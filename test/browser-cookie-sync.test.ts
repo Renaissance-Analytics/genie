@@ -164,9 +164,10 @@ describe('the host', () => {
     it('stores nothing: a browser that links later hears none of it', async () => {
         const { service, events } = setup();
         await service.call('cookies', ['ws', message()], 'window');
-        const before = events.length;
+        const cookies = () => events.filter((e) => e.kind === 'cookies').length;
+        const before = cookies();
         await service.call('register', [], 'browser');
-        expect(events).toHaveLength(before);
+        expect(cookies()).toBe(before);
     });
 
     it('never puts a value in its own words', async () => {

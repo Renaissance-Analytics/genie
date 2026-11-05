@@ -404,7 +404,7 @@ function hostActivityNow(): HostActivity {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).length : 0;
     const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
     const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).length;
-    return { agents, terminals: terminals?.count ?? 0, processes, services: servicesUp, ...onTheClockNow() };
+    return { agents, terminals: terminals?.count ?? 0, processes, services: servicesUp, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
 }
 
 /** What waits on the host's clock, from the host's own lists (core/tray-only.ts). With no host, nothing here outlives the window. */
@@ -1297,6 +1297,8 @@ const browserPages = new BrowserPagesReplica((pageId, method, args) => agentEngi
 let cookieBridge: BrowserCookieBridge | null = null;
 /** This window's connection to the host, as the browser service calls it. */
 let browserConnection: string | null = null;
+/** Whether the Genie browser's own process is linked to the host. */
+let browserLinked = false;
 /** What a browser needs, said whenever it changes and whenever the link comes back. Set once the services are composed. */
 let publishBrowserFacts: () => void = () => {};
 
@@ -1521,9 +1523,11 @@ async function boot(): Promise<void> {
                 cookieBridge?.relinked();
                 client.onBrowserEvent((event) => {
                     if (event.kind === 'pages') browserPages.apply(event.pages);
+                    if (event.kind === 'browserUp') browserLinked = event.up;
                     if (event.kind === 'cookies' || event.kind === 'cookiesWanted') cookieBridge?.onEvent(event);
                     if (event.kind === 'poppedBack' && window && !window.isDestroyed()) window.webContents.send('site-panel:popped-back', event.panelKey);
                 });
+                void client.browserCall('browserUp', []).then((up) => { browserLinked = up === true; }, () => {});
                 void client.browserCall('pagesNow', []).then((pages) => { browserPages.apply(pages as BrowserPage[]); }, () => {});
             },
             callbacks: engineCallbacks,
