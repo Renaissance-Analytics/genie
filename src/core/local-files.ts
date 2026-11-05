@@ -15,6 +15,8 @@ export type FilesProjection =
     | { t: 'record'; entries: Array<[string, FilesProjection]> };
 export interface FilesContentEnvelope { filesContent: { ref: string; value: FilesProjection } }
 export const FILES_INLINE_BYTES = 128 * 1024;
+/** Carries only the native error display of an invalid string slot, without serializing its contents. */
+export interface InvalidFilesArgument { invalidFilesArgument: string }
 export function isLocalFilesMethod(method: string): method is LocalFilesMethod {
     return (LOCAL_FILES_METHODS as readonly string[]).includes(method);
 }

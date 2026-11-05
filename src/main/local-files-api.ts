@@ -14,7 +14,12 @@ const noHost = () => ({ ok: false, reason: 'no files host' });
 const badArgs = () => ({ ok: false, reason: 'bad arguments' });
 
 export async function invokeLocalFiles(deps: LocalFilesDeps | undefined, method: LocalFilesMethod, args: unknown[]): Promise<unknown> {
-    const [workspaceId, path, a, b, c] = args;
+    const [workspaceId, path, a, b, c] = args.map(value => {
+        if (!value || typeof value !== 'object' || Object.keys(value).length !== 1 || !('invalidFilesArgument' in value) || typeof value.invalidFilesArgument !== 'string') return value;
+        const display = value.invalidFilesArgument;
+        // Remains an OBJECT, so a display equal to a valid operation can never select that operation.
+        return { toString: () => display };
+    });
     if (method === 'repo.call') return deps ? deps.repo(workspaceId, path, a, b, c) : { ok: false, error: 'Genie does not have that workspace' };
     if (method === 'files.readBytes' || method === 'files.writeBytes') {
         const editor = deps?.editor();

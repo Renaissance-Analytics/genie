@@ -1,7 +1,7 @@
 import type { BlobClient } from '../core/local-blobs.js';
 import type { LocalUploadClient, PageClient } from '../core/local-content.js';
 import { bytesToBase64 } from '../core/mobile.js';
-import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesProjection, type LocalFilesMethod } from '../core/local-files.js';
+import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesProjection, type InvalidFilesArgument, type LocalFilesMethod } from '../core/local-files.js';
 import type { GenieBridge } from './bridge.js';
 
 export type FilesProtocolKey = 'tree' | 'children' | 'open' | 'readMedia' | 'lastCommitted' | 'state' | 'gitStatus' | 'create' | 'rename' | 'duplicate' | 'trash' | 'readBytes' | 'write' | 'writeBytes';
@@ -13,6 +13,20 @@ function decodeBase64(value: string): Uint8Array {
     if (clean.length % 4 === 1) clean = clean.slice(0, -1);
     const decoded = atob(clean.padEnd(Math.ceil(clean.length / 4) * 4, '='));
     return Uint8Array.from(decoded, character => character.charCodeAt(0));
+}
+
+const text = (value: unknown): string | null => typeof value === 'string' ? value : null;
+const displayedInvalid = (value: unknown): string | InvalidFilesArgument => typeof value === 'string' ? value : { invalidFilesArgument: String(value) };
+/** Native guards run before JSON: invalid non-string values never serialize their BigInt/cyclic contents. */
+function fileArguments(method: LocalFilesMethod, args: unknown[]): unknown[] {
+    if (method === 'repo.call') {
+        const [op, id, rel, a, b] = args;
+        const flag = b === null || typeof b === 'string' || typeof b === 'number' || typeof b === 'boolean' ? b : null;
+        return [displayedInvalid(op), text(id), text(rel), Array.isArray(a) ? a.filter((value): value is string => typeof value === 'string') : text(a), flag];
+    }
+    const safe: unknown[] = args.map(text);
+    if (method === 'files.localOpen' || method === 'files.localReadMedia') safe[1] = displayedInvalid(args[1]);
+    return safe;
 }
 
 export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient }): { files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']> } {
@@ -39,7 +53,8 @@ export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...ar
             default: throw new Error('unknown Files metadata projection');
         }
     };
-    const request = async <T>(method: LocalFilesMethod, args: unknown[]): Promise<T> => {
+    const request = async <T>(method: LocalFilesMethod, rawArgs: unknown[]): Promise<T> => {
+        const args = fileArguments(method, rawArgs);
         let staged: string | null = null;
         const sent = [...args];
         try {

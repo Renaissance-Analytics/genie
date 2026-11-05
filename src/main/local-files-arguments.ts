@@ -7,7 +7,7 @@ import type { LocalUploads } from './local-uploads.js';
 export async function localFilesArguments(method: LocalFilesMethod, args: unknown[], uploads: LocalUploads | null): Promise<{ args: unknown[]; close(): Promise<void> }> {
     const index = method === 'files.write' ? 2 : method === 'files.writeBytes' ? 3 : method === 'repo.call' && args.length === 1 ? 0 : -1;
     const value = index >= 0 ? args[index] : null;
-    if (!value || typeof value !== 'object') {
+    if (!value || typeof value !== 'object' || !Object.hasOwn(value, 'staged')) {
         if (Buffer.byteLength(JSON.stringify(args)) > FILES_INLINE_BYTES) throw new Error('large Files or repository content must use local staging');
         return { args, close: async () => {} };
     }
