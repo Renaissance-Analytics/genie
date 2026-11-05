@@ -1503,8 +1503,9 @@ async function boot(): Promise<void> {
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
-                // How the host starts its updater helper (P5b): this executable, and in a dev run this app's path.
-                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater'] }).catch(() => {});
+                // How the host starts its updater helper (P5b): this executable, in a dev run this app's path, and the switches this
+                // window was started with that an Electron needs to start at all here (the sandbox, the display, the password store).
+                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=)/.test(a))] }).catch(() => {});
                 void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
                 cookieBridge?.relinked();
                 client.onBrowserEvent((event) => {
