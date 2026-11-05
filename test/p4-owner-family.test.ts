@@ -76,7 +76,23 @@ function setup() {
     return { ports, deps, api, invoke, calls, client, raw, port };
 }
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-p4-owner-')); let seq = 0; devices = await DeviceStore.open(dir, { now: Date.now, random: () => `synthetic-owner-${++seq}` }); });
-afterEach(async () => { for (const close of closes.splice(0)) close(); vi.unstubAllGlobals(); await tick(); await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
+async function cleanupOwnerFixture(remove: typeof rm = rm) { for (const close of closes.splice(0)) close(); vi.unstubAllGlobals(); await tick(); await devices.flushed(); await remove(dir, { recursive: true, force: true }); }
+afterEach(() => cleanupOwnerFixture());
+
+it('late fixture cleanup removes only the directory whose device writes it awaited', async () => {
+    const realDir = dir, realDevices = devices, removed: unknown[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; }), flushed = vi.fn(() => gate);
+    const remove = (async (path: unknown) => { removed.push(path); }) as typeof rm;
+    try {
+        dir = 'first-fixture'; devices = { flushed } as unknown as DeviceStore;
+        const pending = cleanupOwnerFixture(remove); await tick(); expect(flushed).toHaveBeenCalledOnce();
+        // A timed-out hook continues after the next case has replaced these shared bindings.
+        dir = 'next-fixture'; devices = { flushed: async () => {} } as unknown as DeviceStore;
+        release(); await pending;
+        expect(removed).toEqual(['first-fixture']);
+    } finally { release(); dir = realDir; devices = realDevices; }
+});
 
 describe('family5 owner methods and real recorded bridge calls', () => {
     it.each(methods)('%s starts local', method => { expect(REMOTE_METHODS).toContain(method); expect(capabilityOf(method as RemoteMethod)).toBe('local'); });
