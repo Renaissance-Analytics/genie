@@ -1,28 +1,23 @@
 import { OS_WORKSPACE } from './registry.js';
-import type { TerminalHost, TerminalOptions } from './terminal-host.js';
+import type { TerminalOptions } from './terminal-host.js';
 
 /**
  * THE TRAY'S NEW SCRATCH TERMINAL (Tynn #761, Genie 1's tray). The owner, 2026-10-19, chose "Genie's own": a shell in
  * the person's home folder, filed under Genie's workspace — not a project's, so it needs no project open and never joins
- * a project's terminals — in a window of its own (the Take Over window, `genie://takeover/<id>`). Closing the window
- * ends the shell, as for every Take Over window.
+ * a project's terminals — in a window of its own (the Take Over window, `genie://takeover/<id>`).
+ *
+ * It takes the header Terminal button's path (genie#1596): a DISPOSABLE terminal through {@link ScratchTerminals}, so
+ * closing its window ends it. Before, it was an ordinary terminal and the window's close reached only an agent's Take
+ * Over, which left the shell running with nothing showing it.
  */
 export interface ScratchTerminalOptions {
-    terminals: Pick<TerminalHost, 'open'>;
-    openWindow: (route: string) => void;
+    scratch: Pick<ScratchTerminals, 'open'>;
     /** The person's home folder (`os.homedir()`). */
     home: string;
 }
 
 export function openScratchTerminal(options: ScratchTerminalOptions): { ok: true; terminalId: string } | { ok: false; reason: string } {
-    let opened: { id: string };
-    try {
-        opened = options.terminals.open({ workspaceId: OS_WORKSPACE, cwd: options.home, limited: false, personal: true });
-    } catch (error) {
-        return { ok: false, reason: `The scratch terminal could not start: ${(error as Error).message}` };
-    }
-    options.openWindow(`genie://takeover/${opened.id}`);
-    return { ok: true, terminalId: opened.id };
+    return options.scratch.open({ workspaceId: OS_WORKSPACE, cwd: options.home });
 }
 
 /**

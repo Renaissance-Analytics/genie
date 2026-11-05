@@ -3895,8 +3895,8 @@ async function boot(): Promise<void> {
             if (r && !r.ok) console.error('[genie] Claude Design login:', r.reason);
         },
         onScratchTerminal: () => {
-            if (!terminals) return;
-            const r = openScratchTerminal({ terminals, openWindow: (route) => openTakeOverWindow(route, 'user-gesture'), home: homedir() });
+            if (!scratchTerminals) return;
+            const r = openScratchTerminal({ scratch: scratchTerminals, home: homedir() });
             if (!r.ok) console.error('[genie] scratch terminal:', r.reason);
         },
         onOpen: () => { revealMainWindow('tray: Open'); },

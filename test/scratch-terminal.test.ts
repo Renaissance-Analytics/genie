@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { OS_WORKSPACE } from '../src/main/registry.js';
-import { openScratchTerminal } from '../src/main/scratch-terminal.js';
+import { ScratchTerminals, openScratchTerminal } from '../src/main/scratch-terminal.js';
 import { trayMenuTemplate } from '../src/main/tray.js';
 
 /**
@@ -29,25 +29,23 @@ describe('opening one', () => {
     it('a shell in the home folder, in Genie’s own workspace, in a window of its own (COUNTED: one terminal, one window)', () => {
         const opened: Array<{ workspaceId: string; cwd: string; command?: string | undefined; limited?: boolean }> = [];
         const windows: string[] = [];
-        const result = openScratchTerminal({
-            terminals: { open: (o: { workspaceId: string; cwd: string; command?: string }) => { opened.push(o); return { id: 'pty_7', pid: 1, shell: 'bash' }; } } as never,
+        const scratch = new ScratchTerminals({
+            terminals: { open: (o: { workspaceId: string; cwd: string; command?: string }) => { opened.push(o); return { id: 'pty_7', pid: 1, shell: 'bash' }; }, close: () => true } as never,
             openWindow: (route) => windows.push(route),
-            home: '/home/example',
         });
+        const result = openScratchTerminal({ scratch, home: '/home/example' });
         expect(result).toEqual({ ok: true, terminalId: 'pty_7' });
-        // Genie's own scratch terminal is not counted against a workspace's terminal limit (core/shell-limits.ts).
-        expect(opened).toEqual([{ workspaceId: OS_WORKSPACE, cwd: '/home/example', limited: false, personal: true }]);
+        // Genie's own scratch terminal is not counted against a workspace's terminal limit (core/shell-limits.ts), and is
+        // disposable: it ends with its window (genie#1596).
+        expect(opened).toEqual([{ workspaceId: OS_WORKSPACE, cwd: '/home/example', limited: false, personal: true, disposable: true }]);
         expect(windows).toEqual(['genie://takeover/pty_7']);
     });
 
     it('a terminal that cannot start says why, and opens no window', () => {
         const windows: string[] = [];
-        const result = openScratchTerminal({
-            terminals: { open: () => { throw new Error('no shell'); } } as never,
-            openWindow: (route) => windows.push(route),
-            home: '/home/example',
-        });
-        expect(result).toEqual({ ok: false, reason: 'The scratch terminal could not start: no shell' });
+        const scratch = new ScratchTerminals({ terminals: { open: () => { throw new Error('no shell'); }, close: () => true }, openWindow: (route) => windows.push(route) });
+        const result = openScratchTerminal({ scratch, home: '/home/example' });
+        expect(result).toEqual({ ok: false, reason: 'The terminal could not start: no shell' });
         expect(windows).toEqual([]);
     });
 });
