@@ -1663,6 +1663,12 @@ async function boot(): Promise<void> {
                 return null;
             }
         },
+        // The same file readManifest read; a failure (read-only, gone, no workspace) throws, and the switch says so.
+        writeManifest: async (record, text) => {
+            const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path;
+            if (!workspace) throw new Error(`${record.name}'s workspace is not registered`);
+            await writeFileText(join(workspace, record.instructions ?? join('.agents', record.name, 'AGENT.md')), text, 'utf8');
+        },
         removeDir: (path) => rm(path, { recursive: true, force: true }),
         realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
         // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.

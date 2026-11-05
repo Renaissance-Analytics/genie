@@ -153,3 +153,36 @@ describe('a result beside the control that caused it', () => {
         expect(html).not.toContain('data-control-outcome');
     });
 });
+
+/*
+ * A REFUSED SWITCH IS NEVER A SILENT FLASH BACK (genie#1569). The Provider control used to change back with the reason
+ * only in the shared outcome line, and a SECOND identical refusal showed nothing at all (the outcome equalled the one
+ * before the touch). Where the switch stands is its own state, drawn beside the control: in flight, done, or refused with
+ * the reason and a Retry (the owner, 2026-10-27: every action shows progress, then success or failure with Retry).
+ */
+describe('the Provider control says where its switch stands', () => {
+    const provider = (html: string) => html.match(/data-rail="provider"[\s\S]*?<\/section>/)?.[0] ?? '';
+
+    it('refused: the reason beside the control, in the danger colour, with a react-fancy Retry button', () => {
+        const html = provider(panel(render('general', { ops: { providerSwitch: { kind: 'failed', to: 'codex', reason: 'Codex is not installed on this machine, so kai cannot switch to it. Install it, then switch again.' } } })));
+        expect(html).toMatch(/data-problem="provider-switch"[^>]*class="[^"]*text-\[var\(--danger\)\]/);
+        expect(html).toContain('Codex is not installed on this machine, so kai cannot switch to it.');
+        expect(html).toMatch(/<button(?=[^>]*data-action="provider-switch-retry")(?=[^>]*data-react-fancy-button)[^>]*>/);
+    });
+
+    it('in flight: a spinner and the step, the select disabled until it ends', () => {
+        const html = provider(panel(render('general', { ops: { providerSwitch: { kind: 'working', to: 'codex' } } })));
+        expect(html).toMatch(/data-provider-switch-step=""[\s\S]*?Switching to Codex/);
+        expect(html).toMatch(/<select[^>]*disabled=""/);
+    });
+
+    it('done: what happened, no Retry; idle: neither (CONTROL: the same render draws no status at all)', () => {
+        const done = provider(panel(render('general', { ops: { providerSwitch: { kind: 'done', text: 'kai switched claude → codex' } } })));
+        expect(done).toMatch(/data-provider-switch-done=""[\s\S]*?kai switched claude → codex/);
+        expect(done).not.toContain('provider-switch-retry');
+        const idle = provider(panel(render('general')));
+        expect(idle).toContain('data-agent-provider');
+        expect(idle).not.toMatch(/data-problem="provider-switch"|data-provider-switch-step|data-provider-switch-done/);
+        expect(idle).not.toMatch(/<select[^>]*disabled=""/);
+    });
+});
