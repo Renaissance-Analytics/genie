@@ -1277,6 +1277,18 @@ const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); retur
 let browserPane: BrowserPane | null = null;
 /** The Genie browser window (beta.35 item 36): this workstation's Genie sites in a window of their own. */
 let genieBrowserWindow: GenieBrowserWindows | null = null;
+/**
+ * THIS MACHINE'S SITES, IN THE GENIE BROWSER'S OWN PROCESS (the host split, P2b): asked through the host, which starts it.
+ * Another workstation's window stays here until P5, and so does the emergency no-host path.
+ */
+function openLocalBrowser(url: string | undefined, activation: Activation): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (agentEngineLink?.live === true) {
+        return agentEngineLink.client.browserCall('open', [url ?? null, activation]).then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
+    }
+    return Promise.resolve(genieBrowserWindow?.open(url, activation) ?? { ok: false as const, error: 'Genie’s browser is not ready yet' });
+}
+/** What a browser needs, said whenever it changes and whenever the link comes back. Set once the services are composed. */
+let publishBrowserFacts: () => void = () => {};
 
 /**
  * Where "latest" comes from, per tool (toolchain-prober.ts `latestIndex`): every command it runs goes through the same
@@ -1491,7 +1503,7 @@ async function boot(): Promise<void> {
     {
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
-            onLinked: (client) => { handProxyAnswers = () => reportProxies(client, lifecycleLog); void handProxyAnswers(); },
+            onLinked: (client) => { handProxyAnswers = () => reportProxies(client, lifecycleLog); void handProxyAnswers(); publishBrowserFacts(); },
             callbacks: engineCallbacks,
             launch: {
                 runtimeDir: runtimeDir(genieHome()),
@@ -2192,7 +2204,7 @@ async function boot(): Promise<void> {
         const remoteUrl = [...remoteWindows].find(([, w]) => !w.isDestroyed() && w.webContents === event.sender)?.[0] ?? null;
         const conn = browserConnectionFor({ remoteUrl, relays: [...relayChannels.values()].filter((c) => c.sender === event.sender) });
         if (conn.kind === 'refused') return { ok: false, error: conn.reason };
-        if (conn.kind === 'local') return browser.open(at, 'user-gesture');
+        if (conn.kind === 'local') return openLocalBrowser(at, 'user-gesture');
         const via = await remoteBrowsers.connect(conn.workstationId, conn.transport);
         const hosts = Array.isArray(rawHosts) ? rawHosts.filter(isGenHost) : [];
         const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
@@ -3086,8 +3098,7 @@ async function boot(): Promise<void> {
     // WHO ASKED decides whether it may take the keyboard (genie#1235): the Hosting row's Open is the person's click and
     // brings the window up; an agent's `sites open` opens it behind whatever the person is doing.
     const openInBrowserFor = (activation: Activation): OpenInBrowser => async (url) => {
-        if (!genieBrowserWindow) return { ok: false, reason: 'Genie’s browser is not ready yet' };
-        const opened = genieBrowserWindow.open(url, activation);
+        const opened = await openLocalBrowser(url, activation);
         return opened.ok ? { ok: true } : { ok: false, reason: opened.error };
     };
     // AN AGENT'S `sites open` (genie#1265): in the background, and the workspace the site belongs to pulses for the person.
@@ -3840,7 +3851,7 @@ async function boot(): Promise<void> {
     if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
     // in the store of the site's own workspace.
-    livePanels = sitePanels({ window: () => window, genieHome: genieHome(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? null, openInWindow: (url, activation) => { genieBrowserWindow?.open(url, activation); } });
+    livePanels = sitePanels({ window: () => window, genieHome: genieHome(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? null, openInWindow: (url, activation) => { void openLocalBrowser(url, activation); } });
     mainWindowDeps = { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
     mountMainWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
     // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
@@ -3911,6 +3922,18 @@ async function boot(): Promise<void> {
         onReportIssue: () => { void shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?title=${encodeURIComponent(`[v${app.getVersion()}] `)}`); },
     })));
     // THE GENIE BROWSER WINDOW (beta.35 item 36): the same front door and CA, its own session; the sites read at each use.
+    publishBrowserFacts = () => {
+        if (agentEngineLink?.live !== true) return;
+        const facts = {
+            frontDoorPort: composed.frontDoorPort,
+            caPem: browserTrust.caPem,
+            hosts: composed.routes().map((r) => r.host),
+            launch: { file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--genie-browser', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=|genie-browser-debug-port=)/.test(a))] },
+        };
+        void agentEngineLink.client.browserCall('publish', [facts]).catch((error: unknown) => { rendererErrorLog?.(`the browser's facts could not be published: ${error instanceof Error ? error.message : String(error)}`); });
+    };
+    composed.sites.onChange(() => { publishBrowserFacts(); });
+    publishBrowserFacts();
     genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), ledger: activationLedger });
     // TRAY-ONLY (P1b): while genie-host runs, one look every few seconds — what the tray says, and whether a tray-only
     // Genie with nothing left running ends (core/tray-only.ts).

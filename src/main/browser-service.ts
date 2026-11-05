@@ -9,6 +9,8 @@ export interface BrowserFacts {
     readonly frontDoorPort: number;
     readonly caPem: string | null;
     readonly hosts: readonly string[];
+    /** How to start the browser's process: the window knows the install; the host may run from a copy of it (P6). */
+    readonly launch: { readonly file: string; readonly args: readonly string[] };
 }
 
 export type BrowserActivation = 'user-gesture' | 'background';
@@ -17,22 +19,47 @@ export type BrowserEvent =
     | { readonly kind: 'facts'; readonly facts: BrowserFacts }
     /** Whether a window holds the front door. With none, `.gen` pages cannot load until P5 moves the door to the host. */
     | { readonly kind: 'door'; readonly up: boolean }
-    | { readonly kind: 'open'; readonly url: string; readonly activation: BrowserActivation };
+    /** `url` null: the browser with its first site. */
+    | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation }
+    /** The host is ending on purpose, and the browser ends with it: an installer needs the binary free. */
+    | { readonly kind: 'quit' };
 
 const HELD_LIMIT = 20;
+/** A browser started and not linked by then is started again. */
+const START_PATIENCE_MS = 20_000;
 
 function isFacts(value: unknown): value is BrowserFacts {
     if (typeof value !== 'object' || value === null) return false;
     const f = value as Partial<BrowserFacts>;
-    return Number.isInteger(f.frontDoorPort) && (f.caPem === null || typeof f.caPem === 'string') && Array.isArray(f.hosts) && f.hosts.every((h) => typeof h === 'string');
+    return Number.isInteger(f.frontDoorPort) && (f.caPem === null || typeof f.caPem === 'string') && Array.isArray(f.hosts) && f.hosts.every((h) => typeof h === 'string') && typeof f.launch?.file === 'string' && Array.isArray(f.launch.args) && f.launch.args.every((a) => typeof a === 'string');
+}
+
+export interface BrowserServicePorts {
+    readonly startBrowser?: (launch: BrowserFacts['launch']) => void;
+    readonly now?: () => number;
 }
 
 export class BrowserService {
+    readonly #ports: BrowserServicePorts;
+    #startedAt: number | null = null;
     readonly #listeners = new Set<(event: BrowserEvent) => void>();
     #facts: BrowserFacts | null = null;
     #publisher: string | null = null;
     #browser: string | null = null;
     #held: Array<Extract<BrowserEvent, { kind: 'open' }>> = [];
+
+    constructor(ports: BrowserServicePorts = {}) {
+        this.#ports = ports;
+    }
+
+    /** Something is waiting for a browser and none is linked: start one, not twice while one is on its way. */
+    #startIfWanted(): void {
+        if (this.#browser !== null || this.#held.length === 0 || this.#facts === null || !this.#ports.startBrowser) return;
+        const now = (this.#ports.now ?? Date.now)();
+        if (this.#startedAt !== null && now - this.#startedAt < START_PATIENCE_MS) return;
+        this.#startedAt = now;
+        this.#ports.startBrowser(this.#facts.launch);
+    }
 
     onEvent(listener: (event: BrowserEvent) => void): () => void {
         this.#listeners.add(listener);
@@ -53,14 +80,16 @@ export class BrowserService {
                 this.#publisher = from;
                 this.#emit({ kind: 'facts', facts: this.#facts });
                 if (wasDown) this.#emit({ kind: 'door', up: true });
+                this.#startIfWanted();
                 return null;
             }
             case 'open': {
-                if (typeof args[0] !== 'string') throw new Error('an address to open has to be text');
-                const event = { kind: 'open' as const, url: args[0], activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const };
+                if (typeof args[0] !== 'string' && args[0] !== null && args[0] !== undefined) throw new Error('an address to open has to be text');
+                const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const };
                 if (this.#browser === null) {
                     this.#held.push(event);
                     if (this.#held.length > HELD_LIMIT) this.#held.shift();
+                    this.#startIfWanted();
                     return { browserUp: false };
                 }
                 this.#emit(event);
@@ -68,6 +97,7 @@ export class BrowserService {
             }
             case 'register': {
                 this.#browser = from;
+                this.#startedAt = null;
                 const held = this.#held;
                 this.#held = [];
                 for (const event of held) this.#emit(event);
@@ -76,6 +106,11 @@ export class BrowserService {
             default:
                 throw new Error(`the browser service has no ${method}`);
         }
+    }
+
+    /** The host is ending. */
+    quit(): void {
+        this.#emit({ kind: 'quit' });
     }
 
     /** A connection went. Only the browser's own going means there is no browser. */

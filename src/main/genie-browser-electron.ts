@@ -74,14 +74,23 @@ function routeSession(ses: Session, port: number, log: (line: string) => void): 
  * page load (a `.gen` load before it would go to DNS).
  */
 let sharedSession: { ses: Session; routed: Promise<void> } | null = null;
+let sharedCa: string | null = null;
 export function genieBrowserSession(options: { frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): { ses: Session; routed: Promise<void> } {
     if (sharedSession) return sharedSession;
     const log = options.log ?? ((line: string) => console.log(line));
     const ses = session.fromPartition('persist:genie-browser-window');
-    guardSession(ses, () => options.caPem);
+    sharedCa = options.caPem;
+    guardSession(ses, () => sharedCa);
     const routed = routeSession(ses, options.frontDoorPort, log);
     sharedSession = { ses, routed };
     return sharedSession;
+}
+
+/** The window came back with a new front door (its port is per launch): the browser's process follows it. */
+export function rerouteGenieBrowserSession(options: { frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): void {
+    if (!sharedSession) return;
+    sharedCa = options.caPem;
+    sharedSession.routed = routeSession(sharedSession.ses, options.frontDoorPort, options.log ?? ((line: string) => console.log(line)));
 }
 
 /**
@@ -123,6 +132,8 @@ export interface GenieBrowserWindows {
      * inactive, or flashes an open one — never takes the keyboard.
      */
     open(address: string | undefined, activation: Activation, remote?: RemoteBrowsing): { ok: true } | { ok: false; error: string };
+    /** One line for this machine's window, shown now and in any made later. */
+    setNotice(notice: string | null): void;
 }
 
 const NOT_OURS = { ok: false as const, error: 'this is not the Genie browser window' };
@@ -192,7 +203,8 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     const sessionFor = (key: string): { ses: Session; routed: () => Promise<void> } => {
         if (key !== LOCAL) return remoteSession(key);
         const { ses, routed } = genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem, log });
-        return { ses, routed: () => routed };
+        void routed;
+        return { ses, routed: () => sharedSession!.routed };
     };
     const hostsOf = (key: string): readonly string[] => (key === LOCAL ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
 
@@ -272,7 +284,13 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         return { window, brain: b };
     };
 
+    let notice: string | null = null;
     return {
+        setNotice(next) {
+            notice = next;
+            const entry = windows.get(LOCAL);
+            if (entry && !entry.win.isDestroyed()) entry.browser.setNotice(next);
+        },
         open: (address, activation, remote) => {
             const key = remote?.key ?? LOCAL;
             if (remote) remotes.set(key, remote);
@@ -280,6 +298,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             const fresh = !entry || entry.win.isDestroyed();
             if (fresh) {
                 const m = make(key, remote ? `Genie browser — ${remote.title}` : 'Genie browser', activation);
+                if (key === LOCAL) m.brain.setNotice(notice);
                 entry = { win: m.window, browser: m.brain };
                 windows.set(key, entry);
             } else {

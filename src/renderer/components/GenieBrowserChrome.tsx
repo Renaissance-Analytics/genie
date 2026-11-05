@@ -121,6 +121,9 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
                 </div>
             ) : null}
 
+            {s.notice ? (
+                <div data-browser-notice="" className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-1 text-[11px] text-[var(--fg-2)]">{s.notice}</div>
+            ) : null}
             {error ? (
                 <div data-browser-error="" className="shrink-0 border-b border-[var(--danger)] bg-[var(--bg-1)] px-3 py-1 text-xs text-[var(--danger)]">{error}</div>
             ) : null}
