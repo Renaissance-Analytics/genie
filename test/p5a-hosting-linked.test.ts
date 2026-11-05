@@ -26,7 +26,7 @@ function fakePty() {
 
 const exists = (path: string) => access(path).then(() => true, () => false);
 const CADDY = '/opt/genie/runtime/caddy';
-const caddyStarts = (opened: Array<{ command?: string }>) => opened.filter((o) => o.command?.includes(`${CADDY} run`)).length;
+const caddyStarts = (opened: ReadonlyArray<PtySpawnOptions>) => opened.filter((o) => o.command?.includes(`${CADDY} run`)).length;
 /** Lets compose's start-up work (the Caddy controller's first pass, the CA) run before anything is read. */
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
