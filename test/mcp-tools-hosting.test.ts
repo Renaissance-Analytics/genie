@@ -63,10 +63,10 @@ let docker: ReturnType<typeof fakeDocker>;
 let services: ComposedServices;
 let tools: Registration[];
 interface ComposeSample { stage: string; elapsedMs: number; totalMs: number }
-const composeStages: ComposeSample[] = [];
+let composeStages: ComposeSample[] = [];
 let composeAttempt = 0;
-const timingLine = (sample: ComposeSample): void => {
-    if (process.env.CI === 'true' && process.platform === 'win32') console.log(`COMPOSE_TIMING ${JSON.stringify({ attempt: composeAttempt, ...sample })}`);
+const timingLine = (attempt: number, sample: ComposeSample): void => {
+    if (process.env.CI === 'true' && process.platform === 'win32') console.log(`COMPOSE_TIMING ${JSON.stringify({ attempt, ...sample })}`);
 };
 const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 const pg = { workspaceId: 'example', engine: 'postgres', major: '17', scope: 'dedicated' as const };
@@ -90,8 +90,9 @@ async function asked(): Promise<{ id: string; title: string }> {
 const dockerCalls = (verb: string) => docker.calls.filter((c) => c[0] === verb).length;
 
 beforeEach(async () => {
-    const setupStarted = performance.now(); composeAttempt++; composeStages.length = 0;
+    const setupStarted = performance.now(), attempt = ++composeAttempt, samples: ComposeSample[] = []; composeStages = samples;
     dir = await mkdtemp(join(tmpdir(), 'genie2-mcp-hosting-'));
+    const fixtureDir = dir;
     docker = fakeDocker();
     opened.length = 0;
     shown.length = 0;
@@ -99,14 +100,14 @@ beforeEach(async () => {
         await mkdir(join(dir, ws), { recursive: true });
         await writeFile(join(dir, ws, 'project.json'), `${JSON.stringify({ name: ws, repos: [] }, null, 2)}\n`, 'utf8');
     }
-    timingLine({ stage: 'fixture-files', elapsedMs: performance.now() - setupStarted, totalMs: performance.now() - setupStarted });
+    timingLine(attempt, { stage: 'fixture-files', elapsedMs: performance.now() - setupStarted, totalMs: performance.now() - setupStarted });
     const input = {
-        userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
-        workspaces: () => [{ id: 'example', path: join(dir, 'example') }, { id: 'example-other', path: join(dir, 'example-other') }],
-        onComposeStage: (sample: ComposeSample) => { composeStages.push(sample); timingLine(sample); },
+        userData: fixtureDir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
+        workspaces: () => [{ id: 'example', path: join(fixtureDir, 'example') }, { id: 'example-other', path: join(fixtureDir, 'example-other') }],
+        onComposeStage: (sample: ComposeSample) => { samples.push(sample); timingLine(attempt, sample); },
     };
     services = await composeServices(input);
-    timingLine({ stage: 'hook-composed', elapsedMs: performance.now() - setupStarted, totalMs: performance.now() - setupStarted });
+    timingLine(attempt, { stage: 'hook-composed', elapsedMs: performance.now() - setupStarted, totalMs: performance.now() - setupStarted });
     callers['t-example'] = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'example', workspacePath: join(dir, 'example') };
     callers['t-other'] = { agentId: mintAgentId(), agentName: 'vega', workspaceId: 'example-other', workspacePath: join(dir, 'example-other') };
     tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services, openInBrowser: async (url) => { shown.push(url); return { ok: true }; } });

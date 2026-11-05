@@ -77,6 +77,8 @@ import type { GenRouterServer } from './gen-router-server.js';
  */
 
 export interface ComposeInput extends HostingOptions {
+    /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
+    readonly onComposeStage?: (sample: { stage: string; elapsedMs: number; totalMs: number }) => void;
     readonly userData: string;
     readonly pty: PtyPort;
     /**
@@ -298,17 +300,26 @@ export async function composeWindowServices(input: ComposeInput & { readonly age
 }
 
 async function composeWith(input: ComposeInput): Promise<WindowServices> {
+    const compositionStarted = input.onComposeStage ? performance.now() : 0;
+    let lastStage = compositionStarted;
+    const stage = async <T>(name: string, action: () => T | Promise<T>): Promise<T> => {
+        if (!input.onComposeStage) return action();
+        const started = performance.now();
+        input.onComposeStage({ stage: `${name}:begin`, elapsedMs: 0, totalMs: started - compositionStarted });
+        try { return await action(); }
+        finally { lastStage = performance.now(); input.onComposeStage({ stage: name, elapsedMs: lastStage - started, totalMs: lastStage - compositionStarted }); }
+    };
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
-    await mkdir(runtimeDir(input.userData), { recursive: true });
-    const localStaging = await LocalStagingArea.open(input.userData);
+    await stage('runtime-directory', () => mkdir(runtimeDir(input.userData), { recursive: true }));
+    const localStaging = await stage('local-staging', () => LocalStagingArea.open(input.userData));
 
     // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
     // whoever, fires the listeners below with the new value readable. Opened here only on the emergency path.
     let ownSettings: SettingsStore | null = null;
     if (!input.agentStores?.settings) {
-        ownSettings = await SettingsStore.open(input.userData, iso);
-        await ownSettings.carryOverFromV1(input.v1Settings());
+        ownSettings = await stage('settings', () => SettingsStore.open(input.userData, iso));
+        await stage('settings-carry-over', () => ownSettings!.carryOverFromV1(input.v1Settings()));
     }
     const settings: S_Settings = input.agentStores?.settings ?? ownSettings!;
 
@@ -316,9 +327,11 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // host could start, this window's own, opened here with Genie 1's history taken once.
     let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
     if (!input.agentStores) {
-        ownStores = await openAgentStores(input.userData, iso);
-        importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
-        await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
+        ownStores = await stage('agent-stores', () => openAgentStores(input.userData, iso));
+        await stage('agent-store-imports', async () => {
+            importV1Knowledge(ownStores!.knowledge, input.v1Knowledge);
+            await importV1Inbox(ownStores!.inbox, input.v1Inbox, input.roster?.() ?? [], now());
+        });
     }
     const inbox: WindowAgentStores['inbox'] = input.agentStores?.inbox ?? ownStores!.inbox;
     const attention: WindowAgentStores['attention'] = input.agentStores?.attention ?? ownStores!.attention;
@@ -329,7 +342,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     ensureFlowToolKinds();
     let ownFlows: FlowStore | null = null;
     if (!input.flowsEngine) {
-        ownFlows = await FlowStore.open(input.userData, now);
+        ownFlows = await stage('flows', () => FlowStore.open(input.userData, now));
         // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
         if (input.v1Flows) await runV1FlowImport(ownFlows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
     }
@@ -363,8 +376,8 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
     const pluginsDir = join(input.userData, 'plugins');
     const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS });
-    let plugins = await openPlugins();
-    const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
+    let plugins = await stage('plugins', openPlugins);
+    const remoteDevices = await stage('remote-devices', () => DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') }));
     // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
     const pairing = new PairApprovals({ host: hostName, now });
     const remote = new RemoteHost({
@@ -382,7 +395,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
     // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA. Its own
     // (hosting-compose.ts) only on the emergency path, built exactly as it always was.
-    const ownHosting = input.hosting ? null : await composeHosting({ ...input, supervisor, settings, appEnv: appEnvOf });
+    const ownHosting = input.hosting ? null : await stage('hosting', () => composeHosting({ ...input, supervisor, settings, appEnv: appEnvOf }));
     const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
@@ -464,6 +477,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const stopLiveness = supervisor.watchLiveness();
     let down: Promise<void> | null = null;
 
+    if (input.onComposeStage) { const ready = performance.now(); input.onComposeStage({ stage: 'ready', elapsedMs: ready - lastStage, totalMs: ready - compositionStarted }); }
     return {
         own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
         ownFlows,
