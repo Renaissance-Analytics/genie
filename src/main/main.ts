@@ -80,7 +80,7 @@ import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { featureOrigin, HostPicks } from './host-picks.js';
-import { startForWork, type StartForWork } from './start-on-demand.js';
+import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
@@ -1543,6 +1543,14 @@ async function boot(): Promise<void> {
             cap: agentCapFrom(services?.settings.snapshotFor(r.workspaceId) ?? {}),
         }),
     }, record);
+    // THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): the same rule, and a new driver through the one
+    // Restart when the run's own stopped itself. `agentOps` is read when a message comes, never while main is wiring up.
+    const startForYours = (record: AgentRecord): Promise<StartForWork> => startForYourMessage({
+        startForWork: startOnDemand,
+        needsNewDriver: (id) => host?.needsNewDriver(id) ?? false,
+        restart: (id) => restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch()),
+        notice: (id, message) => host?.notice(id, message) ?? false,
+    }, record);
 
     ipcMain.handle('genie:open-agent', (_event, raw: unknown) => {
         // The renderer is not trusted to hand over a well-formed id. `asAgentId` returning
@@ -1578,14 +1586,16 @@ async function boot(): Promise<void> {
         return host.cancel(record.id);
     });
 
-    ipcMain.handle('genie:prompt', (_event, raw: unknown, text: unknown, files: unknown) => {
+    ipcMain.handle('genie:prompt', async (_event, raw: unknown, text: unknown, files: unknown) => {
         const record = agentFromRenderer(raw);
         const attachments = attachmentsFromRenderer(files);
         if (!record || !host || typeof text !== 'string' || attachments === null || (text.length === 0 && attachments.length === 0)) return { ok: false };
         // THE FIRST MESSAGE STARTS IT (q_04ce323c): a stopped or never-started agent is started here, and the message
-        // waits in its session's queue for the start (the chat shows it waiting, then sent). A refused start is said.
-        const started = startOnDemand(record);
+        // waits in its session's queue for the start (the chat shows it waiting, then sent). A refused start is said. A
+        // run whose driver stopped itself (Claude's uncertain Stop, prism-acp 0.37.0) is started again on its conversation.
+        const started = await startForYours(record);
         if (!started.ok) return { ok: false, reason: started.reason };
+        if (!host) return { ok: false };
         // The composer: the turn is started by YOU, and the ledger says so.
         const sent = host.promptWith(record.id, text, attachments, 'you');
         return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
@@ -2513,6 +2523,7 @@ async function boot(): Promise<void> {
             cwdFor,
             // A remote window's message starts the agent as the composer's does (q_04ce323c).
             startForWork: (record) => startOnDemand(record),
+            startForYourMessage: (record) => startForYours(record),
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),

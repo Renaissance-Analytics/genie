@@ -39,9 +39,11 @@ describe('main: opening shows, a message starts', () => {
 
     it('`genie:prompt` (the composer) starts the agent on demand before it delivers', () => {
         const prompt = handler('genie:prompt');
-        expect(prompt).toMatch(/startOnDemand\(record\)/);
-        expect(prompt.indexOf('startOnDemand(')).toBeLessThan(prompt.indexOf('promptWith('));
-        // …and that is the shared rule (main/start-on-demand.ts), not a start of its own.
+        expect(prompt).toMatch(/await startForYours\(record\)/);
+        expect(prompt.indexOf('startForYours(')).toBeLessThan(prompt.indexOf('promptWith('));
+        // …and that is the shared rule (main/start-on-demand.ts), not a start of its own: the person's message rule
+        // (a new driver when the run's own stopped itself, prism-acp 0.37.0) over `startOnDemand`.
+        expect(main).toMatch(/const startForYours = \(record: AgentRecord\): Promise<StartForWork> => startForYourMessage\(\{\s*startForWork: startOnDemand,/);
         expect(main).toMatch(/const startOnDemand = \(record: AgentRecord\): StartForWork => startForWork\(/);
     });
 

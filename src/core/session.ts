@@ -238,6 +238,16 @@ export const OVERLOAD_RETRY_MS: readonly number[] = [30_000, 60_000, 120_000, 24
 export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last turn did not finish. Continue where you left off.';
 
 /**
+ * CLAUDE'S CANCEL STATE UNCERTAIN (prism-acp 0.37.0): its cancel receipt was missing (30 s) or did not account for the
+ * prompts in flight, so prism-acp ended them all cancelled (raw `cancel accounting mismatch`), stopped the CLI and said
+ * this fixed reason through `onProtocolError`; that driver's `prompt()` throws `ClaudeCancelStateError` with this code
+ * from then on. Matched here by value so core/ stays free of prism-acp at runtime; test/prism-acp-version.test.ts holds
+ * them to the installed package's own error.
+ */
+export const CANCEL_STATE_UNCERTAIN = 'cancel state uncertain; driver stopped';
+export const CANCEL_STATE_UNCERTAIN_CODE = 'claude_cancel_state_uncertain';
+
+/**
  * COOLING (the owner, 2026-11-01): "a state they enter right after finishing a turn (coming out of the work state).
  * Instead of immediately marking them as idle, they are "Cooling" down for 15 seconds then become Idle. This way I can
  * sort By status and agents that are in between turns aren't making the whole list jump around."
@@ -391,8 +401,17 @@ export class AgentSession {
      * owner, 2026-10-14).
      */
     #inTurn = false;
-    /** Who sent each prompt still waiting for its turn (`by`, as `prompt` takes it), oldest first. */
-    #queued: (string | null)[] = [];
+    /**
+     * Each prompt still waiting for its turn, oldest first: who sent it (`by`, as `prompt` takes it), and what it was, so
+     * one Claude DROPS at a Stop (prism-acp 0.37.0, `#dropped`) can be sent again or kept as a draft.
+     */
+    #queued: Array<{ by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
+    /**
+     * THE DRIVER STOPPED ITSELF and will take no prompt again (prism-acp 0.37.0: Claude's cancel state uncertain,
+     * `CANCEL_STATE_UNCERTAIN`). Not Broken — nothing about the agent is wrong — but this run is over: the person's next
+     * message starts a new driver on the same conversation (`SessionHost.needsNewDriver`, main/start-on-demand.ts).
+     */
+    #needsNewDriver = false;
     /**
      * Who asked to stop the running turn (`cancel`'s `by`), until that turn ends. The cancelled turn's end is then
      * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
@@ -644,7 +663,7 @@ export class AgentSession {
      * and cannot take a turn until its `ready`.
      */
     get promptable(): boolean {
-        return this.running && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+        return this.running && !this.#needsNewDriver && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
     }
 
     /**
@@ -655,7 +674,12 @@ export class AgentSession {
      * like user input"). Held is excluded: a notice is Genie's to tell again, so it waits out the limit untold, not queued.
      */
     get deliverable(): boolean {
-        return this.running && !this.#starting && !this.#held && !this.#stoppedByYou && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+        return this.running && !this.#needsNewDriver && !this.#starting && !this.#held && !this.#stoppedByYou && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+    }
+
+    /** This run's driver stopped itself and takes no prompt again: a new one is started for the next work (`#needsNewDriver`). */
+    get needsNewDriver(): boolean {
+        return this.#needsNewDriver;
     }
 
     /** The person stopped the last turn and has not acted since: notices wait and held input was left as drafts (genie#1565). */
@@ -855,6 +879,8 @@ export class AgentSession {
             try {
                 return this.prompt(text, by, sent, context);
             } catch (error) {
+                // A driver that has stopped itself takes nothing again: said, and a new one is needed (`#needsNewDriver`).
+                if (cancelStateUncertain(error)) this.#driverStoppedItself();
                 // Only a refusal DURING a turn can wait for its end. An idle driver failure must reach the caller.
                 if (!this.#inTurn) throw error;
             }
@@ -874,7 +900,7 @@ export class AgentSession {
 
     /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
-        if (this.#afterTurn.length === 0 || !this.running || this.#starting || this.#approval !== null || this.#inTurn || this.#held || this.#options.mayTakeWork?.() === false) return;
+        if (this.#afterTurn.length === 0 || !this.running || this.#needsNewDriver || this.#starting || this.#approval !== null || this.#inTurn || this.#held || this.#options.mayTakeWork?.() === false) return;
         while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
             const next = this.#afterTurn[0]!;
             try {
@@ -938,6 +964,44 @@ export class AgentSession {
         }
     }
 
+    /**
+     * A PROMPT THE STOP DROPPED (prism-acp 0.37.0's `cancel_queued`, genie#1565): settled by the rules a prompt HELD at
+     * the Stop follows (`#keepOnlyYours`), so Claude and Codex agents stop alike —
+     * - a Genie notice (`context.retold`) is not sent again: its sender tells it again (the turn it went into was stopped,
+     *   so the inbox counts it untold) once the pause lifts;
+     * - the person's own message goes, as its own turn — them acting (genie#1143) — and so does anyone's after a stop
+     *   the person did not ask for;
+     * - someone else's message after the person's Stop, or anything this run can no longer send (its driver stopped
+     *   itself), is kept as a DRAFT the person can send and a Restart owes (`deliverOwed`).
+     * Sent on the next microtask: prism-acp ends every dropped prompt in one go, and one sent in between would read the
+     * next one's end as its own.
+     */
+    #dropped(p: { by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }): void {
+        if (p.context.retold === true) return;
+        const id = randomUUID();
+        if (this.#needsNewDriver || !this.running || (this.#stoppedByYou && p.by !== 'you')) {
+            const row = promptRow(p.text, p.by, p.sent, p.context);
+            if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: p.sent?.content ?? null } });
+            void this.#emitRow({ kind: 'prompt_delivery', id, status: 'undelivered' });
+            return;
+        }
+        if (p.by === 'you') this.#stoppedByYou = false;
+        this.#afterTurn.push({ id, text: p.text, by: p.by, sent: p.sent, context: p.context });
+        queueMicrotask(() => {
+            if (!this.#inTurn) this.#flushAfterTurn();
+            this.#changed();
+        });
+    }
+
+    /** The driver stopped itself (`CANCEL_STATE_UNCERTAIN`): said once; this run takes nothing more (`#needsNewDriver`). */
+    #driverStoppedItself(): void {
+        if (this.#needsNewDriver) return;
+        this.#needsNewDriver = true;
+        this.#stopCooling();
+        void this.#emitRow({ kind: 'notice', level: 'warning', message: 'The Stop could not be confirmed, so this run was ended to be sure nothing kept going. Your next message starts the agent again on the same conversation.' });
+        this.#changed();
+    }
+
     start(): void {
         if (this.#driver) return; // Reattach, never a second copy of the same agent.
 
@@ -960,6 +1024,12 @@ export class AgentSession {
                      */
                     if (detail?.recoverable === true) {
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: problem });
+                        return;
+                    }
+                    // CLAUDE'S CANCEL STATE UNCERTAIN (prism-acp 0.37.0): the driver ended its CLI to be sure the Stop
+                    // stopped everything. Not a failure of the agent: the next message from the person starts a new one.
+                    if (problem === CANCEL_STATE_UNCERTAIN) {
+                        this.#driverStoppedItself();
                         return;
                     }
                     this.#turnState = 'failed';
@@ -1022,10 +1092,23 @@ export class AgentSession {
                     this.#echo = null;
                     this.#echoSeen = '';
 
+                    /*
+                     * A PROMPT THE STOP DROPPED (prism-acp 0.37.0, genie#1565): Claude's interrupt sends `cancel_queued`,
+                     * so a prompt it took mid-turn never runs; each ends on its own, cancelled, AFTER the stopped turn (raw
+                     * `dropped by cancel`, or `cancel accounting mismatch` when the receipt could not be trusted). It was
+                     * never a turn: no marker, no `stopped` row, no count. Ended while Genie holds no turn open with a
+                     * prompt still waiting for one, cancelled — a prompt that did start ran as a turn and opened it.
+                     */
+                    if (!this.#inTurn && outcome.stopReason === 'cancelled' && !outcome.isError && this.#queued.length > 0) {
+                        this.#dropped(this.#queued.shift()!);
+                        this.#changed();
+                        return;
+                    }
+
                     // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
                     // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
                     // turn, and it opens nothing, as before.
-                    if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
+                    if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
 
                     this.#turns += 1;
                     this.#endedThisRun += 1;
@@ -1126,13 +1209,9 @@ export class AgentSession {
                     // one (its first activity, credited to the oldest queued sender) or ends one silently (above). After a
                     // crashed turn nothing is assumed to run: the queue is dropped and the failure stands.
                     if (crashed) this.#queued = [];
-                    // EXCEPT after a stop: there is no running turn to fold into, and Claude runs the queued prompt as its
-                    // own turn after the interrupt (measured, test/stop-cancels-turn.test.ts), so that turn opens now.
-                    else if (outcome.stopReason === 'cancelled' && this.#queued.length > 0) {
-                        void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
-                        this.#inTurn = true;
-                        this.#turnState = 'working';
-                    }
+                    // After a stop nothing is assumed either: since prism-acp 0.37.0 Claude DROPS what it took mid-turn,
+                    // and each such prompt ends on its own after this one (`#dropped`). It used to run it after the
+                    // interrupt, and its turn was opened here.
                     // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
                     if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
                     // EXCEPT after the person's own Stop (genie#1565; the owner's Codex agent, beta.58: "Stopped by you",
@@ -1349,7 +1428,7 @@ export class AgentSession {
         }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
-        if (this.#inTurn) this.#queued.push(by);
+        if (this.#inTurn) this.#queued.push({ by, text, sent, context });
         else {
             // Whatever the queue still holds was folded into an earlier turn (no turn of its own came): not ahead of this.
             this.#queued = [];
@@ -1928,7 +2007,7 @@ export class AgentSession {
             this.#turnState = 'working';
         } else if (this.#turnState === 'idle' && activity) {
             // A prompt queued while the last turn ran is credited to this one (it ran as its own turn); none = nobody's.
-            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
+            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
             this.#inTurn = true;
             this.#turnState = 'working';
             this.#changed();
@@ -2116,4 +2195,9 @@ function answerFor(request: PermissionRequestLike, decision: 'allow' | 'deny'): 
     };
     const chosen = (decision === 'allow' ? idOf('allow_once') : null) ?? idOf('reject_once');
     return chosen ? { outcome: 'selected', optionId: chosen } : { outcome: 'cancelled' };
+}
+
+/** prism-acp 0.37.0's `ClaudeDriver.prompt()` after an uncertain cancel: `ClaudeCancelStateError`, known by its code. */
+function cancelStateUncertain(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === CANCEL_STATE_UNCERTAIN_CODE;
 }
