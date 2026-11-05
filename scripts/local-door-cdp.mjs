@@ -352,15 +352,24 @@ try {
         demand(r.ok && r.value?.ok, 'real settings write builds the site tab');
         await main.evaluate(`location.hash='#genie://workspace/tynn?view=tab:door-tab'; true`);
         await until('real site panel box', () => main.evaluate('!!document.querySelector("[data-site-panel-box]")'), 30_000);
-        const panelId = await until('native contents created by the panel', async () => {
-            // Both WebContentsView and webview are found by role/creation, not a particular type name.
-            return inspector.evaluate(`(() => {
-                const { webContents, BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
-                const roots = new Set(BrowserWindow.getAllWindows().map((w) => w.webContents.id));
-                const candidates = webContents.getAllWebContents().filter((w) => !${JSON.stringify(before)}.includes(w.id) && !roots.has(w.id) && w.getType() !== 'remote');
+        const candidatesNow = () => inspector.evaluate(`(() => {
+            const { webContents, BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
+            const roots = new Set(BrowserWindow.getAllWindows().map((w) => w.webContents.id));
+            return webContents.getAllWebContents().filter((w) => !${JSON.stringify(before)}.includes(w.id) && !roots.has(w.id) && w.getType() !== 'remote').map((w) => ({ id: w.id, type: w.getType(), url: w.getURL().slice(0, 120) }));
+        })()`);
+        let panelId;
+        try {
+            panelId = await until('native contents created by the panel', async () => {
+                // Both WebContentsView and webview are found by role/creation, not a particular type name.
+                const candidates = await candidatesNow();
                 return candidates.length === 1 ? candidates[0].id : null;
-            })()`);
-        }, 30_000);
+            }, 30_000);
+        } catch (error) {
+            // What there was instead, and what the panel says: the row's question unchanged, its failure readable.
+            log(`  4 candidates after 30 s: ${JSON.stringify(await candidatesNow().catch((e) => String(e)))}`);
+            log(`  4 panel box says: ${JSON.stringify(await main.evaluate('document.querySelector("[data-site-panel-box]")?.innerText?.slice(0, 300) ?? null').catch((e) => String(e)))}`);
+            throw error;
+        }
         let lastPanelState;
         await step('panel document readiness', () => until('loaded fixture panel', async () => {
             const state = await inspector.evaluate(`(() => {
