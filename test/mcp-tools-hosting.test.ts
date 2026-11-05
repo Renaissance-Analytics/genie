@@ -62,6 +62,12 @@ let dir: string;
 let docker: ReturnType<typeof fakeDocker>;
 let services: ComposedServices;
 let tools: Registration[];
+interface ComposeSample { stage: string; elapsedMs: number; totalMs: number }
+const composeStages: ComposeSample[] = [];
+let composeAttempt = 0;
+const timingLine = (sample: ComposeSample): void => {
+    if (process.env.CI === 'true' && process.platform === 'win32') console.log(`COMPOSE_TIMING ${JSON.stringify({ attempt: composeAttempt, ...sample })}`);
+};
 const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 const pg = { workspaceId: 'example', engine: 'postgres', major: '17', scope: 'dedicated' as const };
 const callers: Record<string, Caller> = {};
@@ -84,6 +90,7 @@ async function asked(): Promise<{ id: string; title: string }> {
 const dockerCalls = (verb: string) => docker.calls.filter((c) => c[0] === verb).length;
 
 beforeEach(async () => {
+    const setupStarted = performance.now(); composeAttempt++; composeStages.length = 0;
     dir = await mkdtemp(join(tmpdir(), 'genie2-mcp-hosting-'));
     docker = fakeDocker();
     opened.length = 0;
@@ -92,22 +99,29 @@ beforeEach(async () => {
         await mkdir(join(dir, ws), { recursive: true });
         await writeFile(join(dir, ws, 'project.json'), `${JSON.stringify({ name: ws, repos: [] }, null, 2)}\n`, 'utf8');
     }
-    services = await composeServices({
+    timingLine({ stage: 'fixture-files', elapsedMs: performance.now() - setupStarted, totalMs: performance.now() - setupStarted });
+    const input = {
         userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
         workspaces: () => [{ id: 'example', path: join(dir, 'example') }, { id: 'example-other', path: join(dir, 'example-other') }],
-    });
+        onComposeStage: (sample: ComposeSample) => { composeStages.push(sample); timingLine(sample); },
+    };
+    services = await composeServices(input);
+    timingLine({ stage: 'hook-composed', elapsedMs: performance.now() - setupStarted, totalMs: performance.now() - setupStarted });
     callers['t-example'] = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'example', workspacePath: join(dir, 'example') };
     callers['t-other'] = { agentId: mintAgentId(), agentName: 'vega', workspaceId: 'example-other', workspacePath: join(dir, 'example-other') };
     tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services, openInBrowser: async (url) => { shown.push(url); return { ok: true }; } });
 });
 
 afterEach(async () => {
-    await services.shutdown();
+    await services?.shutdown();
     await rm(dir, { recursive: true, force: true });
 });
 
 describe('services: reading', () => {
     it('catalog: the engines Genie offers with their versions and images — never MinIO, which can only be taken over', async () => {
+        // The real first composition must expose costs, including a positive completion; a missing observer is not zero cost.
+        expect(composeStages.map(sample => sample.stage)).toEqual(expect.arrayContaining(['local-staging', 'settings', 'agent-stores', 'hosting', 'ready']));
+        for (const sample of composeStages) { expect(Number.isFinite(sample.elapsedMs) && sample.elapsedMs >= 0).toBe(true); expect(sample.totalMs).toBeGreaterThanOrEqual(sample.elapsedMs); }
         const r = await call('services', 't-example', { action: 'catalog' });
         expect(r.isError).toBe(false);
         const engines = r.json.engines as Array<{ engine: string; versions: string[]; images: string[]; scopes: string[] }>;
