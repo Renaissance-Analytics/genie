@@ -70,9 +70,16 @@ export class LocalFilesContent {
             return { t: 'blob', ref, encoding: bytes && key === 'base64' ? 'base64' : 'utf8' };
         }
         if (value === null || typeof value === 'number' || typeof value === 'boolean') return { t: 'value', value };
-        if (Array.isArray(value)) return { t: 'array', kind, count: value.length, ref: this.#resource(scope, { scope, type: 'page', kind, value, object: false, projected: false }) };
+        if (Array.isArray(value)) return value.length === 0 ? { t: 'json', value } : { t: 'array', kind, count: value.length, ref: this.#resource(scope, { scope, type: 'page', kind, value, object: false, projected: false }) };
         if (typeof value !== 'object') throw new Error('invalid workspace response value');
         const object = value as Record<string, unknown>, keys = Object.keys(object);
+        // Bound a plain leaf once, rather than serializing every scalar/key and wrapping each field.
+        // Undefined/large/nested values retain the lossless projection below.
+        const prototype = Object.getPrototypeOf(object);
+        if ((prototype === Object.prototype || prototype === null) && keys.every(k => {
+            const item = object[k];
+            return item === null || typeof item === 'number' || typeof item === 'boolean' || (typeof item === 'string' && item.length <= FILES_INLINE_BYTES) || (Array.isArray(item) && item.length === 0);
+        }) && Buffer.byteLength(JSON.stringify(object)) <= FILES_INLINE_BYTES) return { t: 'json', value: object };
         // Long object keys travel as values on a metadata page too; never put them directly into a frame.
         if (keys.some(k => Buffer.byteLength(JSON.stringify(k)) > FILES_INLINE_BYTES)) return { t: 'object', kind, count: keys.length, ref: this.#resource(scope, { scope, type: 'page', kind, value: object, object: true, projected: false }) };
         const entries = keys.map(k => [k, this.#project(scope, object[k], kind, bytes, k)] as [string, FilesProjection]);

@@ -9,6 +9,7 @@ export type FilesPageKind = 'workspace-tree' | 'folder-children';
 /** Content is separate from bounded metadata, including long keys and workspace-derived errors. */
 export type FilesProjection =
     | { t: 'value'; value: string | number | boolean | null }
+    | { t: 'json'; value: unknown }
     | { t: 'undefined' }
     | { t: 'blob'; ref: string; encoding: 'utf8' | 'base64' }
     | { t: 'array' | 'object'; ref: string; kind: FilesPageKind; count: number }

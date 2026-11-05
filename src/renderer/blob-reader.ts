@@ -1,5 +1,5 @@
 import { BLOB_READ_BYTES, type BlobCalls, type BlobClient } from '../core/local-blobs.js';
-import { fromBase64 } from '../core/mobile-wire.js';
+import { decodeLocalBase64 } from './local-base64.js';
 
 /** Uses the caller's existing connection, with no family consumer or additional transport. */
 export function verifiedBlobClient(port: BlobCalls): BlobClient {
@@ -12,7 +12,7 @@ export function verifiedBlobClient(port: BlobCalls): BlobClient {
             for (let offset = 0; offset < opened.size; offset += BLOB_READ_BYTES) {
                 const length = Math.min(BLOB_READ_BYTES, opened.size - offset), chunk = await port.read(opened.id, offset, length);
                 if (!chunk || typeof chunk.base64 !== 'string' || chunk.base64.length !== 4 * Math.ceil(length / 3) || !/^[A-Za-z0-9+/]*={0,2}$/.test(chunk.base64)) throw new Error('invalid base64 in a blob read');
-                const decoded = fromBase64(chunk.base64);
+                const decoded = decodeLocalBase64(chunk.base64);
                 if (decoded === null || decoded.byteLength !== length) throw new Error('invalid base64 length in a blob read');
                 bytes.set(decoded, offset);
             }

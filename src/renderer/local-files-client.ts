@@ -1,6 +1,6 @@
 import type { BlobClient } from '../core/local-blobs.js';
 import type { LocalUploadClient, PageClient } from '../core/local-content.js';
-import { bytesToBase64 } from '../core/mobile.js';
+import { decodeLocalBase64, encodeLocalBase64 } from './local-base64.js';
 import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesProjection, type InvalidFilesArgument, type LocalFilesMethod } from '../core/local-files.js';
 import type { GenieBridge } from './bridge.js';
 
@@ -11,8 +11,9 @@ export type LocalFilesBridge = Pick<GenieBridge['files'], FilesProtocolKey>;
 function decodeBase64(value: string): Uint8Array {
     let clean = value.split('=')[0]!.replace(/-/g, '+').replace(/_/g, '/').replace(/[^A-Za-z0-9+/]/g, '');
     if (clean.length % 4 === 1) clean = clean.slice(0, -1);
-    const decoded = atob(clean.padEnd(Math.ceil(clean.length / 4) * 4, '='));
-    return Uint8Array.from(decoded, character => character.charCodeAt(0));
+    const decoded = decodeLocalBase64(clean.padEnd(Math.ceil(clean.length / 4) * 4, '='));
+    if (decoded === null) throw new Error('invalid base64 file bytes');
+    return decoded;
 }
 
 const text = (value: unknown): string | null => typeof value === 'string' ? value : null;
@@ -34,8 +35,9 @@ export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...ar
         if (!value || typeof value !== 'object') throw new Error('invalid Files metadata projection');
         switch (value.t) {
             case 'value': return value.value;
+            case 'json': return value.value;
             case 'undefined': return undefined;
-            case 'blob': { const bytes = await port.blobs.readAll('workspace-file', value.ref); return value.encoding === 'base64' ? bytesToBase64(bytes) : new TextDecoder().decode(bytes); }
+            case 'blob': { const bytes = await port.blobs.readAll('workspace-file', value.ref); return value.encoding === 'base64' ? encodeLocalBase64(bytes) : new TextDecoder().decode(bytes); }
             case 'record': { const entries: Array<[string, unknown]> = []; for (const [key, item] of value.entries) entries.push([key, await decode(item)]); return Object.fromEntries(entries); }
             case 'array':
             case 'object': {
