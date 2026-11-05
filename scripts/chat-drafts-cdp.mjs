@@ -2,7 +2,7 @@
 /** CI/test VM only. Copy both draft scripts to the pinned 7D baseline and add --baseline there. */
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { measureChatDraftsPage } from './chat-drafts-measure-page.mjs';
@@ -13,6 +13,14 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const json = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+function logTail(path) {
+    const fd = openSync(path, 'r');
+    try {
+        const size = fstatSync(fd).size, bytes = Buffer.alloc(Math.min(size, 32768)); let at = 0;
+        while (at < bytes.length) { const count = readSync(fd, bytes, at, bytes.length - at, size - bytes.length + at); if (!count) break; at += count; }
+        return bytes.subarray(0, at).toString('utf8');
+    } finally { closeSync(fd); }
+}
 const targets = async port => (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) })).json();
 async function until(label, read, ms = 30000) { const end = Date.now() + ms; while (Date.now() < end) { const value = await read().catch(() => null); if (value) return value; await sleep(100); } throw new Error(`${label} was not ready`); }
 class Cdp {
@@ -35,7 +43,8 @@ class Cdp {
         } finally { clearTimeout(timer); this.pending.delete(id); }
     }
 }
-let app, page, main, root, hostRecord, failure = null, code = 1;
+let app, page, main, root, hostRecord, failure = null, code = 1, ownedElectronLog = false;
+const startup = {};
 try {
     demand(process.env.CI === 'true' || process.env.GENIE_DRAFTS_MEASURE_ALLOW === '1' || (process.platform === 'linux' && process.env.USER === 'genie'), 'refused: run only in CI or an explicitly allowed test VM');
     demand(existsSync('dist/main/entry.js'), 'run from a built checkout');
@@ -52,15 +61,21 @@ try {
     writeFileSync(join(runtime, 'agents.json'), JSON.stringify(agents)); writeFileSync(join(runtime, 'chat-drafts.json'), JSON.stringify(drafts));
     const attachmentHash = sha(attachment), listBytes = Buffer.from(JSON.stringify(drafts)), paste = { v: 1, text: 'look at \u2063paste\u2063', pills: [{ kind: 'text', id: 'paste', text: 'x'.repeat(2 * 1024 * 1024), label: '2 MiB paste' }], attachments: [] };
     const fd = openSync(join(OUT, 'chat-drafts-electron.log'), 'w'), electron = resolve('node_modules/electron', WIN ? 'dist/electron.exe' : 'dist/electron');
+    ownedElectronLog = true;
     const args = ['.', `--remote-debugging-port=${PORT}`, `--inspect=${INSPECT}`, `--user-data-dir=${join(root, 'profile')}`]; if (!WIN) args.push('--no-sandbox');
     if (process.platform === 'linux' && ['wayland', 'x11'].includes(process.env.XDG_SESSION_TYPE)) args.push(`--ozone-platform=${process.env.XDG_SESSION_TYPE}`);
     const xvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY, launchStarted = Date.now();
     app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd); app.on('error', e => console.error(e.message));
     // Startup is measured separately (#1587); it is not part of any content row's elapsed time.
     const target = await until('owned app page', async () => (await targets(PORT)).find(t => t.type === 'page' && /index\.html/.test(t.url)), 240000);
+    startup.pageTargetMs = Date.now() - launchStarted;
     page = await Cdp.connect(target.webSocketDebuggerUrl); main = await Cdp.connect((await until('owned main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
-    await waitForPageProbe(page); await until('ready page connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"'));
-    reports.push({ label: 'startup', elapsedMs: Date.now() - launchStarted }); console.log(`DRAFT_STARTUP ${JSON.stringify(reports.at(-1))}`);
+    startup.inspectorsConnectedMs = Date.now() - launchStarted;
+    await waitForPageProbe(page); startup.pageBridgeMs = Date.now() - launchStarted;
+    await until('ready page connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"'));
+    startup.protocolReadyMs = Date.now() - launchStarted;
+    startup.navigation = await page.evaluate('(()=>{const n=performance.getEntriesByType("navigation")[0];return n?{domInteractive:n.domInteractive,domContentLoaded:n.domContentLoadedEventEnd,load:n.loadEventEnd}:null})()');
+    reports.push({ label: 'startup', elapsedMs: startup.protocolReadyMs, phases: startup }); console.log(`DRAFT_STARTUP ${JSON.stringify(reports.at(-1))}`);
     hostRecord = json(join(runtime, 'host.json'));
     const handlers = await main.evaluate(`(() => { const ipc=process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').ipcMain;
         const rss=process.memoryUsage().rss,s=globalThis.__draftMain={ticks:0,ticksBefore:0,gap:0,last:performance.now(),rss,rssBefore:rss,methods:{}};
@@ -97,5 +112,11 @@ finally {
     const record = root ? json(join(root, '.genie', 'runtime', 'host.json')) : null;
     if (hostRecord && record?.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt && Number.isFinite(record.startedAt) && record.startedAt >= started) { try { process.kill(record.pid, 'SIGTERM'); } catch {} }
     const head = (() => { try { return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', stdio: 'pipe' }).trim(); } catch { return null; } })();
-    mkdirSync(OUT, { recursive: true }); writeFileSync(join(OUT, 'chat-drafts-result.json'), JSON.stringify({ code, baseline: BASELINE, platform: process.platform, head, root, failure, reports, limits: ['server stays in main', 'startup measured separately; #1587 remains separate', 'save read-back/hash verification outside save latency', 'whole attachment SHA checked; peak host RSS unmeasured', 'physical VM and installed-ASAR gates remain coordinator-owned'] }, null, 2)); process.exitCode = code;
+    const result = { code, baseline: BASELINE, platform: process.platform, head, root, failure, reports, limits: ['server stays in main', 'startup measured separately; #1587 remains separate', 'save read-back/hash verification outside save latency', 'whole attachment SHA checked; peak host RSS unmeasured', 'physical VM and installed-ASAR gates remain coordinator-owned'] };
+    mkdirSync(OUT, { recursive: true }); writeFileSync(join(OUT, 'chat-drafts-result.json'), JSON.stringify(result, null, 2));
+    for (const [name, path] of [['lifecycle', root ? join(root, '.genie', 'runtime', 'lifecycle.log') : null], ['electron', ownedElectronLog ? join(OUT, 'chat-drafts-electron.log') : null]]) {
+        try { const tail = logTail(path); writeFileSync(join(OUT, `chat-drafts-${name}-tail.log`), tail); console.log(`DRAFT_LOG_TAIL ${name} ${JSON.stringify(tail)}`); }
+        catch { console.log(`DRAFT_LOG_TAIL ${name} unavailable`); }
+    }
+    console.log(`DRAFT_RESULT ${JSON.stringify(result)}`); process.exitCode = code;
 }
