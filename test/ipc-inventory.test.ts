@@ -4,9 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CLIPBOARD_WRITE_CHANNEL } from '../src/core/clipboard-wire.js';
 import { IPC_INVENTORY } from '../src/core/ipc-inventory.js';
+import { LOCAL_FRAME_CHANNELS } from '../src/core/local-frame.js';
 import { FEATURE_CHANNELS } from '../src/renderer/bridge.js';
 
-const bindings: Readonly<Record<string, unknown>> = { CLIPBOARD_WRITE_CHANNEL, FEATURE_CHANNELS };
+const bindings: Readonly<Record<string, unknown>> = { CLIPBOARD_WRITE_CHANNEL, FEATURE_CHANNELS, LOCAL_FRAME_CHANNELS };
 const registrationKinds = new Set(['handle', 'on', 'once', 'handleOnce']);
 
 function channels(source: string, file: string): string[] {
@@ -67,7 +68,14 @@ describe('P4 IPC inventory', () => {
     });
 
     it('names a protocol method, a window port, or the reason it is deferred', () => {
-        for (const [, destination] of IPC_INVENTORY) expect(destination).toMatch(/^(protocol:.+|window-port|later:.+)$/);
+        for (const [, destination] of IPC_INVENTORY) expect(destination).toMatch(/^(protocol:.+|protocol-door|window-port|later:.+)$/);
+    });
+
+    it('reserves protocol-door for the frame channel and requires that channel', () => {
+        const doorChannels = (rows: readonly (readonly [string, string])[]) => rows.filter(([, destination]) => destination === 'protocol-door').map(([channel]) => channel);
+        expect(doorChannels(IPC_INVENTORY)).toEqual([LOCAL_FRAME_CHANNELS.toHost]);
+        const unapproved = doorChannels([['genie:unapproved', 'protocol-door']]).filter((channel) => channel !== LOCAL_FRAME_CHANNELS.toHost);
+        expect(unapproved).toEqual(['genie:unapproved']);
     });
 
     it('CONTROL: notices an added registration and a removed registration', () => {

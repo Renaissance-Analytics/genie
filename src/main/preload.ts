@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { FEATURE_CHANNELS, type AgentDetail, type FilesViewEvent, type GenieSnapshot, type PreloadBridge, type UpdateState } from '../renderer/bridge.js';
+import { LOCAL_FRAME_CHANNELS, type LocalFramePort } from '../core/local-frame.js';
+import { FEATURE_CHANNELS, type AgentDetail, type FilesViewEvent, type GenieSnapshot, type PreloadBridge } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
-import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -62,12 +62,6 @@ const bridge: PreloadBridge = {
         ipcRenderer.on('genie:workspace-pulse', listener);
         return () => ipcRenderer.removeListener('genie:workspace-pulse', listener);
     },
-    onHeadroom: (onHeadroom) => {
-        const listener = (_event: unknown, limits: Readonly<Record<string, Headroom>>): void => onHeadroom(limits);
-        ipcRenderer.on('genie:headroom', listener);
-        void ipcRenderer.invoke('genie:headroom').then((limits: Readonly<Record<string, Headroom>>) => onHeadroom(limits), () => {});
-        return () => ipcRenderer.removeListener('genie:headroom', listener);
-    },
     onAction: (onAction) => {
         const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[] }): void => onAction(action);
         ipcRenderer.on('genie:action', listener);
@@ -114,7 +108,6 @@ const bridge: PreloadBridge = {
     cancelTurn: (agentId) => ipcRenderer.invoke('genie:cancel-turn', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     resumeLimit: (agentId) => ipcRenderer.invoke('genie:resume-limit', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     providerLogin: (agentId) => ipcRenderer.invoke('genie:provider-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
-    accountRetry: (agentId) => ipcRenderer.invoke('genie:account-retry', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     prompt: (agentId, text, attachments) => ipcRenderer.invoke('genie:prompt', agentId, text, attachments) as Promise<{ ok: boolean; reason?: string }>,
@@ -129,28 +122,9 @@ const bridge: PreloadBridge = {
         ipcRenderer.invoke('genie:restart-with-handoff', agentId, finishedId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     workspaces: {
-        previewAdd: (path) => ipcRenderer.invoke('genie:workspace-preview-add', path) as never,
-        confirmAdd: (path) => ipcRenderer.invoke('genie:workspace-confirm-add', path) as never,
-        create: (name, parent, remote, tynnProjectId) => ipcRenderer.invoke('genie:workspace-create', name, parent, remote, tynnProjectId ?? '') as never,
-        previewAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-preview-add-git', url, parent) as never,
-        confirmAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-confirm-add-git', url, parent) as never,
-        readSource: (path) => ipcRenderer.invoke('genie:workspace-read-source', path) as never,
-        stageFromGit: (url) => ipcRenderer.invoke('genie:workspace-stage-git', url) as never,
-        registerExisting: (path) => ipcRenderer.invoke('genie:workspace-register-existing', path) as never,
-        buildEnvelope: (plan, remote) => ipcRenderer.invoke('genie:workspace-build-envelope', plan, remote) as never,
-        discardStaged: (path) => ipcRenderer.invoke('genie:workspace-discard-staged', path) as never,
-        githubRepos: () => ipcRenderer.invoke('genie:workspace-github-repos') as never,
-        tynnProjects: () => ipcRenderer.invoke('genie:workspace-tynn-projects') as never,
-        tynnOwnerOptions: () => ipcRenderer.invoke('genie:workspace-tynn-owner-options') as never,
-        createTynnProject: (input) => ipcRenderer.invoke('genie:workspace-create-tynn-project', input) as never,
-        importedAgents: (workspaceId) => ipcRenderer.invoke('genie:workspace-imported-agents', workspaceId) as never,
-        adoptAgent: (workspaceId, name) => ipcRenderer.invoke('genie:workspace-adopt-agent', workspaceId, name) as never,
-        previewAddFromTynn: (projectId, parent) => ipcRenderer.invoke('genie:workspace-preview-add-tynn', projectId, parent) as never,
-        confirmAddFromTynn: (parent, projectId) => ipcRenderer.invoke('genie:workspace-confirm-add-tynn', parent, projectId) as never,
         hibernate: (workspaceId) => ipcRenderer.invoke('genie:workspace-hibernate', workspaceId) as never,
         wake: (workspaceId) => ipcRenderer.invoke('genie:workspace-wake', workspaceId) as never,
         remove: (workspaceId) => ipcRenderer.invoke('genie:workspace-remove', workspaceId) as never,
-        listRepos: (workspaceId) => ipcRenderer.invoke('genie:workspace-repos', workspaceId) as never,
         tynnBoard: (workspaceId, scope) => ipcRenderer.invoke('genie:workspace-tynn-board', workspaceId, scope) as never,
         tynnBoardAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-board-action', workspaceId, input) as never,
         tynnBoardChanges: (workspaceId, scope, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-board-changes', workspaceId, scope, cursor, [...ids]) as never,
@@ -170,40 +144,6 @@ const bridge: PreloadBridge = {
                 if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-board-unwatch', watchId);
             };
         },
-        addRepo: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-repo-add', workspaceId, input) as never,
-        removeRepo: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-remove', workspaceId, slug) as never,
-        locateRepo: (workspaceId, slug, path) => ipcRenderer.invoke('genie:workspace-repo-locate', workspaceId, slug, path) as never,
-        commitsSince: (workspaceId, since) => ipcRenderer.invoke('genie:workspace-commits-since', workspaceId, since) as never,
-        removeRepoLock: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-unlock', workspaceId, slug) as never,
-        settings: (workspaceId) => ipcRenderer.invoke('genie:workspace-settings', workspaceId) as never,
-        setSetting: (workspaceId, key, value) => ipcRenderer.invoke('genie:workspace-setting-set', workspaceId, key, value) as never,
-        resetSetting: (workspaceId, key) => ipcRenderer.invoke('genie:workspace-setting-reset', workspaceId, key) as never,
-        onSettingsChanged: (listener) => {
-            const handler = (_e: unknown, workspaceId: string) => listener(workspaceId);
-            ipcRenderer.on('genie:workspace-settings-changed', handler);
-            return () => { ipcRenderer.removeListener('genie:workspace-settings-changed', handler); };
-        },
-        setGoverns: (workspaceId, childIds) => ipcRenderer.invoke('genie:workspace-set-governs', workspaceId, [...childIds]) as never,
-        setDefaultAgent: (workspaceId, agentId) => ipcRenderer.invoke('genie:workspace-set-default-agent', workspaceId, agentId) as never,
-        setColor: (workspaceId, color) => ipcRenderer.invoke('genie:workspace-set-color', workspaceId, color) as never,
-    },
-
-    agents: {
-        restart: (agentId, kind) => ipcRenderer.invoke('genie:agent-restart', agentId, kind) as never,
-        previewDelete: (agentId, outcome, alsoRemoveFrom) => ipcRenderer.invoke('genie:agent-preview-delete', agentId, outcome, [...alsoRemoveFrom]) as never,
-        delete: (agentId, outcome, alsoRemoveFrom, handoff) => ipcRenderer.invoke('genie:agent-delete', agentId, outcome, [...alsoRemoveFrom], handoff === true) as never,
-        switchDriver: (agentId, to) => ipcRenderer.invoke('genie:agent-switch-driver', agentId, to) as never,
-        setBudget: (agentId, dailyLimitUsd) => ipcRenderer.invoke('genie:agent-set-budget', agentId, dailyLimitUsd) as never,
-        setMode: (agentId, mode) => ipcRenderer.invoke('genie:agent-set-mode', agentId, mode) as never,
-        setAccessScope: (agentId, scope) => ipcRenderer.invoke('genie:agent-set-access-scope', agentId, scope) as never,
-        setAutoApprove: (agentId, on) => ipcRenderer.invoke('genie:agent-set-auto-approve', agentId, on) as never,
-        setManageTabs: (agentId, on) => ipcRenderer.invoke('genie:agent-set-manage-tabs', agentId, on) as never,
-        setDrivePages: (agentId, on) => ipcRenderer.invoke('genie:agent-set-drive-pages', agentId, on) as never,
-        setIssueWatch: (agentId, setting) => ipcRenderer.invoke('genie:agent-set-issue-watch', agentId, setting) as never,
-        setPermissions: (agentId, permissions) => ipcRenderer.invoke('genie:agent-set-permissions', agentId, permissions) as never,
-        setModel: (agentId, model) => ipcRenderer.invoke('genie:agent-set-model', agentId, model) as never,
-        models: (agentId, refresh) => ipcRenderer.invoke('genie:agent-models', agentId, refresh === true) as never,
-        diagnose: (agentId) => ipcRenderer.invoke('genie:agent-diagnose', agentId) as never,
     },
 
     addWorkspace: () => {
@@ -265,16 +205,6 @@ const bridge: PreloadBridge = {
         release: (refs) => ipcRenderer.invoke('genie:chat-drafts-release', refs) as Promise<void>,
     },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.
-    // Every agent's activity feed (beta.33 item 10): the workspace Dashboard's lanes. Pushed, never polled.
-    activity: {
-        feeds: (workspaceId) => ipcRenderer.invoke('genie:activity', workspaceId) as Promise<never>,
-        subscribe: (onFeed) => {
-            // A feed is small (its newest items, 30 minutes of beats), so one channel carries every agent's.
-            const listener = (_event: unknown, feed: unknown): void => onFeed(feed as never);
-            ipcRenderer.on('genie:activity-changed', listener);
-            return () => { ipcRenderer.removeListener('genie:activity-changed', listener); };
-        },
-    },
     sitePanels: {
         prepare: (host) => ipcRenderer.invoke('site-panel:prepare', host) as Promise<never>,
         openWindow: (host) => ipcRenderer.invoke('site-panel:open-window', host) as Promise<void>,
@@ -284,21 +214,11 @@ const bridge: PreloadBridge = {
     // This machine's disk, one folder at a time, for every picker (Tynn #835).
     host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, mkdir: (parent, name) => ipcRenderer.invoke('genie:host-mkdir', parent, name) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
     // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
-    // A workspace's Apps and scripts (genie#1345): its keys, on this machine only — a remote window has no `appInbox`.
-    appInbox: {
-        state: (workspaceId) => ipcRenderer.invoke('genie:app-inbox-state', workspaceId) as Promise<never>,
-        createKey: (workspaceId, name) => ipcRenderer.invoke('genie:app-inbox-create-key', workspaceId, name) as Promise<never>,
-        revokeKey: (workspaceId, keyId) => ipcRenderer.invoke('genie:app-inbox-revoke-key', workspaceId, keyId) as Promise<never>,
-        source: (workspaceId, op, kind, id) => ipcRenderer.invoke('genie:app-inbox-source', workspaceId, op, kind, id) as Promise<never>,
-    },
+    // P5 retains outgoing channel ownership in main; device memory and Tynn reads/actions use the local client.
     deviceLink: {
         open: (url) => ipcRenderer.invoke('genie:device-open', url) as Promise<never>,
-        hosts: () => ipcRenderer.invoke('genie:device-hosts') as Promise<never>,
-        forget: (url) => ipcRenderer.invoke('genie:device-forget', url) as Promise<never>,
-        adopt: (url, token) => ipcRenderer.invoke('genie:device-adopt', url, token) as Promise<never>,
     },
     tynnNetwork: {
-        workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,
         open: (workstationId) => ipcRenderer.invoke('genie:relay-open', workstationId) as Promise<never>,
         // Where an open stands: main says when Tynn gave the way in and it is reaching the machine.
         onOpenStep: (listener) => {
@@ -307,7 +227,6 @@ const bridge: PreloadBridge = {
             return () => { ipcRenderer.removeListener('genie:relay-open-step', handler); };
         },
         openLink: (text) => ipcRenderer.invoke('genie:connect-link', text) as Promise<never>,
-        setRole: (workstationId, role, code) => ipcRenderer.invoke('genie:tynn-workstation-role', workstationId, role, code) as Promise<never>,
         send: (channel, text) => ipcRenderer.send('genie:relay-send', channel, text),
         close: (channel) => ipcRenderer.send('genie:relay-close', channel),
         onMessage: (listener) => {
@@ -320,32 +239,12 @@ const bridge: PreloadBridge = {
             ipcRenderer.on('genie:relay-closed', handler);
             return () => { ipcRenderer.removeListener('genie:relay-closed', handler); };
         },
-        // Sharing this machine through Tynn (Tynn #839).
-        shares: {
-            list: (workspaceId) => ipcRenderer.invoke('genie:tynn-share-links', workspaceId) as Promise<never>,
-            mint: (input) => ipcRenderer.invoke('genie:tynn-share-mint', input) as Promise<never>,
-            revoke: (linkId) => ipcRenderer.invoke('genie:tynn-share-revoke', linkId) as Promise<never>,
-        },
     },
 
-    /*
-     * UPDATES — §7. State is pushed on one channel; the three actions are invokes whose
-     * answers are the host's own (a refusal is `false` / `null`, crossed as-is).
-     */
     files: {
-        tree: (workspaceId) => ipcRenderer.invoke('genie:files-tree', workspaceId) as Promise<never>,
-        children: (workspaceId, dir) => ipcRenderer.invoke('genie:files-children', workspaceId, dir) as Promise<never>,
-        open: (workspaceId, path) => ipcRenderer.invoke('genie:files-open', workspaceId, path) as Promise<never>,
-        readMedia: (workspaceId, path) => ipcRenderer.invoke('genie:files-read-media', workspaceId, path) as Promise<never>,
         openExternal: (workspaceId, path) => ipcRenderer.invoke('genie:files-open-external', workspaceId, path) as Promise<never>,
         reveal: (workspaceId, path) => ipcRenderer.invoke('genie:files-reveal', workspaceId, path) as Promise<never>,
         export: (workspaceId, path) => ipcRenderer.invoke('genie:files-export', workspaceId, path) as Promise<never>,
-        create: (workspaceId, path, kind) => ipcRenderer.invoke('genie:files-create', workspaceId, path, kind) as Promise<never>,
-        rename: (workspaceId, from, to) => ipcRenderer.invoke('genie:files-rename', workspaceId, from, to) as Promise<never>,
-        duplicate: (workspaceId, path) => ipcRenderer.invoke('genie:files-duplicate', workspaceId, path) as Promise<never>,
-        trash: (workspaceId, path) => ipcRenderer.invoke('genie:files-trash', workspaceId, path) as Promise<never>,
-        lastCommitted: (workspaceId, path) => ipcRenderer.invoke('genie:files-last-committed', workspaceId, path) as Promise<string | null>,
-        state: (workspaceId) => ipcRenderer.invoke('genie:files-state', workspaceId) as Promise<never>,
         // ONE SUBSCRIPTION PER VIEW (the host split, P2.2): watched while held, unwatched when let go; its batches and the
         // git it asked for come back on the two channels, for its workspace only.
         subscribe: (workspaceId, want, listener) => {
@@ -362,10 +261,6 @@ const bridge: PreloadBridge = {
                 void ipcRenderer.invoke('genie:files-unwatch', viewId);
             };
         },
-        write: (workspaceId, path, text, expectedSha) => ipcRenderer.invoke('genie:files-write', workspaceId, path, text, expectedSha) as Promise<never>,
-        gitStatus: (workspaceId) => ipcRenderer.invoke('genie:files-git-status', workspaceId) as Promise<never>,
-        readBytes: (workspaceId, pluginId, path) => ipcRenderer.invoke('genie:files-read-bytes', workspaceId, pluginId, path) as Promise<never>,
-        writeBytes: (workspaceId, pluginId, path, base64, expectedSha) => ipcRenderer.invoke('genie:files-write-bytes', workspaceId, pluginId, path, base64, expectedSha) as Promise<never>,
         onChange: (listener) => {
             const handler = (_e: unknown, workspaceId: string, paths?: readonly string[]) => listener(workspaceId, paths);
             ipcRenderer.on('genie:files-changed', handler);
@@ -383,9 +278,6 @@ const bridge: PreloadBridge = {
         },
     },
     // The official panels (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace.
-    repo: {
-        call: (op, workspaceId, rel, a, b) => ipcRenderer.invoke('genie:repo', op, workspaceId, rel, a, b) as Promise<never>,
-    },
     artboard: {
         read: (workspaceId) => ipcRenderer.invoke('genie:artboard-read', workspaceId) as Promise<never>,
         review: (workspaceId, postId, verdict, comment) => ipcRenderer.invoke('genie:artboard-review', workspaceId, postId, verdict, comment) as Promise<never>,
@@ -411,21 +303,26 @@ const bridge: PreloadBridge = {
         current: () => ipcRenderer.invoke('genie:window-overlay-colors-current') as Promise<{ color: string; symbolColor: string } | null>,
     },
 
-    updates: {
-        state: () => ipcRenderer.invoke('genie:updates-state') as Promise<UpdateState>,
-        subscribe: (onChange) => {
-            const handler = (_e: unknown, state: UpdateState) => onChange(state);
-            ipcRenderer.on('genie:updates-changed', handler);
-            return () => { ipcRenderer.removeListener('genie:updates-changed', handler); };
-        },
-        check: () => ipcRenderer.invoke('genie:updates-check') as Promise<UpdateState>,
-        download: () => ipcRenderer.invoke('genie:updates-download') as Promise<boolean>,
-        install: () => ipcRenderer.invoke('genie:updates-install') as Promise<{ report: string } | null>,
-        notes: () => ipcRenderer.invoke('genie:updates-notes') as Promise<UpdateState | null>,
-    },
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);
+// contextBridge makes this main-supplied value immutable in the page, including when false.
+contextBridge.exposeInMainWorld('genieTestMode', process.argv.includes('--genie-page-probe'));
+
+// One string frame pair, separate from the bridge families that have not moved yet. Admission belongs to main.
+contextBridge.exposeInMainWorld('genieLocalProtocol', {
+    send: (action, connection, text) => {
+        if (typeof action !== 'string' || typeof connection !== 'string' || typeof text !== 'string') throw new TypeError('the local protocol port accepts strings only');
+        ipcRenderer.send(LOCAL_FRAME_CHANNELS.toHost, action, connection, text);
+    },
+    onFrame: (listener) => {
+        const onFrame = (_event: unknown, action: unknown, connection: unknown, text: unknown): void => {
+            if ((action === 'frame' || action === 'closed') && typeof connection === 'string' && typeof text === 'string') listener(action, connection, text);
+        };
+        ipcRenderer.on(LOCAL_FRAME_CHANNELS.toWindow, onFrame);
+        return () => { ipcRenderer.removeListener(LOCAL_FRAME_CHANNELS.toWindow, onFrame); };
+    },
+} satisfies LocalFramePort);
 
 // THIS WINDOW'S OWN STALLS (beta.53 freezes): a long task, or no frame presented while visible, over 1 s — sent to main's
 // stall watchdog for lifecycle.log. Imported by THIS preload only: a module two preloads share becomes a chunk a sandboxed

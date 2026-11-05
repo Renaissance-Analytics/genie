@@ -28,6 +28,7 @@ import { lastNumberedTurn } from '../core/turn-numbers.js';
 import { commsOf } from '../core/comms.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
+import { localProtocolDoor } from './local-protocol-door.js';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
@@ -144,8 +145,8 @@ import { needsYouCount } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
-import { trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
-import { terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
+import { onTheClock, trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
+import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
@@ -190,7 +191,7 @@ import { FilesHost } from './files-host.js';
 import { FilesWatchHub, type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
 import { repoStatus } from './repo-git.js';
 import { fileExporter } from './file-export.js';
-import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
+import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
@@ -305,6 +306,8 @@ if (launch.kind === 'exit') {
 }
 
 let window: BrowserWindow | null = null;
+/** Only the window constructors using preload.cjs admit contents to this local frame door. */
+const localDoor = localProtocolDoor(ipcMain);
 /**
  * THE STALL WATCHDOG (beta.53 freezes; main/stall-watchdog.ts): main's held event loop, slow renderer requests and slow
  * outbound calls, the windows' own long tasks and frame gaps, hung renderers and gone child processes — each a line in
@@ -312,7 +315,7 @@ let window: BrowserWindow | null = null;
  */
 let stallLog: ((line: string) => void) | null = null;
 /** Main's own stack, sampled cheaply and read on a block (main/stall-profile.ts); started at boot. */
-let stallProfiler: { capture(ms: number): void } | null = null;
+let stallProfiler: { capture(ms: number): void; stop(): void } | null = null;
 /**
  * THE SPAWN HOST (genie#1397): the child that creates every process main used to create on its own thread — the Docker
  * CLI (600 s of the owner's main in one beta.54 session, up to 18.3 s at a time), every other `execFileRunner` command,
@@ -396,7 +399,13 @@ function hostActivityNow(): HostActivity {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).length : 0;
     const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
     const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).length;
-    return { agents, terminals: terminals?.count ?? 0, processes, services: servicesUp };
+    return { agents, terminals: terminals?.count ?? 0, processes, services: servicesUp, ...onTheClockNow() };
+}
+
+/** What waits on the host's clock, from the host's own lists (core/tray-only.ts). With no host, nothing here outlives the window. */
+function onTheClockNow(): { armedFlows: number; scheduledTasks: number } {
+    if (agentEngineLink?.live !== true) return { armedFlows: 0, scheduledTasks: 0 };
+    return onTheClock(agentEngineLink.client.flows().list(), agentEngineLink.client.processBook().kept());
 }
 
 /**
@@ -420,9 +429,8 @@ function closeUi(reason: string): void {
  * terminal (marked when a command runs in it — read from the process table), the kept processes, the active services and
  * the sites.
  */
-function stoppingNow(): Stopping {
+function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : [];
-    const table = systemProcessTree.snapshot();
     const workspaces = registry?.snapshot().workspaces ?? [];
     const seen = new Map<string, number>();
     const terminalsOpen = (terminals?.list() ?? []).map((t) => {
@@ -434,16 +442,22 @@ function stoppingNow(): Stopping {
     const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => p.name);
     const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).map((e) => `${e.engine} ${e.version}`);
     const sites = (services?.routes() ?? []).map((r) => r.host);
-    return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites };
+    const clockFlows = agentEngineLink?.live === true ? agentEngineLink.client.flows().list().filter((f) => f.armed).map((f) => f.name) : [];
+    const clockTasks = agentEngineLink?.live === true ? agentEngineLink.client.processBook().kept().filter((p) => p.wanted && p.schedule).map((p) => p.name) : [];
+    return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites, flows: clockFlows, scheduled: clockTasks };
 }
+
+/** How long the tray's question waits for the busy marks' process table (read off main) before it is asked without them. */
+const TRAY_TABLE_MS = 1_500;
 
 /**
  * ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first, every time — what will stop,
  * named; Cancel the default and the cancel; only the confirm button goes on. Not asked anywhere else: the quit dialog's own
  * answer, the tray-only exit, the OS ending the session, the upgrade.
  */
-function confirmTray(action: TrayAction): boolean {
-    const q = trayConfirm(action, stoppingNow());
+async function confirmTray(action: TrayAction): Promise<boolean> {
+    const table = await tableWithin(() => systemProcessTree.read?.() ?? Promise.resolve(null), TRAY_TABLE_MS);
+    const q = trayConfirm(action, stoppingNow(table));
     return trayConfirmed(dialog.showMessageBoxSync({ type: 'question', title: q.title, message: q.message, buttons: [...q.buttons], defaultId: q.defaultId, cancelId: q.cancelId }));
 }
 
@@ -525,6 +539,7 @@ function recoverTynnAgents(asked: { secretsMoved?: boolean } = {}): void {
 
 /** Each provider's rate limit as the Dashboard header shows it, buffered (core/headroom-board.ts). */
 const headroomBoard = new HeadroomBoard();
+const headroomListeners = new Set<(room: Readonly<Record<string, Headroom>>) => void>();
 
 /** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
 function alertAccountPaused(provider: string): void {
@@ -782,6 +797,7 @@ function openTakeOverWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => takeOvers?.windowClosed(terminalId));
@@ -804,6 +820,7 @@ function openFilesWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => filesWindows?.windowClosed(workspaceId));
@@ -831,6 +848,7 @@ function openFlowEditorWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
@@ -960,6 +978,8 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
         show: false,
         webPreferences: {
             preload: join(here, 'preload.cjs'),
+            // Expose the page's existing bridge to native harnesses; no product behavior changes.
+            additionalArguments: process.env.GENIE_PAGE_PROBE === '1' ? ['--genie-page-probe'] : [],
             // The renderer gets `window.genie` and nothing else: no Node, no `require`, no
             // `ipcRenderer`. A renderer with Node integration is a renderer where a prompt
             // injection reaches the filesystem — and this one displays agent-authored text.
@@ -971,6 +991,7 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
         },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     // The renderer's console reaches no file, so main writes the lines Genie keeps: the composer-focus log (genie#1235,
     // core/composer-focus.ts) and a surface's render error (parity audit #7), which also goes to the lifecycle log.
@@ -1394,7 +1415,10 @@ async function boot(): Promise<void> {
         onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
-        onHeadroom: (provider: string, room: Headroom) => { if (headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) broadcast('genie:headroom', headroomBoard.view()); },
+        onHeadroom: (provider: string, room: Headroom) => {
+            if (!headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) return;
+            for (const listener of headroomListeners) listener(headroomBoard.view());
+        },
         // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
         // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
         // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
@@ -1774,12 +1798,7 @@ async function boot(): Promise<void> {
             }),
         },
     });
-    updates.onChange((state) => {
-        refreshTray();
-        for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('genie:updates-changed', state);
-        }
-    });
+    updates.onChange(() => { refreshTray(); });
     // Every copy button writes through main (main/clipboard-ipc.ts): in a sandboxed window the page's clipboard can fail silently.
     registerClipboardIpc(ipcMain, electronClipboardPort(clipboard, ClipboardItem));
     // The native window buttons follow the theme (the owner: "not following color theme"): the renderer sends the
@@ -1795,20 +1814,7 @@ async function boot(): Promise<void> {
     });
     // What the window's buttons were last painted with — read by the real-window smoke and by diagnostics.
     ipcMain.handle('genie:window-overlay-colors-current', (event) => overlayApplied.get(event.sender.id) ?? null);
-    ipcMain.handle('genie:updates-state', () => updates?.state() ?? null);
     autoCheckStop = updates.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
-    ipcMain.handle('genie:updates-check', () => updates?.check() ?? null);
-    ipcMain.handle('genie:updates-download', () => updates?.download() ?? false);
-    // The update window opening reads the notes again if they were missing (beta.38, 2026-10-22).
-    ipcMain.handle('genie:updates-notes', () => updates?.refreshNotes() ?? null);
-    ipcMain.handle('genie:updates-install', async () => {
-        // The window has its restart screen at once (the `installing` state, genie#1201); the answer waits for the work.
-        const pending = updates?.install() ?? null;
-        if (!pending) return null;
-        const result = await pending;
-        console.log(`[updater] ${result.report}`);
-        return { report: result.report };
-    });
 
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 
@@ -2013,13 +2019,6 @@ async function boot(): Promise<void> {
             void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, ACCOUNT_BACK, 'genie'); }).finally(() => registry?.touch());
         }
     };
-    ipcMain.handle('genie:headroom', () => headroomBoard.view());
-    ipcMain.handle('genie:account-retry', (_event, raw: unknown) => {
-        const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
-        if (!record) return { ok: false, reason: 'No agent named.' };
-        retryPausedAccount?.(record.provider);
-        return { ok: true };
-    });
     ipcMain.handle('genie:design-login', (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
@@ -2032,52 +2031,6 @@ async function boot(): Promise<void> {
         const started = logins.start(record.provider);
         return started.ok ? { ok: true } : started;
     });
-    ipcMain.handle('genie:agent-restart', (_event, raw: unknown, kind: unknown) => {
-        if (typeof raw !== 'string' || (kind !== 'graceful' && kind !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
-        return restartAgent(agentOps, raw, kind).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-preview-delete', (_event, raw: unknown, outcome: unknown, also: unknown) => {
-        if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
-        return previewDelete(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []);
-    });
-    ipcMain.handle('genie:agent-delete', (_event, raw: unknown, outcome: unknown, also: unknown, handoff: unknown) => {
-        if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
-        return deleteAgent(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : [], { handoff: handoff === true }).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-switch-driver', (_event, raw: unknown, to: unknown) => {
-        if (typeof raw !== 'string' || typeof to !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
-        return switchDriver(agentOps, raw, to).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-set-mode', (_event, raw: unknown, mode: unknown) =>
-        (typeof raw === 'string' && (mode === 'automated' || mode === 'manual') ? setMode(agentOps, raw, mode).finally(() => registry?.touch()) : { ok: false, reason: 'mode is automated or manual' }));
-    ipcMain.handle('genie:agent-set-permissions', (_event, raw: unknown, permissions: unknown) =>
-        (typeof raw === 'string' && (permissions === 'all' || permissions === 'edits' || permissions === 'ask') ? setPermissions(agentOps, raw, permissions).finally(() => registry?.touch()) : { ok: false, reason: 'permissions are all, ask or edits' }));
-    // The provider's own model list for the agent's picker (the owner, 2026-10-21: "using actual available options from
-    // the providers"); `refresh` = ask the provider again.
-    ipcMain.handle('genie:agent-models', (_event, raw: unknown, refresh: unknown) =>
-        (typeof raw === 'string' ? listModels(agentOps, raw, refresh === true) : { ok: false, reason: 'unknown agent' }));
-    ipcMain.handle('genie:agent-set-model', (_event, raw: unknown, model: unknown) =>
-        (typeof raw === 'string' && (model === null || typeof model === 'string') ? setModel(agentOps, raw, model).finally(() => registry?.touch()) : { ok: false, reason: 'a model is a name, or null for the provider default' }));
-    // Autonomous or asked (Tynn #801): its next gated action reads it; nothing restarts.
-    ipcMain.handle('genie:agent-set-auto-approve', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setAutoApprove(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'autonomy is on or off' }));
-    // May manage the workspace's tabs (beta.35 item 36): the workspaceTabs tool is in its next tools/list.
-    ipcMain.handle('genie:agent-set-manage-tabs', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setManageTabs(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'managing tabs is on or off' }));
-    // May drive pages (browser rebuild step 7): the page tool is in its next tools/list.
-    ipcMain.handle('genie:agent-set-drive-pages', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setDrivePages(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'driving pages is on or off' }));
-    // What it hears from IssueWatch (Tynn #806): the setting is checked in setIssueWatch, which says why it refuses one.
-    ipcMain.handle('genie:agent-set-issue-watch', (_event, raw: unknown, setting: unknown) =>
-        (typeof raw === 'string' ? setIssueWatch(agentOps, raw, setting).finally(() => registry?.touch()) : { ok: false, reason: 'unknown agent' }));
-    ipcMain.handle('genie:agent-set-access-scope', (_event, raw: unknown, scope: unknown) =>
-        (typeof raw === 'string' && (scope === 'none' || scope === 'self' || scope === 'all') ? setAccessScope(agentOps, raw, scope).finally(() => registry?.touch()) : { ok: false, reason: 'scope is none, self or all' }));
-    ipcMain.handle('genie:agent-set-budget', (_event, raw: unknown, usd: unknown) => {
-        if (typeof raw !== 'string' || (usd !== null && !(typeof usd === 'number' && usd >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
-        return setBudget(agentOps, raw, usd as number | null).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-diagnose', (_event, raw: unknown) => (typeof raw === 'string' ? diagnose(agentOps, raw) : { ok: false, reason: 'diagnose names an agent' }));
-
     ipcMain.handle('genie:restart-with-handoff', async (_event, raw: unknown, finishedId: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
@@ -2152,16 +2105,6 @@ async function boot(): Promise<void> {
         return { id: joined.id, pid: joined.pid, shell: joined.shell, scrollback: joined.scrollback };
     });
 
-    // THE FILE PANEL (§4.3). Confinement happens in the host; the renderer never sees a path it did not ask about.
-    ipcMain.handle('genie:files-last-committed', (_event, workspaceId: unknown, path: unknown) => (typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.lastCommitted(workspaceId, path) ?? null : null));
-    ipcMain.handle('genie:files-tree', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.tree(workspaceId) ?? null : null));
-    ipcMain.handle('genie:files-children', (_event, workspaceId: unknown, dir: unknown) => (typeof workspaceId === 'string' && typeof dir === 'string' ? filesHost?.children(workspaceId, dir) ?? null : null));
-    ipcMain.handle('genie:files-open', (_event, workspaceId: unknown, path: unknown) =>
-        typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.open(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
-    // A MEDIA TAB'S BYTES (the owner, 2026-10-21: an image showed broken): the Files panel's own viewer, so no plugin gate —
-    // the same confinement and size cap as the text read (files-host `readBytes`).
-    ipcMain.handle('genie:files-read-media', (_event, workspaceId: unknown, path: unknown) =>
-        typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.readBytes(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
     // RIGHT-CLICK A FILE (Tynn #841): the host OS's own app for it, or its file manager — a path confined to the workspace.
     ipcMain.handle('genie:files-open-external', async (_event, workspaceId: unknown, path: unknown) => {
         const abs = typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.absolute(workspaceId, path) ?? null : null;
@@ -2187,27 +2130,8 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:files-export', (event, workspaceId: unknown, path: unknown) =>
         typeof workspaceId === 'string' && typeof path === 'string' ? exporter.export(workspaceId, path, BrowserWindow.fromWebContents(event.sender)) : { ok: false, reason: 'bad arguments' });
-    // THE TREE'S FILE OPERATIONS (Tynn #844): confined, never overwriting, Delete to the trash — all in the host.
-    const fileOp = (run: (host: FilesHost) => Promise<unknown>) => (filesHost ? run(filesHost) : Promise.resolve({ ok: false, reason: 'no files host' }));
-    const str = (v: unknown): v is string => typeof v === 'string';
-    ipcMain.handle('genie:files-create', (_event, workspaceId: unknown, path: unknown, kind: unknown) =>
-        str(workspaceId) && str(path) && (kind === 'file' || kind === 'folder') ? fileOp((h) => h.create(workspaceId, path, kind)) : { ok: false, reason: 'bad arguments' });
-    ipcMain.handle('genie:files-rename', (_event, workspaceId: unknown, from: unknown, to: unknown) =>
-        str(workspaceId) && str(from) && str(to) ? fileOp((h) => h.rename(workspaceId, from, to)) : { ok: false, reason: 'bad arguments' });
-    ipcMain.handle('genie:files-duplicate', (_event, workspaceId: unknown, path: unknown) =>
-        str(workspaceId) && str(path) ? fileOp((h) => h.duplicate(workspaceId, path)) : { ok: false, reason: 'bad arguments' });
-    ipcMain.handle('genie:files-trash', (_event, workspaceId: unknown, path: unknown) =>
-        str(workspaceId) && str(path) ? fileOp((h) => h.trash(workspaceId, path)) : { ok: false, reason: 'bad arguments' });
     // A PLUGIN EDITOR'S BYTES (beta.33 item 14): through the plugin gate — an enabled plugin's own claimed and declared types only.
     const editorBytesDeps = (): EditorBytesDeps | null => (filesHost && services ? { gate: (pluginId, path) => services!.plugins.editorBytes(pluginId, path), files: filesHost } : null);
-    ipcMain.handle('genie:files-read-bytes', (_event, workspaceId: unknown, pluginId: unknown, path: unknown) => {
-        const deps = editorBytesDeps();
-        return deps ? editorRead(deps, workspaceId, pluginId, path) : { ok: false, path: typeof path === 'string' ? path : '', error: 'no files host' };
-    });
-    ipcMain.handle('genie:files-write-bytes', (_event, workspaceId: unknown, pluginId: unknown, path: unknown, base64: unknown, expectedSha: unknown) => {
-        const deps = editorBytesDeps();
-        return deps ? editorWrite(deps, workspaceId, pluginId, path, base64, expectedSha) : { ok: false, reason: 'no files host' };
-    });
     // THE OFFICIAL PANELS (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace (official-panels-host.ts).
     const panelsHost = (): PanelsHostDeps => ({
         workspacePath: (id) => registry?.workspace(id)?.path ?? null,
@@ -2215,11 +2139,8 @@ async function boot(): Promise<void> {
         send: async (agentId, text) => { if (services) await services.inbox.send({ from: HUMAN, to: agentId as AgentId, text }); },
         now: () => new Date().toISOString(),
     });
-    ipcMain.handle('genie:repo', (_event, op: unknown, workspaceId: unknown, rel: unknown, a: unknown, b: unknown) => repoCall(panelsHost(), op, workspaceId, rel, a, b));
     ipcMain.handle('genie:artboard-read', (_event, workspaceId: unknown) => artboardRead(panelsHost(), workspaceId));
     ipcMain.handle('genie:artboard-review', (_event, workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown) => artboardReview(panelsHost(), workspaceId, postId, verdict, comment));
-    ipcMain.handle('genie:files-git-status', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.gitStatus(workspaceId) ?? {} : {}));
-    ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     // A VIEW'S SUBSCRIPTION (the host split, P2.2): held while it is shown, let go when it is not — or when its window
     // closes or reloads (dropFilesViewsOf). The view id is scoped by the webContents that holds it.
     ipcMain.handle('genie:files-watch', (event, viewId: unknown, workspaceId: unknown, want: unknown) => {
@@ -2280,14 +2201,6 @@ async function boot(): Promise<void> {
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
-    ipcMain.handle('genie:tynn-workstations', async () => {
-        const account = tynnAccount;
-        if (!account) return { ok: false, reason: 'this Genie has no Tynn account' };
-        const refused = droneRefusal(workstationRoleNow);
-        if (refused) return { ok: false, reason: refused };
-        // Every Tynn identity this machine holds, not only the one this launch registered (this-machine.ts).
-        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), await thisMachineIds()), rereadRole);
-    });
     // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): main classifies it against the Tynn this Genie is
     // signed in to, with the role Tynn gave this machine — never one the window sends — then opens the invite in the
     // browser or the workstation in its own window.
@@ -2297,18 +2210,6 @@ async function boot(): Promise<void> {
             openExternal: async (url) => { try { await shell.openExternal(url); return true; } catch { return false; } },
             openWorkstation: (id, name) => openRemoteWindow(`relay:${id}`, name ?? null),
         });
-    });
-    // CHANGE A WORKSTATION'S ROLE (genie#1278 W6): refused here first on a drone (the role main read from Tynn), then Tynn
-    // decides — the owner only, with a fresh authenticator code. This machine's own role is read again afterwards.
-    ipcMain.handle('genie:tynn-workstation-role', async (_event, workstationId: unknown, role: unknown, code: unknown) => {
-        const refused = droneRefusal(workstationRoleNow);
-        if (refused) return { ok: false, reason: refused };
-        if (typeof workstationId !== 'string' || (role !== 'pilot' && role !== 'drone') || typeof code !== 'string') return { ok: false, reason: 'not a role change' };
-        const account = tynnAccount;
-        if (!account?.status().signedIn) return { ok: false, reason: 'Sign in to Tynn to change a workstation’s role' };
-        const result = await setWorkstationRole((path, init) => account.request(path, init), workstationId, role, code);
-        if (result.ok) void readWorkstationRoleNow?.();
-        return result;
     });
     ipcMain.handle('genie:relay-open', async (event, workstationId: unknown) => {
         if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
@@ -2348,17 +2249,6 @@ async function boot(): Promise<void> {
         if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
         return tynnAccount.request(path, init);
     };
-    ipcMain.handle('genie:tynn-share-links', (_event, workspaceId: unknown) => listShareLinks(shareRequest, ownWorkstation(), typeof workspaceId === 'string' ? workspaceId : null));
-    ipcMain.handle('genie:tynn-share-mint', (_event, input: unknown) => {
-        const i = (input ?? {}) as { workspaceId?: unknown; capability?: unknown; expiresInDays?: unknown };
-        return mintShareLink(shareRequest, ownWorkstation(), {
-            workspaceId: typeof i.workspaceId === 'string' ? i.workspaceId : null,
-            capability: i.capability === 'readonly' ? 'readonly' : 'control',
-            expiresInDays: typeof i.expiresInDays === 'number' ? i.expiresInDays : 7,
-        });
-    });
-    // Revoking a claimed link ends its guest's live session NOW: this host re-checks its relay sessions at once (audit M-c).
-    ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId, async () => { await relayHostNow?.revalidate(); }) : { ok: false, reason: 'not a link' }));
     // ANOTHER MACHINE, BY ITS ADDRESS (P3.4 cut e, audit M-e): refused here on a drone, then the host dials, and holds the token. The window's frames use the relay's channels.
     const deviceLinkNow = () => agentEngineLink?.client.deviceLink() ?? null;
     let deviceLinkHeard: unknown = null;
@@ -2383,9 +2273,6 @@ async function boot(): Promise<void> {
         sender.once('destroyed', () => { if (deviceChannels.delete(opened.channel)) link?.close(opened.channel); });
         return opened;
     });
-    ipcMain.handle('genie:device-hosts', async () => (await deviceLinkNow()?.hosts()) ?? []);
-    ipcMain.handle('genie:device-forget', async (_event, url: unknown) => (typeof url === 'string' ? (await deviceLinkNow()?.forget(url)) ?? false : false));
-    ipcMain.handle('genie:device-adopt', async (_event, url: unknown, token: unknown) => (typeof url === 'string' && typeof token === 'string' ? (await deviceLinkNow()?.adopt(url, token)) ?? false : false));
     // Only the window that opened a channel may use it.
     ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
         if (typeof channel === 'string' && deviceChannels.get(channel) === event.sender && typeof text === 'string') { deviceLinkNow()?.send(channel, text); return; }
@@ -2399,8 +2286,6 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
     ipcMain.handle('genie:files-windows', () => filesWindows?.list() ?? []);
-    ipcMain.handle('genie:files-write', (_event, workspaceId: unknown, path: unknown, text: unknown, expectedSha: unknown) =>
-        (typeof workspaceId === 'string' && typeof path === 'string' && typeof text === 'string' ? filesHost?.write(workspaceId, path, text, typeof expectedSha === 'string' ? expectedSha : null) ?? { ok: false, reason: 'no files host' } : { ok: false, reason: 'bad arguments' }));
 
     /*
      * WORKSPACE OPERATIONS (§6.1). The plans live in core/workspace-model.ts, the sequencing in
@@ -2515,40 +2400,7 @@ async function boot(): Promise<void> {
         },
         registry: { workspace: (id) => registry?.workspace(id) ?? null },
     };
-    ipcMain.handle('genie:workspace-repo-unlock', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoLockOf(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
-    ipcMain.handle('genie:workspace-repos', (_event, raw: unknown) => (typeof raw === 'string' ? listReposOf(repoOps, raw) : { ok: false, reason: 'name a workspace' }));
-    // The commits in the workspace's repos since a moment (an observed agent's index): git's own account.
-    ipcMain.handle('genie:workspace-commits-since', (_event, raw: unknown, since: unknown) => (typeof raw === 'string' && typeof since === 'number' ? commitsSinceIn(repoOps, raw, since) : { ok: false, reason: 'name a workspace and a moment' }));
-    // "Locate repo" on a Dashboard group fault: a real folder the user picks, inside the envelope; the manifest's path moves.
-    // The folder is picked in the window over the host's disk (Tynn #835); the manifest's path moves.
-    ipcMain.handle('genie:workspace-repo-locate', (_event, raw: unknown, slug: unknown, path: unknown) =>
-        (typeof raw === 'string' && typeof slug === 'string' && typeof path === 'string' && path !== '' ? relocateRepoIn(repoOps, raw, slug, path) : { ok: false, reason: 'name a workspace, a repo and its folder' }));
-    ipcMain.handle('genie:workspace-repo-add', (_event, raw: unknown, input: unknown) => {
-        const i = (typeof input === 'object' && input !== null ? input : {}) as { name?: unknown; path?: unknown };
-        return typeof raw === 'string' ? addRepoTo(repoOps, raw, { name: String(i.name ?? ''), path: String(i.path ?? '') }) : { ok: false, reason: 'name a workspace' };
-    });
-    ipcMain.handle('genie:workspace-repo-remove', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoFrom(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
-    // WORKSPACE SETTINGS (§6.1): the workspace-scoped keys with THIS workspace's effective values and its overrides.
-    ipcMain.handle('genie:workspace-settings', (_event, raw: unknown) =>
-        (typeof raw === 'string' && services ? { ok: true, values: services.settings.snapshotFor(raw), overridden: Object.keys(services.settings.workspaceValues(raw)) } : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:workspace-setting-set', async (_event, raw: unknown, key: unknown, value: unknown) => {
-        if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
-        try { await services.settings.setFor(raw, key, value); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
-    });
-    ipcMain.handle('genie:workspace-setting-reset', async (_event, raw: unknown, key: unknown) => {
-        if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
-        try { await services.settings.resetFor(raw, key); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
-    });
-    // OPS PROJECTS (§6.1): which workspaces this one governs.
-    ipcMain.handle('genie:workspace-set-governs', (_event, raw: unknown, children: unknown) =>
-        (typeof raw === 'string' && registry ? registry.setGoverns(raw, Array.isArray(children) ? children.filter((c): c is string => typeof c === 'string') : []) : { ok: false, reason: 'name a workspace' }));
-    // THE DEFAULT AGENT (Genie 1's): one of the workspace's own agents, or null.
-    ipcMain.handle('genie:workspace-set-color', (_event, raw: unknown, color: unknown) => setWorkspaceColor(raw, color));
-    ipcMain.handle('genie:workspace-set-default-agent', (_event, raw: unknown, agentId: unknown) =>
-        (typeof raw === 'string' && registry ? registry.setDefaultAgent(raw, typeof agentId === 'string' && agentId !== '' ? agentId : null) : { ok: false, reason: 'name a workspace' }));
     // The folder is picked IN THE WINDOW (Tynn #835: a FileBrowser over the host's disk) — no native dialog.
-    ipcMain.handle('genie:workspace-preview-add', async (_event, path: unknown) =>
-        (typeof path === 'string' && path !== '' ? previewAddWorkspace(workspaceOps, path) : { ok: false, reason: 'no folder picked' }));
     ipcMain.handle('genie:host-list-dir', (_event, path: unknown) => listHostDir(typeof path === 'string' ? path : '/'));
     // The folder picker's New folder: made on this machine, inside the folder the picker is in (host-fs.ts makeHostDir).
     ipcMain.handle('genie:host-mkdir', (_event, parent: unknown, name: unknown) =>
@@ -2558,22 +2410,6 @@ async function boot(): Promise<void> {
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
     // The parent is picked in the window over the host's disk (Tynn #835).
     const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
-    ipcMain.handle('genie:workspace-preview-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
-        (typeof rawUrl === 'string' && typeof rawParent === 'string' && rawParent !== '' ? previewGit(rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
-    ipcMain.handle('genie:workspace-confirm-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
-        (typeof rawUrl === 'string' && typeof rawParent === 'string' ? addWorkspaceFromGit(workspaceOps, rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
-    // OPEN EXISTING FOLDER / IMPORT FROM GIT (Add workspace parity item 7, Genie 1's wizard): read the source, then build a
-    // NEW <slug>.agi beside it — the source is never written. Submodules from a GitHub remote clone with the sign-in's
-    // credential, through git's environment, as the clone does.
-    ipcMain.handle('genie:workspace-read-source', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? readSource(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'no folder picked' }));
-    ipcMain.handle('genie:workspace-stage-git', (_event, raw: unknown) => (typeof raw === 'string' && raw.trim() !== '' ? stageFromGit(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'give a git URL' }));
-    ipcMain.handle('genie:workspace-register-existing', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? registerExisting(workspaceOps, raw) : { ok: false, reason: 'no folder picked' }));
-    ipcMain.handle('genie:workspace-build-envelope', (_event, raw: unknown, rawRemote: unknown) => buildFromWindow(raw, rawRemote));
-    ipcMain.handle('genie:workspace-discard-staged', (_event, raw: unknown) => (typeof raw === 'string' ? discardStaged(envelopePorts, raw) : { ok: true }));
-    ipcMain.handle('genie:workspace-github-repos', () => githubRepos());
-    // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
-    // host, and the plan for THAT project before anything is written.
-    ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
     // THE TYNN TAB (genie#1295): the workspace's own project's board, through the person's pairing — never an agent's key.
     ipcMain.handle('genie:workspace-tynn-board', (_event, rawId: unknown, rawScope: unknown) =>
         (typeof rawId === 'string' ? readTynnBoard(tynnBoardPorts(), rawId, (rawScope ?? {}) as BoardScope) : { ok: false, state: 'error', reason: 'name a workspace' }));
@@ -2604,21 +2440,6 @@ async function boot(): Promise<void> {
             return sacredNameOf(await tynnAccount.projects(), projectId);
         },
     };
-    ipcMain.handle('genie:workspace-imported-agents', (_event, raw: unknown) => (typeof raw === 'string' ? readImportedAgents(adoptionPorts, raw) : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:workspace-adopt-agent', (_event, rawId: unknown, rawName: unknown) =>
-        (typeof rawId === 'string' && typeof rawName === 'string' && rawName !== '' ? adoptAgent(adoptionPorts, rawId, rawName) : { ok: false, reason: 'name a workspace and an agent' }));
-    ipcMain.handle('genie:workspace-preview-add-tynn', (_event, rawId: unknown, rawParent: unknown) =>
-        (typeof rawId === 'string' && rawId.length > 0 && typeof rawParent === 'string' && rawParent !== '' ? previewAddFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'choose a Tynn project and a parent folder' }));
-    ipcMain.handle('genie:workspace-confirm-add-tynn', (_event, rawParent: unknown, rawId: unknown) =>
-        (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
-    ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
-    // A NEW workspace (Genie 1's): a name and a folder; Genie makes <folder>/<slug>.agi (main/workspace-ops-host.ts).
-    // Optionally linked to a Tynn project (Add workspace parity item 5): its id, looked up in Tynn's own list on this side.
-    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown, rawRemote: unknown, rawProject: unknown) =>
-        (typeof rawName === 'string' && typeof rawParent === 'string' ? createFromWindow(rawName, rawParent, rawRemote, typeof rawProject === 'string' && rawProject !== '' ? rawProject : undefined) : { ok: false, reason: 'give the workspace a name and a folder' }));
-    // The optional link's "New project" (Genie 1's CreateProjectForm): who may own it, and the project made on Tynn.
-    ipcMain.handle('genie:workspace-tynn-owner-options', () => listTynnOwners(workspaceOps));
-    ipcMain.handle('genie:workspace-create-tynn-project', (_event, raw: unknown) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : { ok: false, reason: 'give the project a name' }; });
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
     ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
@@ -2865,14 +2686,51 @@ async function boot(): Promise<void> {
             return session ? { running: false, startedAt: session.startedAt } : null;
         },
         /*
-         * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
-         * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
-         * any remote call arrives. The SOCKET is not wired yet — fancy-ws awaits its first npm publish
-         * — so nothing listens and Settings → Workstation says devices cannot connect yet.
+         * The common API for remote connections and migrated local families (§6.8, P4).
+         * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
          */
         remoteApi: buildHostApi({
+            localOwner: {
+                appInbox: {
+                    state: (id) => appInboxState(id), workspaceExists: (id) => !!registry?.workspace(id),
+                    createKey: (id, name) => appInboxKeys.createScriptKey(id, name), scriptKeys: (id) => appInboxKeys.scriptKeys(id),
+                    revokeKey: (id) => appInboxKeys.revokeScriptKey(id), rotate: (kind, id) => appInboxKeys.rotate(kind, id),
+                    revokeSource: (source) => appInboxKeys.revokeSource(source), allowSource: (kind, id) => appInboxKeys.allowSource(kind, id),
+                    restartSource: (workspaceId, kind, id) => restartSource(workspaceId, kind, id),
+                },
+                deviceLink: {
+                    hosts: async () => (await deviceLinkNow()?.hosts()) ?? [],
+                    forget: async (url) => (await deviceLinkNow()?.forget(url)) ?? false,
+                    adopt: async (url, token) => (await deviceLinkNow()?.adopt(url, token)) ?? false,
+                },
+                tynnNetwork: {
+                    hasAccount: () => tynnAccount !== null, signedIn: () => tynnAccount?.status().signedIn === true, role: () => workstationRoleNow,
+                    workstations: async () => {
+                        const account = tynnAccount!;
+                        // Every identity this machine holds, not only this launch's registration (this-machine.ts).
+                        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), await thisMachineIds()), rereadRole);
+                    },
+                    // Tynn decides a role change with a fresh authenticator code (genie#1278 W6).
+                    setRole: (id, role, code) => {
+                        const account = tynnAccount!;
+                        return setWorkstationRole((path, init) => account.request(path, init), id, role, code);
+                    },
+                    rereadRole: () => { void readWorkstationRoleNow?.(); },
+                    shares: {
+                        list: (id) => listShareLinks(shareRequest, ownWorkstation(), id),
+                        mint: (input) => mintShareLink(shareRequest, ownWorkstation(), input),
+                        // Keep immediate revalidation of a revoked link's live guest session (audit M-c).
+                        revoke: (id) => revokeShareLink(shareRequest, ownWorkstation(), id, async () => { await relayHostNow?.revalidate(); }),
+                    },
+                },
+            },
             // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).
             activity: { feeds: (workspaceId) => activityOf(workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
+            headroom: {
+                view: () => headroomBoard.view(),
+                subscribe: (listener) => { headroomListeners.add(listener); return () => { headroomListeners.delete(listener); }; },
+            },
+            retryPausedAccount: (provider) => { retryPausedAccount?.(provider); },
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
             subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),
@@ -2894,6 +2752,7 @@ async function boot(): Promise<void> {
                 subscribe: (cb) => host!.subscribe(cb),
             },
             // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
+            localFiles: { files: () => filesHost, editor: editorBytesDeps, repo: (op, id, rel, a, b) => repoCall(panelsHost(), op, id, rel, a, b) },
             files: {
                 children: async (workspaceId, dir) => (await filesHost?.children(workspaceId, dir)) ?? null,
                 open: (workspaceId, path) => filesHost?.open(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),
@@ -2948,24 +2807,25 @@ async function boot(): Promise<void> {
                 settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
                 setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
+                onSettingsChanged: (listener) => services!.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
                 setGoverns: (id, children) => registry!.setGoverns(id, children),
                 setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),
                 setColor: (id, color) => setWorkspaceColor(id, color),
             },
             agentOps: {
-                restart: (id, kind) => restartAgent(agentOps, id, kind),
+                restart: (id, kind) => restartAgent(agentOps, id, kind).finally(() => registry?.touch()),
                 previewDelete: (id, outcome, also) => previewDelete(agentOps, id, outcome, also),
-                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }),
-                switchDriver: (id, to) => switchDriver(agentOps, id, to),
-                setBudget: (id, usd) => setBudget(agentOps, id, usd),
-                setMode: (id, mode) => setMode(agentOps, id, mode),
-                setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope),
-                setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on),
-                setManageTabs: (id, on) => setManageTabs(agentOps, id, on),
-                setDrivePages: (id, on) => setDrivePages(agentOps, id, on),
-                setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting),
-                setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions),
-                setModel: (id, model) => setModel(agentOps, id, model),
+                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }).finally(() => registry?.touch()),
+                switchDriver: (id, to) => switchDriver(agentOps, id, to).finally(() => registry?.touch()),
+                setBudget: (id, usd) => setBudget(agentOps, id, usd).finally(() => registry?.touch()),
+                setMode: (id, mode) => setMode(agentOps, id, mode).finally(() => registry?.touch()),
+                setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope).finally(() => registry?.touch()),
+                setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on).finally(() => registry?.touch()),
+                setManageTabs: (id, on) => setManageTabs(agentOps, id, on).finally(() => registry?.touch()),
+                setDrivePages: (id, on) => setDrivePages(agentOps, id, on).finally(() => registry?.touch()),
+                setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting).finally(() => registry?.touch()),
+                setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions).finally(() => registry?.touch()),
+                setModel: (id, model) => setModel(agentOps, id, model).finally(() => registry?.touch()),
                 models: (id, refresh) => listModels(agentOps, id, refresh),
                 diagnose: (id) => diagnose(agentOps, id),
             },
@@ -2979,13 +2839,19 @@ async function boot(): Promise<void> {
                       state: () => updates!.state(),
                       check: () => updates!.check(),
                       download: () => updates!.download(),
-                      install: () => { const r = updates!.install(); return r ? r.then((done) => ({ report: done.report })) : null; },
+                      install: () => {
+                          const pending = updates!.install();
+                          return pending ? pending.then((done) => { console.log(`[updater] ${done.report}`); return { report: done.report }; }) : null;
+                      },
+                      notes: () => updates!.refreshNotes(),
                       onChange: (cb) => updates!.onChange(cb),
                   }
                 : null,
         }),
     });
     services = composed;
+    // Local calls and event subscriptions use late-bound services. Until now the door answers "Genie is still starting".
+    remoteHub.add(localDoor);
     // ONE snapshot build at a time, the latest state always delivered last (core/latest-push.ts, genie#1393): every change
     // used to build its own snapshot concurrently, and they landed out of order.
     const featurePush = new LatestPush<FeatureData>({
@@ -3000,11 +2866,6 @@ async function boot(): Promise<void> {
     requestFeaturePush = pushFeatures;
     composed.flows.onChange(pushFeatures);
     composed.settings.onChange(pushFeatures);
-    // A WORKSPACE setting changed — the tabs an agent made with workspaceTabs (beta.35 item 36): every window reloads that
-    // workspace's settings, so the tab shows at once.
-    composed.settings.onChange((_key, _value, workspaceId) => {
-        if (workspaceId) broadcast('genie:workspace-settings-changed', workspaceId);
-    });
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
@@ -3538,7 +3399,7 @@ async function boot(): Promise<void> {
             schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         }),
     });
-    // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own window only (preload `appInbox`); a key is
+    // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own local window; a key is
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
     const appInboxState = (workspaceId: string) => ({
@@ -3559,36 +3420,6 @@ async function boot(): Promise<void> {
         }
         return 'its next start uses it';
     };
-    const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
-    ipcMain.handle('genie:app-inbox-state', (_event, workspaceId: unknown) => (named(workspaceId) ? { ok: true, state: appInboxState(workspaceId) } : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:app-inbox-create-key', async (_event, workspaceId: unknown, name: unknown) => {
-        if (!named(workspaceId) || typeof name !== 'string') return { ok: false, reason: 'name a workspace and the key' };
-        if (!registry?.workspace(workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
-        try {
-            const made = await appInboxKeys.createScriptKey(workspaceId, name);
-            return { ok: true, id: made.id, name: name.trim(), token: made.token, state: appInboxState(workspaceId) };
-        } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-        }
-    });
-    ipcMain.handle('genie:app-inbox-revoke-key', async (_event, workspaceId: unknown, keyId: unknown) => {
-        if (!named(workspaceId) || !named(keyId)) return { ok: false, reason: 'name a workspace and the key' };
-        if (!appInboxKeys.scriptKeys(workspaceId).some((k) => k.id === keyId)) return { ok: false, reason: 'that key is not one of this workspace’s' };
-        await appInboxKeys.revokeScriptKey(keyId);
-        return { ok: true, state: appInboxState(workspaceId) };
-    });
-    ipcMain.handle('genie:app-inbox-source', async (_event, workspaceId: unknown, op: unknown, kind: unknown, id: unknown) => {
-        if (!named(workspaceId) || (op !== 'rotate' && op !== 'revoke' && op !== 'allow') || (kind !== 'site' && kind !== 'process') || !named(id)) return { ok: false, reason: 'rotate, revoke or allow a site or a process' };
-        try {
-            if (op === 'rotate') appInboxKeys.rotate(kind, id);
-            else if (op === 'revoke') await appInboxKeys.revokeSource({ kind, id, workspaceId });
-            else await appInboxKeys.allowSource(kind, id);
-            const after = await restartSource(workspaceId, kind, id);
-            return { ok: true, text: `${op === 'rotate' ? 'Rotated' : op === 'revoke' ? 'Revoked' : 'Allowed'}: ${after}`, state: appInboxState(workspaceId) };
-        } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-        }
-    });
     // ISSUEWATCH (Tynn #806): Tynn polls GitHub and pushes each project's entry on the person's own channel; the client
     // listens with the Tynn token Genie already holds, and what changed reaches the agents of the linked workspace through
     // the SAME delivery as mail — Genie's notice, at the agent's next step even mid-turn (genie#1411) — each agent by its own
@@ -3897,6 +3728,8 @@ async function boot(): Promise<void> {
                 remove: (version) => removeJavaVersion(version, javaVersionsPorts()),
             },
         },
+        // Which part of a features snapshot was slow (genie-test-windows, job Q0: an action took 20 s, main mostly free).
+        slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) },
     };
     // THE FORCETHEQUESTION WINDOW (§6.3; the owner, 2026-10-14: "a window that opens on top of all other windows"). It
     // reads the SAME items Pending Questions (the Deck) shows and answers through the same action, so the two stay one
@@ -3973,8 +3806,6 @@ async function boot(): Promise<void> {
     // EVERY AGENT'S ACTIVITY FEED (beta.33 item 10): built from the session host's own ledgers and pushed to the window as
     // each session changes — what the workspace Dashboard's lanes draw. Never polled; one small feed per agent.
     activityFeeds = new ActivityFeeds({ host });
-    activityFeeds.subscribe((feed) => broadcast('genie:activity-changed', feed));
-    ipcMain.handle('genie:activity', (_event, raw: unknown) => activityOf(raw));
     host.subscribe((agentId) => {
         refreshTray();
         pushAgent(agentId);
@@ -4032,7 +3863,7 @@ async function boot(): Promise<void> {
         onQuit: () => { requestQuit(); },
         // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
         // ALWAYS ASK (the owner, 2026-11-02): Restart and Shut down everything confirm first, every time.
-        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { if (confirmTray('restart')) restartGenie(); }, onShutDown: () => { if (confirmTray('shut-down')) requestQuit('shut-down'); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
+        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
@@ -4173,7 +4004,7 @@ app.on('before-quit', (event) => {
             // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
             // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
             const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true, host: agentEngineLink?.live === true ? { keptProcesses: kept } : null });
+            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
         },
         ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
@@ -4194,10 +4025,11 @@ app.on('before-quit', (event) => {
     // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes when runQuit is done, as a 'pass'.
     // "Just close the UI" (P1b) stops no agent, closes no terminal and never ends the host: core/quit.ts runQuit.
     event.preventDefault();
-    let bound: ReturnType<typeof setTimeout> | undefined;
-    const done = runQuit(quitPorts).catch(() => { /* an unwritten row never blocks a quit */ });
-    void Promise.race([done, new Promise<void>((r) => { bound = setTimeout(r, QUIT_WRITES_MS); })])
-        .finally(() => { clearTimeout(bound); app.quit(); });
+    // runQuit runs to its end: the drain bounded inside it, then the host ended, itself bounded (agent-engine.ts). A race
+    // around the whole of it let the window exit before the host was told to end (ss-repeat5, 2026-11-05).
+    void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
+        .catch(() => { /* an unwritten row never blocks a quit */ })
+        .finally(() => { app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */
@@ -4210,6 +4042,9 @@ const quitPorts: QuitPorts = {
     // The stops' readings and reaps run off main (genie#1201); the drain below waits for them too, bounded.
     stopAgents: () => { host?.stopAll(); },
     closeWindow: () => {
+        // Main's own sampler ends first: on a slow machine its restarts held main for seconds, in a loop with the watchdog
+        // (genie-test-windows, job Q0), and a quit needs main for its own steps.
+        stallProfiler?.stop();
         // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
         keepaliveNow?.stop();
         // Every supervised process, the front door, an in-flight flow run, the knowledge database.
@@ -4218,6 +4053,7 @@ const quitPorts: QuitPorts = {
         // itself. Over the host's link it is the host's: nothing to end from here.
         void spawnHostNow?.stop();
         void remoteSocketNow?.stop();
+        localDoor.dispose();
         void filesHost?.close();
         filesWatch?.close();
         clearGenieRunning(genieHome());

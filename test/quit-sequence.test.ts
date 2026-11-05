@@ -140,4 +140,16 @@ describe('runQuit', () => {
         await runQuit({ ...p, drained: async () => { calls.push('drained'); throw new Error('lost'); } });
         expect(calls.at(-1)).toBe('engine.shutdown');
     });
+
+    // genie-test-windows, ss-repeat5 run 2 (2026-11-05): "Shut down everything" ended the window (code 0) and the
+    // providers, and NOT genie-host. The quit's one bound covered the drain AND the host's end, so a slow drain spent it
+    // and the window exited before engine.shutdown was ever sent (the host's log has no "shutting down"). The drain has
+    // its own bound now, and the host is ended after it whatever the drain did.
+    it('a drain that never settles still ends the host, once the drain’s bound is over', async () => {
+        const { calls, p } = ports();
+        const quit = runQuit({ ...p, drained: () => { calls.push('drained'); return new Promise(() => {}); } }, { drainMs: 20 });
+        const outcome = await Promise.race([quit.then(() => 'done'), new Promise((r) => setTimeout(() => r('held'), 1_000))]);
+        expect(outcome).toBe('done');
+        expect(calls).toEqual(['stopAll', 'window', 'terminals', 'drained', 'engine.shutdown']);
+    });
 });
