@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { NO_TERMINALS } from '../src/renderer/bridge.js';
 import { Workspace } from '../src/renderer/components/Workspace.js';
+import { registerAppIcons } from '../src/renderer/icons.js';
 import { control } from './helpers/control-markup.js';
 
 /**
@@ -15,6 +16,9 @@ import { control } from './helpers/control-markup.js';
  *
  * Interaction is a claim about a live DOM, so this file renders in happy-dom (docs/decisions.md D4).
  */
+
+// The app's icons, as the window registers them: an unregistered name draws an empty span (renderer/icons.ts).
+registerAppIcons();
 
 type Opened = { ok: true } | { ok: false; reason: string };
 const ws = { id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' };

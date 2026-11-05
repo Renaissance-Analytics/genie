@@ -57,7 +57,8 @@ function elements(markup: string): El[] {
     }
     return out;
 }
-const classes = (el: El): string[] => (/class="([^"]*)"/.exec(el.attrs)?.[1] ?? '').split(/\s+/).filter(Boolean);
+// Read as the browser reads the attribute: static markup escapes `&` in a class (`[&_pre]:…` is `[&amp;_pre]:…`).
+const classes = (el: El): string[] => (/class="([^"]*)"/.exec(el.attrs)?.[1] ?? '').replace(/&amp;/g, '&').split(/\s+/).filter(Boolean);
 const inside = (el: El, outer: El): boolean => { for (let p = el.parent; p; p = p.parent) if (p === outer) return true; return false; };
 const attr = (el: El, name: string): string | undefined => new RegExp(`\\s${name}="([^"]*)"`).exec(el.attrs)?.[1];
 const withAttr = (all: El[], name: string): El[] => all.filter((e) => new RegExp(`\\s${name}(=|\\s|$)`).test(e.attrs));

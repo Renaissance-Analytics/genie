@@ -1952,6 +1952,7 @@ function DesktopApp({ bridge }: AppProps) {
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
+            {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
             onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] restart refused:', r.reason); }); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
