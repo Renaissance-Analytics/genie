@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { runtimeDir } from '../src/main/paths.js';
 import { systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
@@ -47,17 +47,12 @@ describe('7B owned staging at real host composition startup', () => {
         const nativeRead = systemProcessTree.read!.bind(systemProcessTree);
         const first = (await nativeRead())?.find(p => p.pid === process.pid);
         expect(first?.started).toBeGreaterThan(0);
-        // TDD break probe: perturb the second real reader result; remove only after reading hosted RED.
-        const probe = vi.spyOn(systemProcessTree, 'read').mockImplementationOnce(async () =>
-            (await nativeRead())?.map(p => p.pid === process.pid ? { ...p, started: p.started + 1 } : p) ?? null);
-        try {
-            const second = (await systemProcessTree.read!())?.find(p => p.pid === process.pid);
-            expect(second?.started).toBe(first!.started);
-            const f = await homeFixture(), module = await areaModule(), area = await module.LocalStagingArea.open(f.home);
-            expect(area.directory).toBe(join(f.root, `${process.pid}-${first!.started}`));
-            await area.sweep();
-            expect((await stat(area.directory)).isDirectory()).toBe(true);
-        } finally { probe.mockRestore(); }
+        const second = (await systemProcessTree.read!())?.find(p => p.pid === process.pid);
+        expect(second?.started).toBe(first!.started);
+        const f = await homeFixture(), module = await areaModule(), area = await module.LocalStagingArea.open(f.home);
+        expect(area.directory).toBe(join(f.root, `${process.pid}-${first!.started}`));
+        await area.sweep();
+        expect((await stat(area.directory)).isDirectory()).toBe(true);
     });
     it('removes stale files and nested connection folders at start, while preserving other runtime data', async () => {
         const f = await homeFixture(), stale = join(f.root, `${process.pid}-1`); // same pid, DIFFERENT start time
