@@ -495,6 +495,16 @@ writeFileSync(TICKER, String(process.pid));
 let cannot = null;
 /** Failures from before the run (a held port, 0.4/0.5) are reported, never mistaken for the run's own controls failing. */
 const failuresBeforeRun = failures.length;
+/**
+ * QUIT_CDP_CARRY_ON=1: a failed agent step or control is a FAIL row, and the run carries on to the quit and the tray with what
+ * is running, so one run on a slow VM still answers the tray's question (batch SS on Windows: two runs ended before row 26).
+ * The rows that need the agents fail on their own; nothing passes for want of them.
+ */
+const CARRY_ON = process.env.QUIT_CDP_CARRY_ON === '1';
+const carry = async (label, fn) => {
+    if (!CARRY_ON) return fn();
+    try { return await fn(); } catch (error) { check(false, `${label} (carried on past it)`, String(error?.message ?? error).slice(0, 160)); return undefined; }
+};
 try {
     // -------------------------------------------------------------------------------- A: three agents streaming
     a = await open('first', 1);
@@ -508,7 +518,7 @@ try {
         const added = await a.cdp.evaluate(`window.genie.addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the quit check.', provider: 'codex' })`, 30_000);
         if (check(added?.ok === true, `1.${i} agent ${name} added`, added?.ok ? added.id : added?.reason)) agents.push({ id: added.id, name });
     }
-    for (const ag of agents) {
+    for (const ag of agents) await carry(`2-3. ${ag.name}`, async () => {
         step('2', `starting ${ag.name} (≤ 30 s to running)`);
         await waitForPageProbe(a.cdp);
         await a.cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(ag.id)}, "graceful"); true`, 15_000);
@@ -517,14 +527,15 @@ try {
         step('3', `prompting ${ag.name}`);
         const sent = await a.cdp.evaluate(`window.genie.prompt(${JSON.stringify(ag.id)}, 'Stream ticks until stopped.')`, 15_000);
         check(sent?.ok === true, `3. ${ag.name} took the prompt`, sent?.reason ?? '');
-    }
-    for (const ag of agents) {
+    });
+    for (const ag of agents) await carry(`4. ${ag.name}`, async () => {
         step('4', `waiting for ${ag.name}'s ledger to stream 8 ticks (≤ 30 s)`);
         const t = await until(async () => { const x = await ticksOf(a.cdp, ag.id); return x.max >= 8 ? x : null; }, 30_000);
         ag.before = t ?? await ticksOf(a.cdp, ag.id);
         ag.pid = ag.before.pids.length === 1 ? ag.before.pids[0] : null;
         check(ag.pid !== null, `4. ${ag.name}'s ledger is streaming, from ONE provider pid`, `ticks to ${ag.before.max}, pids ${JSON.stringify(ag.before.pids)}`);
-    }
+    });
+    for (const ag of agents) { ag.before ??= { max: 0, size: 0, pids: [] }; ag.pid ??= null; }
 
     // POSITIVE CONTROL: the pids read above are real, live, and what they say they are — before anything is closed.
     step('5', `positive control: host.json (${HOST_RECORD}) and the process table`);
@@ -534,16 +545,17 @@ try {
     const pids = agents.map((ag) => ag.pid);
     check(new Set(pids).size === AGENTS, '7. CONTROL: three DIFFERENT provider pids', JSON.stringify(pids));
     for (const ag of agents) check(alive(ag.pid) && /stub-codex/.test(commandLine(ag.pid)), `8. CONTROL: ${ag.name}'s provider pid ${ag.pid} is a LIVE stub-codex process`, commandLine(ag.pid).slice(0, 120));
-    for (const ag of agents) {
+    for (const ag of agents) await carry(`9. ${ag.name}`, async () => {
         step('9', `positive control: ${ag.name} is streaming NOW (≤ 10 s)`);
         const later = await until(async () => { const x = await ticksOf(a.cdp, ag.id); return x.max > ag.before.max ? x : null; }, 10_000);
         check(later !== null && later.pids.length === 1 && later.pids[0] === ag.pid, `9. CONTROL: ${ag.name} is streaming NOW (its ledger grew within seconds, same pid)`, `${ag.before.max} → ${later?.max}`);
         ag.before = later ?? ag.before;
-    }
+    });
     // Only THIS run's setup and controls gate what follows. A port finding at 0.4/0.5 is its own failed check and the run
     // carries on past it on a free port (batch L4 aborted here on it, with every control passing).
     const controlFailures = failures.slice(failuresBeforeRun);
-    if (controlFailures.length) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
+    if (controlFailures.length && !CARRY_ON) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
+    if (controlFailures.length) console.log(`  CARRYING ON past ${controlFailures.length} failed setup or control row(s), to answer the quit and tray rows with what is running`);
 
     // A TERMINAL, with "Keep terminals through a quit" ON (genie#1508: from reading, that setting decides nothing with a host).
     step('9t', 'the setting on, and a terminal open');
