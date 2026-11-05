@@ -370,6 +370,28 @@ describe('the live board in the host, followed per view', () => {
         expect(r.boardTynn.sockets[0]!.closed).toBe(true);
     });
 
+    /*
+     * LOCAL ONLY (P4 rule 4: what moves starts local-only). A non-local connection may be a share-link guest; following the
+     * board would hand it the owner's private board, read with the owner's own account.
+     */
+    it('a NON-LOCAL connection’s watch is refused in words and dials nothing; it gets no board events. CONTROL: a local one watches and gets them', async () => {
+        const r = await serverRig();
+        const remote = await windowOn(r.server, false);
+        await expect(remote.client.call('engine.tynnBoardWatch', ['view-r', 'acme'])).resolves.toEqual({ ok: false, reason: 'The Tynn board is followed from a local window only.' });
+        await expect(remote.client.call('engine.tynnBoardUnwatch', ['view-r'])).resolves.toEqual({ ok: false, reason: 'The Tynn board is followed from a local window only.' });
+        expect(await remote.client.tynnBoardWatch('view-r2', 'acme')).toBe(false);
+        await settle();
+        expect(r.boardTynn.sockets).toEqual([]);
+        // The control, on the same host: a local window's watch dials, and its events reach it — and still not the guest.
+        const local = await windowOn(r.server);
+        expect(await local.client.tynnBoardWatch('view-l', 'acme')).toBe(true);
+        await settle();
+        expect(r.boardTynn.sockets).toHaveLength(1);
+        await boardLive(r, r.boardTynn.sockets[0]!);
+        expect(local.board).toContainEqual({ workspaceId: 'acme', signal: { state: 'live' } });
+        expect(remote.board).toEqual([]);
+    });
+
     it('a workspace not linked to a Tynn project is not followed, and dials nothing', async () => {
         const r = await serverRig();
         const w = await windowOn(r.server);
