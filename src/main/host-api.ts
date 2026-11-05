@@ -18,6 +18,39 @@ import type { StartForWork as StartForWorkAnswer } from './start-on-demand.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { BytesResult, FileOpResult, OpenResult } from './files-host.js';
 import type { TreeNode } from '../core/files-panel.js';
+import { droneRefusal, type WorkstationRole } from '../core/workstation-role.js';
+import type { AppSourceKind } from '../core/app-inbox.js';
+import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
+import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
+
+/** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
+export interface LocalOwnerDeps {
+    appInbox: {
+        state(workspaceId: string): AppInboxCardState;
+        workspaceExists(workspaceId: string): boolean;
+        createKey(workspaceId: string, name: string): Promise<{ id: string; token: string }>;
+        scriptKeys(workspaceId: string): readonly { id: string }[];
+        revokeKey(keyId: string): Promise<unknown>;
+        rotate(kind: AppSourceKind, id: string): void;
+        revokeSource(source: { kind: AppSourceKind; id: string; workspaceId: string }): Promise<unknown>;
+        allowSource(kind: AppSourceKind, id: string): Promise<unknown>;
+        restartSource(workspaceId: string, kind: AppSourceKind, id: string): Promise<string>;
+    };
+    deviceLink?: {
+        hosts(): Promise<string[]>;
+        forget(url: string): Promise<boolean>;
+        adopt(url: string, token: string): Promise<boolean>;
+    };
+    tynnNetwork: {
+        hasAccount(): boolean;
+        signedIn(): boolean;
+        role(): WorkstationRole | null;
+        workstations(): Promise<TynnWorkstationList>;
+        setRole(workstationId: string, role: WorkstationRole, code: string): Promise<RoleChange>;
+        rereadRole(): void;
+        shares: NonNullable<TynnNetworkBridge['shares']>;
+    };
+}
 
 /**
  * THE HOST API (§6.8) — what a remote connection may perform on THIS Genie: one `invoke` over the
@@ -28,6 +61,7 @@ import type { TreeNode } from '../core/files-panel.js';
  */
 
 export interface HostApiDeps {
+    localOwner?: LocalOwnerDeps;
     /** The timer and clock the agent events are coalesced on (core/coalesce.ts). Default: the real ones. */
     schedule?: (ms: number, fn: () => void) => () => void;
     now?: () => number;
@@ -188,12 +222,76 @@ export interface HostApiDeps {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''));
 const num = (v: unknown): number | undefined => (typeof v === 'number' && v > 0 ? Math.floor(v) : undefined);
+const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
 export function buildHostApi(deps: HostApiDeps): HostApi {
     const agent = (id: unknown): AgentRecord | null => deps.find(str(id));
+    const owner = (): LocalOwnerDeps => {
+        if (!deps.localOwner) throw new Error('this host has no local owner operations');
+        return deps.localOwner;
+    };
 
     const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
         switch (method) {
+            case 'appInbox.state':
+                return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };
+            case 'appInbox.createKey': {
+                const [workspaceId, name] = args;
+                if (!named(workspaceId) || typeof name !== 'string') return { ok: false, reason: 'name a workspace and the key' };
+                const inbox = owner().appInbox;
+                if (!inbox.workspaceExists(workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
+                try {
+                    const made = await inbox.createKey(workspaceId, name);
+                    return { ok: true, id: made.id, name: name.trim(), token: made.token, state: inbox.state(workspaceId) };
+                } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+            }
+            case 'appInbox.revokeKey': {
+                const [workspaceId, keyId] = args;
+                if (!named(workspaceId) || !named(keyId)) return { ok: false, reason: 'name a workspace and the key' };
+                const inbox = owner().appInbox;
+                if (!inbox.scriptKeys(workspaceId).some(k => k.id === keyId)) return { ok: false, reason: 'that key is not one of this workspace’s' };
+                await inbox.revokeKey(keyId);
+                return { ok: true, state: inbox.state(workspaceId) };
+            }
+            case 'appInbox.source': {
+                const [workspaceId, op, kind, id] = args;
+                if (!named(workspaceId) || (op !== 'rotate' && op !== 'revoke' && op !== 'allow') || (kind !== 'site' && kind !== 'process') || !named(id)) return { ok: false, reason: 'rotate, revoke or allow a site or a process' };
+                const inbox = owner().appInbox;
+                try {
+                    if (op === 'rotate') inbox.rotate(kind, id);
+                    else if (op === 'revoke') await inbox.revokeSource({ kind, id, workspaceId });
+                    else await inbox.allowSource(kind, id);
+                    const after = await inbox.restartSource(workspaceId, kind, id);
+                    return { ok: true, text: `${op === 'rotate' ? 'Rotated' : op === 'revoke' ? 'Revoked' : 'Allowed'}: ${after}`, state: inbox.state(workspaceId) };
+                } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+            }
+            case 'deviceLink.hosts': return (await owner().deviceLink?.hosts()) ?? [];
+            case 'deviceLink.forget': return typeof args[0] === 'string' ? (await owner().deviceLink?.forget(args[0])) ?? false : false;
+            case 'deviceLink.adopt': return typeof args[0] === 'string' && typeof args[1] === 'string' ? (await owner().deviceLink?.adopt(args[0], args[1])) ?? false : false;
+            case 'tynnNetwork.workstations': {
+                const network = owner().tynnNetwork;
+                if (!network.hasAccount()) return { ok: false, reason: 'this Genie has no Tynn account' };
+                const refused = droneRefusal(network.role());
+                if (refused) return { ok: false, reason: refused };
+                return network.workstations();
+            }
+            case 'tynnNetwork.setRole': {
+                const network = owner().tynnNetwork, [workstationId, role, code] = args;
+                const refused = droneRefusal(network.role());
+                if (refused) return { ok: false, reason: refused };
+                if (typeof workstationId !== 'string' || (role !== 'pilot' && role !== 'drone') || typeof code !== 'string') return { ok: false, reason: 'not a role change' };
+                if (!network.signedIn()) return { ok: false, reason: 'Sign in to Tynn to change a workstation’s role' };
+                const result = await network.setRole(workstationId, role, code);
+                if (result.ok) network.rereadRole();
+                return result;
+            }
+            case 'tynnNetwork.shares.list': return owner().tynnNetwork.shares.list(typeof args[0] === 'string' ? args[0] : null);
+            case 'tynnNetwork.shares.mint': {
+                const input = (args[0] ?? {}) as { workspaceId?: unknown; capability?: unknown; expiresInDays?: unknown };
+                return owner().tynnNetwork.shares.mint({ workspaceId: typeof input.workspaceId === 'string' ? input.workspaceId : null,
+                    capability: input.capability === 'readonly' ? 'readonly' : 'control', expiresInDays: typeof input.expiresInDays === 'number' ? input.expiresInDays : 7 });
+            }
+            case 'tynnNetwork.shares.revoke': return typeof args[0] === 'string' ? owner().tynnNetwork.shares.revoke(args[0]) : { ok: false, reason: 'not a link' };
             case 'snapshot':
                 return deps.snapshot();
             case 'agentDetail':

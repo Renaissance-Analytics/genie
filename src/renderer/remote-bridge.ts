@@ -33,6 +33,8 @@ export interface RemoteState {
 }
 
 export interface RemoteClient {
+    /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
+    readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
     readonly bridge: GenieBridge;
     readonly ready: Promise<{ ok: true } | { ok: false; reason: string }>;
     state(): RemoteState;
@@ -227,6 +229,28 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
     const watchers = new Map<string, number>();
 
+    const localOwner: import('./bridge.js').LocalOwnerBridge | undefined = local ? {
+        appInbox: {
+            state: (id) => read('appInbox.state', id),
+            createKey: (id, name) => read('appInbox.createKey', id, name),
+            revokeKey: (id, key) => read('appInbox.revokeKey', id, key),
+            source: (id, op, kind, source) => read('appInbox.source', id, op, kind, source),
+        },
+        deviceLink: {
+            hosts: () => read('deviceLink.hosts'),
+            forget: (url) => read('deviceLink.forget', url),
+            adopt: (url, token) => read('deviceLink.adopt', url, token),
+        },
+        tynnNetwork: {
+            workstations: () => read('tynnNetwork.workstations'),
+            setRole: (id, role, code) => read('tynnNetwork.setRole', id, role, code),
+            shares: {
+                list: (id) => read('tynnNetwork.shares.list', id),
+                mint: (input) => read('tynnNetwork.shares.mint', input),
+                revoke: (id) => read('tynnNetwork.shares.revoke', id),
+            },
+        },
+    } : undefined;
     const bridge: GenieBridge = {
         snapshot: () => read<GenieSnapshot>('snapshot'),
         subscribe: (onChange) => on('snapshot', (p) => onChange(p as GenieSnapshot)),
@@ -442,6 +466,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
 
     return {
         bridge,
+        ...(localOwner ? { localOwner } : {}),
         ready,
         state: () => state,
         onState: (l) => { stateListeners.add(l); return () => { stateListeners.delete(l); }; },

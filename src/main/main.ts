@@ -2220,14 +2220,6 @@ async function boot(): Promise<void> {
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
-    ipcMain.handle('genie:tynn-workstations', async () => {
-        const account = tynnAccount;
-        if (!account) return { ok: false, reason: 'this Genie has no Tynn account' };
-        const refused = droneRefusal(workstationRoleNow);
-        if (refused) return { ok: false, reason: refused };
-        // Every Tynn identity this machine holds, not only the one this launch registered (this-machine.ts).
-        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), await thisMachineIds()), rereadRole);
-    });
     // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): main classifies it against the Tynn this Genie is
     // signed in to, with the role Tynn gave this machine — never one the window sends — then opens the invite in the
     // browser or the workstation in its own window.
@@ -2237,18 +2229,6 @@ async function boot(): Promise<void> {
             openExternal: async (url) => { try { await shell.openExternal(url); return true; } catch { return false; } },
             openWorkstation: (id, name) => openRemoteWindow(`relay:${id}`, name ?? null),
         });
-    });
-    // CHANGE A WORKSTATION'S ROLE (genie#1278 W6): refused here first on a drone (the role main read from Tynn), then Tynn
-    // decides — the owner only, with a fresh authenticator code. This machine's own role is read again afterwards.
-    ipcMain.handle('genie:tynn-workstation-role', async (_event, workstationId: unknown, role: unknown, code: unknown) => {
-        const refused = droneRefusal(workstationRoleNow);
-        if (refused) return { ok: false, reason: refused };
-        if (typeof workstationId !== 'string' || (role !== 'pilot' && role !== 'drone') || typeof code !== 'string') return { ok: false, reason: 'not a role change' };
-        const account = tynnAccount;
-        if (!account?.status().signedIn) return { ok: false, reason: 'Sign in to Tynn to change a workstation’s role' };
-        const result = await setWorkstationRole((path, init) => account.request(path, init), workstationId, role, code);
-        if (result.ok) void readWorkstationRoleNow?.();
-        return result;
     });
     ipcMain.handle('genie:relay-open', async (event, workstationId: unknown) => {
         if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
@@ -2288,17 +2268,6 @@ async function boot(): Promise<void> {
         if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
         return tynnAccount.request(path, init);
     };
-    ipcMain.handle('genie:tynn-share-links', (_event, workspaceId: unknown) => listShareLinks(shareRequest, ownWorkstation(), typeof workspaceId === 'string' ? workspaceId : null));
-    ipcMain.handle('genie:tynn-share-mint', (_event, input: unknown) => {
-        const i = (input ?? {}) as { workspaceId?: unknown; capability?: unknown; expiresInDays?: unknown };
-        return mintShareLink(shareRequest, ownWorkstation(), {
-            workspaceId: typeof i.workspaceId === 'string' ? i.workspaceId : null,
-            capability: i.capability === 'readonly' ? 'readonly' : 'control',
-            expiresInDays: typeof i.expiresInDays === 'number' ? i.expiresInDays : 7,
-        });
-    });
-    // Revoking a claimed link ends its guest's live session NOW: this host re-checks its relay sessions at once (audit M-c).
-    ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId, async () => { await relayHostNow?.revalidate(); }) : { ok: false, reason: 'not a link' }));
     // ANOTHER MACHINE, BY ITS ADDRESS (P3.4 cut e, audit M-e): refused here on a drone, then the host dials, and holds the token. The window's frames use the relay's channels.
     const deviceLinkNow = () => agentEngineLink?.client.deviceLink() ?? null;
     let deviceLinkHeard: unknown = null;
@@ -2323,9 +2292,6 @@ async function boot(): Promise<void> {
         sender.once('destroyed', () => { if (deviceChannels.delete(opened.channel)) link?.close(opened.channel); });
         return opened;
     });
-    ipcMain.handle('genie:device-hosts', async () => (await deviceLinkNow()?.hosts()) ?? []);
-    ipcMain.handle('genie:device-forget', async (_event, url: unknown) => (typeof url === 'string' ? (await deviceLinkNow()?.forget(url)) ?? false : false));
-    ipcMain.handle('genie:device-adopt', async (_event, url: unknown, token: unknown) => (typeof url === 'string' && typeof token === 'string' ? (await deviceLinkNow()?.adopt(url, token)) ?? false : false));
     // Only the window that opened a channel may use it.
     ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
         if (typeof channel === 'string' && deviceChannels.get(channel) === event.sender && typeof text === 'string') { deviceLinkNow()?.send(channel, text); return; }
@@ -2745,6 +2711,40 @@ async function boot(): Promise<void> {
          * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
          */
         remoteApi: buildHostApi({
+            localOwner: {
+                appInbox: {
+                    state: (id) => appInboxState(id), workspaceExists: (id) => !!registry?.workspace(id),
+                    createKey: (id, name) => appInboxKeys.createScriptKey(id, name), scriptKeys: (id) => appInboxKeys.scriptKeys(id),
+                    revokeKey: (id) => appInboxKeys.revokeScriptKey(id), rotate: (kind, id) => appInboxKeys.rotate(kind, id),
+                    revokeSource: (source) => appInboxKeys.revokeSource(source), allowSource: (kind, id) => appInboxKeys.allowSource(kind, id),
+                    restartSource: (workspaceId, kind, id) => restartSource(workspaceId, kind, id),
+                },
+                deviceLink: {
+                    hosts: async () => (await deviceLinkNow()?.hosts()) ?? [],
+                    forget: async (url) => (await deviceLinkNow()?.forget(url)) ?? false,
+                    adopt: async (url, token) => (await deviceLinkNow()?.adopt(url, token)) ?? false,
+                },
+                tynnNetwork: {
+                    hasAccount: () => tynnAccount !== null, signedIn: () => tynnAccount?.status().signedIn === true, role: () => workstationRoleNow,
+                    workstations: async () => {
+                        const account = tynnAccount!;
+                        // Every identity this machine holds, not only this launch's registration (this-machine.ts).
+                        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), await thisMachineIds()), rereadRole);
+                    },
+                    // Tynn decides a role change with a fresh authenticator code (genie#1278 W6).
+                    setRole: (id, role, code) => {
+                        const account = tynnAccount!;
+                        return setWorkstationRole((path, init) => account.request(path, init), id, role, code);
+                    },
+                    rereadRole: () => { void readWorkstationRoleNow?.(); },
+                    shares: {
+                        list: (id) => listShareLinks(shareRequest, ownWorkstation(), id),
+                        mint: (input) => mintShareLink(shareRequest, ownWorkstation(), input),
+                        // Keep immediate revalidation of a revoked link's live guest session (audit M-c).
+                        revoke: (id) => revokeShareLink(shareRequest, ownWorkstation(), id, async () => { await relayHostNow?.revalidate(); }),
+                    },
+                },
+            },
             // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).
             activity: { feeds: (workspaceId) => activityOf(workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
             headroom: {
@@ -3419,7 +3419,7 @@ async function boot(): Promise<void> {
             schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         }),
     });
-    // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own window only (preload `appInbox`); a key is
+    // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own local window; a key is
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
     const appInboxState = (workspaceId: string) => ({
@@ -3440,36 +3440,6 @@ async function boot(): Promise<void> {
         }
         return 'its next start uses it';
     };
-    const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
-    ipcMain.handle('genie:app-inbox-state', (_event, workspaceId: unknown) => (named(workspaceId) ? { ok: true, state: appInboxState(workspaceId) } : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:app-inbox-create-key', async (_event, workspaceId: unknown, name: unknown) => {
-        if (!named(workspaceId) || typeof name !== 'string') return { ok: false, reason: 'name a workspace and the key' };
-        if (!registry?.workspace(workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
-        try {
-            const made = await appInboxKeys.createScriptKey(workspaceId, name);
-            return { ok: true, id: made.id, name: name.trim(), token: made.token, state: appInboxState(workspaceId) };
-        } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-        }
-    });
-    ipcMain.handle('genie:app-inbox-revoke-key', async (_event, workspaceId: unknown, keyId: unknown) => {
-        if (!named(workspaceId) || !named(keyId)) return { ok: false, reason: 'name a workspace and the key' };
-        if (!appInboxKeys.scriptKeys(workspaceId).some((k) => k.id === keyId)) return { ok: false, reason: 'that key is not one of this workspace’s' };
-        await appInboxKeys.revokeScriptKey(keyId);
-        return { ok: true, state: appInboxState(workspaceId) };
-    });
-    ipcMain.handle('genie:app-inbox-source', async (_event, workspaceId: unknown, op: unknown, kind: unknown, id: unknown) => {
-        if (!named(workspaceId) || (op !== 'rotate' && op !== 'revoke' && op !== 'allow') || (kind !== 'site' && kind !== 'process') || !named(id)) return { ok: false, reason: 'rotate, revoke or allow a site or a process' };
-        try {
-            if (op === 'rotate') appInboxKeys.rotate(kind, id);
-            else if (op === 'revoke') await appInboxKeys.revokeSource({ kind, id, workspaceId });
-            else await appInboxKeys.allowSource(kind, id);
-            const after = await restartSource(workspaceId, kind, id);
-            return { ok: true, text: `${op === 'rotate' ? 'Rotated' : op === 'revoke' ? 'Revoked' : 'Allowed'}: ${after}`, state: appInboxState(workspaceId) };
-        } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-        }
-    });
     // ISSUEWATCH (Tynn #806): Tynn polls GitHub and pushes each project's entry on the person's own channel; the client
     // listens with the Tynn token Genie already holds, and what changed reaches the agents of the linked workspace through
     // the SAME delivery as mail — Genie's notice, at the agent's next step even mid-turn (genie#1411) — each agent by its own
