@@ -31,7 +31,11 @@ import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
-import { spawnBrowserProcess } from './engine-launch.js';
+import { spawnBrowserProcess, spawnUpdaterProcess } from './engine-launch.js';
+import { hostDrainAgents, updaterHelperEnv, UpdatesService } from './updates-host.js';
+import { killProcessAsync, listProcessesAsync } from './process-list.js';
+import { channelFrom } from '../core/update-channel.js';
+import type { ReleaseLike } from '../core/update-notes.js';
 import { hostIdleStep } from '../core/host-idle.js';
 import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -348,6 +352,60 @@ async function main(): Promise<void> {
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
     const browserService = new BrowserService({ startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    /** What this host supervises, stopped once — by an update's install (in its order) or by the shutdown, whichever is first. */
+    let hostedStop: Promise<void> | null = null;
+    const stopHostedOnce = (): Promise<void> => {
+        hostedStop ??= shutDownHosted({
+            supervisor: processSupervisor,
+            hosting: hostingStack,
+            endChildren: async () => { await relay?.stop(); },
+            schedulers: clocks,
+            log: (line) => { say(line); lifecycleLog(line); },
+        });
+        return hostedStop;
+    };
+    /*
+     * THE UPDATER (the host split, P5b; updates-host.ts): its state, its schedule and the install are this host's, window or
+     * no window. electron-updater needs Electron's `app`, which this process has not: Genie's own executable in its
+     * `--updater` mode makes the library's calls, started here, detached, when one is needed, with this host's environment
+     * (the window's, so an AppImage's `APPIMAGE` reaches it). An install is a person's, from a window; never by itself.
+     */
+    const runningVersion = build.split('+')[0] ?? build;
+    const updatesService = new UpdatesService({
+        host: {
+            installDir: dirname(process.execPath),
+            ownPid: process.pid,
+            processes: listProcessesAsync,
+            kill: killProcessAsync,
+            channel: channelFrom(settings.snapshot().update_channel),
+            runningVersion,
+            releases: async () => {
+                const memory = await proxyMemory;
+                const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say });
+                const res = await send('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', { method: 'GET', headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Genie' }, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(10_000) });
+                if (!res.ok) throw new Error(`GitHub releases: HTTP ${res.status}`);
+                return JSON.parse(await res.text()) as ReleaseLike[];
+            },
+            // §7.4: every session ends with the upgrade, who comes back recorded on disk first; the next launch restores them once.
+            agents: hostDrainAgents({
+                agents: () => hostRegistry.listAgents(),
+                probe: (id) => host.probe(id as AgentId),
+                writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
+                writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
+                stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
+                onRecordError: (error) => { const line = `update: the agents to start again could not be recorded: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); },
+            }),
+            // P5a.3's order: the browser told to end, then sites, the front door and kept processes stopped; containers stay up.
+            stopHosted: async () => { browserService.quit(); await stopHostedOnce(); },
+        },
+        startHelper: (launch) => { spawnUpdaterProcess(launch, { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); },
+        defaultLaunch: { file: process.execPath, args: ['--updater'] },
+        windowConnected: () => engineRef?.windowConnected() ?? false,
+        exit: () => { void shutdown('an update is installing'); },
+        log: (line) => { say(line); lifecycleLog(line); },
+    });
+    settings.onChange((key, value, workspaceId) => { if (key === 'update_channel' && workspaceId === undefined) updatesService.setChannel(channelFrom(value)); });
+    updatesService.onEvent(() => { lastBusy = Date.now(); });
     // WHERE A SLOW ANSWER WAITS (genie-test-windows, job Q0): the window's watchdog, on the host's own loop and on every call
     // a window makes. Its lines go to the shared lifecycle log marked as the host's. No stack profiler here: its own start
     // cost seconds on that machine (stall-profile.ts).
@@ -377,6 +435,7 @@ async function main(): Promise<void> {
         processes: processesService,
         flows: flowsService,
         browser: browserService,
+        updates: updatesService,
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
@@ -670,13 +729,7 @@ async function main(): Promise<void> {
         // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
         // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
         // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
-        await shutDownHosted({
-            supervisor: processSupervisor,
-            hosting: hostingStack,
-            endChildren: async () => { await relay?.stop(); },
-            schedulers: clocks,
-            log: (line) => { say(line); lifecycleLog(line); },
-        });
+        await stopHostedOnce();
         await appInboxDoor.close().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
@@ -687,6 +740,8 @@ async function main(): Promise<void> {
         }
         process.exit(0);
     }
+    // The updater's own clock (AUTO_CHECK): stopped with the host's other clocks, first, at "Shut down everything".
+    clocks.push({ stop: updatesService.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); }) });
     process.on('SIGTERM', () => void shutdown('SIGTERM'));
     process.on('SIGINT', () => void shutdown('SIGINT'));
 
