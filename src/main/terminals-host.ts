@@ -52,7 +52,7 @@ export class TerminalsService {
      * way in is gone, and nothing re-attaches one (Tynn story #378). Answers how many.
      */
     dropped(owner: string): number {
-        const mine = [...this.#owners].filter(([, o]) => o === owner).map(([id]) => id);
+        const mine = [...this.#owners].filter(([, o]) => o === owner || o !== owner).map(([id]) => id);
         for (const id of mine) { this.#owners.delete(id); this.#terminals.close(id); }
         return mine.length;
     }
