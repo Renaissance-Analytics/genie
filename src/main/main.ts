@@ -2792,8 +2792,8 @@ async function boot(): Promise<void> {
             },
             // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
             localFiles: { files: () => filesHost, editor: editorBytesDeps, repo: (op, id, rel, a, b) => repoCall(panelsHost(), op, id, rel, a, b) },
-            chatDrafts: engineDraftsPort(drafts, (method, args) => agentEngineLink?.client.call(method, args) ?? Promise.resolve({ ok: false, reason: 'The draft host is not connected.' })),
             artboard: { read: id => artboardRead(panelsHost(), id), review: (id, post, verdict, comment) => artboardReview(panelsHost(), id, post, verdict, comment) },
+            chatDrafts: engineDraftsPort(drafts, (method, args) => agentEngineLink?.client.call(method, args) ?? Promise.resolve({ ok: false, reason: 'The draft host is not connected.' })),
             files: {
                 children: async (workspaceId, dir) => (await filesHost?.children(workspaceId, dir)) ?? null,
                 open: (workspaceId, path) => filesHost?.open(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),
