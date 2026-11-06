@@ -73,7 +73,7 @@ describe('nothing writes or restores it any more', () => {
     });
 
     it('boot deletes what an older Genie left', () => {
-        expect(code('src/main/main.ts')).toMatch(/await removeSavedScrollback\(genieHome\(\), lifecycleLog\);/);
+        expect(code('src/main/main.ts')).toMatch(/await removeSavedScrollback\(genieRoot\(\), lifecycleLog\);/);
     });
 
     it('a full quit records the running set and saves no screen', () => {
