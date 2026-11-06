@@ -46,7 +46,29 @@ function launch() {
     const args = ['.', `--remote-debugging-port=${PORT}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])];
     return spawn(electron, args, { env, stdio: ['ignore', out, out], detached: process.platform !== 'win32', windowsHide: false });
 }
+/** This run's genie-host, by its own record (`<genieHome>/runtime/host.json`): its pid, or null. */
+function hostPid() {
+    try {
+        const raw = JSON.parse(readFileSync(join(home, '.genie', 'runtime', 'host.json'), 'utf8'));
+        return typeof raw.pid === 'number' ? raw.pid : null;
+    } catch { return null; }
+}
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
+/**
+ * genie-host is detached: it outlives the window by design. The relaunch must boot a NEW host on both systems (the verdicts
+ * then come from its first pass, the path a restart takes), so the host this run started is stopped by the pid in its own
+ * record — never by a pattern. Windows' taskkill /T already reaches it (its parent pid is the window); Linux's group signal
+ * does not (it is in its own session).
+ */
+async function stopHost(pid) {
+    if (pid === null || !alive(pid)) return;
+    try { process.kill(pid, 'SIGTERM'); } catch { /* it has gone */ }
+    for (const end = Date.now() + 15_000; alive(pid) && Date.now() < end;) await sleep(100);
+    if (alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* it has gone */ } }
+    for (const end = Date.now() + 5_000; alive(pid) && Date.now() < end;) await sleep(100);
+}
 async function stop(app) {
+    const host = hostPid();
     const gone = new Promise((r) => { if (app.exitCode !== null) r(); else app.once('exit', r); });
     if (process.platform === 'win32') {
         try { execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* it has gone */ }
@@ -57,9 +79,13 @@ async function stop(app) {
     if (app.exitCode === null && process.platform !== 'win32') {
         try { process.kill(-app.pid, 'SIGKILL'); } catch { /* it has gone */ }
     }
+    await stopHost(host);
+    stopped.push({ host, gone: host === null ? null : !alive(host) });
     // The debugger port and the single-instance lock are free before the next launch.
     await sleep(2000);
 }
+/** Each stop's host and whether it went: the relaunch rows read them. */
+const stopped = [];
 
 class Cdp {
     #ws; #id = 1; #pending = new Map();
@@ -233,6 +259,11 @@ try {
     app = launch();
     cdp = await Cdp.connect();
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-route]'))`, 60_000), '13. relaunched');
+    // The relaunch is against a NEW genie-host: the one before it is gone, and the record names another.
+    const before = stopped.at(-1) ?? { host: null, gone: null };
+    let after = hostPid();
+    for (const end = Date.now() + 20_000; (after === null || after === before.host) && Date.now() < end;) { await sleep(200); after = hostPid(); }
+    check(before.host !== null && before.gone === true && after !== null && after !== before.host, '13b. on a new genie-host (the old one stopped)', `${before.host} -> ${after}`);
     await open(cdp, otherId);
     const stillAsks = await waitFor(cdp, `Boolean(${stepFor(otherId)})`);
     if (!stillAsks) {
