@@ -70,6 +70,20 @@ function stopHook(payload: Payload): Record<string, unknown> {
     return { matcher: '', hooks: [{ type: 'command', command: `curl -s -X POST${auth} -H "Content-Type: application/json" -H "Mcp-Param-TerminalId: $GENIE_TERMINAL_ID" --data '${body}' ${payload.GENIE_MCP_URL} > /dev/null` }] };
 }
 
+/** Genie's Stop hook command and nothing else: its exact form, an address on this machine, and no other words. A folder's hook that merely mentions imDone is not it. */
+export function isExactlyGenieStopHook(command: string): boolean {
+    const body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"imDone","arguments":{"terminalId":"$GENIE_TERMINAL_ID"}}}';
+    const start = 'curl -s -X POST';
+    const middle = ` -H "Content-Type: application/json" -H "Mcp-Param-TerminalId: $GENIE_TERMINAL_ID" --data '${body}' `;
+    const end = ' > /dev/null';
+    if (!command.startsWith(start) || !command.endsWith(end)) return false;
+    const at = command.indexOf(middle);
+    if (at < 0) return false;
+    const auth = command.slice(start.length, at);
+    const url = command.slice(at + middle.length, command.length - end.length);
+    return /^( -H "Authorization: Bearer [A-Za-z0-9._~+/=-]+")?$/.test(auth) && /^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9._~/-]*$/.test(url);
+}
+
 function isGenieStopHook(hook: unknown): boolean {
     // Match on the command text itself: a re-stringified object escapes the inner quotes and never matches.
     if (typeof hook !== 'object' || hook === null) return false;

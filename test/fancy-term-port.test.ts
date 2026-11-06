@@ -213,3 +213,56 @@ describe('environment for a supervised process', () => {
         expect(f.created[1]!.env).toEqual({ GENIE_TERMINAL_ID: (f.created[1] as { id: string }).id });
     });
 });
+
+describe('a batch file on Windows: an npm site', () => {
+    const machine = (files: string[], path = 'C:\\node') => ({ platform: 'win32' as const, env: { PATH: path, SystemRoot: 'C:\\Windows' }, isFile: (p: string) => files.includes(p.toLowerCase()) });
+    function rig(files: string[], path?: string) {
+        const made: Array<Record<string, unknown>> = [];
+        const backend = { create: (o: Record<string, unknown>) => { made.push(o); return { id: String(o.id), pid: 7, shell: String(o.shell), existing: false, scrollback: '' }; }, on: () => {}, write: () => {}, resize: () => {}, kill: () => {}, getScrollback: () => '' } as never;
+        return { made, port: fancyTermPort(backend, { defaultShell: () => ({ command: 'cmd', args: [] }), platform: 'win32', lookup: machine(files, path) }) };
+    }
+    const NPM = 'c:\\node\\npm.cmd';
+
+    it.each([
+        ['npm run dev', ['run', 'dev']],
+        ['npm.cmd run dev', ['run', 'dev']],
+        ['npm run dev -- --port=5173', ['run', 'dev', '--', '--port=5173']],
+    ])('%s: the batch file by its whole path, with its arguments as a list', (command, args) => {
+        const t = rig([NPM]);
+        t.port.open({ cwd: 'C:\\w', command });
+        expect(t.made[0]).toMatchObject({ shell: 'C:\\node\\npm.cmd', args });
+    });
+
+    it('a .bat too, and a program comes before a batch file of the same name', () => {
+        const bat = rig(['c:\\node\\tool.bat']);
+        bat.port.open({ cwd: 'C:\\w', command: 'tool' });
+        expect(bat.made[0]).toMatchObject({ shell: 'C:\\node\\tool.bat' });
+        const both = rig(['c:\\node\\tool.exe', 'c:\\node\\tool.cmd']);
+        both.port.open({ cwd: 'C:\\w', command: 'tool' });
+        expect(both.made[0]).toMatchObject({ shell: 'C:\\node\\tool.exe' });
+    });
+
+    it('only an absolute PATH entry counts: one in a relative entry is not found', () => {
+        const t = rig(['node\\npm.cmd'], 'node');
+        expect(() => t.port.open({ cwd: 'C:\\w', command: 'npm run dev' })).toThrow(/"npm" was not found/);
+        expect(t.made).toEqual([]);
+    });
+
+    it.each(['&', '|', '<', '>', '^', '%', '!'])('an argument with %s reaches no batch file: nothing starts, and the words name it', (character) => {
+        const t = rig([NPM]);
+        expect(() => t.port.open({ cwd: 'C:\\w', command: `npm run dev${character}x` })).toThrow(new RegExp(`dev\\${character}x`));
+        expect(t.made).toEqual([]);
+    });
+
+    it('a batch file named by its whole path gets the same check', () => {
+        const t = rig([]);
+        expect(() => t.port.open({ cwd: 'C:\\w', command: 'C:\\node\\npm.cmd run a&b' })).toThrow(/a&b/);
+        expect(t.made).toEqual([]);
+    });
+
+    it('CONTROL: a program takes the same argument: this is about batch files', () => {
+        const t = rig(['c:\\node\\node.exe']);
+        t.port.open({ cwd: 'C:\\w', command: 'node serve&x' });
+        expect(t.made[0]).toMatchObject({ shell: 'C:\\node\\node.exe', args: ['serve&x'] });
+    });
+});

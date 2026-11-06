@@ -37,3 +37,32 @@ export async function startForWork(ports: StartOnDemandPorts, record: AgentRecor
     const started = await ports.start(record, ports.cwdFor(record));
     return started.ok ? { ok: true, started: true } : started;
 }
+
+/** What the chat says when the person's message started a new driver because the last one stopped itself. */
+export const NEW_DRIVER_NOTICE = 'The last Stop could not be confirmed, so that run was ended. Genie started the agent again on the same conversation for your message.';
+
+/** THE PERSON'S MESSAGE: what `startForWork` does, and a new driver when the run's own stopped itself. */
+export interface StartForYourMessagePorts {
+    /** The rule every sender of work shares (`startForWork` with main's ports: `startOnDemand`). */
+    startForWork(record: AgentRecord): StartForWork | Promise<StartForWork>;
+    /** The run's driver stopped itself and must be replaced before it takes work (`SessionHost.needsNewDriver`). */
+    needsNewDriver(agentId: AgentRecord['id']): boolean;
+    /** THE ONE RESTART (genie#1238, `restartAgent(…, 'graceful')`): the same conversation, what is owed delivered. */
+    restart(agentId: AgentRecord['id']): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** A warning in the agent's chat (`SessionHost.notice`). */
+    notice(agentId: AgentRecord['id'], message: string): boolean | Promise<boolean>;
+}
+
+/**
+ * The rule for the PERSON'S message (the composer, a remote window's chat): `startForWork`, except when the run's driver
+ * stopped itself (prism-acp 0.37.0: Claude's cancel state uncertain). Then their message starts a new driver through the
+ * one Restart — the same conversation, whatever that run still owed delivered first — and the chat says why. Mail and
+ * flows keep `startForWork`: after a Stop, only the person starts the agent again (genie#1565).
+ */
+export async function startForYourMessage(ports: StartForYourMessagePorts, record: AgentRecord): Promise<StartForWork> {
+    if (!ports.needsNewDriver(record.id)) return ports.startForWork(record);
+    const restarted = await ports.restart(record.id);
+    if (!restarted.ok) return restarted;
+    ports.notice(record.id, NEW_DRIVER_NOTICE);
+    return { ok: true, started: true };
+}

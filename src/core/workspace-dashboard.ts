@@ -1,5 +1,5 @@
 import { heartbeat, type ActivityFeed, type FeedItem } from './activity-feed.js';
-import { groupByWorkspace, statusOf, type AgentRow, type AgentState, type Fidelity, type StatusCell } from './dashboard-view.js';
+import { groupByWorkspace, shownState, statusOf, type AgentRow, type AgentState, type Fidelity, type StatusCell } from './dashboard-view.js';
 import { deckBand, isStale, type DeckItem } from './deck.js';
 import { ageOf } from './delivery.js';
 
@@ -112,7 +112,7 @@ export function workspaceDashboard(input: {
             name: row.name,
             provider: row.provider,
             fidelity: row.fidelity,
-            state: row.state,
+            state: shownState(row),
             word: stopped ? 'Stopped' : status.word,
             tone: stopped ? 'muted' : status.tone,
             stopped,
@@ -128,7 +128,7 @@ export function workspaceDashboard(input: {
         };
     });
 
-    const strip = mine.map((row) => ({ id: row.id, name: row.name, fidelity: row.fidelity, state: row.state, word: statusOf(row).word }));
+    const strip = mine.map((row) => ({ id: row.id, name: row.name, fidelity: row.fidelity, state: shownState(row), word: statusOf(row).word }));
     const waiting = open.filter((item) => item.agentId === null || !ids.has(item.agentId)).map((item) => ({ id: item.id, title: item.title }));
     return { strip, lanes, waiting, noAgents: mine.length === 0 };
 }

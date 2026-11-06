@@ -303,6 +303,8 @@ export interface FeatureData {
      * in a pushed snapshot: the flow it saved (and whether the save disarmed it), or the problems, each on its node.
      */
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null; saved?: FlowSaved | null; toolKinds?: readonly import('@particle-academy/fancy-flow/engine').NodeKindDefinition[] } | null;
+    /** Workspaces waiting for the person's yes. Absent = none. */
+    readonly trust?: readonly TrustStepView[];
     readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus; /** What the hosting was started without (genie-host's launch inputs), each with its reason. */ problems?: readonly string[] } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
@@ -334,6 +336,19 @@ export function newestSnapshot(current: FeatureData, next: FeatureData): Feature
 
 /** What a feature action came to, for a control that shows its progress (renderer/site-actions.ts). */
 export type ActOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
+/** A workspace not trusted yet: what would run, for the person to say yes to. */
+export interface TrustStepView {
+    readonly workspaceId: string;
+    readonly changed: boolean;
+    readonly list: {
+        readonly sites: readonly { readonly key: string; readonly fingerprint: string; readonly runs: string; readonly folder: string; readonly npmScript: string | null }[];
+        readonly hooks: readonly { readonly file: string; readonly event: string; readonly command: string }[];
+        readonly servers: readonly { readonly file: string; readonly name: string; readonly command: string }[];
+        readonly gitKeys: readonly { readonly key: string; readonly value: string }[];
+        readonly approvals: readonly string[];
+    };
+}
 
 /** First paint: nothing has been asked yet. */
 export const EMPTY_FEATURES: FeatureData = {
@@ -546,6 +561,8 @@ export type FeatureAction =
     | { kind: 'integrations.githubOpen'; target: { page: 'install' } | { page: 'device' } | { page: 'authorizations' } | { page: 'installation'; installationId: number } }
     | { kind: 'integrations.githubSignOut' }
     | { kind: 'workspace.syncAgentFiles'; workspaceId: string; workspacePath: string }
+    /** The person's yes to what a workspace would run. */
+    | { kind: 'workspace.trust'; workspaceId: string; workspacePath: string }
     /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
     | { kind: 'plugins.setEnabled'; id: string; enabled: boolean };
 

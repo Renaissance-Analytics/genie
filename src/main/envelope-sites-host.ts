@@ -119,6 +119,8 @@ export class EnvelopeSites {
     readonly #workspaces = new Map<string, { path: string; asleep: boolean }>();
     #stopped: Set<string> | null = null;
     #trust: TrustBook | null = null;
+    /** Workspace yeses being saved, with what each said before. */
+    readonly #unsaved = new Map<string, string | undefined>();
     #queue: Promise<void> = Promise.resolve();
 
     constructor(sites: SiteManager, ports: EnvelopeSitesPorts) {
@@ -175,7 +177,7 @@ export class EnvelopeSites {
      */
     async #openTrust(workspaces: readonly WorkspaceRef[]): Promise<void> {
         if (this.#trust !== null) return;
-        const empty = (carried: readonly string[]): TrustBook => ({ version: 1, carried: [...carried], pendingCarry: [...carried], sites: {} });
+        const empty = (carried: readonly string[]): TrustBook => ({ version: 1, carried: [...carried], pendingCarry: [...carried], sites: {}, workspaces: {} });
         let loaded: unknown;
         try {
             loaded = await this.#ports.trust.load();
@@ -223,9 +225,10 @@ export class EnvelopeSites {
         const book = this.#trust!;
         const prefix = `${workspaceId}/`;
         const kept = Object.entries(book.sites).filter(([id]) => !id.startsWith(prefix));
-        if (kept.length === Object.keys(book.sites).length && !book.pendingCarry.includes(workspaceId)) return;
+        if (kept.length === Object.keys(book.sites).length && !book.pendingCarry.includes(workspaceId) && book.workspaces[workspaceId] === undefined) return;
         book.sites = Object.fromEntries(kept);
         book.pendingCarry = book.pendingCarry.filter((id) => id !== workspaceId);
+        delete book.workspaces[workspaceId];
         await this.#saveTrust();
     }
 
@@ -355,6 +358,50 @@ export class EnvelopeSites {
     disabled(siteId: string): boolean {
         const t = this.#tracked.get(siteId);
         return t !== undefined && !t.enabled;
+    }
+
+    /** The record's part the workspace verdict reads (workspace-trust-host.ts). Nothing yet read is nothing trusted. */
+    trustRecord(): { readonly carried: readonly string[]; readonly workspaces: Readonly<Record<string, string>> } {
+        const book = this.#trust;
+        if (book === null) return { carried: [], workspaces: {} };
+        if (this.#unsaved.size === 0) return book;
+        // A yes still being saved has not been said yet: a verdict read in that moment would keep it, whatever the save then did.
+        const workspaces = { ...book.workspaces };
+        for (const [id, before] of this.#unsaved) {
+            if (before === undefined) delete workspaces[id];
+            else workspaces[id] = before;
+        }
+        return { carried: book.carried, workspaces };
+    }
+
+    /** The list a workspace's verdict is against. Throws when it can't be kept: the person is told, and it stays as it was. */
+    async recordWorkspace(workspaceId: string, hash: string): Promise<void> {
+        if (this.#trust === null) throw new Error('the record of what runs here has not been read yet');
+        const book = this.#trust;
+        const before = book.workspaces[workspaceId];
+        // In the book at once, so any other save made meanwhile keeps it; hidden from readers until it is on disk.
+        book.workspaces[workspaceId] = hash;
+        this.#unsaved.set(workspaceId, before);
+        try {
+            await this.#ports.trust.save(book);
+        } catch (error) {
+            // Not saved, so not said yes to: the next read of the verdict must not find it here.
+            if (before === undefined) delete book.workspaces[workspaceId];
+            else book.workspaces[workspaceId] = before;
+            throw error;
+        } finally {
+            this.#unsaved.delete(workspaceId);
+        }
+    }
+
+    /** The person trusted the workspace: nothing of it waits for a first start now, and what the usual rule starts, starts. */
+    async approveSites(workspaceId: string): Promise<void> {
+        const stopped = await this.#stops();
+        for (const [siteId, t] of [...this.#tracked]) {
+            if (t.workspaceId !== workspaceId || this.#sites.get(siteId)?.firstStart === undefined) continue;
+            await this.#lift(siteId, { person: true });
+            if (t.servable && t.enabled && !stopped.has(`${workspaceId}/${t.key}`) && !this.#workspaces.get(workspaceId)?.asleep) this.#tryStart(siteId);
+        }
     }
 
     /** The person's Stop: the processes end and the stop is remembered on this machine through the next launch. */
