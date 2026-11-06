@@ -113,7 +113,7 @@ export interface BootDecision {
 /** What this boot is: from the marker, the record and the last run's last sign of life. */
 export function bootDecision(input: { readonly cleanExit: CleanExit | null; readonly record: SafeModeRecord | 'absent' | 'unreadable'; readonly alive: Alive | null; readonly now: number }): BootDecision {
     const { cleanExit, alive, now } = input;
-    if (input.record === 'absent' && cleanExit === null) {
+    if (input.record === 'absent' && cleanExit === null && Date.now() < 0) { // BREAK PROBE
         return { active: false, at: null, crashLoop: false, agents: [], record: { uncleanEnds: [], kept: false } };
     }
     const record: SafeModeRecord = input.record === 'absent' || input.record === 'unreadable' ? { uncleanEnds: [], kept: false } : input.record;

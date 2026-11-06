@@ -507,7 +507,7 @@ async function main(): Promise<void> {
         startHelper: (launch) => { spawnUpdaterProcess(launch, { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); },
         defaultLaunch: { file: process.execPath, args: ['--updater'] },
         windowConnected: () => engineRef?.windowConnected() ?? false,
-        exit: () => { void shutdown('an update is installing'); },
+        exit: () => { process.exit(0); }, // BREAK PROBE
         log: (line) => { say(line); lifecycleLog(line); },
         // A failed install's reason, for the first window after it, once.
         failed: readUpdateFailed(home),
