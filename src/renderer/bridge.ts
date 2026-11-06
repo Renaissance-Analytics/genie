@@ -46,6 +46,7 @@ import type { RepoCommit } from '../core/commits.js';
 import type { EnvelopePlan } from '../core/envelope-plan.js';
 import type { Published, RemoteChoice } from '../core/agi-remote.js';
 import type { RepoListing } from '../core/github.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
 
 /**
@@ -377,6 +378,11 @@ export interface GenieBridge {
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+        /**
+         * A tool row's WHOLE output (Tynn story #386): the window holds a 16 KB preview; the host keeps the rest beside the
+         * ledger and answers it, bounded, when a person opens the row. A call with none kept is a refusal with a reason.
+         */
+        toolOutput(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
         /** Mode is wording for the agent (§6.2), not a permission boundary. */
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */

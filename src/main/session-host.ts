@@ -72,6 +72,8 @@ export interface SessionLifecycle {
 export const HISTORY_LIMIT = 3000;
 /** The most one `historyRows` reply carries, in bytes of JSON, whatever the caller asks (Tynn story #380). */
 export const HISTORY_ROWS_MAX_BYTES = 256 * 1024;
+/** The most one `toolOutput` reply carries, in bytes, whatever the output's size (Tynn story #386): the rest is said cut. */
+export const TOOL_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
 
 export { permissionDecisionFor } from '../core/agent-ops.js';
 
@@ -80,7 +82,7 @@ export function raisesApprovals(provider: string, permissions?: AgentPermissions
     if (provider === 'codex') return CODEX_DRIVER_CAPABILITIES.permissionRequests;
     return null;
 }
-import { threadIdIsResumable, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
+import { threadIdIsResumable, threadKeyFor, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
 import { promptContent, type Attachment, type PromptAccepts } from '../core/prompt-content.js';
 import type { LiveSession } from '../core/roster.js';
 import { describeProcesses, stillRunning, systemProcessTree, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
@@ -98,7 +100,8 @@ import {
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
-import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD } from '../core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
@@ -1401,6 +1404,24 @@ export class SessionHost {
             kept.push(slim[i]!);
         }
         return { rows: kept.reverse(), cut: false };
+    }
+
+    /**
+     * A TOOL ROW'S WHOLE OUTPUT, when a person opens the row (Tynn story #386). The row the window holds is a 16 KB
+     * preview; the whole is the sidecar the session wrote beside the ledger, read here from this host's own store and
+     * held to {@link TOOL_OUTPUT_MAX_BYTES}. A call with none kept (an older ledger's, or a store that keeps no files)
+     * is a refusal with its reason.
+     */
+    async toolOutput(agentId: AgentId, toolCallId: string): Promise<ToolOutputReply> {
+        await this.settled();
+        const store = this.#store();
+        if (!(store instanceof ThreadStore)) return { ok: false, reason: 'this agent’s history keeps no tool outputs' };
+        try {
+            const kept = await store.readToolOutput(threadKeyFor(agentId), toolCallId, TOOL_OUTPUT_MAX_BYTES);
+            return kept === null ? { ok: false, reason: 'the whole output of this call was not kept' } : { ok: true, ...kept };
+        } catch (error) {
+            return { ok: false, reason: `the output file could not be read (${error instanceof Error ? error.message : String(error)})` };
+        }
     }
 
     /**

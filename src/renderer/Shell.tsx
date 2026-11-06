@@ -50,6 +50,7 @@ import { answeringFor, refusalFor, type ApprovalAnswering, type ApprovalRefusal 
 import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { planStepInsert, type ChatInsert } from '../core/plan-pill.js';
 import { chatRefLists } from '../core/chat-markup.js';
@@ -192,6 +193,8 @@ export interface ShellProps {
     sitePanels?: GenieBridge['sitePanels'] | undefined;
     /** The commits in a workspace's repos since a moment (an observed agent's Activity tab); absent = no section. */
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
+    /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
+    loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
     tynnBoard?: TynnBoardHost | undefined;
     /** NOT DRAWN since 2026-10-19: a workspace's file panel shows inline or pops out. Removed with the pin model. */
@@ -327,6 +330,7 @@ export function Shell({
     activity,
     filesPopped = [],
     readCommits,
+    loadToolOutput,
     tynnBoard,
     onPopOutFiles,
     onBringBackFiles,
@@ -707,6 +711,7 @@ export function Shell({
                                 tab={parsed.tab}
                                 lanes={parseLanes(parsed.lane)}
                                 readCommits={readCommits}
+                                loadToolOutput={loadToolOutput}
                                 at={parsed.at}
                                 layout={parsed.layout}
                                 selectedId={selectedRowId}

@@ -186,6 +186,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setModel: (id, model) => requestAgent((agents) => agents.setModel(id, model)),
             models: (id, refresh) => requestAgent((agents) => agents.models!(id, refresh)),
             diagnose: (id) => requestAgent((agents) => agents.diagnose(id)),
+            toolOutput: (id, toolCallId) => requestAgent((agents) => agents.toolOutput(id, toolCallId)),
         },
         workspaces: {
             previewAdd: (path) => request((ws) => ws.previewAdd(path)),
