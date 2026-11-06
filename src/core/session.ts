@@ -12,7 +12,7 @@ import { carriedLabel, type CarryOver } from './carry-over.js';
 import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult, startTimeUnknown } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
-import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
+import { RATE_LIMIT_META, headroomFromMeta, rateLimitWarning, type Headroom } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
 import { randomUUID } from 'node:crypto';
@@ -536,6 +536,9 @@ export class AgentSession {
     /** The carry-over waiting for the next prompt, and the one sent with the turn now running (Tynn story #380). */
     #carryOver: CarryOver | null = null;
     #carryInFlight: CarryOver | null = null;
+    /** Per-agent provider reading; a turn end arms delivery with the next accepted input. */
+    #latestHeadroom: Headroom | null = null;
+    #rateWarningPending = false;
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -1134,6 +1137,8 @@ export class AgentSession {
                     this.#turns += 1;
                     this.#endedThisRun += 1;
                     this.#inTurn = false;
+                    // Arm before queued mail is flushed. This never sends input or starts a turn by itself.
+                    this.#rateWarningPending = rateLimitWarning(this.#latestHeadroom, this.#now()) !== null;
 
                     // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
                     // idle would present a crashed turn as a completed one, which is the
@@ -1453,13 +1458,16 @@ export class AgentSession {
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
         // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
         const carry = this.#carryOver;
-        const above = carry ? `${carry.text}\n\n---\n\n` : '';
+        // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
+        const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
+        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
         const held = this.#inTurn ? null : this.#heldForNextWork;
         const handed = held === null ? text : `${held}\n\n${text}`;
-        const lead: PromptBlock[] = [...(carry ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
+        const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
         this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
+        this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
             const sentNow = this.#heldSent;
@@ -1479,6 +1487,7 @@ export class AgentSession {
         }
         // What the turn carried, marked where it happened: the exact text sent, opened from the chat — never your message.
         if (carry) void this.#emitRow({ kind: 'notice', level: 'info', message: carriedLabel(carry), carried: { from: carry.from, turns: carry.turns, text: carry.text } });
+        if (rateWarning) void this.#emitRow({ kind: 'notice', level: 'warning', message: rateWarning });
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
         // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
@@ -1969,10 +1978,8 @@ export class AgentSession {
         }
         if (typeof meta === 'object' && meta !== null && RATE_LIMIT_META in meta) {
             const raw = (meta as Record<string, unknown>)[RATE_LIMIT_META];
-            if (this.#options.onHeadroom) {
-                const room = headroomFromMeta(raw);
-                if (room) this.#options.onHeadroom(room);
-            }
+            const room = headroomFromMeta(raw);
+            if (room) { this.#latestHeadroom = room; this.#options.onHeadroom?.(room); }
             const readings = limitReadingsFromMeta(raw);
             if (readings.length > 0) {
                 const notice = update['notice'];
