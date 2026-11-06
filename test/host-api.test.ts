@@ -69,7 +69,7 @@ function fakes() {
             restart: async (id, kind) => { calls.push(`agent-restart:${id}:${kind}`); return { ok: true, kind }; },
             previewDelete: async () => ({ ok: true, plan: { outcome: 'unmount', removes: [], keeps: [], external: [] } }),
             delete: async (id, outcome) => { calls.push(`agent-delete:${id}:${outcome}`); return { ok: true, plan: { outcome, removes: [], keeps: [], external: [] } }; },
-            switchDriver: async (id, to) => { calls.push(`agent-switch:${id}:${to}`); return { ok: true, carries: [], from: 'claude', to }; },
+            switchDriver: async (id, to) => { calls.push(`agent-switch:${id}:${to}`); return { ok: true, from: 'claude', to }; },
             setBudget: async (id, usd) => { calls.push(`agent-budget:${id}:${usd}`); return { ok: true, decision: { kind: 'proceed', remainingUsd: null } }; },
             setMode: async (id, mode) => { calls.push(`agent-mode:${id}:${mode}`); return { ok: true }; },
             setAccessScope: async (id, scope) => { calls.push(`agent-scope:${id}:${scope}`); return { ok: true }; },

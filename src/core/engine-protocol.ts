@@ -46,6 +46,8 @@ export const ENGINE_METHODS = [
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',
+    // An agent's recorded rows, bounded, for a provider switch's carry-over (Tynn story #380): read by the host from its own store.
+    'engine.historyRows',
     // Subscriptions: an agent's ledger is sent only while the window watches it (cheap, incremental — patches only).
     'engine.watchLedger',
     'engine.unwatchLedger',
@@ -61,6 +63,14 @@ export const ENGINE_METHODS = [
     // calling window's connection. Its batches and git come back as `files.event`, to the windows whose views watch.
     'engine.filesWatch',
     'engine.filesUnwatch',
+    // IssueWatch in genie-host (P5c): `[method, args]` — a LOCAL window's Refresh, repo load and repo switch. Its state is
+    // sent as `issueWatch.dump` before `engine.ready` and as `issueWatch.event` (a new state, or a sound to play now), to
+    // local windows only.
+    'engine.issueWatch',
+    // The live board's per-view subscriptions (P5c), LOCAL windows only: `[viewId, workspaceId]` / `[viewId]`, under the calling window's
+    // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
+    'engine.tynnBoardWatch',
+    'engine.tynnBoardUnwatch',
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',
@@ -199,6 +209,7 @@ export interface EngineGlobalView {
  */
 export type EngineCallback =
     | { readonly name: 'threadId'; readonly agentId: string; readonly threadId: string }
+    | { readonly name: 'carryOverSent'; readonly agentId: string }
     | { readonly name: 'plan'; readonly agentId: string; readonly steps: readonly { content: string; status: string }[] }
     | { readonly name: 'turnNumbered'; readonly agentId: string; readonly n: number }
     | { readonly name: 'action'; readonly agentId: string; readonly kind: string }
@@ -211,7 +222,7 @@ export type EngineCallback =
     | { readonly name: 'toolSignal'; readonly signal: unknown };
 
 /** Callbacks that change the window's stores: queued while no window is connected. The rest are moment-only. */
-export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
+export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'carryOverSent', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
 
 /** An attachment on the wire: its bytes as base64 (JSON has no bytes). */
 export interface WireAttachment {

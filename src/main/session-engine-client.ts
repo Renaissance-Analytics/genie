@@ -1,3 +1,4 @@
+import type { StreamEvent } from '../core/stream-event.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -53,6 +54,8 @@ import type { McpToolResult } from '@particle-academy/prism-mcp';
 import { UpdatesReplica } from './updates-replica.js';
 import type { UpdateState } from './updater.js';
 import type { UpdateFailedRecord } from './updates-host.js';
+import { IssueWatchReplica } from './issue-watch-replica.js';
+import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -74,6 +77,7 @@ export type Awaitable<T> = T | Promise<T>;
 /** What main.ts handed its in-process SessionHost, minus what runs on the host. Same names, same meanings. */
 export interface EngineClientOptions {
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
+    readonly onCarryOverSent?: (agentId: AgentId) => void;
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
     readonly onTurnNumbered?: (agentId: AgentId, n: number) => void;
     readonly onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
@@ -146,6 +150,9 @@ export class SessionEngineClient {
     /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
     readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
     readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
+    /** The board views this window follows in the host (P5c), sent again after a reconnect: the host dropped them with the link. */
+    readonly #boardViews = new Map<string, string>();
+    readonly #boardListeners = new Set<(event: TynnBoardHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
     #hosting: HostingReplica | null = null;
@@ -303,6 +310,7 @@ export class SessionEngineClient {
         void this.call('engine.records', [this.#options.records?.() ?? []]);
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
         for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
+        for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
     }
 
     #onEvent(channel: string, payload: unknown): void {
@@ -387,6 +395,15 @@ export class SessionEngineClient {
             case 'files.event':
                 for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
                 return;
+            case 'issueWatch.dump':
+                this.issueWatch().apply({ kind: 'dump', dump: payload as IssueWatchDump });
+                return;
+            case 'issueWatch.event':
+                this.issueWatch().apply(payload as IssueWatchHostEvent);
+                return;
+            case 'tynnBoard.event':
+                for (const l of [...this.#boardListeners]) l(payload as TynnBoardHubEvent);
+                return;
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
                 return;
@@ -413,6 +430,7 @@ export class SessionEngineClient {
         const o = this.#options;
         switch (c.name) {
             case 'threadId': o.onThreadId?.(c.agentId as AgentId, c.threadId); return;
+            case 'carryOverSent': o.onCarryOverSent?.(c.agentId as AgentId); return;
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;
             case 'action': o.onAction?.(c.agentId as AgentId, c.kind as AgentActionKind); return;
@@ -679,6 +697,41 @@ export class SessionEngineClient {
         return this.#processBook;
     }
 
+    #issueWatch: IssueWatchReplica | null = null;
+
+    /** genie-host's IssueWatch (P5c), as this window reads it (local links only) and asks it. */
+    issueWatch(): IssueWatchReplica {
+        this.#issueWatch ??= new IssueWatchReplica(async (method, args) => {
+            const reply = await this.call('engine.issueWatch', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#issueWatch;
+    }
+
+    /**
+     * A view follows a workspace's live board in the host (P5c); false = not linked to a Tynn project. Kept here too, so a
+     * reconnect follows it again.
+     */
+    tynnBoardWatch(viewId: string, workspaceId: string): Promise<boolean> {
+        this.#boardViews.set(viewId, workspaceId);
+        return this.#value('engine.tynnBoardWatch', [viewId, workspaceId], false).then((v) => {
+            if (v !== true) this.#boardViews.delete(viewId);
+            return v === true;
+        });
+    }
+
+    tynnBoardUnwatch(viewId: string): Promise<boolean> {
+        this.#boardViews.delete(viewId);
+        return this.#value('engine.tynnBoardUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    /** The rings and states for this window's board views. */
+    onTynnBoardEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
+        this.#boardListeners.add(listener);
+        return () => { this.#boardListeners.delete(listener); };
+    }
+
     /** The batches and git results for this window's views. */
     onFilesEvent(listener: (event: FilesHubEvent) => void): () => void {
         this.#filesListeners.add(listener);
@@ -897,6 +950,11 @@ export class SessionEngineClient {
 
     ended(agentId: AgentId): Promise<StopVerdict | null> {
         return this.#value<StopVerdict | null>('engine.ended', [agentId], null);
+    }
+
+    /** The agent's newest recorded rows, bounded in rows and bytes, as the host reads them from its own store (`SessionHost.historyRows`). */
+    historyRows(agentId: AgentId, options: { limit: number; maxBytes: number }): Promise<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }> {
+        return this.#value<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }>('engine.historyRows', [agentId, { limit: options.limit, maxBytes: options.maxBytes }], { rows: [], cut: false });
     }
 
     async settled(): Promise<void> {

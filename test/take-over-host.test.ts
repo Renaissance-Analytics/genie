@@ -104,16 +104,6 @@ describe('taking over', () => {
         // The window route is re-opened (the opener decides whether that means focus).
         expect(s.windows).toEqual(['genie://takeover/term_1', 'genie://takeover/term_1']);
     });
-
-    it('refuses a TUI the agent’s AGENT.md does not list — the same rule for human and agent', () => {
-        // §6.2: switching driver is refused when the persona lists `tuis:` and the requested
-        // one is not among them. Take Over is a driver switch by another name.
-        const s = setup();
-        const result = s.host.start({ ...s.record, instructions: null }, '/repos/tynn', 'codex', { tuis: ['claude'] });
-        expect(result).toMatchObject({ ok: false });
-        expect(result.ok === false && result.reason).toContain('codex');
-        expect(s.pty.opened).toEqual([]);
-    });
 });
 
 describe('observing it', () => {

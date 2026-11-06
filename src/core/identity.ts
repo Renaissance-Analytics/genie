@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { OS_AGENT_NAME } from './os-agent.js';
 import type { AcpProvider } from './engine.js';
 import type { IssueWatchSetting } from './issue-watch.js';
+import type { CarryOver } from './carry-over.js';
 
 /**
  * ONE ID, MINTED ONCE, USED BY EVERY SUBSYSTEM.
@@ -164,6 +165,19 @@ export interface AgentRecord {
      * of it. OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
      */
     readonly plan?: readonly PlanStepRecord[];
+    /**
+     * EACH PROVIDER'S OWN SESSION (Tynn story #380): the native session the agent left on another provider, by provider,
+     * resumed when it switches back. `threadId` stays the CURRENT provider's; a record from before this field has none
+     * parked, which is what it had. OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
+     */
+    readonly threadIds?: Readonly<Partial<Record<AcpProvider, string>>>;
+    /** When the agent last LEFT each provider (ISO): switching back carries only what happened since. OPTIONAL. */
+    readonly leftAt?: Readonly<Partial<Record<AcpProvider, string>>>;
+    /**
+     * THE CONVERSATION A SWITCH CARRIES (Tynn story #380, core/carry-over.ts): held here and attached once to the next
+     * prompt that goes; cleared when it went. Absent = nothing pending.
+     */
+    readonly carryOver?: CarryOver;
 }
 
 /** One step of a kept plan: what it is, and the status the agent (or its provider) gave it. */

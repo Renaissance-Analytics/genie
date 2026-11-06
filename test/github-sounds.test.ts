@@ -32,8 +32,9 @@ describe('which sound an IssueWatch batch plays', () => {
         expect(issueWatchSoundKinds([ev('issue.updated'), ev('closed'), ev('comment'), ev('ci.passed'), ev('review'), ev('push')])).toEqual([]);
     });
 
-    it('main plays them for every batch Tynn sends, as a genie:action the window plays by its row', () => {
-        const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-        expect(src).toMatch(/for \(const kind of issueWatchSoundKinds\(events\)\) broadcast\('genie:action', \{ agentId: null, kind \}\);/);
+    it('genie-host says them for every batch Tynn sends (P5c), and main plays each as a genie:action the window plays by its row', () => {
+        const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+        expect(code('src/main/issue-watch-host.ts')).toMatch(/for \(const sound of issueWatchSoundKinds\(events\)\) this\.#emit\(\{ kind: 'sound', sound \}\);/);
+        expect(code('src/main/main.ts')).toMatch(/issueWatchNow\?\.onSound\(\(kind\) => \{ broadcast\('genie:action', \{ agentId: null, kind \}\); \}\);/);
     });
 });

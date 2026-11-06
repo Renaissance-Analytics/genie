@@ -1394,7 +1394,7 @@ function DesktopApp({ bridge }: AppProps) {
                   if (kind === 'graceful') { void restartOne(agentId).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? 'restarted on the same conversation' : r.reason }))); return; }
                   void resolvedBridge.agents.restart(agentId, 'fresh').then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted on the same conversation') : r.reason })));
               },
-              // A switch starts a NEW conversation on the new provider; switchOutcome says so, and names a dropped model.
+              // A switch carries the conversation and keeps the old provider's to resume (Tynn story #380); switchOutcome says so.
               onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: switchOutcome(detail?.agent.name ?? 'the agent', r) })); if (r.ok && !r.noop) setModelsAsked((n) => n + 1); }); },
               onDiagnose: () => { void resolvedBridge.agents.diagnose(agentId).then((r) => setOpsView((v) => (r.ok ? { ...v, diagnosis: r.diagnosis } : { ...v, lastOutcome: r.reason }))); },
               onPreviewDelete: (outcome) => { void resolvedBridge.agents.previewDelete(agentId, outcome, []).then((r) => setOpsView((v) => (r.ok ? { ...v, deletePreview: r.plan } : { ...v, lastOutcome: r.reason }))); },

@@ -126,19 +126,22 @@ describe('checkIssues(refresh: true) — Tynn reads GitHub now', () => {
     });
 });
 
-describe('main keeps the latest entry per project and answers for a workspace', () => {
+describe('genie-host keeps the latest entry per project (P5c); main answers for a workspace through the replica', () => {
     const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+    const host = readFileSync('src/main/issue-watch-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('the client reports every entry; the tools are given the summary for a workspace', () => {
-        expect(src).toMatch(/onEntry: \(entry\) => \{\s*issueWatchLatest\.set\(entry\.projectId, entry\);\s*issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\);[\s\S]*?pushFeatures\(\);\s*\}/);
+        expect(host).toMatch(/onEntry: \(entry\) => \{\s*this\.#latest\.set\(entry\.projectId, entry\);\s*this\.#delivered\.set\(entry\.projectId, this\.#now\(\)\);[\s\S]*?this\.#changed\(\);\s*\}/);
+        expect(src).toMatch(/return issueWatchNow\?\.summaryFor\(projectId\) \?\? \{ state: 'stopped', linked: projectId !== null \};/);
         // Extended 2026-10-21: an agent that finds IssueWatch signed out has Genie ask Tynn again (main/tynn-account.ts recheck).
         expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\), refresh: \(workspaceId\) => issueWatchRefreshFor\(workspaceId\), recheckSignIn: \(\) => \{ void tynnAccount\?\.recheck\(\); \} \}/);
     });
-    it('a refresh goes to the workspace’s Tynn project through the running client; unlinked or not running says so', () => {
+    it('a refresh goes to the workspace’s Tynn project through the host’s client; unlinked or not running says so', () => {
         expect(src).toMatch(/async function issueWatchRefreshFor\(workspaceId: string\): Promise<IssueWatchRefreshAnswer> \{/);
-        expect(src).toMatch(/if \(projectId === null\) return \{ ok: false, reason: 'this workspace is not linked to a Tynn project' \};/);
-        expect(src).toMatch(/if \(!issueWatchRunning\) return \{ ok: false, reason: 'IssueWatch is not running' \};/);
-        // The refresh, then the repo switches read again (the GitHub panel's Watched repos).
-        expect(src).toMatch(/const answer = await issueWatchRunning\.refresh\(projectId\);\s*void issueWatchLoadRepos\(projectId\);\s*return answer;/);
-        expect(src).toMatch(/issueWatchRunning = issueWatchClient;/);
+        expect(src).toMatch(/if \(tynnProjectFor\(workspaceId\) === null\) return \{ ok: false, reason: 'this workspace is not linked to a Tynn project' \};/);
+        expect(src).toMatch(/if \(!issueWatchNow\) return \{ ok: false, reason: 'IssueWatch is not running' \};/);
+        expect(src).toMatch(/return issueWatchNow\.refresh\(workspaceId\);/);
+        // In the host: the refresh, then the repo switches read again (the GitHub panel's Watched repos).
+        expect(host).toMatch(/if \(projectId === null\) return \{ ok: false, reason: 'this workspace is not linked to a Tynn project' \};/);
+        expect(host).toMatch(/const answer = await this\.#client\.refresh\(projectId\);\s*void this\.#loadRepos\(projectId\);\s*return answer;/);
     });
 });

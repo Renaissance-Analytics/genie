@@ -112,10 +112,12 @@ describe('the GitHub panel', () => {
 
 describe('the wiring', () => {
     const src = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
-    it('main reads a project’s repos when its first entry arrives, after a change and after a Refresh — no timer', () => {
-        const main = src('../src/main/main.ts');
-        expect(main).toMatch(/issueWatchLoadRepos\(/);
-        expect(main).not.toMatch(/setInterval\([^)]*issueWatchLoadRepos/);
+    it('genie-host reads a project’s repos when its first entry arrives, after a change and after a Refresh — no timer (P5c)', () => {
+        const host = src('../src/main/issue-watch-host.ts');
+        expect(host).toMatch(/if \(!this\.#watched\.has\(entry\.projectId\)\) void this\.#loadRepos\(entry\.projectId\);/);
+        expect(host).toMatch(/const answer = await this\.#client\.refresh\(projectId\);\s*void this\.#loadRepos\(projectId\);/);
+        expect(host).toMatch(/const r = await this\.#client\.setWatchedRepo\(projectId, owner, repo, change\);\s*await this\.#loadRepos\(projectId\);/);
+        expect(host).not.toMatch(/setInterval/);
     });
 
     it('a checkbox is a feature action that sets Tynn’s switch', () => {

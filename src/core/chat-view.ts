@@ -70,6 +70,11 @@ export interface ChatMessage {
      * every other message — a session prompt has no read receipt, and claiming one would be a guess.
      */
     read?: number | null;
+    /**
+     * A PROVIDER SWITCH'S CARRY-OVER (Tynn story #380): the exact text the turn carried above the person's words, drawn
+     * as a collapsed marker that opens to it. Absent on every other message.
+     */
+    carried?: string;
     /** The names of the files sent with it (your message only); absent when there were none. */
     attachments?: readonly string[];
     /** Why an undelivered draft was not sent, when the host said; absent = the agent is not running. */
@@ -185,6 +190,11 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         if (e.kind === 'stopped') {
             const text = e.by === null ? 'Stopped' : `Stopped by ${e.by}`;
             out.push({ id: row.id, who: 'stopped', from: e.by ?? '', text, delivered: true, at: row.at });
+            continue;
+        }
+        // What a provider switch carried into this turn: a marker, never the person's words (Tynn story #380).
+        if (e.kind === 'notice' && e.carried) {
+            out.push({ id: row.id, who: 'system', from: '', text: e.message, delivered: true, at: row.at, carried: e.carried.text });
             continue;
         }
         if (e.kind === 'divider' && e.variant === 'compaction') {

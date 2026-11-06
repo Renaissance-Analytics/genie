@@ -1,5 +1,6 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
-import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
+import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
+import type { CarryOver } from '../core/carry-over.js';
 import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, type AgentPermissions, type PlanStepRecord, threadIdIsResumable } from '../core/identity.js';
 import type { IssueWatchSetting } from '../core/issue-watch.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
@@ -531,22 +532,46 @@ export class Registry {
     }
 
     /**
-     * Switch driver: identity, inbox, history and prompt stay. What belonged to the OLD provider does not: its
-     * conversation (`threadId` → `null`, "never ran on this provider" — a Claude session id handed to Codex would be a
-     * resume of nothing) and, unless the caller found it in the new provider's own list (`keepModel`), its model. The
-     * owner, 2026-10-21: "I need to be able to change provider as well as model". The same provider changes nothing.
+     * Switch provider (Tynn story #380): identity, inbox, history, plan and the conversation stay with the agent. Each
+     * provider keeps ITS OWN native session — a Claude session id means nothing to Codex — so the one it leaves is PARKED
+     * under the old provider (`threadIds`) with when it left (`leftAt`), and the new provider's is resumed when it has one
+     * (`null` = it never ran there). `carryOver` is what the next prompt carries (core/carry-over.ts); a switch always
+     * REPLACES it, never stacks. The model goes with the old provider unless the caller found it in the new provider's own
+     * list (`keepModel`). The owner, 2026-10-21: "I need to be able to change provider as well as model". The same
+     * provider changes nothing.
      */
-    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
+    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean; carryOver?: CarryOver | null; now?: string }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
         if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return { ok: false, reason: `No agent ${agentId}.` };
         if (existing.provider === provider) return { ok: true, record: existing };
-        const { model: _oldModel, ...withoutModel } = existing;
-        const record: AgentRecord = { ...(options.keepModel ? existing : withoutModel), provider, threadId: null };
+        const { model: _oldModel, carryOver: _oldCarry, ...withoutModel } = existing;
+        const { carryOver: _carry, ...keptModel } = existing;
+        const parked: Partial<Record<AcpProvider, string>> = { ...(existing.threadIds ?? {}) };
+        if (existing.threadId) parked[existing.provider] = existing.threadId;
+        else delete parked[existing.provider];
+        const resumed = parked[provider] ?? null;
+        delete parked[provider];
+        const leftAt = { ...(existing.leftAt ?? {}), [existing.provider]: options.now ?? new Date().toISOString() };
+        const record: AgentRecord = {
+            ...(options.keepModel ? keptModel : withoutModel),
+            provider,
+            threadId: resumed,
+            threadIds: parked,
+            leftAt,
+            ...(options.carryOver ? { carryOver: options.carryOver } : {}),
+        };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(record.id);
         return { ok: true, record };
+    }
+
+    /** The carry-over went with a prompt (Tynn story #380): it is not carried again. */
+    async clearCarryOver(agentId: AgentId): Promise<AgentRecord | null> {
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing || existing.carryOver === undefined) return existing ?? null;
+        return this.#update(agentId, ({ carryOver: _sent, ...rest }) => rest);
     }
 
     /** Mode is WORDING for the agent (§6.2) — automated or manual — not a permission boundary. */

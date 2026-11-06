@@ -66,8 +66,10 @@ describe('the delete confirm card', () => {
 });
 
 describe('the provider rail', () => {
-    it('says a new provider starts a NEW conversation — the old one does not come along', () => {
-        expect(render(ops())).toMatch(/starts a new conversation on the new provider/);
+    it('says the conversation comes along on a switch, and switching back resumes the old one (Tynn story #380)', () => {
+        const html = render(ops());
+        expect(html).toMatch(/Its conversation comes with it[.] Switching back resumes the old one[.]/);
+        expect(html).not.toMatch(/new conversation on the new provider/);
     });
 });
 
