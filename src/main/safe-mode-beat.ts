@@ -14,8 +14,18 @@ export interface BeatPorts {
 
 export const BEAT_EVERY_MS = 15_000;
 
+/**
+ * Beats at once, on EVERY CHANGE to the started set (a start, a stop, an exit: an agent started just before this run dies
+ * is on the beat the next start reads — the owner's crash loop came as a restore brought agents back), and every 15 s. A
+ * session event that leaves the set as it was writes nothing. Answers its stop.
+ */
 export function startBeat(p: BeatPorts): () => void {
     const every = p.every ?? ((fn, ms) => { const t = setInterval(fn, ms); t.unref?.(); return () => clearInterval(t); });
-    p.beat(p.started());
-    return every(() => { p.beat(p.started()); }, BEAT_EVERY_MS);
+    let last: string | null = null;
+    const keyOf = (ids: readonly string[]) => JSON.stringify([...ids].sort());
+    const beat = () => { const ids = p.started(); last = keyOf(ids); p.beat(ids); };
+    beat();
+    const stopChanges = p.onChange(() => { if (keyOf(p.started()) !== last) beat(); });
+    const stopTimer = every(beat, BEAT_EVERY_MS);
+    return () => { stopChanges(); stopTimer(); };
 }

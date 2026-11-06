@@ -31,6 +31,7 @@ import { composeHosting, type HostingStack } from './hosting-compose.js';
 import { HostingService, WindowElevation } from './hosting-host.js';
 import { AppInboxHost } from './app-inbox-host.js';
 import { shutDownHosted } from './host-shutdown.js';
+import { startBeat } from './safe-mode-beat.js';
 import { SafeMode } from './safe-mode-host.js';
 import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
@@ -855,8 +856,7 @@ async function main(): Promise<void> {
     host.subscribe(() => { lastBusy = Date.now(); });
     // THE HOST'S SIGN OF LIFE (safe mode): when, and which agents have a session — what the next start reads if this run
     // dies. Small and atomic; unref'd, so it never holds a host that is otherwise done.
-    safeMode.beat(host.startedIds());
-    setInterval(() => { safeMode.beat(host.startedIds()); }, 15_000).unref?.();
+    startBeat({ started: () => host.startedIds(), onChange: (l) => host.subscribe(() => l()), beat: (ids) => { safeMode.beat(ids); } });
     /*
      * EVERY PROCESS THE WINDOW STARTS, STARTED HERE (the host split, P2.1; plan §11a): #1405's spawn host as THIS
      * process's children — `processes` (exec, streams, supervised ptys) and `terminals` (interactive shells) — so a site,
