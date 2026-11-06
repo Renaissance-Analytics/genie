@@ -15,6 +15,12 @@ import { LOCAL_DRAFT_METHODS, type LocalDraftMethod } from './local-drafts.js';
  * Everything else derives from it.
  */
 
+/**
+ * The remote wire's version, said in `welcome` with the host's build (P10.1e): a client sees what it is talking to. Raised
+ * only for a change an older client cannot read; a new field an old client ignores is not one.
+ */
+export const REMOTE_PROTOCOL = 1;
+
 export const REMOTE_METHODS = [
     'snapshot',
     'agentDetail',
@@ -307,7 +313,7 @@ export type ClientProfile = 'mobile';
 
 export type WireMessage =
     | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile }
-    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string }
+    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
     /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
     | { kind: 'pairing'; host: string; expiresAt: number }

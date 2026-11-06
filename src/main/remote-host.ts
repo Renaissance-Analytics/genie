@@ -171,7 +171,7 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads> }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads> }) {
         this.#api = deps.api;
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;

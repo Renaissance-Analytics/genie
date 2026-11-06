@@ -17,6 +17,14 @@ export interface HostHolds {
     readonly scheduledTasks: number;
 }
 
+/** Ten minutes: how long a host that holds nothing, with no window, waits before it exits (GENIE_HOST_IDLE_MS unset). */
+export const DEFAULT_HOST_IDLE_MS = 10 * 60_000;
+
+/** `GENIE_HOST_IDLE_MS` as the host reads it: the wait in ms. */
+export function hostIdleMs(raw: string | undefined): number | null {
+    return Number(raw ?? DEFAULT_HOST_IDLE_MS);
+}
+
 export function hostIdleStep(holds: HostHolds, lastBusy: number, now: number, idleMs: number): { readonly lastBusy: number; readonly exit: boolean } {
     if (holds.agents + holds.windows + holds.ptys + holds.armedFlows + holds.scheduledTasks > 0) return { lastBusy: now, exit: false };
     return { lastBusy, exit: now - lastBusy >= idleMs };

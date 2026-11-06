@@ -62,6 +62,8 @@ function isFacts(value: unknown): value is BrowserFacts {
 
 export interface BrowserServicePorts {
     readonly startBrowser?: (launch: BrowserFacts['launch']) => void;
+    /** Why this host has no Genie browser (P10.1d: plain Node, no Electron to start it with). Absent = it has one. */
+    readonly unavailable?: string;
     readonly now?: () => number;
 }
 

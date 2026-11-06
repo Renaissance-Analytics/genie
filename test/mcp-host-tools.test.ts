@@ -96,3 +96,35 @@ describe('openFileForUser with no window', () => {
         expect(r.queuedOpens).toEqual([]);
     });
 });
+
+/**
+ * A WINDOW TOOL THIS HOST CAN NEVER RUN (P10.1d): genie-host on plain Node has no Electron, so no Genie browser for `pages`
+ * to read. The agent is told that, in the host's words — not "open Genie", which on such a host cannot help — and the call
+ * is never forwarded, window or not. The other window tools are unchanged.
+ */
+describe('a window tool that is not available on this host', () => {
+    const WHY = 'pages is not available on this host: it runs on plain Node, with no Electron for the Genie browser. Nothing was done.';
+    const rigHere = (connected: boolean) => {
+        const ran: string[] = [];
+        const forwarded: ForwardedToolCall[] = [];
+        const regs = hostRegistrations(['pages', 'sites'].map((n) => local(n, ran)), {
+            resolveCaller: (id) => (id === 'session-1' ? CALLER : null),
+            window: { connected: () => connected, call: async (c) => { forwarded.push(c); return { text: `window ran ${c.name}`, isError: false }; } },
+            openFileLater: () => {},
+            unavailableHere: new Map([['pages', WHY]]),
+        });
+        return { byName: (n: string) => regs.find((r) => r.definition.name === n)!, ran, forwarded };
+    };
+
+    it.each([[false], [true]])('window connected %s: pages answers why, and nothing is forwarded or run', async (connected) => {
+        const r = rigHere(connected);
+        expect(await r.byName('pages').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: WHY, isError: true });
+        expect(r.forwarded).toEqual([]);
+        expect(r.ran).toEqual([]);
+    });
+
+    it('CONTROL: another window tool on the same host is forwarded with a window, and told the window is closed without one', async () => {
+        expect(await rigHere(true).byName('sites').handler({} as JsonObject, ctx())).toEqual({ text: 'window ran sites', isError: false });
+        expect(await rigHere(false).byName('sites').handler({} as JsonObject, ctx())).toEqual({ text: windowClosedRefusal('sites'), isError: true });
+    });
+});

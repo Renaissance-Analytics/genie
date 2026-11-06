@@ -38,6 +38,8 @@ export interface HostToolsOptions {
     readonly openFileLater: (call: ForwardedToolCall) => void;
     /** The agent's calls while they are forwarded, by id: an approval the window's tool asks is tied to its call. */
     readonly forwardedCalls?: Map<string, McpCall>;
+    /** Window tools this host can never run, each with what the agent is told (P10.1d: `pages` on plain Node). */
+    readonly unavailableHere?: ReadonlyMap<string, string>;
 }
 
 /** What a window tool answers when there is no window. The agent reads it; nothing was done. */
