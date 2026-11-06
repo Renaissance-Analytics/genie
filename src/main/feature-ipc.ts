@@ -96,7 +96,7 @@ export interface FeaturePorts {
      * Linux with no keyring (main/linux-keyring.ts, the owner 2026-11-01): the card's view (null = fine, or not Linux) and
      * its one button. Absent = no card (doctor mode, tests that do not wire it).
      */
-    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void> };
+    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void>; press?(): Promise<void>; cancel?(): void | Promise<void> };
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: import('./processes-host.js').ProcessBookApi;
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
@@ -1677,7 +1677,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         // THE KEYRING CARD'S ONE BUTTON: install, start, restart or check again, whichever the session needs next.
         case 'keyring.fix': {
             if (!ports.keyring) throw new Error('this Genie has no keyring to set up here');
-            await ports.keyring.fix();
+            // Answered once the step is done, or the keyring's own unlock dialog is up (it waits on the person, not on this).
+            await (ports.keyring.press ? ports.keyring.press() : ports.keyring.fix());
+            break;
+        }
+        // THE CARD'S CANCEL while the keyring's unlock dialog is up (Tynn story #388).
+        case 'keyring.cancel': {
+            await ports.keyring?.cancel?.();
             break;
         }
         case 'integrations.tynnCode': {

@@ -530,6 +530,7 @@ export type FeatureAction =
     | { kind: 'integrations.tynnCode'; code: string }
     /** The keyring card's one button: install, start, restart Genie or check again, whichever comes next. */
     | { kind: 'keyring.fix' }
+    | { kind: 'keyring.cancel' }
     | { kind: 'integrations.tynnSignOut' }
     /** GitHub (beta.33 item 25; Genie 1's): sign in with the device flow, cancel it, read GitHub again, open one of its pages, sign out. */
     | { kind: 'integrations.githubSignIn' }

@@ -19,4 +19,6 @@ export class KeyringReplica {
     canKeepSecrets(): boolean { return this.#dump.canKeepSecrets; }
     onChange(listener: () => void): () => void { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; }
     async fix(): Promise<void> { await this.#call('fix', []); }
+    /** The card's Cancel while the keyring's unlock dialog is up (Tynn story #388). */
+    async cancel(): Promise<void> { await this.#call('cancel', []); }
 }

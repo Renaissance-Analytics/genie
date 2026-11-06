@@ -46,9 +46,10 @@ export class KeyringService {
     }
 
     async call(method: string, _args: readonly unknown[]): Promise<unknown> {
-        if (method !== 'fix') throw new Error(`The keyring has no ${method}.`);
         const keyring = await this.#opening;
-        await keyring?.fix();
-        return null;
+        // The button answers once its step is done or the keyring's own unlock dialog is up (Tynn story #388); Cancel ends that ask.
+        if (method === 'fix') { await keyring?.press(); return null; }
+        if (method === 'cancel') { keyring?.cancel(); return null; }
+        throw new Error(`The keyring has no ${method}.`);
     }
 }

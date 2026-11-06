@@ -37,6 +37,7 @@ import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 import { ProviderLogo } from './ProviderLogo.js';
 import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
+import { UNLOCK_WORDS } from '../../core/keyring-unlock.js';
 
 /**
  * THE FEATURE SURFACES — Knowledge, Flows, Hosting, Toolchain, Inbox, Settings, Browser.
@@ -2278,8 +2279,8 @@ function TynnSignIn({ tynn, onAction }: { tynn: NonNullable<FeatureData['integra
 }
 
 /** The keyring card's button, per state: what it does, and what it says while it does it. */
-const KEYRING_ACTION: Record<KeyringView['state'], string> = { 'not-installed': 'Install keyring', 'not-running': 'Start keyring', 'restart-needed': 'Restart Genie', refused: 'Check again' };
-const KEYRING_STEP: Record<NonNullable<KeyringView['step']>, string> = { installing: 'Installing…', starting: 'Starting…', restarting: 'Restarting…' };
+const KEYRING_ACTION: Record<KeyringView['state'], string> = { 'not-installed': 'Install keyring', 'not-running': 'Start keyring', 'restart-needed': 'Restart Genie', refused: UNLOCK_WORDS.button };
+const KEYRING_STEP: Record<NonNullable<KeyringView['step']>, string> = { installing: 'Installing…', starting: 'Starting…', restarting: 'Restarting…', unlocking: 'Unlocking…' };
 /** One line per state: why the sign-in waits, in the fewest words (the owner: reduce reading). */
 const KEYRING_LINE: Record<KeyringView['state'], string> = {
     'not-installed': 'Genie needs a keyring to keep your sign-ins safe. This computer has none.',
@@ -2297,12 +2298,17 @@ const KEYRING_LINE: Record<KeyringView['state'], string> = {
 function KeyringCard({ keyring, onAction }: { keyring: KeyringView; onAction: SurfaceProps['onAction'] }) {
     const command = useCopyText();
     const busy = keyring.step !== null;
-    const label = busy ? KEYRING_STEP[keyring.step!] : keyring.failure ? 'Retry' : KEYRING_ACTION[keyring.state];
+    const unlocking = keyring.step === 'unlocking';
+    // A locked keyring is asked again by the same button: Unlock, never Retry or instructions (Tynn story #388).
+    const label = busy ? KEYRING_STEP[keyring.step!] : keyring.failure && keyring.state !== 'refused' ? 'Retry' : KEYRING_ACTION[keyring.state];
     return (
         <div data-keyring-card={keyring.state} className="flex flex-col gap-2 rounded-md border border-[var(--border-1)] p-3 text-sm">
-            <span>{KEYRING_LINE[keyring.state]}</span>
+            <span>{unlocking ? UNLOCK_WORDS.asking : KEYRING_LINE[keyring.state]}</span>
             {keyring.state === 'not-installed' ? <span className="text-xs text-[var(--fg-3)]">Installs {keyring.packages}. Your system asks for your password.</span> : null}
-            <div><Button type="button" data-action="keyring-fix" size="sm" disabled={busy} loading={busy} onClick={() => onAction({ kind: 'keyring.fix' })}>{label}</Button></div>
+            <div className="flex items-center gap-2">
+                <Button type="button" data-action="keyring-fix" size="sm" disabled={busy} loading={busy} onClick={() => onAction({ kind: 'keyring.fix' })}>{label}</Button>
+                {unlocking ? <Button type="button" data-action="keyring-cancel" variant="ghost" size="sm" onClick={() => onAction({ kind: 'keyring.cancel' })}>Cancel</Button> : null}
+            </div>
             {keyring.failure ? <span data-keyring-failure="" role="status" className="text-xs text-[var(--danger)]">{keyring.failure}</span> : null}
             {keyring.failure && keyring.manual ? (
                 <div data-keyring-manual={keyring.manual} className="flex min-w-0 items-center gap-1.5">

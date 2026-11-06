@@ -443,6 +443,16 @@ async function main(): Promise<void> {
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
     const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    // A keyring unlocked while the Genie browser runs (Tynn story #388): that browser is restarted to use it, and the log says so.
+    void keychainOpening.then(({ keyring }) => {
+        if (!keyring) return;
+        let before = keyring.state();
+        keyring.onChange(() => {
+            const now = keyring.state();
+            if (before === 'refused' && now === 'ready' && browserService.restartForKeyring()) { say('keyring unlocked: the Genie browser restarts so its sites can use it'); lifecycleLog('keyring unlocked: Genie browser restarted'); }
+            before = now;
+        });
+    }, () => {});
     /** What this host supervises, stopped once — by an update's install (in its order) or by the shutdown, whichever is first. */
     let hostedStop: Promise<void> | null = null;
     const stopHostedOnce = (): Promise<void> => {
