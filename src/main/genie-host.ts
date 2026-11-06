@@ -581,6 +581,7 @@ async function main(): Promise<void> {
         kill: (pid) => killProcessAsync(pid),
         alive: pidAlive,
         hostRss: () => process.memoryUsage.rss(),
+        cpuMs: () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; },
         agents: () => {
             const running = hostForNotes;
             if (running === null) return [];
