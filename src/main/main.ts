@@ -24,7 +24,8 @@ import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
-import { commsOf } from '../core/comms.js';
+import { CommsCache } from '../core/comms.js';
+import { askerLiveFrom } from './asker-live.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
@@ -704,6 +705,8 @@ function activityOf(raw: unknown): Record<string, ActivityFeed> {
  * registry's first load, when the session host already exists.
  */
 let askerLivenessKnown = false;
+/** The Dashboard's comms cell (§4.1): AgentInbox traffic since the session started, bounded to the newest 2000 mails. */
+const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.involving(agentId as AgentId, 2000) : null));
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
 /** The updater as this window reads and drives it: genie-host's, through a replica (P5b); the window's own only on the emergency path. */
@@ -1441,7 +1444,7 @@ async function boot(): Promise<void> {
             return [...(agentEngineLink ? [] : genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id))), ...privateServers];
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
-        comms: (agentId: AgentId, since: number) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
+        comms: (agentId: AgentId, since: number) => dashboardComms.read(agentId, since, Date.now()),
         onThreadId: (agentId: AgentId, threadId: string) => {
             void theRegistry.recordThread(agentId, threadId).then((result) => {
                 if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
@@ -2675,15 +2678,7 @@ async function boot(): Promise<void> {
         workspaceColor: (path) => workspaceColors?.colorOf(path) ?? null,
         // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
         // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
-        askerLive: (id) => {
-            // Not heard yet: nothing is judged (undefined), never "gone" or "ended".
-            if (!askerLivenessKnown) return undefined;
-            const session = host?.probe(id as AgentId) ?? null;
-            if (session?.running) return { running: true, startedAt: session.startedAt };
-            const takeOver = takeOvers?.probe(id as AgentId) ?? null;
-            if (takeOver) return { running: true, startedAt: takeOver.startedAt };
-            return session ? { running: false, startedAt: session.startedAt } : null;
-        },
+        askerLive: askerLiveFrom({ known: () => askerLivenessKnown, engine: () => host, takeOvers: () => takeOvers }),
         /*
          * The common API for remote connections and migrated local families (§6.8, P4).
          * Late-bound through `services`/`featurePorts`; the local door attaches after composition.

@@ -35,7 +35,7 @@ import type { ClientTransport } from '../core/remote-protocol.js';
 import type { LiveSession } from '../core/roster.js';
 import type { CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
-import { commsFields } from './session-host.js';
+import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
@@ -851,6 +851,12 @@ export class SessionEngineClient {
 
     #view(agentId: string): EngineAgentView {
         return this.#agents.get(agentId)?.view ?? EMPTY_VIEW;
+    }
+
+    /** Is it running, and since when, from the pushed view: never the comms cell (see SessionHost.liveness). */
+    liveness(agentId: AgentId): EngineLiveness | null {
+        const probe = this.#view(agentId).probe;
+        return probe === null ? null : { running: probe.running, startedAt: probe.startedAt ?? null };
     }
 
     probe(agentId: AgentId): LiveSession | null {
