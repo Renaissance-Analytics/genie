@@ -15,10 +15,10 @@ import { WorkspaceTrust, readTrustList, type WorkspaceTrustPorts } from '../src/
 const W = join('/ws', 'acme');
 const at = (...parts: string[]) => join(W, ...parts);
 const THEIRS = JSON.stringify({ mcpServers: { keep: { command: 'user-server' } } });
-const THEIRS_TOO = JSON.stringify({ mcpServers: { also: { command: 'user-server-two' } } });
+const THEIRS_TOO = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'their-hook' }] }] } });
 
 function rig(read: (path: string, files: Map<string, string>) => string | null) {
-    const files = new Map<string, string>([[at('.mcp.json'), THEIRS], [at('.cursor', 'mcp.json'), THEIRS_TOO]]);
+    const files = new Map<string, string>([[at('.mcp.json'), THEIRS], [at('.claude', 'settings.json'), THEIRS_TOO]]);
     const book = { carried: ['acme'] as string[], workspaces: {} as Record<string, string> };
     const recorded: string[] = [];
     const waits: number[] = [];
@@ -39,8 +39,8 @@ describe('a carried workspace, read while its files are being written', () => {
     it('PROBE: the first read misses a file being written; the list recorded is the WHOLE one, and the verdict is trusted, not "changed"', async () => {
         let missed = false;
         const r = rig((p, files) => {
-            // The boot pass reads .cursor/mcp.json a moment before it lands on disk: the first read of it finds nothing.
-            if (p === at('.cursor', 'mcp.json') && !missed) { missed = true; return null; }
+            // The boot pass reads .claude/settings.json a moment before it lands on disk: the first read of it finds nothing.
+            if (p === at('.claude', 'settings.json') && !missed) { missed = true; return null; }
             return files.get(p) ?? null;
         });
         expect(await r.trust.refresh('acme')).toMatchObject({ trusted: true, changed: false });
@@ -51,7 +51,7 @@ describe('a carried workspace, read while its files are being written', () => {
 
     it('a list that never settles records nothing and stays untrusted (an unstable read never grants trust), after 5 reads, a wait apart', async () => {
         let n = 0;
-        const r = rig((p, files) => (p === at('.cursor', 'mcp.json') ? ((n++ % 2 === 0) ? null : files.get(p)!) : files.get(p) ?? null));
+        const r = rig((p, files) => (p === at('.claude', 'settings.json') ? ((n++ % 2 === 0) ? null : files.get(p)!) : files.get(p) ?? null));
         expect(await r.trust.refresh('acme')).toMatchObject({ trusted: false, changed: false });
         expect(r.recorded).toEqual([]);
         expect(r.book.workspaces).toEqual({});
