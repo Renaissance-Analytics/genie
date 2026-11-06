@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, readdir, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseHostRecord, type HostRecord } from '../src/core/engine-protocol.js';
+import { ENGINE_PROTOCOL, parseHostRecord, type HostRecord } from '../src/core/engine-protocol.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import { connectSocket, pidAlive } from '../src/main/engine-launch.js';
@@ -105,7 +105,7 @@ afterAll(async () => {
 
 describe('genie-host as its own process', () => {
     it('writes host.json with its own pid, the protocol and the build it was started as', () => {
-        expect(record).toMatchObject({ pid: hostProcess.pid, protocol: 1, build: 'test-build' });
+        expect(record).toMatchObject({ pid: hostProcess.pid, protocol: ENGINE_PROTOCOL, build: 'test-build' });
     });
 
     it('a second host for the same user finds the endpoint taken and exits, leaving the first serving', async () => {
