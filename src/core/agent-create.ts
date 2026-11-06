@@ -42,10 +42,10 @@ export function newAgentRefusal(input: NewAgentInput): string | null {
 }
 
 /**
- * The AGENT.md a new agent starts with — Genie 1's `renderAgentFile`: its name and purpose, and `tuis:` naming the
- * provider it starts on (what adoption and Switch provider read back, core/agent-manifest.ts). The purpose is on one line.
+ * The AGENT.md a new agent starts with — Genie 1's `renderAgentFile`: its name and purpose, the purpose on one line. No
+ * provider (Tynn story #380): the provider is Genie's record of the agent, switchable at any time, never the persona's.
  */
-export function agentFileText(input: { name: string; purpose: string; provider: string }): string {
+export function agentFileText(input: { name: string; purpose: string; provider?: string }): string {
     const purpose = input.purpose.replace(/\s+/g, ' ').trim();
-    return `---\nname: ${input.name}\npurpose: ${purpose}\ntuis: [${input.provider}]\n---\nYou are ${input.name}. ${purpose}\n`;
+    return `---\nname: ${input.name}\npurpose: ${purpose}\n---\nYou are ${input.name}. ${purpose}\n`;
 }

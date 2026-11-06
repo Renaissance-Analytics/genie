@@ -1,7 +1,6 @@
 import { limitOf } from '../core/shell-limits.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
-import type { BoardIds, BoardLiveSignal, BoardScope } from '../core/tynn-board.js';
-import { TynnBoardLive } from './tynn-board-live.js';
+import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
@@ -109,13 +108,14 @@ import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './sp
 import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
 import { Session as InspectorSession } from 'node:inspector';
-import { startStallProfiler } from './stall-profile.js';
+import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
+import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { LoginHost } from './login-host.js';
@@ -237,13 +237,12 @@ import { AppInboxKeys } from './app-inbox-keys.js';
 import type { AppInboxReplica } from './app-inbox-host.js';
 import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
 import { type AppSourceKind } from '../core/app-inbox.js';
-import { IssueWatchClient, type IssueWatchRefreshAnswer } from './issue-watch-client.js';
-import { dialTynnSocket } from './tynn-socket.js';
-import { IssueWatchDelivery } from './issue-watch-delivery.js';
+import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
+import { IssueWatchReplica } from './issue-watch-replica.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nestGoverned } from '../core/rail-view.js';
-import { issueWatchPanelView, issueWatchSoundKinds, PANEL_RECENT, tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary, type IwEntry, type IwEvent } from '../core/issue-watch.js';
+import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
 import { resolveProgram } from '../core/program-lookup.js';
 
 /**
@@ -570,17 +569,12 @@ let registry: Registry | null = null;
 /** Each workspace's colour (genie#1300): read from and written to its project.json. */
 let workspaceColors: WorkspaceColors | null = null;
 /**
- * ISSUEWATCH (Tynn #806): the latest entry Tynn sent per project, and the client's state — what `checkIssues` and imDone's
- * count line read for a workspace (its project.json `tynn.projectId`). Filled by the client once it runs.
+ * ISSUEWATCH (Tynn #806; the host split, P5c): genie-host hears Tynn and holds the state — the latest entry per project,
+ * when it arrived, what happened lately, the repo switches, the client's state. This window reads it through the replica
+ * (issue-watch-replica.ts): what `checkIssues`, imDone's count line and the GitHub panel read for a workspace (its
+ * project.json `tynn.projectId`). On the emergency no-host path the replica reads the window's own (issue-watch-emergency.ts).
  */
-const issueWatchLatest = new Map<string, IwEntry>();
-/** When each project's latest entry arrived: the panel says how old its list is (the owner, 2026-10-21). */
-const issueWatchDelivered = new Map<string, number>();
-let issueWatchState: IssueWatchSummary['state'] = 'stopped';
-/** Why it is not live (genie#1478): what `checkIssues`, imDone and the panel say instead of "not connected yet". */
-let issueWatchReason: string | undefined;
-/** What happened lately per Tynn project, newest first, capped — the GitHub panel's "Lately". */
-const issueWatchRecent = new Map<string, IwEvent[]>();
+let issueWatchNow: IssueWatchReplica | null = null;
 /** A workspace's Tynn project, from its project.json `tynn.projectId`; `null` = not linked. */
 /** The Tynn tab's door (genie#1295): the pairing's request, the workspace's own project, nothing else. */
 function tynnBoardPorts(): TynnBoardPorts {
@@ -594,40 +588,23 @@ function tynnBoardPorts(): TynnBoardPorts {
     };
 }
 /**
- * THE LIVE BOARD (genie#1295 row B4): one socket to Tynn for every open Tynn tab, on the web board's own channel. Each
- * open tab is a watch (workspace → its project); a project's rings and live state go to the windows as
- * `genie:workspace-tynn-board-live` for every workspace watching it. A window that closes drops its watches.
+ * THE LIVE BOARD (genie#1295 row B4; the host split, P5c): genie-host follows each open Tynn tab per view — one socket for
+ * every board, released with this window's link — and its rings and live state come back for the workspaces this window's
+ * views watch, broadcast to the renderers as `genie:workspace-tynn-board-live`. A tab that closes drops its watch. On the
+ * emergency no-host path the door is the window's own hub (issue-watch-emergency.ts).
  */
-let tynnBoardLiveClient: TynnBoardLive | null = null;
-const tynnBoardWatches = new Map<number, { workspaceId: string; projectId: string; stop: () => void }>();
+let tynnBoardDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
+const tynnBoardWatches = new Map<number, () => void>();
 let tynnBoardWatchSeq = 0;
-function tynnBoardLiveSignal(projectId: string, signal: BoardLiveSignal): void {
-    const workspaces = new Set([...tynnBoardWatches.values()].filter((w) => w.projectId === projectId).map((w) => w.workspaceId));
-    for (const workspaceId of workspaces) broadcast('genie:workspace-tynn-board-live', workspaceId, signal);
-}
-function tynnBoardLive(): TynnBoardLive {
-    tynnBoardLiveClient ??= new TynnBoardLive({
-        tynn: () => {
-            const account = tynnAccount;
-            if (!account || account.status().signedIn !== true) return null;
-            return { request: (path, init) => account.request(path, init) };
-        },
-        socket: (url) => dialTynnSocket(url, tynnAccount?.host() ?? TYNN_HOST),
-        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        onRing: (projectId, ring) => tynnBoardLiveSignal(projectId, { ring }),
-        onState: (projectId, state) => tynnBoardLiveSignal(projectId, { state }),
-        onFailure: (reason) => { console.log(`[genie] tynn board live: ${reason}`); },
-    });
-    return tynnBoardLiveClient;
-}
-/** Start following a workspace's board for a window; answers the watch's id (to stop it), or null when not linked. */
-function watchTynnBoard(workspaceId: string, onGone: (stop: () => void) => void): number | null {
-    const projectId = tynnProjectFor(workspaceId);
-    if (projectId === null) return null;
+/** Start following a workspace's board for a tab; answers the watch's id (to stop it), or null when not linked. */
+async function watchTynnBoard(workspaceId: string, onGone: (stop: () => void) => void): Promise<number | null> {
+    const door = tynnBoardDoor;
+    if (door === null || tynnProjectFor(workspaceId) === null) return null;
     const id = ++tynnBoardWatchSeq;
-    const stopLive = tynnBoardLive().watch(projectId);
-    const stop = () => { if (tynnBoardWatches.delete(id)) stopLive(); };
-    tynnBoardWatches.set(id, { workspaceId, projectId, stop });
+    const viewId = `tynn-board-${id}`;
+    if (!(await door.watch(viewId, workspaceId))) return null;
+    const stop = () => { if (tynnBoardWatches.delete(id)) door.unwatch(viewId); };
+    tynnBoardWatches.set(id, stop);
     onGone(stop);
     return id;
 }
@@ -658,51 +635,22 @@ function agentCreatePorts(): AgentCreatePorts {
 }
 /** Every workspace's GitHub panel (Tynn #806), as the features snapshot carries it. */
 function issueWatchPanels(): Record<string, IssueWatchPanelView> {
-    const out: Record<string, IssueWatchPanelView> = {};
-    for (const w of registry?.snapshot().workspaces ?? []) {
-        const projectId = tynnProjectFor(w.id);
-        out[w.id] = issueWatchPanelView(issueWatchSummaryFor(w.id), projectId === null ? [] : issueWatchRecent.get(projectId) ?? [], Date.now(), projectId === null ? null : issueWatchWatched.get(projectId) ?? null);
-    }
-    return out;
+    return issueWatchNow?.panels(registry?.snapshot().workspaces ?? [], tynnProjectFor, Date.now()) ?? {};
 }
-/** The running IssueWatch client, once boot has started it: what a `checkIssues(refresh: true)` goes through. */
-let issueWatchRunning: IssueWatchClient | null = null;
-/** Have Tynn read a workspace's repos now (its project.json `tynn.projectId`). */
+/** Have Tynn read a workspace's repos now (its project.json `tynn.projectId`): the host's call. */
 async function issueWatchRefreshFor(workspaceId: string): Promise<IssueWatchRefreshAnswer> {
-    const projectId = tynnProjectFor(workspaceId);
-    if (projectId === null) return { ok: false, reason: 'this workspace is not linked to a Tynn project' };
-    if (!issueWatchRunning) return { ok: false, reason: 'IssueWatch is not running' };
-    const answer = await issueWatchRunning.refresh(projectId);
-    void issueWatchLoadRepos(projectId);
-    return answer;
+    if (tynnProjectFor(workspaceId) === null) return { ok: false, reason: 'this workspace is not linked to a Tynn project' };
+    if (!issueWatchNow) return { ok: false, reason: 'IssueWatch is not running' };
+    return issueWatchNow.refresh(workspaceId);
 }
-/**
- * WHICH REPOS FEED A PROJECT'S STREAM (the owner, 2026-10-21: Genie 1 let him choose) — Tynn's switches, per project,
- * for the GitHub panel. Read when the project's first entry arrives, after a switch is set, and on Refresh: never on a
- * timer.
- */
-const issueWatchWatched = new Map<string, WatchedReposView>();
-/** Tells the windows the switches changed — main's pushFeatures, once the client runs (set beside it). */
-let issueWatchChanged: () => void = () => {};
-async function issueWatchLoadRepos(projectId: string): Promise<void> {
-    if (!issueWatchRunning) return;
-    const r = await issueWatchRunning.watchedRepos(projectId);
-    issueWatchWatched.set(projectId, r.ok ? { state: 'ok', ...r.repos } : { state: 'unavailable', reason: r.reason });
-    issueWatchChanged();
-}
-/** A Watched repos checkbox: Tynn's switch, then the switches read again (Tynn pushes the changed feed itself). */
+/** A Watched repos checkbox: Tynn's switch, set by the host, which reads the switches again (Tynn pushes the changed feed itself). */
 async function issueWatchSetRepoFor(workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }): Promise<unknown> {
-    const projectId = tynnProjectFor(workspaceId);
-    if (projectId === null || !issueWatchRunning) return { ok: false, reason: 'IssueWatch is not running for this workspace' };
-    const r = await issueWatchRunning.setWatchedRepo(projectId, owner, repo, change);
-    await issueWatchLoadRepos(projectId);
-    return r;
+    if (tynnProjectFor(workspaceId) === null || !issueWatchNow) return { ok: false, reason: 'IssueWatch is not running for this workspace' };
+    return issueWatchNow.setRepo(workspaceId, owner, repo, change);
 }
 function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     const projectId = tynnProjectFor(workspaceId);
-    const entry = projectId === null ? undefined : issueWatchLatest.get(projectId);
-    const deliveredAt = projectId === null ? undefined : issueWatchDelivered.get(projectId);
-    return { state: issueWatchState, linked: projectId !== null, ...(issueWatchReason !== undefined ? { reason: issueWatchReason } : {}), ...(entry ? { entry } : {}), ...(deliveredAt !== undefined ? { deliveredAt } : {}) };
+    return issueWatchNow?.summaryFor(projectId) ?? { state: 'stopped', linked: projectId !== null };
 }
 let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
@@ -1413,7 +1361,7 @@ async function boot(): Promise<void> {
     setPrivateCredentialFailureLog(lifecycleLog);
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
     stallLog = lifecycleLog;
-    stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
+    if (stallStacksWanted(process.env)) stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
     stallWatchdog.start();
     watchOutboundCalls(diagnosticsChannel, stallWatchdog);
     ipcMain.on('genie:renderer-stall', (event, report: unknown) => stallWatchdog.renderer(report, windowNameOf(event.sender)));
@@ -1492,6 +1440,8 @@ async function boot(): Promise<void> {
                 if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
             });
         },
+        // A provider switch's carry-over went (Tynn story #380): the next prompt does not carry it again.
+        onCarryOverSent: (agentId: AgentId) => { void theRegistry.clearCarryOver(agentId); },
     };
     /*
      * THE AGENT ENGINE IN ITS OWN PROCESS (the host split, phase 1; the owner, 2026-10-31: "the actions agents take should
@@ -2014,6 +1964,8 @@ async function boot(): Promise<void> {
                 return null;
             }
         },
+        // What a provider switch carries (Tynn story #380): the agent's rows, asked of the agent host, which reads its own store.
+        history: async (record) => (host ? (await host.historyRows(record.id, { limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES })).rows : []),
         removeDir: (path) => rm(path, { recursive: true, force: true }),
         realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
         // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.
@@ -2445,7 +2397,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-tynn-board-watch', (event, rawId: unknown) =>
         (typeof rawId === 'string' ? watchTynnBoard(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
     ipcMain.handle('genie:workspace-tynn-board-unwatch', (_event, rawWatch: unknown) => {
-        if (typeof rawWatch === 'number') tynnBoardWatches.get(rawWatch)?.stop();
+        if (typeof rawWatch === 'number') tynnBoardWatches.get(rawWatch)?.();
     });
     ipcMain.handle('genie:workspace-tynn-board-action', (_event, rawId: unknown, rawInput: unknown) =>
         (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnBoardAction(tynnBoardPorts(), rawId, rawInput as { action: string; ids: BoardIds; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
@@ -3460,67 +3412,50 @@ async function boot(): Promise<void> {
         }
         return 'its next start uses it';
     };
-    // ISSUEWATCH (Tynn #806): Tynn polls GitHub and pushes each project's entry on the person's own channel; the client
-    // listens with the Tynn token Genie already holds, and what changed reaches the agents of the linked workspace through
-    // the SAME delivery as mail — Genie's notice, at the agent's next step even mid-turn (genie#1411) — each agent by its own
-    // setting and in its mode.
-    const issueWatchDelivery = new IssueWatchDelivery({
-        agents: () => registry?.listAgents() ?? [],
-        defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
-        workspaceFor: (projectId) => {
-            for (const w of registry?.snapshot().workspaces ?? []) {
-                let manifest: string | null = null;
-                try { manifest = readFileSync(join(w.path, 'project.json'), 'utf8'); } catch { manifest = null; }
-                if (tynnProjectIdOf(manifest) === projectId) return { id: w.id, name: workspaceNameFor(w.path) };
-            }
-            return null;
+    // ISSUEWATCH AND THE LIVE BOARD (Tynn #806, genie#1295 B4; the host split, P5c): genie-host's. It hears Tynn on its own
+    // account and tells the linked workspace's agents through its own wake, window or no window; this window reads the state,
+    // plays the sounds the host says to play now, and follows its boards per view. Only on the emergency no-host path are
+    // they the window's own, loaded lazily, until P6.
+    // The sessions as they are here (narrowed): read later, inside the lazy start.
+    const windowSessions = host;
+    const windowIssueWatch = agentEngineLink ? null : import('./issue-watch-emergency.js').then((m) => m.startWindowIssueWatch({
+        account: () => tynnAccount,
+        projectFor: tynnProjectFor,
+        delivery: {
+            agents: () => registry?.listAgents() ?? [],
+            defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
+            workspaceFor: (projectId) => {
+                for (const w of registry?.snapshot().workspaces ?? []) {
+                    let manifest: string | null = null;
+                    try { manifest = readFileSync(join(w.path, 'project.json'), 'utf8'); } catch { manifest = null; }
+                    if (tynnProjectIdOf(manifest) === projectId) return { id: w.id, name: workspaceNameFor(w.path) };
+                }
+                return null;
+            },
         },
-    });
-    wireInboxPush({
-        inbox: { onSend: (listener) => issueWatchDelivery.onQueued(listener) },
-        host,
-        reminders: (input) => issueWatchDelivery.due(input),
-        settled: (agentId, delivered) => issueWatchDelivery.settled(agentId, delivered),
-        // `push` wakes a stopped agent as mail does; `next-turn` waits for it to be running.
-        wake: (agentId) => issueWatchDelivery.wakes(agentId) && wakeAgent(agentId),
-    });
-    const issueWatchClient = new IssueWatchClient({
-        // The signed-in Tynn SESSION (main/tynn-account.ts), on Genie 1's routes: the person's id and session-bound requests.
-        tynn: () => {
-            const account = tynnAccount;
-            const userId = tynnAccount?.userId() ?? null;
-            if (!account || userId === null) return null;
-            return { userId, request: (path, init) => account.request(path, init) };
-        },
-        socket: (url) => dialTynnSocket(url, tynnAccount?.host() ?? TYNN_HOST),
-        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        onEvents: (projectId, events) => {
-            issueWatchRecent.set(projectId, [...[...events].reverse(), ...(issueWatchRecent.get(projectId) ?? [])].slice(0, PANEL_RECENT));
-            issueWatchDelivery.onEvents(projectId, events);
-            // The person's GitHub sound rows (core/alerts.ts): one per kind per batch, played by the window like any action.
-            for (const kind of issueWatchSoundKinds(events)) broadcast('genie:action', { agentId: null, kind });
-            pushFeatures();
-        },
-        onEntry: (entry) => {
-            issueWatchLatest.set(entry.projectId, entry);
-            issueWatchDelivered.set(entry.projectId, Date.now());
-            // The project's repo switches, read once when its first entry arrives (then after changes and Refresh).
-            if (!issueWatchWatched.has(entry.projectId)) void issueWatchLoadRepos(entry.projectId);
-            pushFeatures();
-        },
-        onState: (state) => {
-            issueWatchState = state.kind;
-            issueWatchReason = 'reason' in state ? state.reason : undefined;
-            pushFeatures();
-            console.log(`[genie] issuewatch: ${state.kind}${'reason' in state && state.reason ? ` — ${state.reason}` : ''}`);
-        },
-    });
-    issueWatchRunning = issueWatchClient;
-    issueWatchChanged = pushFeatures;
-    issueWatchClient.start();
-    // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.
-    const restartIssueWatch = () => { issueWatchClient.stop(); issueWatchClient.start(); };
-    tynnAccount.onChange(restartIssueWatch);
+        host: windowSessions,
+        wake: (agentId) => wakeAgent(agentId),
+        onBoard: (event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); },
+        log: (line) => { console.log(`[genie] ${line}`); },
+    }));
+    if (agentEngineLink) {
+        const engineClient = agentEngineLink.client;
+        issueWatchNow = engineClient.issueWatch();
+        tynnBoardDoor = { watch: (viewId, workspaceId) => engineClient.tynnBoardWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnBoardUnwatch(viewId); } };
+        engineClient.onTynnBoardEvent((event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); });
+    } else if (windowIssueWatch) {
+        const own = windowIssueWatch;
+        const replica = new IssueWatchReplica(async (method, args) => (await own).issueWatch.call(method, args));
+        issueWatchNow = replica;
+        tynnBoardDoor = { watch: async (viewId, workspaceId) => (await own).board.watch(viewId, workspaceId), unwatch: (viewId) => { void own.then((w) => { w.board.unwatch(viewId); }); } };
+        void own.then((w) => {
+            replica.apply({ kind: 'dump', dump: w.issueWatch.dump() });
+            w.issueWatch.onEvent((event) => { replica.apply(event); });
+        }, (error: unknown) => { console.log(`[genie] IssueWatch could not start in the window: ${error instanceof Error ? error.message : String(error)}`); });
+    }
+    // The panel follows the host's state; a batch's sounds (one per kind, core/alerts.ts) are played by the window like any action.
+    issueWatchNow?.onChange(() => { pushFeatures(); });
+    issueWatchNow?.onSound((kind) => { broadcast('genie:action', { agentId: null, kind }); });
     // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
     // push it, so a reply or a "read 14:07" lands without anyone polling.
     composed.inbox.onSend(() => { pushFeatures(); });

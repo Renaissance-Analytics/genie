@@ -92,22 +92,10 @@ export class TakeOverHost {
      * The click. Opens the TUI in a terminal in the agent's workspace and a window on it.
      *
      * One take-over per agent: a second click re-opens the window (focus) rather than starting
-     * a second TUI on the same persona. A persona that lists `tuis:` and does not name the
-     * requested one is REFUSED — §6.2's rule for switching driver, which this is by another
-     * name — with the TUI named so the reader knows what to edit.
+     * a second TUI on the same persona. AGENT.md names no provider (Tynn story #380): nothing in
+     * it refuses a Take Over.
      */
-    start(
-        record: AgentRecord,
-        cwd: string,
-        tui: string,
-        persona: { tuis?: readonly string[] | undefined } = {},
-    ): { ok: true; terminalId: string } | { ok: false; reason: string } {
-        if (persona.tuis && !persona.tuis.includes(tui)) {
-            return {
-                ok: false,
-                reason: `${record.name}'s AGENT.md lists tuis: [${persona.tuis.join(', ')}] and "${tui}" is not among them.`,
-            };
-        }
+    start(record: AgentRecord, cwd: string, tui: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
 
         const existing = this.#live.get(record.id);
         if (existing) {

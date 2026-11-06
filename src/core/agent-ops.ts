@@ -9,9 +9,9 @@
  *   DELETE removes the folder too. Linked systems are LISTED and kept unless the same prompt opts
  *   in by name — a deletion that reached into Tynn because a checkbox defaulted on is not a
  *   deletion anyone asked for.
- * - SWITCH DRIVER carries identity, inbox, history and prompt; an `AGENT.md` with a `tuis:` list is
- *   the agent's own word on which providers may run it, and the same code refuses the user and an
- *   agent alike.
+ * - SWITCH PROVIDER carries the agent: its identity, inbox, history, plan and its CONVERSATION (core/carry-over.ts), and
+ *   each provider keeps its own native session to resume on switching back (Tynn story #380). The person can always
+ *   switch; AGENT.md is the person's persona and names no provider.
  * - A daily BUDGET parks the NEXT turn and asks; it never kills a turn in flight; and when the
  *   provider reports no cost it says `unenforceable` instead of silently never firing.
  */
@@ -73,42 +73,38 @@ export function deletePlan(input: { outcome: 'unmount' | 'delete'; agentName: st
     return { outcome: input.outcome, removes, keeps, external };
 }
 
-export interface AgentManifest {
-    readonly name: string;
-    /** The providers this agent may run under. Absent = any. */
-    readonly tuis?: readonly string[];
-}
-
 /**
- * A switch that happened also says what it LEFT with the old provider: `discarded` — the old provider's conversation
- * (`null` = the agent never ran, so there was none) — and `droppedModel` — a model the new provider does not list
+ * A switch that happened also says what came along and what waits: `carried` — how much of the conversation the next
+ * prompt carries (core/carry-over.ts; `null` = nothing to carry) — `left` — the old provider's own session, kept to
+ * resume on switching back (`null` = it never ran there) — and `droppedModel` — a model the new provider does not list
  * (`null` = none dropped). Absent on the pure decision and on a no-op; the host fills them in when it switches.
  */
 export type SwitchDecision =
-    | { ok: true; carries: string[]; from: string; to: string; noop?: true; discarded?: string | null; droppedModel?: string | null }
+    | { ok: true; from: string; to: string; noop?: true; carried?: { turns: number; of: number; plan: boolean } | null; left?: string | null; droppedModel?: string | null }
     | { ok: false; reason: string };
 
-export function switchDriverDecision(manifest: AgentManifest, from: string, to: string, _by: 'user' | 'agent'): SwitchDecision {
-    if (from === to) return { ok: true, carries: [], from, to, noop: true };
-    if (manifest.tuis && !manifest.tuis.includes(to)) {
-        return { ok: false, reason: `${manifest.name}’s AGENT.md allows tuis: ${manifest.tuis.join(', ')}; ${to} is not among them` };
-    }
-    return { ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from, to };
+/** The person can always switch an agent's provider (Tynn story #380); the same provider is a no-op. */
+export function switchDriverDecision(from: string, to: string): SwitchDecision {
+    if (from === to) return { ok: true, from, to, noop: true };
+    return { ok: true, from, to };
 }
 
 /**
- * WHAT THE VIEW SAYS AFTER A SWITCH. A provider's conversation is the provider's (a Claude session id means nothing to
- * Codex), so the agent starts a NEW one on the new provider — said plainly, so nobody expects the old chat to continue
- * there. Genie's own record of the agent (identity, inbox, history, prompt) is what comes along.
+ * WHAT THE PERSON IS TOLD AFTER A SWITCH (Tynn story #380): the conversation comes with the agent (the last N turns, or
+ * N of M when the carry-over had to cut, and its plan), and switching back resumes the old provider's own conversation.
  */
 export function switchOutcome(agentName: string, decision: SwitchDecision): string {
     if (!decision.ok) return decision.reason;
     if (decision.noop) return `${agentName} already runs on ${decision.to}`;
-    const parts = [`${agentName} switched ${decision.from} → ${decision.to}`, `it starts a new conversation on ${decision.to}`];
-    if (decision.discarded) parts.push(`its ${decision.from} conversation stays with ${decision.from}`);
-    if (decision.droppedModel) parts.push(`"${decision.droppedModel}" is a ${decision.from} model; ${decision.to} starts on its default model`);
-    parts.push(`kept: ${decision.carries.join(', ')}`);
-    return `${parts.join('; ')}. Start it when ready.`;
+    const parts = [`${agentName} switched ${decision.from} → ${decision.to}.`];
+    const carried = decision.carried;
+    if (carried && carried.turns > 0) {
+        const turns = carried.of > carried.turns ? `${carried.turns} of ${carried.of} turns` : `${carried.turns} turn${carried.turns === 1 ? '' : 's'}`;
+        parts.push(`Its conversation comes with it (the last ${turns}${carried.plan ? ' and its plan' : ''}).`);
+    } else if (carried?.plan) parts.push('Its plan comes with it.');
+    if (decision.left) parts.push(`Switching back to ${decision.from} resumes its ${decision.from} conversation.`);
+    if (decision.droppedModel) parts.push(`"${decision.droppedModel}" is a ${decision.from} model; ${decision.to} starts on its default model.`);
+    return parts.join(' ');
 }
 
 export type BudgetDecision =

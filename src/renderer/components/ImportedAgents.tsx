@@ -89,6 +89,8 @@ export interface AgentRosterViewProps {
     readonly notice: string | null;
     readonly error: string | null;
     readonly onReattach: (name: string) => void;
+    /** Opens the New agent form for this workspace (Tynn story #381). Absent = no Add agent here. */
+    readonly onAddAgent?: (() => void) | undefined;
 }
 
 /**
@@ -97,11 +99,14 @@ export interface AgentRosterViewProps {
  * reason it cannot come back. Reattaching is adoption: the same rules, the file read and never rewritten. Hook-free, so a
  * test renders and presses it; the list and the busy state live with whoever draws it (App.tsx).
  */
-export function AgentRosterView({ registered, onDisk, busy, notice, error, onReattach }: AgentRosterViewProps) {
+export function AgentRosterView({ registered, onDisk, busy, notice, error, onReattach, onAddAgent }: AgentRosterViewProps) {
     return (
         <div data-agent-roster="" className="flex flex-col gap-3">
             <div data-roster-registered="" className="flex flex-col gap-1">
-                <span className="text-xs font-semibold">Registered</span>
+                <span className="flex items-center gap-2">
+                    <span className="text-xs font-semibold">Registered</span>
+                    {onAddAgent ? <Button type="button" size="xs" icon="plus" data-action="add-agent" onClick={onAddAgent}>Add agent</Button> : null}
+                </span>
                 {registered.length === 0 ? (
                     <span className={muted}>No agents are registered here.</span>
                 ) : (

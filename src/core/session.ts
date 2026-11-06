@@ -7,6 +7,7 @@ import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type 
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
+import { carriedLabel, type CarryOver } from './carry-over.js';
 import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult, startTimeUnknown } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
@@ -256,6 +257,14 @@ export interface AgentSessionOptions {
     /** Resume this provider-side conversation instead of starting a fresh one. */
     resumeSessionId?: string | null;
     /**
+     * THE CONVERSATION A PROVIDER SWITCH CARRIES (Tynn story #380, core/carry-over.ts): attached ONCE, above the words of
+     * the next prompt that goes; the chat marks that turn with a `notice` row carrying the exact text sent, and the
+     * person's message row stays their words alone. A send the provider refuses, or a turn that does not reply (failed,
+     * stopped, held), keeps it for the next prompt; a turn that replied calls `onCarryOverSent`.
+     */
+    carryOver?: CarryOver | null;
+    onCarryOverSent?: () => void;
+    /**
      * Notified for every ledger row, so a surface can render without re-reading the thread.
      *
      * `meta.replacesLast` means this row SUPERSEDES the one emitted immediately before it: the
@@ -492,6 +501,9 @@ export class AgentSession {
     #heldBeside: StreamEvent[] = [];
     /** A subagent's calls not yet answered, and the call that spawned each: a row of one is known as theirs even if it comes without the mark. */
     #subagentCalls = new Map<string, string>();
+    /** The carry-over waiting for the next prompt, and the one sent with the turn now running (Tynn story #380). */
+    #carryOver: CarryOver | null = null;
+    #carryInFlight: CarryOver | null = null;
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -512,6 +524,7 @@ export class AgentSession {
     constructor(options: AgentSessionOptions) {
         this.#options = options;
         this.agentId = options.agentId;
+        this.#carryOver = options.carryOver ?? null;
         if (options.turnsBefore !== undefined && options.turnsBefore >= 0) { this.#turns = options.turnsBefore; this.#marked = options.turnsBefore; }
     }
 
@@ -1009,6 +1022,13 @@ export class AgentSession {
                     // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
                     const byOverload = crashed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
                     this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
+                    // The carry-over this turn took: gone with a reply; otherwise the next prompt carries it again (Tynn story #380).
+                    if (this.#carryInFlight !== null) {
+                        const carried = this.#carryInFlight;
+                        this.#carryInFlight = null;
+                        if (this.#lastTurnEnd === 'replied') this.#options.onCarryOverSent?.();
+                        else this.#carryOver ??= carried;
+                    }
                     this.#limitThisTurn = false;
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
@@ -1257,7 +1277,12 @@ export class AgentSession {
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
         // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
-        this.#driver.prompt(sent ? sent.content : text);
+        // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
+        const carry = this.#carryOver;
+        const above = carry ? `${carry.text}\n\n---\n\n` : '';
+        const wire = carry ? (sent ? [{ type: 'text' as const, text: above }, ...sent.content] : `${above}${text}`) : (sent ? sent.content : text);
+        this.#driver.prompt(wire);
+        if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
         if (this.#inTurn) this.#queued.push(by);
@@ -1268,11 +1293,13 @@ export class AgentSession {
             this.#inTurn = true;
             this.#limitThisTurn = false;
         }
+        // What the turn carried, marked where it happened: the exact text sent, opened from the chat — never your message.
+        if (carry) void this.#emitRow({ kind: 'notice', level: 'info', message: carriedLabel(carry), carried: { from: carry.from, turns: carry.turns, text: carry.text } });
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
         if (record) void this.#emitRow(promptRow(text, by, sent, context));
-        // A provider that DOES echo it is not recorded twice (see `#handle`).
-        this.#echo = text;
+        // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over above it included.
+        this.#echo = `${above}${text}`;
         this.#echoSeen = '';
         this.#turnState = 'working';
         // A new turn during Cooling goes straight to Working, and its timer goes with it.

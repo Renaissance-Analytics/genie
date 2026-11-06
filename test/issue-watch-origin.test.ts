@@ -191,10 +191,15 @@ describe('Genie’s socket against that rule (real socket, real wire)', () => {
         expect(liveTimers(h).map((t) => t.ms)).toEqual([RECONNECT_MS]);
     });
 
-    it('both of main’s Tynn sockets dial through dialTynnSocket (COUNTED), with the account’s host', async () => {
+    it('the Tynn sockets dial through dialTynnSocket (COUNTED), with the account’s host: genie-host’s, and the window’s only on the emergency no-host path (P5c)', async () => {
+        const host = await readFile(resolve('src/main/genie-host.ts'), 'utf8');
+        expect(host.match(/dialTynnSocket\(url, hostTynn\?\.host\(\) \?\? TYNN_HOST\)/g)).toHaveLength(1);
+        expect(host.match(/socket: tynnSocket,/g)).toHaveLength(2);
+        const emergency = await readFile(resolve('src/main/issue-watch-emergency.ts'), 'utf8');
+        expect(emergency.match(/dialTynnSocket\(url, p\.account\(\)\?\.host\(\) \?\? TYNN_HOST\)/g)).toHaveLength(1);
         const main = await readFile(resolve('src/main/main.ts'), 'utf8');
-        expect(main.match(/socket: \(url\) => dialTynnSocket\(url, tynnAccount\?\.host\(\) \?\? TYNN_HOST\)/g)).toHaveLength(2);
-        expect(main).not.toMatch(/new WebSocket\(url\) as unknown as SocketLike/);
+        expect(main).not.toMatch(/dialTynnSocket/);
+        for (const file of [host, emergency, main]) expect(file).not.toMatch(/new WebSocket\(url\) as unknown as SocketLike/);
     });
 });
 

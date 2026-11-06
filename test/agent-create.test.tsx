@@ -37,11 +37,11 @@ describe('the form’s rules', () => {
         expect(newAgentRefusal({ ...ok, name: 'genie', sacredName: 'tynn' })).toMatch(/reserved/);
     });
 
-    it('AGENT.md says the name, the purpose and the provider it starts on — and reads back as itself', () => {
+    it('AGENT.md says the name and the purpose — no provider (Tynn story #380) — and reads back as itself', () => {
         const text = agentFileText({ name: 'scout', purpose: 'Reads issues and triages them', provider: 'codex' });
-        expect(text).toMatch(/^---\nname: scout\npurpose: Reads issues and triages them\ntuis: \[codex\]\n---\n/);
+        expect(text).toMatch(/^---\nname: scout\npurpose: Reads issues and triages them\n---\n/);
         expect(text).toContain('You are scout. Reads issues and triages them');
-        expect(parseAgentManifest(text, 'scout')).toMatchObject({ name: 'scout', tuis: ['codex'] });
+        expect(parseAgentManifest(text, 'scout')).toEqual({ name: 'scout' });
     });
 });
 
