@@ -17,7 +17,7 @@ const sha = (value: string | Uint8Array) => createHash('sha256').update(value).d
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const methods = ['artboard.read', 'artboard.review'] as const;
 const post = (value: Partial<BoardPost> = {}): BoardPost => ({ id: 'p1', title: 'A mockup', kind: 'html', file: 'p1.html', createdAt: '2026-11-05T01:00:00Z', agentId: 'agent_a', askVerdict: true, ...value });
-interface Ref { ref: string; size: number; sha256: string; type: string }
+interface Ref { ref: string; size: number | null; sha256: string | null; type: string; error?: string }
 interface Metadata { id: string; postId: string; title: string; kind: string; artifact: Ref; review?: { verdict: string; at: string; comment?: Ref } }
 interface Envelope { artboardContent: { ref: string; list: string; count: number; error?: string } }
 type Raw = { call(method: string, args: unknown[]): Promise<WireMessage> };
@@ -79,7 +79,7 @@ describe('7F ArtBoard on the admitted local connection', () => {
         const rows = resultValue<{ items: Metadata[] }>(await raw.call('page.open', ['artboard-posts', value.list]));
         expect(rows.items).toHaveLength(1); const row = rows.items[0]!;
         expect(row).not.toHaveProperty('html'); expect(row).not.toHaveProperty('src'); expect(JSON.stringify(rows)).not.toContain(html); expect(JSON.stringify(rows)).not.toContain(comment);
-        expect(row.artifact).toMatchObject({ ref: expect.any(String), size: Buffer.byteLength(html), sha256: sha(html), type: 'text/html' });
+        expect(row.artifact).toMatchObject({ ref: expect.any(String), size: Buffer.byteLength(html), sha256: null, type: 'text/html' });
         const blob = resultValue<{ id: string; size: number; sha256: string }>(await raw.call('blob.open', ['artboard-post', row.artifact.ref]));
         expect(blob.size).toBe(Buffer.byteLength(html)); expect(blob.sha256).toBe(sha(html));
         expect(resultValue<{ base64: string }>(await raw.call('blob.read', [blob.id, 0, blob.size])).base64).toBe(Buffer.from(html).toString('base64'));
