@@ -1,9 +1,12 @@
-/** Serialized into the app's own page bridge by the CI/VM harness. */
-export async function measureArtboardPage(input) {
+import { createWallGapGauge } from './artboard-gap-probe.mjs';
+
+/** Serialized into the app's own page bridge by the CI/VM harness, with its gauge factory. */
+export async function measureArtboardPage(input, createGauge = createWallGapGauge) {
     const bridge = window.genieTest;
     if (!bridge?.artboard) throw new Error('the page ArtBoard bridge window.genieTest.artboard is not ready');
     let ticks = 0, last = performance.now(), maxGapMs = 0;
-    const ticker = setInterval(() => { const now = performance.now(); maxGapMs = Math.max(maxGapMs, now - last); last = now; ticks++; }, 16);
+    const gauge = createGauge();
+    const ticker = setInterval(() => { const now = performance.now(); maxGapMs = Math.max(maxGapMs, now - last); last = now; ticks++; gauge.beat(); }, 16);
     try {
         await new Promise(resolve => setTimeout(resolve, 60));
         const before = ticks, started = performance.now(); let completedAt, settingsAt;
@@ -11,7 +14,8 @@ export async function measureArtboardPage(input) {
         const settings = bridge.workspaces.settings(input.workspaceId).then(value => { settingsAt = performance.now(); return value; });
         const [board, concurrent] = await Promise.all([operation, settings]), during = ticks - before;
         await new Promise(resolve => setTimeout(resolve, 60));
-        const heartbeat = { before, during, after: ticks - before - during, maxGapMs }, verifyStarted = performance.now();
+        gauge.beat();
+        const gaps = gauge.snapshot(), heartbeat = { before, during, after: ticks - before - during, maxGapMs, gaps: gaps.gaps, dropped: gaps.dropped }, verifyStarted = performance.now();
         if (!board || !Array.isArray(board.posts)) throw new Error('the measured ArtBoard was not available');
         let bytes;
         if (input.postId !== undefined) {
