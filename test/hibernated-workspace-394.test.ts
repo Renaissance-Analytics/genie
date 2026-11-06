@@ -75,7 +75,7 @@ describe('story 394: a hibernated workspace supplies no data', () => {
         const host = new HostRegistry(store); await host.refresh();
         const inbox = await InboxStore.open(dir), attention = await AttentionStore.open(dir, inbox);
         const tools = genieTools({ inbox, attention, roster: () => host.listAgents(), workspaceSlugs: () => host.workspaceSlugs(),
-            resolveCaller: () => ({ agentId: 'os-caller', agentName: 'genie', workspaceId: 'awake', workspacePath: dir }),
+            resolveCaller: () => ({ agentId: registry.osAgent()!.id, agentName: 'genie', workspaceId: registry.osAgent()!.workspaceId, workspacePath: dir }),
             workspaceSetting: () => ({ scope: 'all' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
         });
         const answer = await tools.find((t) => t.definition.name === 'agentinbox')!.handler({ action: 'list', terminalId: 'test' }, { server: 'genie', tool: 'agentinbox', headers: {} });

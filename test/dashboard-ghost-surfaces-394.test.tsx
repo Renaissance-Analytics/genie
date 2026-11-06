@@ -29,7 +29,7 @@ describe('story394: the sidebar is the only ghost-workspace surface', () => {
         expect(container.querySelector('[data-workspace="ghost"], [data-agent-workspace="ghost"]')).toBeNull();
     });
     it('does not force an asleep workspace into the sidebar merely because its old route is current', () => {
-        const html = renderToStaticMarkup(<Sidebar route="genie://workspace/ghost" deckCount={0} workspaces={[ghost as never]} onNavigate={() => {}} />);
+        const html = renderToStaticMarkup(<Sidebar route="genie://workspace/ghost" deckCount={0} workspaces={[ghost as never]} available={['dashboard', 'workspace']} onNavigate={() => {}} />);
         expect(html).not.toContain('data-workspace="ghost"');
         expect(html).toContain('data-rail-tool="hibernated"');
     });
@@ -37,7 +37,7 @@ describe('story394: the sidebar is the only ghost-workspace surface', () => {
         localStorage.setItem('genie.rail.showHibernated', '1');
         const navigate = vi.fn(), wake = vi.fn();
         const container = document.createElement('div'); document.body.append(container); root = createRoot(container);
-        const props = { route: 'genie://dashboard', deckCount: 0, workspaces: [ghost], onNavigate: navigate, onWakeWorkspace: wake } as unknown as Parameters<typeof Sidebar>[0];
+        const props = { route: 'genie://dashboard', deckCount: 0, workspaces: [ghost], available: ['dashboard', 'workspace'], onNavigate: navigate, onWakeWorkspace: wake } as unknown as Parameters<typeof Sidebar>[0];
         act(() => root!.render(<Sidebar {...props} />));
         const entry = container.querySelector<HTMLElement>('[data-workspace="ghost"]'); expect(entry).not.toBeNull();
         act(() => entry!.click());
@@ -45,7 +45,7 @@ describe('story394: the sidebar is the only ghost-workspace surface', () => {
         expect(navigate).not.toHaveBeenCalled();
     });
     it('the phone’s workspace picker only receives active workspaces, not the separate sidebar metadata', () => {
-        const html = renderToStaticMarkup(<MobileShell host="test" locked={false} refusal={null} items={[]} answering={null} onAnswer={() => {}} onDisconnect={() => {}} agents={null} workspaces={snapshot.workspaces} onSelectWorkspace={() => {}} />);
+        const html = renderToStaticMarkup(<MobileShell host="test" locked={false} refusal={null} items={[]} answering={null} onAnswer={() => {}} onDisconnect={() => {}} workspaces={snapshot.workspaces} onSelectWorkspace={() => {}} />);
         expect(html).toContain('Active project');
         expect(html).not.toContain('Hibernated project');
     });
