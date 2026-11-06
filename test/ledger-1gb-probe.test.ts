@@ -5,6 +5,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
 import { mintAgentId, threadKeyFor } from '../src/core/identity.js';
 import { ThreadStore, readHistory, readWholeHistory } from '../src/core/thread-store.js';
+import { promptDeliveries } from '../src/core/prompt-delivery.js';
+import type { StreamEvent } from '../src/core/stream-event.js';
 
 const support = async () => { const file: string = './live/ledger-1gb-support.js'; return import(file); };
 type Entry = { position: number; message: Record<string, unknown>; recorded_at: string };
@@ -39,6 +41,15 @@ it('serializes fixture rows byte-for-byte like the real ThreadStore append forma
     await store.appendLog(key, rows as never);
     const actual = await readFile(store.logFile(key)), expected = Buffer.from(rows.map(row => m.serializeLedgerEntry(row)).join(''));
     expect(actual.equals(expected)).toBe(true); // Failure must never print a synthetic tool payload into CI logs.
+});
+it('generates prompt bookkeeping that the real delivery replay recognizes as sent', async () => {
+    const m = await support(), rows = [...m.fixtureEntries({ ...small, toolPairs: 0 })] as Entry[];
+    const states = promptDeliveries(rows.map(row => ({ event: row.message as StreamEvent })));
+    expect(states.size).toBe(2);
+    expect([...states.values()].every(status => status === 'sent')).toBe(true);
+    expect(rows.filter(row => row.message.kind === 'run').every(row => row.message.resumed === false)).toBe(true);
+    const pending = rows.flatMap(row => row.message.kind === 'message' && row.message.pending ? [row.message.pending as { content?: unknown }] : []);
+    expect(pending.length).toBe(2); expect(pending.every(value => value.content === null)).toBe(true);
 });
 it('writes in bounded batches and copies an exact whole-line prefix for the smaller reference control', async () => {
     const m = await support(), dir = await temp(), id = mintAgentId();
