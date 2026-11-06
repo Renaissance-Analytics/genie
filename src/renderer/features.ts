@@ -213,6 +213,8 @@ export interface IntegrationsSection {
     readonly agentFiles?: readonly AgentFilesReport[];
     /** Linux with no keyring: the card (main/linux-keyring.ts), null when the keyring is fine or off Linux. */
     readonly keyring?: KeyringView | null;
+    /** What an unlock set going, said on screen — the Genie browser restarting (Tynn story #388); null/absent = nothing. */
+    readonly keyringNotice?: string | null;
 }
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */

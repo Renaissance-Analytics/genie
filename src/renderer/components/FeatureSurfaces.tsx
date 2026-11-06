@@ -2379,6 +2379,7 @@ function TynnBlock({ integrations, onAction }: { integrations: FeatureData['inte
     if (integrations === null) return <div data-integrations=""><Skeletons rows={2} /></div>;
     return (
         <div data-integrations="" className="flex flex-col gap-2">
+            {integrations.keyringNotice ? <p data-keyring-notice="" role="status" className="text-xs text-[var(--fg-2)]">{integrations.keyringNotice}</p> : null}
             {integrations.keyring && !integrations.tynn.user ? <KeyringCard keyring={integrations.keyring} onAction={onAction} /> : <TynnSignIn tynn={integrations.tynn} onAction={onAction} />}
                         <ul className="mt-2 divide-y divide-[var(--border-1)]">
                             {integrations.gated.map((row) => (
@@ -2437,6 +2438,7 @@ function GithubBlock({ integrations, onAction }: { integrations: FeatureData['in
             <div data-integrations="" data-github-status="signed-out" className="flex flex-col gap-2 text-sm">
                 <p className="text-[var(--fg-3)]">One click: GitHub shows a code, you approve the Genie AOS app in your browser, and Genie reads where it is installed. No token to paste.</p>
                 {/* No keyring: nothing could keep the GitHub sign-in either — the same card, in its place. */}
+                {integrations.keyringNotice ? <p data-keyring-notice="" role="status" className="text-xs text-[var(--fg-2)]">{integrations.keyringNotice}</p> : null}
                 {integrations.keyring ? <KeyringCard keyring={integrations.keyring} onAction={onAction} /> : <div><Button type="button" data-action="github-sign-in" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignIn' })}>Sign in with GitHub</Button></div>}
                 {message}
                 {githubCapabilityList(gh.capabilities)}
