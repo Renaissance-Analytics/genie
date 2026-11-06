@@ -152,7 +152,19 @@ const word = (id) => {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`not a workspace id: ${String(id)}`);
     return id;
 };
-const open = (cdp, id) => cdp.evaluate(`window.location.hash = '#genie://workspace/${word(id)}'; true`);
+/*
+ * Go to a workspace, and stay there: just after a launch the app lands on its own route (the Dashboard, and after a host
+ * that did not end cleanly, the safe-mode notice with it), which can replace an address set a moment before. So the
+ * address is set again until the workspace's page is what shows (15 s).
+ */
+const open = async (cdp, id) => {
+    const there = `window.location.hash.includes('workspace/${word(id)}') && Boolean(document.querySelector('[data-surface="workspace"]'))`;
+    for (const end = Date.now() + 15_000; Date.now() < end;) {
+        await cdp.evaluate(`window.location.hash = '#genie://workspace/${word(id)}'; true`);
+        if (await waitFor(cdp, there, 1_000)) return true;
+    }
+    return false;
+};
 const stepFor = (id) => `document.querySelector('[data-trust-step="${word(id)}"]')`;
 /*
  * Adding a folder is the window's call over its local door (the host split: genie-host keeps the workspaces). A call of
