@@ -30,6 +30,8 @@ const hang = (at: number, lifecycle: string[] = []): CrashRecord => ({
     stalls: [],
     memory: [],
     agents: [],
+    relaunched: true,
+    hangsRecent: 1,
 });
 
 describe('crash records on disk', () => {

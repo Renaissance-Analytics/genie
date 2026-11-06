@@ -44,6 +44,10 @@ export interface HangWatchdogOptions {
     readonly log: (line: string) => void;
     /** The common header (crash-records.ts `crashHeader`): this host's version, build, OS and uptime. */
     readonly header: () => CrashHeader;
+    /** Starts a new window after a hung one was ended (genie-host: the installed Genie from the window's launch spec). Absent = none. */
+    readonly relaunch?: () => void;
+    /** Each hang: when, how many within the window of {@link RELAUNCH_WINDOW_MS}, and whether a new window was started. */
+    readonly onHang?: (hang: { at: number; hangs: number; relaunched: boolean }) => void;
     readonly hangMs?: number;
     readonly lostMs?: number;
     readonly rssEveryMs?: number;
@@ -183,6 +187,8 @@ export class HangWatchdog {
             stalls: this.#safe(() => mainStalls(lifecycle), []),
             memory: [...this.#samples],
             agents: this.#safe(() => this.#o.agents(), []),
+            relaunched: false,
+            hangsRecent: 0,
         };
         this.#safe(() => this.#o.write(record), undefined);
         this.#o.log(`hang window pid=${w.pid} silent_ms=${now - w.lastBeatAt}: recorded, and the window is ended (this host and its agents keep running)`);

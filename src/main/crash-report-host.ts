@@ -1,5 +1,6 @@
 import { checkBeforeSend, crashReportText, crashSignatures, redactCrashText, type CrashFacts, type RedactionContext } from '../core/crash-report.js';
 import type { SafeModeView } from '../core/safe-mode.js';
+import type { HangNotice } from '../core/crash-record.js';
 
 /**
  * THE CRASH REPORT'S TWO STEPS IN THE WINDOW'S MAIN PROCESS (Tynn #386 part 4): the DRAFT the safe-mode banner shows —
@@ -13,6 +14,10 @@ import type { SafeModeView } from '../core/safe-mode.js';
  */
 export interface CrashReportDeps {
     readonly view: () => SafeModeView | null;
+    /** The latest crash record the host sent (Tynn #386 cut 3). Not read yet. */
+    readonly record?: () => unknown;
+    /** The reopened-window notice, when there is one. Not read yet. */
+    readonly notice?: () => HangNotice | null;
     /** Every registered agent: their names are redacted, their providers counted. */
     readonly agents: () => readonly { readonly id: string; readonly name: string; readonly provider: string }[];
     /** Every workspace name Genie knows (names, slugs, folder names): redacted. */

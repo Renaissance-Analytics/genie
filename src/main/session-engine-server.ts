@@ -40,6 +40,7 @@ import type { TerminalsService } from './terminals-host.js';
 import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
+import type { CrashStateView } from '../core/crash-record.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -138,6 +139,8 @@ export interface EngineServerOptions {
      * the connection dropping. Absent = a beat is ignored.
      */
     readonly heartbeat?: { beat(connId: string, beat: unknown): void; dropped(connId: string): void };
+    /** The latest crash record and the reopened-window notice (crash-state-host.ts), for LOCAL windows. Not built yet. */
+    readonly crash?: { view(): CrashStateView; dismiss(): CrashStateView; onChange(listener: (view: CrashStateView) => void): () => void };
     /** The host's process supervisor (P3.3b: supervisor-host.ts). Absent = `engine.supervisor` is refused. */
     readonly supervisor?: SupervisorService;
     /** The host's hosting: the front door, the engines, the sites (P5a: hosting-host.ts). Absent = `engine.hosting` is refused. */

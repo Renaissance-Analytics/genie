@@ -58,6 +58,7 @@ import type { UpdateFailedRecord } from './updates-host.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
+import type { CrashStateView } from '../core/crash-record.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -1039,6 +1040,13 @@ export class SessionEngineClient {
         if (t === null || this.#welcome === null) return;
         t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.heartbeat', args: [beat] }));
     }
+
+    /** The latest crash record and the reopened-window notice, as the host last said (local windows). Not built yet. */
+    crashStateView(): CrashStateView | null { return null; }
+
+    onCrashState(_listener: (view: CrashStateView) => void): () => void { return () => {}; }
+
+    async dismissHangNotice(): Promise<{ ok: true } | { ok: false; reason: string }> { return { ok: false, reason: 'not built yet' }; }
 
     /** Liveness: `true` when the host answered. */
     async ping(): Promise<boolean> {

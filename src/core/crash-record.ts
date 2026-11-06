@@ -1,4 +1,5 @@
 import type { TimedEvent } from './stream-view.js';
+import type { SafeModeView } from './safe-mode.js';
 
 /**
  * A CRASH RECORD (Tynn story #386; spec `.ai/plans/genie-crash-safe-mode-reporting-spec.md` §1) — what a hang, a lost
@@ -40,6 +41,10 @@ export interface RunningAgentNote {
     readonly lastTool: string | null;
     readonly lastToolBytes: number | null;
 }
+
+/** After a hang genie-host reopens the window, at most this many times within {@link RELAUNCH_WINDOW_MS}: a 4th is recorded, not reopened. */
+export const RELAUNCH_MAX = 3;
+export const RELAUNCH_WINDOW_MS = 10 * 60_000;
 
 /** Every record's version of its own shape. */
 export const CRASH_SCHEMA = 1;
@@ -85,6 +90,10 @@ export type CrashRecord = CrashHeader & (
           readonly stalls: readonly StallNote[];
           readonly memory: readonly RssSample[];
           readonly agents: readonly RunningAgentNote[];
+          /** genie-host started a new window after ending this one ({@link RELAUNCH_MAX} within {@link RELAUNCH_WINDOW_MS}). */
+          readonly relaunched: boolean;
+          /** Hangs within the last {@link RELAUNCH_WINDOW_MS}, this one included. */
+          readonly hangsRecent: number;
       }
     | {
           readonly kind: 'lost';
@@ -107,6 +116,32 @@ export type CrashRecord = CrashHeader & (
           /** An error's TYPE (`TypeError`), never its message. */
           readonly error?: string;
       });
+
+/**
+ * THE REOPENED WINDOW'S NOTICE: genie-host ended a hung window and started a new one. When, how many hangs within
+ * {@link RELAUNCH_WINDOW_MS}, and what was running (ids and names: the notice lists them, the report counts providers).
+ */
+export interface HangNotice {
+    readonly at: number;
+    readonly hangs: number;
+    readonly agents: readonly { readonly id: string; readonly name: string }[];
+}
+
+/** What the host tells a LOCAL window: the latest record (the previous run's, or the newest since) and the notice. */
+export interface CrashStateView {
+    readonly record: CrashRecord | null;
+    readonly notice: HangNotice | null;
+}
+
+/** The notice's words. Not built yet. */
+export function hangNoticeWords(_notice: HangNotice, _clock: (at: number) => string): string {
+    throw new Error('not built yet (Tynn #386)');
+}
+
+/** The notice as the crash report's view (no safe mode: the host never stopped). Not built yet. */
+export function hangNoticeView(_notice: HangNotice): SafeModeView {
+    throw new Error('not built yet (Tynn #386)');
+}
 
 /** What window main says each second: its pid and its own RSS in bytes; `bye` = its quit ran to its end. */
 export interface WindowBeatPayload {
