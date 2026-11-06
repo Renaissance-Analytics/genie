@@ -39,6 +39,7 @@ import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
 import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
+import type { SafeModeView } from '../core/safe-mode.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -150,6 +151,8 @@ export interface EngineServerOptions {
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
     readonly updates?: UpdatesService;
+    /** The host's safe mode (Tynn #386: safe-mode-host.ts): told to EVERY window before ready and on change; `engine.safeMode` leaves it. */
+    readonly safeMode?: { view(): SafeModeView; leave(): SafeModeView; onChange(listener: (view: SafeModeView) => void): () => void };
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     /** IssueWatch in the host (P5c: issue-watch-host.ts). Absent = `engine.issueWatch` is refused. Local windows only. */

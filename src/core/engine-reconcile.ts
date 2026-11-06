@@ -55,6 +55,8 @@ export interface ReconcilePorts extends EnginePorts {
     readonly sleep: (ms: number) => Promise<void>;
     /** For an engine found already RUNNING: put back what lives only in its memory. A failure is the engine's outcome. */
     readonly restore?: (instance: ServiceInstance) => Promise<void>;
+    /** SAFE MODE (Tynn #386): while on, a stopped engine is not started (held); a running container is left alone. */
+    readonly safeMode?: () => boolean;
 }
 
 /** An engine taken over from Genie 1 that no workspace holds a slice of: it gives nobody any env. */

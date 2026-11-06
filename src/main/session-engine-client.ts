@@ -56,6 +56,7 @@ import type { UpdateState } from './updater.js';
 import type { UpdateFailedRecord } from './updates-host.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
+import type { SafeModeView } from '../core/safe-mode.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -560,6 +561,14 @@ export class SessionEngineClient {
         });
         return this.#appInbox;
     }
+
+    /** genie-host's safe mode (Tynn #386), as this window last heard it; `null` = the host has said nothing (an older host). */
+    safeModeView(): SafeModeView | null { return null; }
+
+    onSafeMode(_listener: (view: SafeModeView) => void): () => void { return () => {}; }
+
+    /** "Leave safe mode": the host's leave. It starts nothing; it lets the automatic behaviour run again. */
+    async leaveSafeMode(): Promise<{ ok: true } | { ok: false; reason: string }> { return { ok: false, reason: 'not built yet' }; }
 
     #updates: UpdatesReplica | null = null;
 

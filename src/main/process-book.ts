@@ -110,6 +110,8 @@ export interface ProcessBookDeps {
     readonly asleep: (workspaceId: string) => boolean;
     /** The workspace's background-process limit (core/shell-limits.ts), read live; absent = no limit. */
     readonly limit?: (workspaceId: string) => number;
+    /** SAFE MODE (Tynn #386): while on, the launch restore starts no kept process; each is held back, saying why. */
+    readonly safeMode?: () => boolean;
     readonly now?: () => number;
     /** Genie 1's database and Genie 2's workspaces: the book imports v1's background processes ONCE when it opens. */
     readonly v1?: {

@@ -71,6 +71,8 @@ export interface FlowSchedulerDeps {
      * Run now (`null` when it has none). Answers the outcome; resolving with nothing means it ran.
      */
     readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume) => Promise<RunResult | void>;
+    /** SAFE MODE (Tynn #386): while on, no schedule is armed, no file starts a flow and no interrupted run resumes. */
+    readonly safeMode?: () => boolean;
 }
 
 export interface Due {

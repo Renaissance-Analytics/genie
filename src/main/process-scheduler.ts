@@ -36,6 +36,8 @@ export interface ProcessSchedulerDeps {
     readonly nudge: (address: string, text: string, from: string) => boolean | Promise<boolean>;
     readonly now: () => number;
     readonly schedule: (fn: () => void, ms: number) => () => void;
+    /** SAFE MODE (Tynn #386): while on, no scheduled task is armed or fired; Run now is the person's and still runs. */
+    readonly safeMode?: () => boolean;
 }
 
 export class ProcessScheduler {

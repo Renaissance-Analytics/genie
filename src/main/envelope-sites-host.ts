@@ -44,6 +44,9 @@ export interface EnvelopeSitesPorts {
     /** The workspace's service env (its engines + the shared ones), for every process of its sites. */
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
     readonly log?: (line: string) => void;
+    /** SAFE MODE (Tynn #386): while on, no site is started by a launch or a wake; each is told to `held`. */
+    readonly safeMode?: () => boolean;
+    readonly held?: (siteId: string) => void;
 }
 
 let tmpCounter = 0;
