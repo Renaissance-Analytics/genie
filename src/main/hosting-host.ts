@@ -239,8 +239,9 @@ export class HostingService {
         this.#elevation?.onChange(changed);
         options.onChange?.(changed);
         stack.engines.onStarted((id) => this.#emit({ kind: 'engineStarted', id }));
-        // A verdict that moved goes out with the next dump (genie#1519).
-        stack.trust.onVerdict(changed);
+        // A verdict that moved goes out AT ONCE, uncoalesced (genie#1519): the host recorded it first, and a revocation must
+        // reach the window before anything else it runs.
+        stack.trust.onVerdict(() => this.#sendNow());
         void stack.engineReconcile.then((report) => { this.#reconcile = report; this.#changed(); });
     }
 
@@ -364,6 +365,8 @@ export class HostingReplica implements HostingApi {
     readonly #startedListeners = new Set<(id: string) => void>();
     readonly #frontDoorListeners = new Set<() => void>();
     #dump: HostingDump | null = null;
+    /** The link is up and its dump is in: until then, and after it drops, no verdict is believed (fail closed, genie#1519). */
+    #linked = false;
     #keys = { sites: '', engines: '', frontDoor: '', trust: '' };
     readonly #verdictListeners = new Set<(workspaceId: string) => void>();
     #reconciled: ((report: ReconcileReport) => void) | null = null;
@@ -381,6 +384,7 @@ export class HostingReplica implements HostingApi {
     rebase(dump: HostingDump): void {
         const trustBefore = this.#trustEntries();
         this.#dump = dump;
+        this.#linked = true;
         const keys = {
             sites: JSON.stringify([dump.sites, dump.specs, dump.declared]),
             engines: JSON.stringify([dump.engines, dump.workspaces, dump.dependents]),
@@ -398,7 +402,14 @@ export class HostingReplica implements HostingApi {
     }
 
     #trustEntries(): readonly TrustEntry[] {
-        return this.#dump?.trust ?? [];
+        return this.#linked ? (this.#dump?.trust ?? []) : [];
+    }
+
+    /** The link to the host dropped: the verdicts it last sent are not believed, so every workspace reads untrusted until the next dump. */
+    linkDown(): void {
+        const trustBefore = this.#trustEntries();
+        this.#linked = false;
+        this.#verdictsMoved(trustBefore);
     }
 
     #verdictsMoved(before: readonly TrustEntry[]): void {
@@ -421,7 +432,8 @@ export class HostingReplica implements HostingApi {
         trust: (workspaceId: string) => this.#ask<TrustView | null>('trust.trust', workspaceId),
         mayWriteInto: async (folder: string) => {
             const dump = this.#dump;
-            if (dump === null) return true;
+            // Fail closed: no dump yet, or the link is down, and nothing is known to be trusted.
+            if (dump === null || !this.#linked) return false;
             const entry = (dump.trust ?? []).find((e) => e.path === folder);
             if (entry) return entry.trusted;
             // A registered workspace not read yet is not trusted; a folder that is no workspace is not this rule's.

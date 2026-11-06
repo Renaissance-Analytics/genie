@@ -588,6 +588,10 @@ describe('the app is wired to it (reads the source: no window is opened here)', 
     it('compose gives the same verdict to the sync read, and announces through what main passed', () => {
         const compose = source('compose.ts');
         expect(compose).toMatch(/untrustedNow\(record/);
-        expect(compose).toMatch(/verdictMoved:/);
+        // The verdicts are the host's now (genie#1519 in the host split): compose hears them from the hosting replica and
+        // announces through what main passed; the host's own stack announces through ownTrust's verdictMoved.
+        expect(compose).toMatch(/hosting\.trust\.onVerdict\(\(id\) => input\.onTrustVerdict\?\.\(id\)\)/);
+        expect(source('hosting-compose.ts')).toMatch(/verdictMoved: input\.onTrustVerdict,/);
+        expect(source('genie-host.ts')).toMatch(/onTrustVerdict: \(workspaceId\) => hostVerdicts\?\.changed\(workspaceId\)/);
     });
 });

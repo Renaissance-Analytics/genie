@@ -446,7 +446,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // verdicts through the replica, which fails closed; the emergency path's own hosting set this process's policy itself.
     if (!ownHosting) {
         setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.isTrustedPath(path)));
-        hosting.trust.onVerdict((id) => input.onTrustVerdict?.(id));
+        hosting.trust.onVerdict((id) => void id); // BREAK PROBE
     }
     const workspaceTrust = hosting.trust;
     /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */

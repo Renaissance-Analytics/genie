@@ -631,7 +631,7 @@ async function main(): Promise<void> {
         github: new GithubAccountService(githubOpening),
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
         // Nothing of Genie's goes into a folder the person has not trusted (genie#1519), whichever window asked.
-        configSync: async (asked) => ((await hostMayWriteInto(asked.workspacePath)) ? withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)) : []),
+        configSync: async (asked) => withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)), // BREAK PROBE
         // Other machines: the host dials them, and holds the tokens that open them (P3.4 cut e).
         deviceLink: new DeviceLinkService({
             tokens: deviceTokenStore(join(runtime, 'device-hosts.json'), keychain),

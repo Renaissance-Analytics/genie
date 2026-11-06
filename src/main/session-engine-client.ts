@@ -252,6 +252,8 @@ export class SessionEngineClient {
                 this.#welcome = null;
                 for (const p of this.#pending.values()) p({ ok: false, reason: NOT_CONNECTED });
                 this.#pending.clear();
+                // Trust first (genie#1519): from here the window believes no verdict until the next dump.
+                this.#hosting?.linkDown();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
                 this.#deviceLink?.lost('the host closed the connection');
                 this.#options.onDisconnected?.('the host closed the connection');

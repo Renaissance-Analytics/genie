@@ -74,7 +74,8 @@ describe('the one lock', () => {
         const host = readFileSync('src/main/genie-host.ts', 'utf8');
         expect(host).toMatch(/const withConfig = configWriter\(\);/);
         expect(host).toMatch(/hostAgentKeys\(\{\s*[^]*?withConfig,/);
-        expect(host).toMatch(/configSync: \(asked\) => withConfig\(asked\.workspacePath, \(\) => writeWorkspaceConfig\(asked\)\)/);
+        // The sync holds the lock, and (genie#1519, now the host's) writes nothing into a workspace that is not trusted.
+        expect(host).toMatch(/configSync: async \(asked\) => \(\(await hostMayWriteInto\(asked\.workspacePath\)\) \? withConfig\(asked\.workspacePath, \(\) => writeWorkspaceConfig\(asked\)\) : \[\]\)/);
         expect(readFileSync('src/main/host-agent-keys.ts', 'utf8')).toMatch(/withConfig: options\.withConfig/);
     });
 });
