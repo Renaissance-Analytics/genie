@@ -24,7 +24,8 @@ import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
-import { commsOf } from '../core/comms.js';
+import { CommsCache } from '../core/comms.js';
+import { askerLiveFrom } from './asker-live.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
@@ -35,6 +36,7 @@ import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
+import { crashReportHost } from './crash-report-host.js';
 import { FilesWindows } from './files-windows.js';
 import { availableParallelism, homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
@@ -70,7 +72,7 @@ import { WorkstationService, type WorkstationPort } from './workstation-service.
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
-import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn } from './linux-keyring.js';
+import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn, unlockKeyringBeforeStores } from './linux-keyring.js';
 import type { KeyringReplica } from './keyring-replica.js';
 import { osCipher } from './os-cipher.js';
 import { linkedAgentSecrets, linkedVault } from './agent-secrets.js';
@@ -687,6 +689,8 @@ let filesHost: FilesHost | null = null;
 let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): boolean | Promise<boolean>; unwatch(viewId: string): void; close(): void } | null = null;
 const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
 let takeOvers: TakeOverHost | null = null;
+/** This workstation's Tynn identity, once known: a crash report is sent with its host proof (Tynn #386 part 4). */
+let crashReportMachine: WorkstationPort | null = null;
 /** The workspace header's throwaway terminals (Tynn story #378): each in its own window, closed with it. */
 let scratchTerminals: ScratchTerminals | null = null;
 let filesWindows: FilesWindows | null = null;
@@ -724,6 +728,8 @@ function activityOf(raw: unknown): Record<string, ActivityFeed> {
  * registry's first load, when the session host already exists.
  */
 let askerLivenessKnown = false;
+/** The Dashboard's comms cell (§4.1): AgentInbox traffic since the session started, bounded to the newest 2000 mails. */
+const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.involving(agentId as AgentId, 2000) : null));
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
 /** The updater as this window reads and drives it: genie-host's, through a replica (P5b); the window's own only on the emergency path. */
@@ -1312,6 +1318,9 @@ async function boot(): Promise<void> {
     // The store this launch actually got, written down for the next (a probe can come back empty — genie#588).
     // Only a store that gave a key is remembered; the remembered store failing to give one is forgotten (a selected store
     // is not a working one: password-store-memo.ts).
+    // A LOCKED KEYRING, ASKED FIRST (Tynn story #388): Electron reads its store's availability once, so the keyring is asked to
+    // unlock — its own dialog — before anything here reads it. An unlocked one answers at once; no Secret Service, at once too.
+    if (process.platform === 'linux') await unlockKeyringBeforeStores((line) => console.log(`[genie] ${line}`));
     if (process.platform === 'linux') rememberPasswordStore(genieRoot(), safeStorage.getSelectedStorageBackend(), safeStorage.isEncryptionAvailable());
     // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
     // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
@@ -1458,7 +1467,7 @@ async function boot(): Promise<void> {
             return [...(agentEngineLink ? [] : genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id))), ...privateServers];
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
-        comms: (agentId: AgentId, since: number) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
+        comms: (agentId: AgentId, since: number) => dashboardComms.read(agentId, since, Date.now()),
         onThreadId: (agentId: AgentId, threadId: string) => {
             void theRegistry.recordThread(agentId, threadId).then((result) => {
                 if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
@@ -2079,6 +2088,22 @@ async function boot(): Promise<void> {
         return r;
     });
 
+    // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
+    const crashReports = crashReportHost({
+        view: () => agentEngineLink?.client.safeModeView() ?? null,
+        agents: () => (registry?.listAgents() ?? []).map((a) => ({ id: a.id, name: a.name, provider: a.provider })),
+        workspaceNames: () => [...(registry?.listWorkspaces() ?? []).flatMap((w) => [w.id, basename(w.path)]), ...(registry?.workspaceSlugs().values() ?? [])],
+        genieVersion: app.getVersion(),
+        os: process.platform,
+        arch: process.arch,
+        tynnHost: TYNN_HOST,
+        identity: async () => (crashReportMachine ? crashReportMachine.identity(TYNN_HOST) : null),
+        authHeader: async () => { if (!crashReportMachine) throw new Error('no workstation identity'); return crashReportMachine.authHeader(TYNN_HOST); },
+        fetch: (url, init) => net.fetch(url, init),
+    });
+    ipcMain.handle('genie:crash-report-draft', () => crashReports.draft());
+    ipcMain.handle('genie:crash-report-send', (_event, text: unknown, notes: unknown) =>
+        typeof text === 'string' && typeof notes === 'string' ? crashReports.send(text, notes) : { ok: false, reason: 'A crash report needs its text.' });
     ipcMain.handle('genie:take-over', (_event, raw: unknown) => {
         if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
         const record = registry?.find(raw as AgentId) ?? null;
@@ -2698,15 +2723,7 @@ async function boot(): Promise<void> {
         workspaceColor: (path) => workspaceColors?.colorOf(path) ?? null,
         // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
         // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
-        askerLive: (id) => {
-            // Not heard yet: nothing is judged (undefined), never "gone" or "ended".
-            if (!askerLivenessKnown) return undefined;
-            const session = host?.probe(id as AgentId) ?? null;
-            if (session?.running) return { running: true, startedAt: session.startedAt };
-            const takeOver = takeOvers?.probe(id as AgentId) ?? null;
-            if (takeOver) return { running: true, startedAt: takeOver.startedAt };
-            return session ? { running: false, startedAt: session.startedAt } : null;
-        },
+        askerLive: askerLiveFrom({ known: () => askerLivenessKnown, engine: () => host, takeOvers: () => takeOvers }),
         /*
          * The common API for remote connections and migrated local families (§6.8, P4).
          * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
@@ -2927,7 +2944,7 @@ async function boot(): Promise<void> {
                     requestQuit();
                 },
                 onChange: () => pushFeatures(),
-            }));
+            }), { unlockAtStart: true });
         } catch (error) {
             console.warn('[genie] the keyring check failed', error);
         }
@@ -3001,7 +3018,7 @@ async function boot(): Promise<void> {
     // sign-in landing during the launch's own check cannot make two workstations.
     const identityCipher = osCipher(safeStorage, process.platform);
     // THE KEY IS THE HOST'S (P3.4): this window asks it to sign. Only a window running its own engine holds one, in the keychain just the same.
-    const machineIdentity: WorkstationPort = agentEngineLink ? agentEngineLink.client.workstation() : new WorkstationService({
+    const machineIdentity: WorkstationPort = crashReportMachine = agentEngineLink ? agentEngineLink.client.workstation() : new WorkstationService({
         store: workstationKeyStore(join(genieRoot(), 'workstation.json'), new Keychain()),
         request: (path, init) => tynnAccount ? tynnAccount.request(path, init) : Promise.reject(new Error('Sign in to Tynn first')),
         host: () => tynnAccount?.host() ?? TYNN_HOST,

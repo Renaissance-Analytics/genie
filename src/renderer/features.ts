@@ -213,6 +213,8 @@ export interface IntegrationsSection {
     readonly agentFiles?: readonly AgentFilesReport[];
     /** Linux with no keyring: the card (main/linux-keyring.ts), null when the keyring is fine or off Linux. */
     readonly keyring?: KeyringView | null;
+    /** What an unlock set going, said on screen — the Genie browser restarting (Tynn story #388); null/absent = nothing. */
+    readonly keyringNotice?: string | null;
 }
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */
@@ -532,6 +534,7 @@ export type FeatureAction =
     | { kind: 'integrations.tynnCode'; code: string }
     /** The keyring card's one button: install, start, restart Genie or check again, whichever comes next. */
     | { kind: 'keyring.fix' }
+    | { kind: 'keyring.cancel' }
     | { kind: 'integrations.tynnSignOut' }
     /** GitHub (beta.33 item 25; Genie 1's): sign in with the device flow, cancel it, read GitHub again, open one of its pages, sign out. */
     | { kind: 'integrations.githubSignIn' }

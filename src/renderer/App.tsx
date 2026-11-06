@@ -36,6 +36,7 @@ import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../cor
 import { chatAgentsKey, chatSendFor, chatThreadFrom, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
+import { copyToClipboard } from './clipboard.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
@@ -1953,6 +1954,7 @@ function DesktopApp({ bridge }: AppProps) {
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
+            {...(resolvedBridge?.crashReport ? { crashReport: { draft: () => resolvedBridge.crashReport!.draft(), send: (text: string, notes: string) => resolvedBridge.crashReport!.send(text, notes), copy: (text: string) => copyToClipboard({ plain: text }) } } : {})}
             {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
             onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] restart refused:', r.reason); }); }}

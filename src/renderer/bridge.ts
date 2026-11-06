@@ -287,6 +287,12 @@ export interface GenieBridge {
      */
     takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
 
+    /** The safe-mode banner's crash report (Tynn #386 part 4): never sent until the person presses Send. Absent = remote. */
+    crashReport?: {
+        draft(): Promise<{ text: string }>;
+        send(text: string, notes: string): Promise<import('./components/SafeModeBanner.js').CrashReportAnswer>;
+    };
+
     /**
      * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
      * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
