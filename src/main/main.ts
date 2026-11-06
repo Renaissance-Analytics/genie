@@ -3622,9 +3622,9 @@ async function boot(): Promise<void> {
     };
     const featurePorts: FeaturePorts = {
         ...processPorts(),
+        openInBrowser: openInBrowserFor('user-gesture'),
         // "Leave safe mode" (Tynn #386): the host's; this window only asks.
         safeMode: { leave: () => (agentEngineLink ? agentEngineLink.client.leaveSafeMode() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })) },
-        openInBrowser: openInBrowserFor('user-gesture'),
         // The flow editor's own window (genie#1204): Open, a row's name, Add a flow — the person's click.
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
