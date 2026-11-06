@@ -239,6 +239,10 @@ try {
         // What the page and main say, on the way to a failure: the first thing wanted when this row goes red.
         const seen = await cdp.evaluate(`window.genie.features.snapshot().then((data) => JSON.stringify({ hash: window.location.hash, trust: (data?.trust ?? []).map((s) => s.workspaceId ?? s.id ?? '?'), surface: (document.querySelector('[data-surface]')?.getAttribute('data-surface') ?? 'none'), text: (document.body?.innerText ?? '').slice(0, 200) }))`);
         console.log(`  at the failure: ${String(seen).slice(0, 600)}`);
+        // genie-host's own words: it keeps the verdicts, and a relaunch may have started a new one.
+        const hostLog = join(home, '.genie', 'logs', 'genie-host.log');
+        const lines = existsSync(hostLog) ? readFileSync(hostLog, 'utf8').split(/\r?\n/).filter((l) => /trust|host|ready|workspace/i.test(l)).slice(-25) : ['no host log at ' + hostLog];
+        console.log(`  genie-host.log (filtered):\n    ${lines.map((l) => l.slice(0, 220)).join('\n    ')}`);
     }
     check(stillAsks, '14. CONTROL: after the relaunch that one still asks, so a missing step below means something');
     await open(cdp, acmeId);
