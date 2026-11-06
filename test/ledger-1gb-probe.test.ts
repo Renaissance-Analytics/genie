@@ -88,3 +88,28 @@ it('resets the positive-control gap and memory baseline before measuring the rea
     now = 3500; rss = 210;
     expect(gauge.snapshot()).toMatchObject({ ticks: 0, wallMs: 500, maxGapMs: 500, maxLatenessMs: 0, baselineRssBytes: 200, peakRssBytes: 210, rssGrowthBytes: 10 });
 });
+it('gates the 50ms sampler lateness, retaining raw heartbeat gaps and monitorEventLoopDelay for reporting only', async () => {
+    const m = await support();
+    const measurement = { sampler: { maxGapMs: 1050, maxLatenessMs: 1000 }, heartbeat: { maxGapMs: 1700 }, rssGrowthBytes: 299_999_999, eventLoopDelay: { maxMs: 1500, p99Ms: 1200 } };
+    expect(m.measurementFailures(measurement)).toEqual([]);
+    expect(m.measurementFailures({ ...measurement, sampler: { maxGapMs: 1050.01, maxLatenessMs: 1000.01 } }).some((reason: string) => /lateness/i.test(reason))).toBe(true);
+});
+it('requires RSS growth strictly under 300MB and actual serialized history bytes at most 4MiB', async () => {
+    const m = await support(), base = { sampler: { maxLatenessMs: 0 }, rssGrowthBytes: 0 };
+    expect(m.measurementFailures({ ...base, rssGrowthBytes: 300_000_000 }).some((reason: string) => /RSS/i.test(reason))).toBe(true);
+    expect(m.measurementFailures({ ...base, historyBytes: 4 * 1024 * 1024 })).toEqual([]);
+    expect(m.measurementFailures({ ...base, historyBytes: 4 * 1024 * 1024 + 1 }).some((reason: string) => /history/i.test(reason))).toBe(true);
+});
+it('requires the live 2s positive control and 5s idle control at their exact ruled boundaries', async () => {
+    const m = await support();
+    expect(m.controlFailures({ positiveLatenessMs: 1900, idleLatenessMs: 99.99, idleWallMs: 5000 })).toEqual([]);
+    expect(m.controlFailures({ positiveLatenessMs: 1899.99, idleLatenessMs: 0, idleWallMs: 5000 }).some((reason: string) => /positive/i.test(reason))).toBe(true);
+    expect(m.controlFailures({ positiveLatenessMs: 2000, idleLatenessMs: 100, idleWallMs: 5000 }).some((reason: string) => /idle/i.test(reason))).toBe(true);
+    expect(m.controlFailures({ positiveLatenessMs: 2000, idleLatenessMs: 0, idleWallMs: 4999 }).some((reason: string) => /idle/i.test(reason))).toBe(true);
+});
+it('refuses missing or non-finite gauge readings instead of treating an unobserved gauge as quiet', async () => {
+    const m = await support();
+    expect(m.measurementFailures({ sampler: { maxLatenessMs: NaN }, rssGrowthBytes: 0 }).length).toBeGreaterThan(0);
+    expect(m.measurementFailures({ sampler: { maxLatenessMs: 0 }, rssGrowthBytes: undefined }).length).toBeGreaterThan(0);
+    expect(m.controlFailures({ positiveLatenessMs: NaN, idleLatenessMs: 0, idleWallMs: 5000 }).length).toBeGreaterThan(0);
+});
