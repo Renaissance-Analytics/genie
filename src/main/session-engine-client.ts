@@ -1,3 +1,4 @@
+import type { StreamEvent } from '../core/stream-event.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -76,6 +77,7 @@ export type Awaitable<T> = T | Promise<T>;
 /** What main.ts handed its in-process SessionHost, minus what runs on the host. Same names, same meanings. */
 export interface EngineClientOptions {
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
+    readonly onCarryOverSent?: (agentId: AgentId) => void;
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
     readonly onTurnNumbered?: (agentId: AgentId, n: number) => void;
     readonly onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
@@ -428,6 +430,7 @@ export class SessionEngineClient {
         const o = this.#options;
         switch (c.name) {
             case 'threadId': o.onThreadId?.(c.agentId as AgentId, c.threadId); return;
+            case 'carryOverSent': o.onCarryOverSent?.(c.agentId as AgentId); return;
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;
             case 'action': o.onAction?.(c.agentId as AgentId, c.kind as AgentActionKind); return;
@@ -947,6 +950,11 @@ export class SessionEngineClient {
 
     ended(agentId: AgentId): Promise<StopVerdict | null> {
         return this.#value<StopVerdict | null>('engine.ended', [agentId], null);
+    }
+
+    /** The agent's newest recorded rows, bounded in rows and bytes, as the host reads them from its own store (`SessionHost.historyRows`). */
+    historyRows(agentId: AgentId, options: { limit: number; maxBytes: number }): Promise<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }> {
+        return this.#value<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }>('engine.historyRows', [agentId, { limit: options.limit, maxBytes: options.maxBytes }], { rows: [], cut: false });
     }
 
     async settled(): Promise<void> {

@@ -1149,7 +1149,7 @@ function AgentViewBody({
                                                     <section data-rail="provider" data-agent-provider={agent.provider}>
                                                         <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h3>
                                                         <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: providerName(p) }))} prefix={<ProviderLogo provider={agent.provider} />} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
-                                                        <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its name, inbox and history stay; it starts a new conversation on the new provider.')}{outcomeFor('provider')}</p>
+                                                        <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its conversation comes with it. Switching back resumes the old one.')}{outcomeFor('provider')}</p>
                                                     </section>
                                                     {/* MODEL: the PROVIDER's list (prism-acp 0.22), what the agent starts with, and what it runs. Never one Genie made up. */}
                                                     {has.has('model') ? (() => {

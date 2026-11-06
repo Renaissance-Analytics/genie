@@ -29,14 +29,14 @@ describe('which agents a workspace brought (pure)', () => {
         expect(list[0]).toEqual({ name: 'atlas', provider: 'claude', instructions: '.agents/atlas/AGENT.md', refusal: null });
     });
 
-    it('the provider is the AGENT.md’s own word (`tuis:`): its first provider Genie 2 runs; none it runs is a refusal', () => {
+    it('the provider is Genie’s default; an old `tuis:` line is a hint only (its first provider Genie runs), never a refusal (Tynn story #380)', () => {
         const [codex, inline, aider] = importedAgents({
             files: [{ folder: 'coder', text: persona('tuis:\n  - codex\n  - claude') }, { folder: 'inline', text: persona('tuis: [aider, claude]') }, { folder: 'old', text: persona('tuis: [aider]') }],
             registered: [],
         });
         expect(codex).toMatchObject({ name: 'coder', provider: 'codex', refusal: null });
         expect(inline).toMatchObject({ provider: 'claude', refusal: null });
-        expect(aider).toMatchObject({ provider: null, refusal: expect.stringMatching(/tuis: aider.*claude or codex/) });
+        expect(aider).toMatchObject({ provider: 'claude', refusal: null });
     });
 
     it('Genie 1’s reserved names are refused — unless the workspace is granted THAT one term', () => {
