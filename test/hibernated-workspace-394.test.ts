@@ -31,6 +31,7 @@ afterEach(async () => { vi.restoreAllMocks(); await rm(dir, { recursive: true, f
 
 describe('story 394: a hibernated workspace supplies no data', () => {
     it('a hidden duplicate name cannot shadow an active public mail address', async () => {
+        await store.writeWorkspaces([{ id: 'ghost', path: '/ghost', asleep: true }, { id: 'awake', path: '/awake' }]);
         await store.writeAgents([{ ...awake, name: 'Dormant' }, ghost]); await registry.refresh();
         registry.setWorkspaceNamer(() => 'ghost');
         const refusal = (registry as unknown as { mailRefusal?: (text: string) => string | null }).mailRefusal;

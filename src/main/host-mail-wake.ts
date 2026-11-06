@@ -46,6 +46,10 @@ export function wireHostMailWake(p: {
         cap: agentCapFrom(p.settings.snapshotFor(record.workspaceId)),
     });
     const wake = async (agentId: string): Promise<boolean> => {
+        if (!p.registry.mailParticipantVisible(agentId)) {
+            p.log('a notice waits: its workspace is hibernating, so nothing is started');
+            return false;
+        }
         const record = p.registry.find(agentId);
         if (!record) return false;
         // SAFE MODE (Tynn #386): no stopped agent is started for its mail or IssueWatch's push. A running one (the person

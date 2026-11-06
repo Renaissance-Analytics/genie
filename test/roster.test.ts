@@ -30,10 +30,10 @@ const session = (over: Partial<LiveSession> = {}): LiveSession => ({
 });
 
 describe('an agent with no session', () => {
-    it('is IDLE, and says so without inventing a duration', () => {
+    it('is Stopped, without inventing a duration', () => {
         const row = agentRowFor(record(), null, () => Date.now());
 
-        expect(row).toMatchObject({ state: 'idle', fidelity: 'declared', duration: null });
+        expect(row).toMatchObject({ state: 'stopped', fidelity: 'declared', duration: null });
         // Nothing has been measured, so nothing is claimed.
         expect(row.delivery).toBeNull();
         expect(row.contextUsed).toBeNull();

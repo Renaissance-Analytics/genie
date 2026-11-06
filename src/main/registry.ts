@@ -376,6 +376,17 @@ export class Registry {
         return () => this.#listeners.delete(listener);
     }
 
+    /** Child windows need membership/hibernation changes, without the main window's activity-rate snapshots. */
+    subscribeWorkspaceVisibility(listener: (snapshot: GenieSnapshot) => void): () => void {
+        const key = () => JSON.stringify(this.#workspaces.map((w) => [w.id, w.asleep === true]));
+        let previous = key();
+        return this.subscribe((snapshot) => {
+            const next = key();
+            if (next === previous) return;
+            previous = next; listener(snapshot);
+        });
+    }
+
     /**
      * Which agent's RECORD changed — a setting saved, its provider switched, its thread cleared. The
      * snapshot carries no detail, and the Agent view reads its settings from the agent's detail, so

@@ -49,8 +49,14 @@ function render(rows: readonly AgentRow[], workspaces = WORKSPACES): string {
 function rowHtml(html: string, id: string): string {
     const start = html.indexOf(`data-agent="${id}"`);
     expect(start, `row ${id} is in the markup`).toBeGreaterThan(-1);
-    const next = html.indexOf('data-agent="', start + 20);
-    return html.slice(start, next === -1 ? undefined : next);
+    const root = html.lastIndexOf('<div', start);
+    const tags = /<\/?div\b[^>]*>/g; tags.lastIndex = root;
+    let depth = 0;
+    for (let tag = tags.exec(html); tag; tag = tags.exec(html)) {
+        depth += tag[0].startsWith('</') ? -1 : 1;
+        if (depth === 0) return html.slice(root, tags.lastIndex);
+    }
+    throw new Error(`row ${id} did not close`);
 }
 
 describe('the grid is the board\u2019s, exactly', () => {
@@ -205,19 +211,20 @@ describe('workspaces', () => {
         const html = render([row({ id: 'a', workspaceId: 'tynn' })]);
 
         expect(html).toContain('data-add-agent="fancy"');
-        expect(html).toContain('No agents');
+        expect(html).toContain('has no agents yet');
         // The populated one does not get the offer.
         expect(html).not.toContain('data-add-agent="tynn"');
     });
 
-    it('shows the workspace path and a summary that never says zero', () => {
+    it('names the workspace in each agent row and keeps nonzero census chips', () => {
         const html = render([
             row({ id: 'a', workspaceId: 'tynn' }),
             row({ id: 'b', workspaceId: 'tynn', state: 'waiting', ask: 'ok?' }),
         ]);
 
-        expect(html).toContain('C:/_Projects/tynn.ai');
-        expect(html).toContain('2 agents · 1 waiting');
+        expect(rowHtml(html, 'a')).toContain('tynn.ai');
+        expect(rowHtml(html, 'b')).toContain('tynn.ai');
+        expect(html).toMatch(/data-chip="waiting"[^>]*>[\s\S]*?1 waiting/);
         expect(html).not.toContain('0 broken');
     });
 
@@ -308,10 +315,10 @@ describe('the column headers cannot spill out of their row', () => {
          */
         const html = render([row()], [{ id: 'tynn', path: 'C:/x' }]);
 
-        const headerRow = html.slice(html.indexOf('uppercase'), html.indexOf('data-workspace='));
+        const headerRow = html.slice(html.indexOf('uppercase'), html.indexOf('data-dashboard-list='));
         const spans = [...headerRow.matchAll(/<span[^>]*>/g)];
 
-        expect(spans.length).toBe(6);
+        expect(spans.length).toBe(7);
         expect(spans.filter((s) => !s[0].includes('truncate'))).toEqual([]);
     });
 

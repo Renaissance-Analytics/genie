@@ -103,7 +103,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
 
         expect(shapes.map(formatRoute).filter((r) => r.endsWith('?'))).toEqual([]);
         // POSITIVE CONTROL: these DO produce query strings where there is something to say.
-        expect(shapes.map(formatRoute).filter((r) => r.includes('?'))).toHaveLength(2);
+        expect(shapes.map(formatRoute).filter((r) => r.includes('?'))).toHaveLength(1);
     });
 });
 

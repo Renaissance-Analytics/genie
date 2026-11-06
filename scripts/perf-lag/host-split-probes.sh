@@ -90,7 +90,9 @@ probe "client-resubscribes" src/main/session-engine-client.ts \
 # main x host split: Cooling (#1433) reaches the window through the host replica
 probe "cooling-end-pushed" src/core/session.ts \
     "            this.#coolingCancel = null;
-            this.#changed();" "            this.#coolingCancel = null;" \
+            this.#startIdle();
+            this.#changed();" "            this.#coolingCancel = null;
+            this.#startIdle();" \
     test/engine-cooling-replica.test.ts "each step pushed to the window"
 
 # P3.1: Genie's MCP server and the stores agents write to, in genie-host
@@ -99,7 +101,7 @@ probe "host-tool-refuses-without-window" src/main/mcp-host-tools.ts \
     test/mcp-host-tools.test.ts "with NO window: refused AT ONCE"
 
 probe "replica-follows-mail" src/main/agent-stores-host.ts \
-    "        this.#emit({ store: 'inbox', kind: 'delta', appended, updated, removed, cursors: { ...mail.cursors } });" "" \
+    "        this.#emit({ store: 'inbox', kind: 'delta', appended, updated, removed, cursors: { ...mail.cursors }, ...(mail.filtered ? { filtered: true } : {}) });" "" \
     test/agent-stores-contract.test.ts "after an agent sends"
 
 probe "dump-before-ready" src/main/session-engine-server.ts \

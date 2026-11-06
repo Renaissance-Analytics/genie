@@ -125,7 +125,7 @@ describe('on launch', () => {
     it('lists every site each workspace’s project.json declares — including the ones Genie 2 cannot serve, each with its reason', async () => {
         const s = await launch();
         const sites = await sitesOf(s);
-        expect(sites.map((x) => x.host).sort()).toEqual(['api.gen', 'blog.gen', 'docs.gen', 'legacy.gen', 'shop.gen', 'wallet.gen', 'web.acme.gen']);
+        expect(sites.map((x) => x.host).sort()).toEqual(['api.gen', 'docs.gen', 'legacy.gen', 'shop.gen', 'wallet.gen', 'web.acme.gen']);
         const wallet = sites.find((x) => x.host === 'wallet.gen')!;
         expect(wallet).toMatchObject({ workspaceId: 'acme', state: 'unservable' });
         expect(wallet.problem).toMatch(/container/);
@@ -152,11 +152,11 @@ describe('on launch', () => {
         expect(s.routes().map((r) => r.host).sort()).toEqual(['api.gen', 'legacy.gen', 'shop.gen', 'web.acme.gen']);
     });
 
-    it('a disabled site, and every site of a hibernating workspace, is listed but NOT started', async () => {
+    it('a disabled awake site stays listed; hibernated sites are hidden and neither starts', async () => {
         const s = await launch();
         const sites = await sitesOf(s);
         expect(sites.find((x) => x.host === 'docs.gen')).toMatchObject({ state: 'stopped', processIds: [] });
-        expect(sites.find((x) => x.host === 'blog.gen')).toMatchObject({ state: 'stopped', workspaceId: 'sleepy', processIds: [] });
+        expect(sites.some((x) => x.workspaceId === 'sleepy')).toBe(false);
         expect(opened.some((o) => o.cwd.startsWith(sleepy))).toBe(false);
         expect(opened.some((o) => o.cwd === join(acme, 'repos', 'docs-site'))).toBe(false);
         // Positive control in the same run: the scan does find processes started in acme (shop's two, api's one, web.acme's two).
@@ -242,33 +242,35 @@ describe('a site created or removed in Hosting is kept in the envelope', () => {
 });
 
 describe('the hosts file follows the CONFIGURED sites (S4)', () => {
-    it('carries every servable site not declared disabled — running or not, asleep or awake — written ONCE for the whole boot', async () => {
+    it('carries configured awake sites and omits hibernated declarations, written once for the whole boot', async () => {
         const s = await launch();
-        // docs is `enabled: false`; wallet cannot be served; web.acme can since S5; blog's workspace is asleep, but blog is configured.
-        expect(s.configuredHosts().sort()).toEqual(['api.gen', 'blog.gen', 'legacy.gen', 'shop.gen', 'web.acme.gen']);
+        // docs is disabled; wallet cannot be served; blog's hibernated envelope supplies no configuration.
+        expect(s.configuredHosts().sort()).toEqual(['api.gen', 'legacy.gen', 'shop.gen', 'web.acme.gen']);
         expect(hostsWrites).toBe(1);
-        for (const h of ['api.gen', 'blog.gen', 'legacy.gen', 'shop.gen', 'web.acme.gen']) expect(hostsContent).toContain(`127.0.0.1 ${h}\n::1 ${h}\n`);
+        for (const h of ['api.gen', 'legacy.gen', 'shop.gen', 'web.acme.gen']) expect(hostsContent).toContain(`127.0.0.1 ${h}\n::1 ${h}\n`);
+        expect(hostsContent).not.toContain('blog.gen');
         expect(hostsContent).not.toContain('docs.gen');
         expect(hostsContent).not.toContain('wallet.gen');
     });
 
-    it('the person’s Stop and Start, and a workspace waking, write nothing; a site created in Hosting is one write', async () => {
+    it('Stop/Start preserve the hosts file; redock and a new site each add their newly visible host once', async () => {
         const s = await launch();
         expect(hostsWrites).toBe(1);
         await handleFeatureAction(s, { kind: 'hosting.stopSite', siteId: 'site_shop' }, state());
         await handleFeatureAction(s, { kind: 'hosting.startSite', siteId: 'site_shop' } as never, state());
+        expect(hostsWrites).toBe(1);
         workspaces = [{ id: 'acme', path: acme }, { id: 'sleepy', path: sleepy, asleep: false }];
         for (const l of listeners) l();
         await settle();
         expect((await sitesOf(s)).find((x) => x.host === 'blog.gen')).toMatchObject({ state: 'running' });
-        expect(hostsWrites).toBe(1);
+        expect(hostsWrites).toBe(2);
         // Positive control in the same run: a new site is exactly one write.
         await handleFeatureAction(s, {
             kind: 'hosting.createSite', workspaceId: 'acme', repoPath: join(acme, 'repos', 'new'),
             form: { name: 'fresh', mode: 'static', devServer: null, hostPort: null, root: 'build', spa: true },
         }, state());
         await settle();
-        expect(hostsWrites).toBe(2);
+        expect(hostsWrites).toBe(3);
         expect(hostsContent).toContain('127.0.0.1 fresh.gen');
     });
 });
