@@ -22,6 +22,13 @@ import { droneRefusal, type WorkstationRole } from '../core/workstation-role.js'
 import type { AppSourceKind } from '../core/app-inbox.js';
 import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
 import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
+import { isLocalFilesMethod } from '../core/local-files.js';
+import { invokeLocalFiles, type LocalFilesDeps } from './local-files-api.js';
+import type { FilesWatchPort } from './local-files-watches.js';
+import { isLocalDraftMethod } from '../core/local-drafts.js';
+import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js';
+import { isLocalArtboardMethod } from '../core/local-artboard.js';
+import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -61,6 +68,10 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    artboard?: LocalArtboardPort;
+    chatDrafts?: LocalDraftsStore;
+    filesWatch?: FilesWatchPort;
+    localFiles?: LocalFilesDeps;
     localOwner?: LocalOwnerDeps;
     /** The timer and clock the agent events are coalesced on (core/coalesce.ts). Default: the real ones. */
     schedule?: (ms: number, fn: () => void) => () => void;
@@ -232,6 +243,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     };
 
     const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+        if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
+        if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
+        if (isLocalArtboardMethod(method)) return invokeLocalArtboard(deps.artboard, method, args);
         switch (method) {
             case 'appInbox.state':
                 return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };
@@ -590,6 +604,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     const terminalWorkspaces = new Map<string, string>();
     return {
         invoke,
+        ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
         // A terminal's workspace, remembered once seen: its exit is pushed after it has left the list.
         workspaceOfTerminal: (terminalId) => {
@@ -618,6 +633,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.updates?.onChange((state) => { listener('updates', state); listener(LOCAL_EVENTS.updates, state); }) ?? (() => {}),
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
+                deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };

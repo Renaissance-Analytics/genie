@@ -80,6 +80,11 @@ export interface UpdaterPort {
     download(onProgress: (percent: number) => void): Promise<void>;
     /** Quits and runs the installer. Does not return in the real implementation. */
     quitAndInstall(): void;
+    /**
+     * Make the install ready BEFORE anything is stopped (P5b: the helper has the update in hand). A rejection stops the
+     * install there, in words, with every agent and site still running. Absent = nothing to make ready.
+     */
+    prepareInstall?(): Promise<void>;
 }
 
 /**
@@ -118,6 +123,10 @@ export interface UpdateHostOptions {
     runningVersion?: string;
     /** Genie's published releases (GitHub's releases API); absent = no changelog is fetched. */
     releases?: () => Promise<readonly ReleaseLike[]>;
+    /** What else the install stops, after the agents and before the teardown scan (P5b: genie-host's hosting, P5a.3's order). */
+    stopHosted?: () => Promise<void>;
+    /** Other pids whose trees the teardown scan leaves alone (P5b: the updater helper, the window that asked). */
+    spare?: () => readonly number[];
 }
 
 /**
@@ -327,6 +336,19 @@ export class UpdateHost {
 
     private async finishInstall(live: ReadonlyArray<{ id: string; name: string }>): Promise<InstallResult> {
         const progress = (installing: InstallProgress): void => { this.set({ ...this.current, phase: 'installing', installing }); };
+        // READY BEFORE ANYTHING STOPS (P5b): the helper has the update in hand, or nothing is stopped and the person is told.
+        if (this.options.port.prepareInstall) {
+            try {
+                await this.options.port.prepareInstall();
+            } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error);
+                const { installing: _dropped, ...rest } = this.current;
+                this.set({ ...rest, phase: 'error', error: message });
+                const result: InstallResult = { killed: [], report: `Not installed: ${message}. Nothing was stopped.` };
+                this.last = result;
+                return result;
+            }
+        }
         // §7.4: an upgrade ends every agent session and does not revive them — waited for, bounded, never held on main.
         let stillStopping = 0;
         if (this.options.agents) {
@@ -339,10 +361,12 @@ export class UpdateHost {
             if (!ended) stillStopping = left;
         }
         progress({ step: 'processes', agents: live.length, left: stillStopping });
+        // What else the install stops before the scan (P5b: genie-host's sites and front door, P5a.3's order; containers stay).
+        await this.options.stopHosted?.().catch(() => undefined);
         const orphans = orphansUnder(
             await this.options.processes(),
             this.options.installDir,
-            this.options.ownPid,
+            [this.options.ownPid, ...(this.options.spare?.() ?? [])],
             this.options.caseInsensitive,
         );
         await Promise.all(orphans.map((p) => Promise.resolve(this.options.kill(p.pid)).catch(() => false)));

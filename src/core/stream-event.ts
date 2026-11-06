@@ -163,6 +163,11 @@ export type StreamEvent =
           tasks?: BackgroundTask[];
           /** One background task's event — started, updated, ended; absent when the notice is not one. */
           task?: TaskEvent;
+          /**
+           * A PROVIDER SWITCH'S CARRY-OVER went with this turn (Tynn story #380, core/carry-over.ts): where it came from, how
+           * many turns, and the exact text sent. Minted by the session, never read off the wire, never carried again.
+           */
+          carried?: { from: string; turns: number; text: string };
       }
     /**
      * A DECISION on a permission request — minted by the session when the human answers (or the session stops with

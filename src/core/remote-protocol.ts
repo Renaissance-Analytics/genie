@@ -1,5 +1,9 @@
 import { BLOB_METHODS } from './local-blobs.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
+import { FILES_WATCH_METHODS } from './local-files-watch.js';
+import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
+import { LOCAL_DRAFT_METHODS, type LocalDraftMethod } from './local-drafts.js';
+import { LOCAL_ARTBOARD_METHODS, type LocalArtboardMethod } from './local-artboard.js';
 
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie.
@@ -118,6 +122,9 @@ export const REMOTE_METHODS = [
     'files.open',
     'files.readMedia',
     'files.upload',
+    ...LOCAL_FILES_METHODS,
+    ...LOCAL_DRAFT_METHODS,
+    ...LOCAL_ARTBOARD_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -128,11 +135,11 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
@@ -253,6 +260,9 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'files.open': 'read',
     'files.readMedia': 'read',
     'files.upload': 'write',
+    ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
+    ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
+    ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
     addWorkspace: 'host-only',
     takeOver: 'host-only',
     // A provider's login opens a window on the host, for the person at it: like Take Over.

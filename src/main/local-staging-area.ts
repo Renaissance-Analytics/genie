@@ -3,7 +3,7 @@ import { lstat, mkdir, readdir, rm, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { systemProcessTree, type ProcessInfo } from '../core/process-tree.js';
 import { runtimeDir } from './paths.js';
-import { restrictPrivateDirectories } from './private-credentials.js';
+import { secureStagingDirectories } from './staging-permissions.js';
 import { LocalUploads } from './local-uploads.js';
 
 type ProcessReader = () => Promise<readonly ProcessInfo[] | null>;
@@ -61,7 +61,7 @@ export class LocalStagingArea {
                 if (table !== null) await area.#removeDead(entries, table);
                 await mkdir(area.directory, { recursive: true, mode: 0o700 }); await realDirectory(area.directory);
                 // Both directories have a verified private ACL; this process's protected folder is independent of another host's.
-                await restrictPrivateDirectories([root, area.directory]);
+                await secureStagingDirectories([root, area.directory]);
                 return area;
             })();
             areas.set(key, opening);
@@ -75,6 +75,22 @@ export class LocalStagingArea {
         return new LocalUploads({ root: this.directory, ...(now ? { now } : {}) });
     }
 
+    /** Post-startup maintenance inspects only an existing root; it creates no directory and starts no ACL helper. */
+    static async sweepOld(home: string, deps: { readProcesses?: ProcessReader; signal?: AbortSignal } = {}): Promise<void> {
+        if (deps.signal?.aborted) return;
+        const root = resolve(runtimeDir(home), 'local-staging');
+        try { await realDirectory(root); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+        if (deps.signal?.aborted) return;
+        // A process that creates its folder during the fresh read is not among these deletion candidates.
+        const entries = await readdir(root, { withFileTypes: true });
+        if (deps.signal?.aborted || !entries.some(e => folderOwner(e.name) && (e.isDirectory() || e.isSymbolicLink()))) return;
+        const read = deps.readProcesses ?? readProcesses, table = await read();
+        if (deps.signal?.aborted) return;
+        const area = new LocalStagingArea(root, self(table), read);
+        await area.#removeDead(entries, table!, deps.signal);
+    }
+
     async sweep(): Promise<void> {
         await realDirectory(this.root);
         const entries = await readdir(this.root, { withFileTypes: true }), table = await this.#read();
@@ -82,16 +98,19 @@ export class LocalStagingArea {
         await this.#removeDead(entries, table!);
     }
 
-    async #removeDead(entries: readonly Dirent[], table: readonly ProcessInfo[]): Promise<void> {
+    async #removeDead(entries: readonly Dirent[], table: readonly ProcessInfo[], signal?: AbortSignal): Promise<void> {
         for (const entry of entries) {
+            if (signal?.aborted) return;
             const owner = folderOwner(entry.name);
             if (!owner || (!entry.isDirectory() && !entry.isSymbolicLink())) continue;
             const matching = table.filter(p => p.pid === owner.pid);
             // Missing/invalid birth times are unknown, not proof that the recorded process has gone.
             if (matching.some(p => !Number.isSafeInteger(p.started) || p.started <= 0 || p.started === owner.started)) continue;
             await realDirectory(this.root);
+            if (signal?.aborted) return;
             const path = join(this.root, entry.name);
             const info = await lstat(path).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; });
+            if (signal?.aborted) return;
             if (info?.isSymbolicLink()) await unlink(path);
             else if (info?.isDirectory()) await rm(path, { recursive: true, force: true });
         }

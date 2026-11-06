@@ -26,7 +26,8 @@ export type SpawnMethod = (typeof SPAWN_METHODS)[number];
  */
 export type PtyTag =
     | { readonly kind: 'process'; readonly processId: string; readonly workspaceId: string }
-    | { readonly kind: 'terminal'; readonly workspaceId: string; readonly shell: string };
+    // `disposable`: a throwaway terminal (Tynn story #378) — never adopted; it ends with its window.
+    | { readonly kind: 'terminal'; readonly workspaceId: string; readonly shell: string; readonly disposable?: true };
 
 /** One live pty, as `pty.list` answers it. `tag` is null for a pty opened without one. */
 export interface ListedPty {

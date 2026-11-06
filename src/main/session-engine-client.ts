@@ -1,3 +1,4 @@
+import type { StreamEvent } from '../core/stream-event.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -39,12 +40,22 @@ import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
+import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-host.js';
+import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-inbox-host.js';
+import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
+import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
+import type { BrowserEvent } from './browser-service.js';
 import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { HostMcp, WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
+import { UpdatesReplica } from './updates-replica.js';
+import type { UpdateState } from './updater.js';
+import type { UpdateFailedRecord } from './updates-host.js';
+import { IssueWatchReplica } from './issue-watch-replica.js';
+import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -66,6 +77,7 @@ export type Awaitable<T> = T | Promise<T>;
 /** What main.ts handed its in-process SessionHost, minus what runs on the host. Same names, same meanings. */
 export interface EngineClientOptions {
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
+    readonly onCarryOverSent?: (agentId: AgentId) => void;
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
     readonly onTurnNumbered?: (agentId: AgentId, n: number) => void;
     readonly onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
@@ -79,8 +91,10 @@ export interface EngineClientOptions {
     readonly onOpenFileLater?: (call: ForwardedToolCall) => void;
     /** A tool's moment: a glow, a thumbs-up, an action signal. */
     readonly onToolSignal?: (signal: unknown) => void;
-    /** Each kept process's app-inbox credential, for the host's process book (P3.3c). */
-    readonly appEnvs?: (processes: ReadonlyArray<{ id: string; name: string; workspaceId: string }>) => Record<string, Record<string, string>>;
+    /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
+    readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
+    /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
+    readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
      * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
@@ -136,10 +150,16 @@ export class SessionEngineClient {
     /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
     readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
     readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
+    /** The board views this window follows in the host (P5c), sent again after a reconnect: the host dropped them with the link. */
+    readonly #boardViews = new Map<string, string>();
+    readonly #boardListeners = new Set<(event: TynnBoardHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
+    #hosting: HostingReplica | null = null;
+    #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #flows: FlowsReplica | null = null;
+    readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
     #tynn: TynnAccountReplica | null = null;
     #github: GithubAccountReplica | null = null;
     #keyring: KeyringReplica | null = null;
@@ -264,6 +284,13 @@ export class SessionEngineClient {
     }
 
     /** End the link from this side (a quit): no reconnect is asked for. */
+    /** The window's environment NOW, to the host (P5a.2): after a Check and repair, what the host starts next reads it. */
+    async pushEnv(): Promise<void> {
+        const env = Object.fromEntries(Object.entries((this.#options.env ?? (() => process.env))()).filter((e): e is [string, string] => typeof e[1] === 'string'));
+        const reply = await this.call('engine.windowEnv', [env]);
+        if (!reply.ok) throw new Error(reply.reason);
+    }
+
     disconnect(): void {
         const t = this.#transport;
         this.#transport = null;
@@ -283,6 +310,7 @@ export class SessionEngineClient {
         void this.call('engine.records', [this.#options.records?.() ?? []]);
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
         for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
+        for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
     }
 
     #onEvent(channel: string, payload: unknown): void {
@@ -308,11 +336,34 @@ export class SessionEngineClient {
             case 'terminals.event':
                 this.terminals().apply(payload as TerminalsEvent);
                 return;
+            case 'browser.event':
+                for (const listener of [...this.#browserListeners]) listener(payload as BrowserEvent);
+                return;
             case 'flows.event':
                 this.flows().apply(payload as FlowsEvent);
                 return;
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
+                return;
+            case 'appInbox.dump':
+                this.appInbox().rebase(payload as AppInboxDump);
+                return;
+            case 'appInbox.event':
+                this.appInbox().apply(payload as AppInboxEvent);
+                return;
+            case 'hosting.dump':
+                this.hosting().rebase(payload as HostingDump);
+                return;
+            // genie-host's updater (P5b): its whole state, on this window's local link only.
+            case 'updates.dump':
+            case 'updates.event':
+                this.updates().rebase(payload as UpdateState);
+                return;
+            case 'updates.failed':
+                this.updates().failedInstall(payload as UpdateFailedRecord);
+                return;
+            case 'hosting.event':
+                this.hosting().apply(payload as HostingEvent);
                 return;
             case 'supervisor.dump':
                 this.supervisor().rebase(payload as SupervisorDump);
@@ -344,6 +395,15 @@ export class SessionEngineClient {
             case 'files.event':
                 for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
                 return;
+            case 'issueWatch.dump':
+                this.issueWatch().apply({ kind: 'dump', dump: payload as IssueWatchDump });
+                return;
+            case 'issueWatch.event':
+                this.issueWatch().apply(payload as IssueWatchHostEvent);
+                return;
+            case 'tynnBoard.event':
+                for (const l of [...this.#boardListeners]) l(payload as TynnBoardHubEvent);
+                return;
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
                 return;
@@ -370,6 +430,7 @@ export class SessionEngineClient {
         const o = this.#options;
         switch (c.name) {
             case 'threadId': o.onThreadId?.(c.agentId as AgentId, c.threadId); return;
+            case 'carryOverSent': o.onCarryOverSent?.(c.agentId as AgentId); return;
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;
             case 'action': o.onAction?.(c.agentId as AgentId, c.kind as AgentActionKind); return;
@@ -381,13 +442,13 @@ export class SessionEngineClient {
         }
     }
 
-    /** The host asks the window: a window tool's call, and each process's app-inbox credential. */
+    /** The host asks the window: a window tool's call, and an elevation. */
     async #answer(id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: Record<string, unknown>;
         try {
-            if (method === 'client.appEnvs') {
-                const list = Array.isArray(args[0]) ? (args[0] as Array<{ id: string; name: string; workspaceId: string }>) : [];
-                reply = { kind: 'result', id, ok: true, value: this.#options.appEnvs?.(list) ?? {} };
+            if (method === 'client.elevate') {
+                if (!this.#options.elevate) throw new Error('this window runs no elevation');
+                reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
@@ -488,6 +549,41 @@ export class SessionEngineClient {
     }
 
     /**
+     * genie-host's front door, service engines and site routes (P5a), as this window reads and drives them: the dump
+     * arrives before `engine.ready`, so a connected window reads them synchronously.
+     */
+    appInbox(): AppInboxReplica {
+        this.#appInbox ??= new AppInboxReplica(async (method, args) => {
+            const reply = await this.call('engine.appInbox', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#appInbox;
+    }
+
+    #updates: UpdatesReplica | null = null;
+
+    /** genie-host's updater (P5b), as this window reads and drives it. */
+    updates(): UpdatesReplica {
+        this.#updates ??= new UpdatesReplica(async (method, args) => {
+            const reply = await this.call('engine.updates', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        }, process.pid);
+        return this.#updates;
+    }
+
+    /** genie-host's app door and its keys (P5a.2), as this window reads and changes them. */
+    hosting(): HostingReplica {
+        this.#hosting ??= new HostingReplica(async (method, args) => {
+            const reply = await this.call('engine.hosting', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        }, this.#options.phpCgiFor ? { phpCgiFor: this.#options.phpCgiFor } : {});
+        return this.#hosting;
+    }
+
+    /**
      * genie-host's process supervisor, as this window drives it (P3.3b): sites, the front door and the Processes view run
      * their processes there, so they live — and restart — with the UI closed.
      */
@@ -570,6 +666,18 @@ export class SessionEngineClient {
     }
 
     /** genie-host's flows, as this window reads, edits, arms and runs them (P3.3d). */
+    /** Between the window and the Genie browser's process (P2b: browser-service.ts). */
+    async browserCall(method: string, args: readonly unknown[]): Promise<unknown> {
+        const reply = await this.call('engine.browser', [method, [...args]]);
+        if (!reply.ok) throw new Error(reply.reason);
+        return reply.value;
+    }
+
+    onBrowserEvent(listener: (event: BrowserEvent) => void): () => void {
+        this.#browserListeners.add(listener);
+        return () => { this.#browserListeners.delete(listener); };
+    }
+
     flows(): FlowsReplica {
         this.#flows ??= new FlowsReplica(async (method, args) => {
             const reply = await this.call('engine.flows', [method, [...args]]);
@@ -587,6 +695,41 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#processBook;
+    }
+
+    #issueWatch: IssueWatchReplica | null = null;
+
+    /** genie-host's IssueWatch (P5c), as this window reads it (local links only) and asks it. */
+    issueWatch(): IssueWatchReplica {
+        this.#issueWatch ??= new IssueWatchReplica(async (method, args) => {
+            const reply = await this.call('engine.issueWatch', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#issueWatch;
+    }
+
+    /**
+     * A view follows a workspace's live board in the host (P5c); false = not linked to a Tynn project. Kept here too, so a
+     * reconnect follows it again.
+     */
+    tynnBoardWatch(viewId: string, workspaceId: string): Promise<boolean> {
+        this.#boardViews.set(viewId, workspaceId);
+        return this.#value('engine.tynnBoardWatch', [viewId, workspaceId], false).then((v) => {
+            if (v !== true) this.#boardViews.delete(viewId);
+            return v === true;
+        });
+    }
+
+    tynnBoardUnwatch(viewId: string): Promise<boolean> {
+        this.#boardViews.delete(viewId);
+        return this.#value('engine.tynnBoardUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    /** The rings and states for this window's board views. */
+    onTynnBoardEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
+        this.#boardListeners.add(listener);
+        return () => { this.#boardListeners.delete(listener); };
     }
 
     /** The batches and git results for this window's views. */
@@ -807,6 +950,11 @@ export class SessionEngineClient {
 
     ended(agentId: AgentId): Promise<StopVerdict | null> {
         return this.#value<StopVerdict | null>('engine.ended', [agentId], null);
+    }
+
+    /** The agent's newest recorded rows, bounded in rows and bytes, as the host reads them from its own store (`SessionHost.historyRows`). */
+    historyRows(agentId: AgentId, options: { limit: number; maxBytes: number }): Promise<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }> {
+        return this.#value<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }>('engine.historyRows', [agentId, { limit: options.limit, maxBytes: options.maxBytes }], { rows: [], cut: false });
     }
 
     async settled(): Promise<void> {

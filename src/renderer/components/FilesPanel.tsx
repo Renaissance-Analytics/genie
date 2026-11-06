@@ -223,7 +223,9 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
     const shownTabs = single ? tabs.filter((t) => t === single) : tabs;
     const changed = changedCount(state);
     return (
-        <section data-files-panel={workspace.id} {...(single ? { 'data-single': single } : {})} className="flex h-full min-h-0 flex-col bg-[var(--bg-0)]"
+        // SIZED BY ITS CONTAINER, NOT ITS CONTENT (Tynn story #382): in the Files tab's flex row an unsized panel was as wide as
+        // what it showed, so an image (fancy-code's FileViewer is intrinsically sized) shrank tabs, crumb and status bar to it.
+        <section data-files-panel={workspace.id} {...(single ? { 'data-single': single } : {})} className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col bg-[var(--bg-0)]"
             onKeyDown={(e) => {
                 if (!isSaveShortcut(e)) return;
                 if (activePlugin) { e.preventDefault(); if (activePlugin.dirty) activePlugin.onSave?.(); return; }
@@ -427,7 +429,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 <p className="p-4 text-sm text-[var(--fg-3)]">No file open. Pick one in the tree.</p>
                             )
                         ) : open.ok ? (
-                            <div className="flex min-h-0 flex-1 flex-col">
+                            <div data-file-column={open.path} className="flex min-h-0 min-w-0 flex-1 flex-col">
                                 {/* THE CRUMB (the board): the path, segment by segment, over the editor. */}
                                 <div data-file-crumb={open.path} className="flex shrink-0 items-center border-b border-[var(--border-1)] px-4 py-1 font-mono text-[11px] text-[var(--fg-4)]">
                                     {fileCrumb(open.path).map((seg, i) => (
@@ -444,7 +446,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                         if (kind.kind === 'office') return <p data-office-unclaimed={open.path} className="p-4 text-sm text-[var(--fg-3)]">No enabled plugin opens .{kind.officeKind} files here. Turn one on in Settings → Plugins.</p>;
                                         return kind.kind === 'media' ? (
                                             // SEAMLESS (the owner, 2026-10-21: "they shouldn't have that stupid border"): no device frame, no rounded box.
-                                            <FileViewer filename={open.path} value={open.text} {...(open.src ? { src: open.src } : {})} mediaProps={SEAMLESS_MEDIA} theme="auto" className="min-h-0 flex-1" />
+                                            <FileViewer filename={open.path} value={open.text} {...(open.src ? { src: open.src } : {})} mediaProps={SEAMLESS_MEDIA} theme="auto" className="min-h-0 w-full flex-1 [&_img]:object-scale-down" />
                                         ) : (
                                             <div data-editor-theme={theme ?? 'auto'} className="flex h-full min-h-0 flex-col">
                                             <CodeEditor className="flex h-full min-h-0 flex-col" value={open.text} language={kind.language} readOnly={!edit} wordWrap={wordWrap} {...(baseline !== undefined ? { diffBase: baseline } : {})} {...(edit ? { onChange: edit.onChange } : {})} {...(line ? { cursorLine: line, highlightLines: [line] } : {})} theme={theme ?? 'auto'}>

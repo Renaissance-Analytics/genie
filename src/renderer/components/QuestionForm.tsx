@@ -1,5 +1,6 @@
 import { Button, ContentRenderer } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
+import { CONTAINED_PROSE } from '../prose-contain.js';
 import { useState, type FormEvent } from 'react';
 import type { DeckItem } from '../../core/deck.js';
 import { toggleChoice, unansweredCount } from '../../core/deck-resolve.js';
@@ -85,21 +86,21 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
         onSubmit(selections.map((s) => [...s]), [...notes]);
     };
     return (
-        <form data-deck-form={item.id} onSubmit={submit} className="flex max-w-[72ch] flex-col gap-4 font-sans text-[13px]">
+        <form data-deck-form={item.id} onSubmit={submit} className="flex min-w-0 max-w-[72ch] flex-col gap-4 font-sans text-[13px]">
             {questions.map((q, i) => (
-                <fieldset key={i} data-deck-question={i} className="flex flex-col gap-2">
+                <fieldset key={i} data-deck-question={i} className="flex min-w-0 flex-col gap-2">
                     {showHeaders ? (
                         <legend className="mb-1 w-full">
                             <span data-question-header={i} className="rounded-sm bg-[var(--bg-3)] px-1.5 py-px text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-3)]">{q.header}</span>
                         </legend>
                     ) : null}
                     {/* The question is Markdown (§6.3): agents write bold, lists and links into it. Prose: sans, 13px, 1.6. */}
-                    <div data-question-text={i} className="min-w-0 break-words">
-                        <ContentRenderer clipboardWriter={genieClipboardWriter} value={q.question} format="markdown" lineSpacing={1.6} className="font-sans text-[13px] text-[var(--fg-1)]" />
+                    <div data-question-text={i} className="min-w-0 [overflow-wrap:anywhere]">
+                        <ContentRenderer clipboardWriter={genieClipboardWriter} value={q.question} format="markdown" lineSpacing={1.6} className={`font-sans text-[13px] text-[var(--fg-1)] ${CONTAINED_PROSE}`} />
                     </div>
                     {/* TOGGLE OPTIONS (Genie 1's): a button per option, pressed when picked; a picked option clicked again clears.
                         A radio could not be unpicked. */}
-                    <div role="group" aria-label={q.header} className="flex flex-wrap gap-1.5">
+                    <div role="group" aria-label={q.header} className="flex min-w-0 flex-wrap gap-1.5">
                         {q.options.map((o) => {
                             const on = (selections[i] ?? []).includes(o.label);
                             return (
@@ -111,7 +112,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                                     aria-pressed={on}
                                     onClick={() => pick(i, o.label, q.multiSelect === true)}
                                     title={o.description ?? undefined}
-                                    className={`justify-start max-w-full rounded-lg border px-2.5 py-1 text-left text-[13px] leading-snug ${on ? 'border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_18%,transparent)] text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
+                                    className={`justify-start max-w-full [overflow-wrap:anywhere] rounded-lg border px-2.5 py-1 text-left text-[13px] leading-snug ${on ? 'border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_18%,transparent)] text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
                                 >
                                     <span className="font-medium">{o.label}</span>
                                     {o.description ? <span className="block text-[12px] text-[var(--fg-3)]">{o.description}</span> : null}

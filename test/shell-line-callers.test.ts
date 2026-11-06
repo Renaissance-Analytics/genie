@@ -1,7 +1,10 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { LoginHost } from '../src/main/login-host.js';
+
+const scratch = mkdtempSync(join(tmpdir(), 'genie-shell-line-login-'));
 
 /** What goes into a shell line: every caller named, and what a sign-in's line may hold. */
 function host(binary: string | null) {
@@ -12,6 +15,8 @@ function host(binary: string | null) {
         runStatus: vi.fn(async () => 1),
         onSignedIn: () => {},
         binaryFor: () => binary,
+        // P7: the login's scratch is the caller's; one made here, never the OS temp folder by default.
+        scratch: () => scratch,
     });
     return { logins, opened };
 }

@@ -42,7 +42,7 @@ const rows: Row[] = [
     { name: 'restart', channel: 'genie:agent-restart', args: ['agent_a', 'fresh'], result: { ok: true, kind: 'fresh', discarded: 'thread-1' } },
     { name: 'previewDelete', channel: 'genie:agent-preview-delete', args: ['agent_a', 'delete', ['tynn', 'github']], result: { ok: true, plan } },
     { name: 'delete', channel: 'genie:agent-delete', args: ['agent_a', 'delete', ['tynn'], true], result: { ok: true, plan, handoff: 'landed' } },
-    { name: 'switchDriver', channel: 'genie:agent-switch-driver', args: ['agent_a', 'codex'], result: { ok: true, from: 'claude', to: 'codex', carries: ['identity', 'inbox', 'history', 'prompt'], discarded: 'thread-1', droppedModel: null } },
+    { name: 'switchDriver', channel: 'genie:agent-switch-driver', args: ['agent_a', 'codex'], result: { ok: true, from: 'claude', to: 'codex', carried: { turns: 2, of: 2, plan: false }, left: 'thread-1', droppedModel: null } },
     { name: 'setBudget', channel: 'genie:agent-set-budget', args: ['agent_a', 12.5], result: { ok: true, record, decision: { kind: 'unenforceable', reason: 'provider reports no cost' } } },
     { name: 'setMode', channel: 'genie:agent-set-mode', args: ['agent_a', 'automated'], result: { ok: true, record: { ...record, mode: 'automated' } } },
     { name: 'setAccessScope', channel: 'genie:agent-set-access-scope', args: ['agent_a', 'none'], result: { ok: true, record: { ...record, accessScope: 'none' } } },

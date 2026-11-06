@@ -1,5 +1,6 @@
-import { Button, Icon } from '@particle-academy/react-fancy';
+import { Button } from '@particle-academy/react-fancy';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { NO_SITE_STATE, SingleSiteBar, type SiteState } from './SingleSiteBar.js';
 
 /** What the window offers a live panel: main's view placed over the box, hidden, reloaded, or the site in the browser. */
 export interface SitePanelLive {
@@ -8,7 +9,20 @@ export interface SitePanelLive {
     readonly onBounds: (panelKey: string, host: string, bounds: { x: number; y: number; width: number; height: number }) => void;
     readonly onHide: (panelKey: string) => void;
     readonly onReload: (panelKey: string) => void;
+    readonly onBack: (panelKey: string) => void;
+    readonly onForward: (panelKey: string) => void;
+    /** What the page can do, as it changes. Answers the leaving function. */
+    readonly onState: (panelKey: string, listener: (state: SiteState) => void) => () => void;
     readonly onOpenInWindow: (host: string) => void;
+    /** Its site is out in its own window. */
+    readonly popped?: boolean;
+    readonly onPopBack?: (panelKey: string) => void;
+    /** Why this panel shows no page. */
+    readonly refused?: { readonly error: string; readonly locked?: boolean };
+    readonly onRefused?: (panelKey: string, listener: (why: { readonly error: string; readonly locked?: boolean } | null) => void) => () => void;
+    readonly onRestart?: () => void;
+    /** Whether it is out, as that changes. Answers the leaving function. */
+    readonly onPopped?: (panelKey: string, listener: (out: boolean) => void) => () => void;
 }
 
 /**
@@ -35,7 +49,22 @@ export function SitePanel({ host, onPick, live }: { host: string | null; onPick:
     if (!live) {
         return <p className="flex flex-1 items-center justify-center p-4 text-[12px] text-[var(--fg-3)]">{host} is served by the machine this window drives; it shows live in that machine’s own Genie window.</p>;
     }
-    return <LiveSite host={host} live={live} />;
+    return <PanelSite host={host} live={live} />;
+}
+
+function PanelSite({ host, live }: { host: string; live: SitePanelLive }) {
+    const [out, setOut] = useState(live.popped === true);
+    const { panelKey, onPopped } = live;
+    const subscribe = useRef(onPopped);
+    subscribe.current = onPopped;
+    useEffect(() => subscribe.current?.(panelKey, setOut), [panelKey]);
+    if (!out) return <LiveSite host={host} live={live} />;
+    return (
+        <div data-site-popped={panelKey} className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-[12px] text-[var(--fg-3)]">
+            <p>{host} is in its own window.</p>
+            <Button size="xs" type="button" data-site-action="pop-back" title="Back to the panel: the page reloads here" onClick={() => live.onPopBack?.(panelKey)}>Back to the panel (reloads)</Button>
+        </div>
+    );
 }
 
 function LiveSite({ host, live }: { host: string; live: SitePanelLive }) {
@@ -57,23 +86,28 @@ function LiveSite({ host, live }: { host: string; live: SitePanelLive }) {
     }, [panelKey, host]);
     // Off screen (the tab changed, the panel unmounted): the page is hidden and kept.
     useEffect(() => () => calls.current.onHide(panelKey), [panelKey]);
-    const button = 'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]';
+    const [state, setState] = useState<SiteState>(NO_SITE_STATE);
+    const [why, setWhy] = useState(live.refused ?? null);
+    useEffect(() => calls.current.onRefused?.(panelKey, setWhy), [panelKey]);
+    useEffect(() => calls.current.onState(panelKey, setState), [panelKey]);
     return (
         <div data-site-panel={panelKey} className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex h-7 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-2 text-[11px]">
-                <Icon name="lock" size="xs" className="text-[var(--success)]" />
-                <span className="truncate font-mono text-[var(--fg-2)]">{host}</span>
-                <span className="ml-auto flex items-center gap-1">
-                    <Button size="xs" labelClassName="contents" type="button" data-site-panel-action="reload" aria-label={`Reload ${host}`} title="Reload" className={button} onClick={() => live.onReload(panelKey)}>
-                        <Icon name="rotate-cw" size="xs" />
-                    </Button>
-                    <Button size="xs" labelClassName="contents" type="button" data-site-panel-action="open-window" title={`Open ${host} in the Genie browser`} className={button} onClick={() => live.onOpenInWindow(host)}>
-                        <Icon name="globe" size="xs" />
-                        Open in browser
-                    </Button>
-                </span>
-            </div>
-            {/* The live page is placed over this box by main. */}
+            <SingleSiteBar
+                host={host}
+                state={state}
+                where="panel"
+                onBack={() => live.onBack(panelKey)}
+                onForward={() => live.onForward(panelKey)}
+                onReload={() => live.onReload(panelKey)}
+                onPop={() => live.onOpenInWindow(host)}
+            />
+            {why ? (
+                <div data-site-refused="" className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-2 py-1 text-[11px] text-[var(--fg-2)]">
+                    {why.error}
+                    {why.locked ? <Button size="xs" type="button" data-site-action="restart" onClick={live.onRestart}>Restart</Button> : null}
+                </div>
+            ) : null}
+            {/* The live page sits over this box, in the layer (renderer/site-webview-layer.ts). */}
             <div ref={box} data-site-panel-box="" className="min-h-0 flex-1" />
         </div>
     );

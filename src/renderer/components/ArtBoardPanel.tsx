@@ -25,6 +25,7 @@ import type { GenieBridge } from '../bridge.js';
  * can read in the source.
  */
 export function ArtifactPreview({ post, full = false }: { readonly post: DisplayPost; readonly full?: boolean }) {
+    if (post.contentError) return <p role="alert" className="p-3 text-xs text-[var(--warning)]">{post.contentError}</p>;
     if (post.kind === 'html') {
         return <iframe title={post.title} sandbox="" srcDoc={post.html ?? ''} className={full ? 'block h-full w-full border-0' : 'block h-[max(16rem,calc(100cqh_-_6rem))] w-full border-0'} />;
     }

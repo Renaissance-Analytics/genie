@@ -1,4 +1,4 @@
-import { bytesToBase64 } from '../core/mobile.js';
+import { encodeLocalBase64 } from './local-base64.js';
 import { LOCAL_UPLOAD_CHUNK_BYTES, PAGE_MAX_BYTES, PAGE_MAX_ITEMS, type LocalUploadCalls, type LocalUploadClient, type MetadataItem, type MetadataPage, type PageCalls, type PageClient } from '../core/local-content.js';
 
 function checkCancelled(signal?: AbortSignal): void { if (signal?.aborted) throw new Error('the local content operation was cancelled'); }
@@ -14,7 +14,7 @@ export function localUploadClient(port: LocalUploadCalls): LocalUploadClient {
             for (let at = 0, index = 0; at < bytes.length; at += LOCAL_UPLOAD_CHUNK_BYTES, index++) {
                 checkCancelled(options.signal);
                 const end = Math.min(bytes.length, at + LOCAL_UPLOAD_CHUNK_BYTES);
-                const r = await port.chunk(opened.id, index, bytesToBase64(bytes.subarray(at, end)));
+                const r = await port.chunk(opened.id, index, encodeLocalBase64(bytes.subarray(at, end)));
                 if (r.received !== end) throw new Error('the local upload did not receive its exact chunk');
             }
             checkCancelled(options.signal); complete = true; return opened;

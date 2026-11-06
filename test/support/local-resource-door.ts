@@ -25,12 +25,12 @@ class Contents extends EventEmitter {
 }
 
 /** The actual admitted door, real host/API and same renderer client, with only host resource sources injected. */
-export async function resourceDoor(cleanups: Array<() => Promise<void>>, sources: Record<string, unknown> = {}) {
+export async function resourceDoor(cleanups: Array<() => Promise<void>>, sources: Record<string, unknown> = {}, family: Record<string, unknown> = {}) {
     const dir = await mkdtemp(join(tmpdir(), 'genie-p4-resources-'));
     const area = await LocalStagingArea.open(dir), uploads: LocalUploads[] = [];
     let seq = 0;
     const devices = await DeviceStore.open(dir, { now: Date.now, random: () => `synthetic-resource-device-${++seq}` });
-    const api = buildHostApi(protocolContractDeps(dir)), invoke = vi.spyOn(api, 'invoke');
+    const api = buildHostApi(Object.assign(protocolContractDeps(dir), family)), invoke = vi.spyOn(api, 'invoke');
     const ipc = new EventEmitter(), door = localProtocolDoor(ipc);
     let accept!: (connection: ServerConnection) => void;
     const hub = transportHub({ onConnection: listener => { accept = listener; return () => {}; } }); hub.add(door);
@@ -82,7 +82,7 @@ export async function resourceDoor(cleanups: Array<() => Promise<void>>, sources
         const c = connectRemote(transport, { kind: proof ? 'relay' : 'local' }, 'resource-fixture');
         closes.push(() => c.close()); expect(await c.ready).toEqual({ ok: true }); return c;
     }
-    return { raw, client, invoke, serialized, calls, rewrite };
+    return { raw, client, invoke, serialized, calls, rewrite, port };
 }
 
 export function resultValue<T>(r: WireMessage): T {

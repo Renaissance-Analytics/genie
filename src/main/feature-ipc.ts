@@ -62,6 +62,8 @@ import type { AskedRecord } from './attention-store.js';
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /** A part of a snapshot that took at least `ms` (genie-test-windows, job Q0: an action took 20 s with main mostly free). */
+    readonly slowPart?: { readonly ms: number; log(part: string, ms: number): void };
     /**
      * How long a snapshot waits for Docker's engine statuses before it goes out with the last read (genie#1393); absent =
      * ENGINE_STATUS_WAIT_MS. The first read ever is always waited for: there is no last one to show.
@@ -523,11 +525,16 @@ let snapshotSeq = 0;
 
 export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
     const seq = ++snapshotSeq;
+    const timed = async <T>(part: string, work: () => Promise<T>): Promise<T> => {
+        if (!ports.slowPart) return work();
+        const started = Date.now();
+        try { return await work(); } finally { const ms = Date.now() - started; if (ms >= ports.slowPart.ms) ports.slowPart.log(part, ms); }
+    };
     // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
     // 108 memories and drew skeletons until a search). A query searches.
-    const hits = state.knowledgeQuery
+    const hits = await timed('knowledge', async () => state.knowledgeQuery
         ? (await services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' })).hits
-        : (await services.knowledge.list({ scopes: 'all', limit: 200 })).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class }));
+        : (await services.knowledge.list({ scopes: 'all', limit: 200 })).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class })));
     const roster = services.agentAddresses();
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
@@ -540,10 +547,10 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}), toolKinds: flowToolDefinitions() },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
-        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
+        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems() },
         // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
         // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
-        services: { instances: await engineStatusesWithin(services, ports), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
+        services: { instances: await timed('engines', () => engineStatusesWithin(services, ports)), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: {
@@ -664,6 +671,9 @@ async function phpChoices(services: ComposedServices, ports: FeaturePorts): Prom
 
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason — except a toolchain row's, which comes back IN the snapshot, on that row (`toolchain.refusals`). */
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}, origin: FeatureOrigin = REMOTE_ORIGIN): Promise<FeatureData> {
+    // genie#1583: which half of a slow action waits, the action itself or the snapshot it answers with.
+    const actStarted = Date.now();
+    const slow = (part: string, started: number): void => { const ms = Date.now() - started; if (ports.slowPart && ms >= ports.slowPart.ms) ports.slowPart.log(part, ms); };
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
@@ -1458,6 +1468,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 case 'defer-trust-certificate':
                     services.deferTrustCertificate();
                     break;
+                case 'sync-hosts': {
+                    // What genie-host held for a window: the person approves it here, so the prompt is raised by this window.
+                    const r = await services.syncHosts();
+                    if ('error' in r) throw new Error(r.error);
+                    break;
+                }
                 case 'dismiss-main-error':
                     // Read, and put aside. Refused with its reason when nothing is wired or the item is already gone.
                     if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
@@ -1714,6 +1730,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'browser.reload':
             break;
     }
-    return featureSnapshot(services, next, ports);
+    slow(`act:${action.kind}`, actStarted);
+    const snapshotStarted = Date.now();
+    try {
+        return await featureSnapshot(services, next, ports);
+    } finally {
+        slow('snapshot', snapshotStarted);
+    }
 }
 

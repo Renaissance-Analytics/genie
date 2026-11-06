@@ -125,10 +125,10 @@ describe('two agents ask: ONE window with both in its queue', () => {
         expect(queueEntries(render(h.last()))).toHaveLength(2);
     });
 
-    it('control: one agent, one question — no queue list is drawn (nothing to pick between)', () => {
+    it('control: one agent, one question — one tab, its own (the strip is always there, so a second question moves nothing: Tynn story #378)', () => {
         const h = harness([kaiAsks]);
         h.ctl.changed();
-        expect(queueEntries(render(h.last()))).toHaveLength(0);
+        expect(queueEntries(render(h.last()))).toEqual(['q_kai']);
     });
 });
 

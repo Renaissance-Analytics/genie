@@ -46,7 +46,7 @@ import type { DeckItem } from './deck.js';
  * `stop-unverified`: an agent's stop could not be verified — a process of its run is still running, or the machine could
  * not be read (hosting plan 1.1/1.3). Not a crash: a Deck item, because "Stop" must never quietly mean "probably".
  */
-export type MainErrorKind = 'uncaught-exception' | 'unhandled-rejection' | 'stop-unverified' | 'containment-unready' | 'agent-host';
+export type MainErrorKind = 'uncaught-exception' | 'unhandled-rejection' | 'stop-unverified' | 'containment-unready' | 'agent-host' | 'update-failed';
 
 export const MAIN_ERROR_DECK_PREFIX = 'genie:main-error:';
 /** The Deck item that says how many distinct errors were replaced to keep the list bounded. */
@@ -81,6 +81,7 @@ const KIND_LABEL: Record<MainErrorKind, string> = {
     'stop-unverified': 'unverified stop',
     'containment-unready': 'uncontained start',
     'agent-host': 'agent host problem',
+    'update-failed': 'update not installed',
 };
 
 /** Whatever was thrown — an Error, a string, an object, `undefined` — as a message, its stack and the stack's top frame. */

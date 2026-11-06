@@ -92,6 +92,8 @@ describe('what the person sees', () => {
 
 describe('the login window', () => {
     function fakes(statusExit: number) {
+        // P7: the login's scratch is the caller's (`<genie root>/cache/tmp/<this process>`), never the OS temp folder.
+        const scratch = tempDir();
         const opened: Array<{ workspaceId: string; cwd: string; command?: string | undefined; shell?: boolean | undefined }> = [];
         const windows: string[] = [];
         const signedIn: string[] = [];
@@ -106,8 +108,9 @@ describe('the login window', () => {
             openWindow: (route) => windows.push(route),
             runStatus: async (command, cwd) => { statusRan.push({ command, cwd }); return statusExit; },
             onSignedIn: (provider) => signedIn.push(provider),
+            scratch: () => scratch,
         });
-        return { host, opened, windows, signedIn, statusRan, exit: (id: string, code: number) => exit!(id, code) };
+        return { host, scratch, opened, windows, signedIn, statusRan, exit: (id: string, code: number) => exit!(id, code) };
     }
 
     it('runs the provider’s login in a fresh scratch folder, in its own window that carries the notice', () => {
@@ -117,7 +120,7 @@ describe('the login window', () => {
         expect(f.opened[0]!.command).toBe('claude auth login');
         expect(f.opened[0]!.shell).toBe(true);
         expect(basename(f.opened[0]!.cwd)).toMatch(/^genie-login-claude-/);
-        expect(dirname(f.opened[0]!.cwd)).toBe(tmpdir());
+        expect(dirname(f.opened[0]!.cwd)).toBe(f.scratch);
         expect(existsSync(f.opened[0]!.cwd)).toBe(true);
         expect(f.windows).toEqual(['genie://takeover/t1?login=claude']);
     });

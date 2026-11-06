@@ -1,4 +1,6 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
+export type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
 import { localSession, type LocalProtocolControl, type WorkspaceProtocolKey } from './local-session.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { Headroom } from '../core/headroom.js';
@@ -161,10 +163,14 @@ export interface GenieBridge {
      */
     activity?: ActivityBridge;
     sitePanels?: {
-        show(panelKey: string, host: string, bounds: { x: number; y: number; width: number; height: number }): Promise<{ ok: true } | { ok: false; error: string }>;
-        hide(panelKey: string): Promise<void>;
-        reload(panelKey: string): Promise<void>;
+        /** May this site load, with its store routed? The page itself is a <webview> the window holds (site-webview-layer.ts). */
+        prepare(host: string): Promise<{ ok: true } | { ok: false; error: string; locked?: boolean }>;
+        restart(): Promise<void>;
         openWindow(host: string): Promise<void>;
+        popOut(panelKey: string, host: string): Promise<void>;
+        popBack(panelKey: string): Promise<void>;
+        popped(): Promise<ReadonlyArray<{ readonly panelKey: string; readonly host: string }>>;
+        onPoppedBack(listener: (panelKey: string) => void): () => void;
     };
     /** The Genie browser window (beta.35 item 36): this machine's Genie sites. Host-only: absent on a remote bridge. */
     /** `hosts`: the `.gen` names of the workstation a remote window is driving (main decides which browser by the window). */
@@ -277,6 +283,12 @@ export interface GenieBridge {
      * watches. The answer says whether it opened and which terminal, or why not.
      */
     takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+
+    /**
+     * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
+     * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
+     */
+    scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
 
     /** WORKSPACE OPERATIONS (§6.1). Add is preview-then-confirm: nothing is written before the plan was shown. */
     workspaces: {
@@ -566,21 +578,6 @@ export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'work
  * exists. Every call is a no-op and every list is empty, which is the honest answer: nothing
  * is opened, nothing is written, nothing is claimed. Never a fake terminal.
  */
-/** What a files view asks for beside the batches (the host split, P2.2). */
-export interface FilesViewWant {
-    readonly git?: boolean;
-    readonly repos?: readonly string[];
-}
-
-/** A batch (`paths`) or a git result (`git`) for a view's workspace. */
-export interface FilesViewEvent {
-    readonly paths?: readonly string[];
-    readonly git?: {
-        readonly tree?: Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>>;
-        readonly repos?: Readonly<Record<string, { ok: true; value: unknown } | { ok: false; error: string }>>;
-    };
-}
-
 export const NO_FILES: GenieBridge['files'] = {
     tree: () => Promise.resolve(null),
     children: () => Promise.resolve(null),
@@ -607,7 +604,8 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard'> & {
+    files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
     workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
@@ -650,6 +648,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         appInbox: local.owner.appInbox,
         deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
+        files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
     if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;

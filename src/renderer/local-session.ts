@@ -2,6 +2,7 @@ import type { LocalFramePort } from '../core/local-frame.js';
 import type { GenieBridge, LocalOwnerBridge } from './bridge.js';
 import { localTransport } from './local-transport.js';
 import { connectRemote, type RemoteClient } from './remote-bridge.js';
+import type { LocalFilesBridge } from './local-files-client.js';
 
 export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'commitsSince'
     | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'onSettingsChanged'
@@ -31,7 +32,7 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
@@ -110,6 +111,24 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     // The same admitted local client, with the same read/rejection and recovery semantics as the other moved families.
     const ownerRead = <T>(call: (owner: LocalOwnerBridge) => Promise<T>): Promise<T> => read(() => call(client!.localOwner!));
     return {
+        artboard: { read: id => read(b => b.artboard!.read(id)), review: (id, post, verdict, comment) => read(b => b.artboard!.review(id, post, verdict, comment)) },
+        chatDrafts: {
+            load: () => read(b => b.chatDrafts!.load()), save: (id, draft) => read(b => b.chatDrafts!.save(id, draft)),
+            putFile: bytes => read(b => b.chatDrafts!.putFile(bytes)), readFile: ref => read(b => b.chatDrafts!.readFile(ref)),
+            release: refs => read(b => b.chatDrafts!.release(refs)),
+        },
+        files: {
+            subscribe: (id, want, listener) => subscribe(b => b.files.subscribe!(id, want, listener)),
+            onChange: listener => subscribe(b => b.files.onChange(listener)),
+            tree: id => read(b => b.files.tree(id)), children: (id, dir) => read(b => b.files.children!(id, dir)),
+            open: (id, path) => read(b => b.files.open(id, path)), readMedia: (id, path) => read(b => b.files.readMedia!(id, path)),
+            lastCommitted: (id, path) => read(b => b.files.lastCommitted!(id, path)), state: id => read(b => b.files.state(id)), gitStatus: id => read(b => b.files.gitStatus!(id)),
+            create: (id, path, kind) => read(b => b.files.create!(id, path, kind)), rename: (id, from, to) => read(b => b.files.rename!(id, from, to)),
+            duplicate: (id, path) => read(b => b.files.duplicate!(id, path)), trash: (id, path) => read(b => b.files.trash!(id, path)),
+            readBytes: (id, plugin, path) => read(b => b.files.readBytes!(id, plugin, path)), write: (id, path, text, expected) => read(b => b.files.write(id, path, text, expected)),
+            writeBytes: (id, plugin, path, base64, expected) => read(b => b.files.writeBytes!(id, plugin, path, base64, expected)),
+        },
+        repo: { call: (op, id, rel, a, b) => read(bridge => bridge.repo!.call(op, id, rel, a, b)) },
         owner: {
             appInbox: {
                 state: (id) => ownerRead(b => b.appInbox.state(id)),
