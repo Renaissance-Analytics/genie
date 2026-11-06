@@ -90,7 +90,7 @@ describe('genie-host hears window main beat, and records a hang', () => {
         expect(r.killed).toEqual([]);
     });
 
-    it('a gap in the HOST’s own clock (sleep, the host held) re-arms the wait instead of ending a window that was asleep too', () => {
+    it('a gap in the HOST’s own clock (sleep, the host held) PAUSES the wait instead of ending a window that was asleep too', () => {
         const r = rig();
         r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
         r.second(5);
@@ -102,6 +102,56 @@ describe('genie-host hears window main beat, and records a hang', () => {
         // And it is still watching: 30 s more with no beat is a hang.
         r.second(30);
         expect(r.records.map((x) => x.kind)).toEqual(['hang']);
+    });
+
+    /*
+     * THE WAIT PAUSES, IT DOES NOT START AGAIN (omarchy-test, hang-cdp, 2026-11-06: genie-host's loop came 8–12 s late
+     * twice in every 40 s hold, each restarting every window's wait, so 30 s of silence was never reached and a real hang
+     * went uncaught). Only the host's own stalled time comes off a window's silence: a window silent for 30 s of the host's
+     * awake time is a hang, however many times the host's loop was late in between. A sleep is one large stalled span, so
+     * a window that beats after it is not.
+     */
+    it('(a) repeated 8–12 s jumps of the host\'s clock during a 60 s silence still end in a hang record', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(5);
+        // Three times: the host's loop held 9–11 s (the next tick that late), then 10 s of ordinary ticks. 65 s of wall time,
+        // 38 s of it with the host awake and the window silent throughout.
+        for (const held of [9_000, 11_000, 10_000]) { r.jump(held); r.second(1); r.second(10); }
+        expect(r.records.map((x) => x.kind)).toEqual(['hang']);
+        expect(r.killed).toEqual([4242]);
+        // Each late tick was said, with what the host itself spent meanwhile.
+        expect(r.lines.filter((l) => /clock jumped/.test(l))).toHaveLength(3);
+        expect(r.lines.find((l) => /clock jumped/.test(l))).toMatch(/the window waits pause/);
+    });
+
+    it('CONTROL for (a): the same jumps with the window beating between them: no hang', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(5);
+        for (const held of [9_000, 11_000, 10_000]) { r.jump(held); r.second(1); r.second(10, () => r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB })); }
+        expect(r.records).toEqual([]);
+    });
+
+    it('(b) one 10-minute sleep, the window beating again right after it: no hang', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(20);
+        r.jump(600_000);
+        r.second(1);
+        r.second(40, () => r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB }));
+        expect(r.records).toEqual([]);
+        expect(r.killed).toEqual([]);
+    });
+
+    it('a dropped window\'s grace pauses the same way: the host held is not the window gone', () => {
+        const r = rig({ alive: () => false });
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.dog.dropped('conn-1');
+        r.second(3);
+        r.jump(600_000);
+        r.second(1);
+        expect(r.records).toEqual([]);
     });
 
     it('the running agents go in with the current turn’s last tool NAME and its byte size, and NO content', () => {
