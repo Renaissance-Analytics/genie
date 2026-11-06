@@ -118,6 +118,10 @@ export function clearUpdateFailed(home: string): void {
     rmSync(failedFile(home), { force: true });
 }
 
+/** How the updater helper is started: the published launch. */
+export function helperLaunch(launch: HelperLaunch): HelperLaunch {
+    return { file: launch.file, args: [...launch.args] };
+}
 /**
  * How to start Genie again after an install that did not happen: the executable still installed (on Linux the AppImage
  * file itself, whose mount may be gone), the window's own switches and a dev run's app path — never the updater mode.
