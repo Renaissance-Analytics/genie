@@ -55,10 +55,9 @@ describe('historyRows over the link', () => {
         r.server.accept(h);
         const client = new SessionEngineClient();
         expect(await client.connect(w, TOKEN)).toMatchObject({ ok: true });
-        const ask = (client as unknown as { historyRows?: (id: string, o: { limit: number }) => Promise<readonly { event: Record<string, unknown>; at: number | null }[]> }).historyRows;
-        expect(ask, 'SessionEngineClient.historyRows').toBeTypeOf('function');
+        const ask = askOf(client);
         const rows = await vi.waitFor(async () => {
-            const got = await ask!.call(client, record.id, { limit: 3000 });
+            const got = (await ask(record.id, { limit: 3000, maxBytes: 128 * 1024 })).rows ?? [];
             expect(got.some((x) => x.event['kind'] === 'message' && x.event['text'] === 'Found it.')).toBe(true);
             return got;
         }, { timeout: 3000 });
@@ -70,9 +69,61 @@ describe('historyRows over the link', () => {
         expect(wire).not.toContain('SECRET-OUTPUT');
         expect(wire).not.toContain('PRIVATE-THOUGHT');
         // Bounded: never more rows than asked.
-        expect((await ask!.call(client, record.id, { limit: 2 })).length).toBeLessThanOrEqual(2);
+        expect(((await ask(record.id, { limit: 2, maxBytes: 128 * 1024 })).rows ?? []).length).toBeLessThanOrEqual(2);
+    });
+
+    it('a long ledger: the reply stays under the byte bound, keeps the NEWEST rows in order, and says it cut; a caller asking more is held to the host’s ceiling', async () => {
+        const r = rig();
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        r.host.start(record, dir);
+        // 120 turns of an 8 KB reply: about a megabyte of ledger.
+        for (let n = 1; n <= 120; n += 1) {
+            r.host.prompt(record.id, `question ${n}`, 'you');
+            r.events().onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `answer ${n} ${'x'.repeat(8000)}` } } as never);
+            r.events().onTurnEnd?.({ stopReason: 'end_turn' } as never);
+        }
+        await r.host.settled();
+        const [h, w] = memoryPair();
+        r.server.accept(h);
+        const client = new SessionEngineClient();
+        expect(await client.connect(w, TOKEN)).toMatchObject({ ok: true });
+        const ask = askOf(client);
+        const bytes = (rows: unknown) => Buffer.byteLength(JSON.stringify(rows ?? []), 'utf8');
+
+        const small = await vi.waitFor(async () => {
+            const got = await ask(record.id, { limit: 3000, maxBytes: 64 * 1024 });
+            expect((got.rows ?? []).some((x) => x.event['text'] === 'question 120')).toBe(true);
+            return got;
+        }, { timeout: 5000 });
+        expect(bytes(small.rows)).toBeLessThanOrEqual(64 * 1024);
+        expect(small.cut).toBe(true);
+        // The newest kept, in order: the last turn's question before its answer, and nothing from the start.
+        const texts = (small.rows ?? []).flatMap((x) => (x.event['kind'] === 'message' ? [String(x.event['text']).split(' ').slice(0, 2).join(' ')] : []));
+        expect(texts.at(-2)).toBe('question 120');
+        expect(texts.at(-1)).toBe('answer 120');
+        expect(texts).not.toContain('question 1');
+
+        // Asking for 10 MB is held to the host's ceiling (256 KiB).
+        const greedy = await ask(record.id, { limit: 3000, maxBytes: 10 * 1024 * 1024 });
+        expect(bytes(greedy.rows)).toBeLessThanOrEqual(256 * 1024);
+        expect(greedy.cut).toBe(true);
+        // Control: a bound that holds everything cuts nothing.
+        const all = await ask(record.id, { limit: 5, maxBytes: 128 * 1024 });
+        expect(all.cut).toBe(false);
+        expect((all.rows ?? []).length).toBe(5);
     });
 });
+
+type Reply = { rows?: readonly { event: Record<string, unknown>; at: number | null }[]; cut?: boolean };
+/** The client's `historyRows`, reached loosely: before it exists or changes shape, these are red by assertion. */
+function askOf(client: SessionEngineClient): (id: string, o: { limit: number; maxBytes: number }) => Promise<Reply> {
+    const fn = (client as unknown as { historyRows?: (id: string, o: { limit: number; maxBytes: number }) => Promise<unknown> }).historyRows;
+    expect(fn, 'SessionEngineClient.historyRows').toBeTypeOf('function');
+    return async (id, o) => {
+        const got = await fn!.call(client, id, o);
+        return Array.isArray(got) ? {} : (got as Reply);
+    };
+}
 
 describe('the window never reads the host’s thread logs', () => {
     // Comment lines dropped by LINE, CRLF-safe: a guard that matched a comment would pass on prose.
@@ -86,5 +137,7 @@ describe('the window never reads the host’s thread logs', () => {
 
     it('the switch’s history port asks the engine', () => {
         expect(code('src/main/main.ts')).toMatch(/history: [^\n]*historyRows\(/);
+        // It asks for what a carry-over needs, never the whole ledger.
+        expect(code('src/main/main.ts')).toMatch(/historyRows\(record\.id, \{ limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES \}\)/);
     });
 });
