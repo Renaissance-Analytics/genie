@@ -16,9 +16,9 @@ export interface AskerLiveDeps {
 
 export function askerLiveFrom(deps: AskerLiveDeps): (id: string) => AskerState | null | undefined {
     return (id) => {
-        if (!deps.known()) return null; // BREAK PROBE
+        if (!deps.known()) return undefined;
         const session = deps.engine()?.liveness(id as AgentId) ?? null;
-        if (session?.running) return { running: false, startedAt: session.startedAt }; // BREAK PROBE
+        if (session?.running) return { running: true, startedAt: session.startedAt };
         const takeOver = deps.takeOvers()?.probe(id as AgentId) ?? null;
         if (takeOver) return { running: true, startedAt: takeOver.startedAt };
         return session ? { running: false, startedAt: session.startedAt } : null;
