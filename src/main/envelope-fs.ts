@@ -1,4 +1,3 @@
-import { execFile, spawn } from 'node:child_process';
 import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
@@ -18,7 +17,8 @@ import {
     type SubmoduleEntry,
 } from '../core/envelope-plan.js';
 import type { EnvelopePorts } from './envelope-wizard-host.js';
-import { resolveProgram } from '../core/program-lookup.js';
+import { withinGitLimit } from './git-ports.js';
+import { gitMayRun } from './git-read-policy.js';
 
 /**
  * THE REAL DISK AND GIT THE ENVELOPE BUILD RUNS ON (Add workspace parity item 7). main.ts hands these to
@@ -32,24 +32,22 @@ import { resolveProgram } from '../core/program-lookup.js';
 const isDir = async (p: string) => { try { return (await stat(p)).isDirectory(); } catch { return false; } };
 const exists = async (p: string) => { try { await stat(p); return true; } catch { return false; } };
 
-/** One read-only git command; `null` when it fails (not a repo, no such config, no git). */
-function gitRead(cwd: string, args: readonly string[]): Promise<string | null> {
-    return new Promise((done) => {
-        execFile(resolveProgram('git'), [...args], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => done(error ? null : String(stdout)));
-    });
+/** One read-only git command; `null` when it fails (not a repo, no such config, no git). Past the limit it rejects: the wizard says so, rather than showing no remote. */
+async function gitRead(cwd: string, args: readonly string[]): Promise<string | null> {
+    if (!(await gitMayRun(cwd))) return null;
+    return withinGitLimit((limit) => new Promise((done) => {
+        limit.git(args, { cwd, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => done(error ? null : String(stdout)));
+    }));
 }
 
 /** git with input on stdin (Genie 1's runGitWithStdin): `check-ignore` exits 1 for "none matched", which is an answer. */
-function gitWithStdin(cwd: string, args: readonly string[], input: string): Promise<string> {
-    return new Promise((done) => {
-        const child = spawn(resolveProgram('git'), [...args], { cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
-        let out = '';
-        child.stdout.setEncoding('utf8');
-        child.stdout.on('data', (d: string) => { out += d; });
-        child.on('error', () => done(''));
-        child.on('close', () => done(out));
-        child.stdin.end(input);
-    });
+async function gitWithStdin(cwd: string, args: readonly string[], input: string): Promise<string> {
+    if (!(await gitMayRun(cwd))) return '';
+    return withinGitLimit((limit) => new Promise((done) => {
+        // The exit code is not read: 1 is "none matched", and what it printed is the answer either way.
+        const child = limit.git(args, { cwd, maxBuffer: 32 * 1024 * 1024 }, (_error, stdout) => done(String(stdout)));
+        child?.stdin?.end(input);
+    }));
 }
 
 async function gitInfo(cwd: string): Promise<{ origin: string | null; head: string | null }> {

@@ -156,6 +156,8 @@ export interface AgentRecord {
      * first was numbered 1 (the owner's rail, 2026-10-16). OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
      */
     readonly lastTurn?: number;
+    /** Genie's own words are in this thread: it began under them, or was handed them. Cleared with the thread. */
+    readonly genieWordsInThread?: true;
     /**
      * THE AGENT'S LATEST PLAN, every step (the owner, 2026-10-21: "The plan loaded in genie should survive a restart, how
      * else will agents know what to pick up on."). Written as each plan arrives — Genie's `plan` tool or the provider's

@@ -17,6 +17,7 @@ import { ancestorsOf, revealFor, treeFromLoaded } from '../../core/files-tree-la
 import type { GenieBridge } from '../bridge.js';
 import { FileOpModal } from './FileOpModal.js';
 import { useCopyText } from './CopyText.js';
+import { GitReadProblem } from './GitReadProblem.js';
 import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile, type PluginTabView } from './FilesPanel.js';
 
 /**
@@ -97,7 +98,12 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     const [state, setState] = useState<FilesPanelState | null>(null);
     // Git's state of each changed file, for the tree's colours (Genie 1 FileTree) — re-read with the tree, on the host's push.
     const [git, setGit] = useState<Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>>>({});
-    const readGit = useCallback(() => { if (!single && files.gitStatus) void files.gitStatus(workspace.id).then(setGit, () => {}); }, [files, workspace.id, single]);
+    const [gitProblem, setGitProblem] = useState<string | null>(null);
+    // Colours from the last good read stay; a read that failed says so, with a Retry, and never reads as "nothing changed".
+    const readGit = useCallback(() => {
+        if (single || !files.gitStatus) return;
+        void files.gitStatus(workspace.id).then((next) => { setGit(next); setGitProblem(null); }, () => { setGitProblem('Git did not answer in time, so changes may not be marked.'); });
+    }, [files, workspace.id, single]);
     // The editor follows GENIE's theme, not the OS's (Genie 1 useResolvedTheme): a light Genie on a dark OS is a light editor.
     const { resolved: theme } = useTheme();
     /*
@@ -420,9 +426,11 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             node: <PluginEditorBody key={`${t}:${p.rev}`} pluginId={p.editor.pluginId} fancyExport={p.editor.fancyEditor.export} workspaceId={workspace.id} path={t} files={files} onDirtyChange={(d) => act({ kind: 'plugin-dirty', path: t, dirty: d })} registerSave={(fn) => { pluginSaves.current.set(t, fn); }} />,
         }];
     });
+    const gitProblemRow = gitProblem ? <GitReadProblem reason={gitProblem} onRetry={readGit} /> : null;
     const panel = <FilesPanel active={bench.active} pluginTabs={pluginTabs} workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={(t) => closeTabs([t])} onPin={onPin} onClose={() => askClose(tabs, onClose)} prefs={prefs} onPrefs={changePrefs} theme={theme} unsaved={dirty} git={git} {...(open?.ok && bench.texts[open.path]?.ok ? { baseline: (bench.texts[open.path] as { text: string }).text } : {})} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} copied={pathCopy.state} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
     return (
         <>
+            {gitProblemRow}
             {panel}
             {discard ? <DiscardModal paths={discard.paths} onCancel={() => setDiscard(null)} onDiscard={() => { const then = discard.then; setDiscard(null); then(); }} /> : null}
             {fileOp && fileOp.dialog.action !== 'duplicate' ? <FileOpModal key={`${fileOp.dialog.action}:${fileOp.dialog.node.path}`} dialog={fileOp.dialog} error={fileOp.error} busy={fileOp.busy} onConfirm={(name) => runFileOp(fileOp.dialog, name)} onCancel={() => setFileOp(null)} /> : null}

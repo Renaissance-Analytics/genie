@@ -83,6 +83,14 @@ export type SwitchDecision =
     | { ok: true; from: string; to: string; noop?: true; carried?: { turns: number; of: number; plan: boolean } | null; left?: string | null; droppedModel?: string | null }
     | { ok: false; reason: string };
 
+/** Where the Provider control's switch stands (genie#1569). */
+export type ProviderSwitchState = { kind: 'idle' } | { kind: 'working'; to: string } | { kind: 'done'; text: string } | { kind: 'failed'; to: string; reason: string };
+
+/** The Provider control's state once a switch to `to` has answered: a refusal keeps `to`, so Retry asks for it again. */
+export function providerSwitchAfter(agentName: string, to: string, decision: SwitchDecision): ProviderSwitchState {
+    return decision.ok ? { kind: 'done', text: switchOutcome(agentName, decision) } : { kind: 'failed', to, reason: decision.reason };
+}
+
 /** The person can always switch an agent's provider (Tynn story #380); the same provider is a no-op. */
 export function switchDriverDecision(from: string, to: string): SwitchDecision {
     if (from === to) return { ok: true, from, to, noop: true };
@@ -183,10 +191,10 @@ export function applyOutcome(agentName: string, what: string, apply: ApplyWhen):
 
 /**
  * A Claude agent's TOOL SETTING as the answer to one shell call (genie#1188), read at the moment the permission hook
- * asks: all tools (and no setting) → allow, nobody asked; ask → park it for the person; edits only → refuse.
+ * asks: all tools (and no setting) → allow, nobody asked; ask → park it for the person; edits only → refuse. In a workspace the person has not trusted, "all tools" asks too: the setting was never about this folder.
  */
-export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined): 'allow' | 'deny' | 'ask' {
+export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined, where: { readonly untrusted?: boolean } = {}): 'allow' | 'deny' | 'ask' {
     if (permissions === 'ask') return 'ask';
     if (permissions === 'edits') return 'deny';
-    return 'allow';
+    return where.untrusted === true ? 'ask' : 'allow';
 }

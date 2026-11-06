@@ -249,6 +249,8 @@ export interface TrustBook {
     readonly carried: readonly string[];
     pendingCarry: string[];
     sites: Record<string, string>;
+    /** A workspace id to the hash of the list the person said yes to, or that it carried over with (core/workspace-trust.ts). */
+    workspaces: Record<string, string>;
 }
 
 /** The record as stored, or `null` when it is not one: every field checked, because what it says decides what runs. */
@@ -257,7 +259,10 @@ export function parseTrustBook(value: unknown): TrustBook | null {
     const texts = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === 'string');
     if (!texts(value.carried) || !texts(value.pendingCarry) || !isRecord(value.sites)) return null;
     if (!Object.values(value.sites).every((s) => typeof s === 'string')) return null;
-    return { version: 1, carried: value.carried, pendingCarry: value.pendingCarry, sites: value.sites as Record<string, string> };
+    // A record written before workspaces were kept has none, and its `carried` still stands.
+    const workspaces = value.workspaces ?? {};
+    if (!isRecord(workspaces) || !Object.values(workspaces).every((s) => typeof s === 'string')) return null;
+    return { version: 1, carried: value.carried, pendingCarry: value.pendingCarry, sites: value.sites as Record<string, string>, workspaces: workspaces as Record<string, string> };
 }
 
 /** The key Genie 1 gives a site: sha256(workspace \0 name), 16 hex — so either Genie reads what the other wrote. */

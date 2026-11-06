@@ -7,6 +7,8 @@ import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { EnvelopeSites, SiteActor } from './envelope-sites-host.js';
 import type { FrontDoorStatus } from './hosting-compose.js';
 import type { HostsSyncResult } from './hosts-file.js';
+import { trustedPathIn, type TrustApi, type TrustEntry } from './hosting-trust.js';
+import type { TrustView } from './workspace-trust-host.js';
 import type { ServiceRegistry } from './service-registry.js';
 import type { CreateSiteInput, PhpCgiResolution, SiteManager } from './site-manager.js';
 
@@ -97,6 +99,11 @@ export interface HostingApi {
     configuredHosts(): string[];
     /** Genie's own Deck items about the front door: the one Trust ask (and, from genie-host, an elevation waiting for a window). */
     trustDeckItems(): DeckItem[];
+    /**
+     * THE WORKSPACES' TRUST (genie#1519): owned where the hosting is — genie-host, or the window on the emergency path. A
+     * window's replica reads the verdicts from the dump and FAILS CLOSED before its first dump and after its link drops.
+     */
+    readonly trust: TrustApi;
     /** Stops what this hosting runs of its own (syncs, watches, the in-app door); supervised processes are the supervisor's. */
     shutdown(): Promise<void>;
 }
@@ -186,6 +193,8 @@ export interface HostingDump {
     readonly dependents: Readonly<Record<string, readonly string[] | null>>;
     readonly reconcile: ReconcileReport | null;
     readonly problems: readonly string[];
+    /** Every workspace's trust verdict as the host last read it (genie#1519). Local window links only, as the whole dump. */
+    readonly trust?: readonly TrustEntry[];
 }
 
 export type HostingEvent =
@@ -230,6 +239,8 @@ export class HostingService {
         this.#elevation?.onChange(changed);
         options.onChange?.(changed);
         stack.engines.onStarted((id) => this.#emit({ kind: 'engineStarted', id }));
+        // A verdict that moved goes out with the next dump (genie#1519).
+        stack.trust.onVerdict(changed);
         void stack.engineReconcile.then((report) => { this.#reconcile = report; this.#changed(); });
     }
 
@@ -259,6 +270,7 @@ export class HostingService {
             dependents: Object.fromEntries(engines.map((e) => [e.id, attempt<readonly string[] | null>(() => s.engineDependents(e.id), null)])),
             reconcile: this.#reconcile,
             problems: s.hostingProblems(),
+            trust: s.trust.entries(),
         };
     }
 
@@ -307,6 +319,9 @@ export class HostingService {
             case 'retryFrontDoor': return s.retryFrontDoor();
             case 'trustCertificate': return s.trustCertificate();
             case 'deferTrustCertificate': return s.deferTrustCertificate();
+            // The person's yes to a workspace (genie#1519). `engine.hosting` is a local window's only (session-engine-server.ts).
+            case 'trust.trust': return s.trust.trust(str(a[0]));
+            case 'trust.refresh': return s.trust.refresh(str(a[0]));
             default: throw new Error(`a window cannot call hosting.${method}`);
         }
     }
@@ -349,7 +364,8 @@ export class HostingReplica implements HostingApi {
     readonly #startedListeners = new Set<(id: string) => void>();
     readonly #frontDoorListeners = new Set<() => void>();
     #dump: HostingDump | null = null;
-    #keys = { sites: '', engines: '', frontDoor: '' };
+    #keys = { sites: '', engines: '', frontDoor: '', trust: '' };
+    readonly #verdictListeners = new Set<(workspaceId: string) => void>();
     #reconciled: ((report: ReconcileReport) => void) | null = null;
     readonly engineReconcile: Promise<ReconcileReport>;
 
@@ -363,12 +379,14 @@ export class HostingReplica implements HostingApi {
     }
 
     rebase(dump: HostingDump): void {
+        const trustBefore = this.#trustEntries();
         this.#dump = dump;
         const keys = {
             sites: JSON.stringify([dump.sites, dump.specs, dump.declared]),
             engines: JSON.stringify([dump.engines, dump.workspaces, dump.dependents]),
             // The port and the CA are part of it (P5a.2): a host that comes back on a new port, or with a new CA, is a change.
             frontDoor: JSON.stringify([dump.frontDoorPort, dump.browserTrust, dump.externalFrontDoor, dump.routes, dump.configuredHosts, dump.deckItems, dump.problems ?? []]),
+            trust: JSON.stringify(dump.trust ?? []),
         };
         const was = this.#keys;
         this.#keys = keys;
@@ -376,7 +394,41 @@ export class HostingReplica implements HostingApi {
         if (keys.sites !== was.sites) this.#fire(this.#siteListeners);
         if (keys.engines !== was.engines) this.#fire(this.#engineListeners);
         if (keys.frontDoor !== was.frontDoor) this.#fire(this.#frontDoorListeners);
+        this.#verdictsMoved(trustBefore);
     }
+
+    #trustEntries(): readonly TrustEntry[] {
+        return this.#dump?.trust ?? [];
+    }
+
+    #verdictsMoved(before: readonly TrustEntry[]): void {
+        const now = this.#trustEntries();
+        const ids = new Set([...before, ...now].map((e) => e.workspaceId));
+        for (const id of ids) {
+            if (before.find((e) => e.workspaceId === id)?.trusted === now.find((e) => e.workspaceId === id)?.trusted) continue;
+            for (const l of [...this.#verdictListeners]) { try { l(id); } catch { /* one listener never costs another */ } }
+        }
+    }
+
+    readonly trust: TrustApi = {
+        isTrustedPath: (path: string) => trustedPathIn(this.#trustEntries(), path),
+        view: (workspaceId: string): TrustView | null => {
+            const entry = this.#trustEntries().find((e) => e.workspaceId === workspaceId);
+            return entry ? { trusted: entry.trusted, changed: entry.changed, list: entry.list } : null;
+        },
+        entries: () => [...this.#trustEntries()],
+        refresh: (workspaceId: string) => this.#ask<TrustView | null>('trust.refresh', workspaceId),
+        trust: (workspaceId: string) => this.#ask<TrustView | null>('trust.trust', workspaceId),
+        mayWriteInto: async (folder: string) => {
+            const dump = this.#dump;
+            if (dump === null) return true;
+            const entry = (dump.trust ?? []).find((e) => e.path === folder);
+            if (entry) return entry.trusted;
+            // A registered workspace not read yet is not trusted; a folder that is no workspace is not this rule's.
+            return !Object.values(dump.workspaces).some((w) => w.path === folder);
+        },
+        onVerdict: (listener: (workspaceId: string) => void) => { this.#verdictListeners.add(listener); return () => { this.#verdictListeners.delete(listener); }; },
+    };
 
     apply(event: HostingEvent): void {
         if (event.kind === 'dump') { this.rebase(event.dump); return; }

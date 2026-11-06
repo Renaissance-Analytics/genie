@@ -128,7 +128,8 @@ try {
     await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
     let running = null;
     for (const end = Date.now() + 30_000; Date.now() < end && running !== true;) {
-        running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);
+        // Past its preparation too: a session reads as running while its launch is still being prepared, before there is any process to count.
+        running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => (d?.session ? d.session.running && d.session.starting === false : null))`);
         if (running !== true) await sleep(500);
     }
     check(running === true, '2. the agent\'s session is RUNNING (the host says so)', String(running));

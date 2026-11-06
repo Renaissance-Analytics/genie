@@ -12,6 +12,8 @@ import { WorkspaceTabs } from './WorkspaceTabs.js';
 import { SitePanel } from './SitePanel.js';
 import { siteWebviewLayerFor, tabsChanged, type SeenTabs } from '../site-webview-layer.js';
 import { TerminalCell } from './TerminalCell.js';
+import { TrustStep } from './TrustStep.js';
+import type { TrustStepView } from '../features.js';
 import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, sitePanelKeys, type TabsState } from '../../core/workspace-tabs.js';
 import {
     activate,
@@ -147,6 +149,9 @@ export interface WorkspaceOpsProps {
 }
 
 export interface WorkspaceProps {
+    /** This workspace is waiting for the person's yes. */
+    trustStep?: TrustStepView | null | undefined;
+    onTrust?: (() => Promise<unknown>) | undefined;
     /** Open this workspace's Background processes or Sites (Genie 1's modals) — the Settings page's Hosting card. Absent = no card. */
     onOpenRuntime?: ((kind: 'processes' | 'sites') => void) | undefined;
     /** The registry's workspace row. `name` is optional there, so the id stands in — never an invented label. */
@@ -224,7 +229,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
     const wsColor = useWorkspaceColor(workspace.id);
@@ -585,6 +590,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
 
     return (
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
+            {trustStep && onTrust ? <TrustStep step={trustStep} onTrust={onTrust} /> : null}
             {/* View header, 56px — the workspace's name and path, like the Dashboard's group header. */}
             {/*
               * THE HEADER FITS ITS COLUMN (beta.33 item 23; the owner: "why the fuck is any content at all behind the fucking

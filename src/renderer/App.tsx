@@ -86,7 +86,7 @@ import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import { addConfirmer } from './add-confirm.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
-import { applyOutcome, switchOutcome, type DeletePlan } from '../core/agent-ops.js';
+import { applyOutcome, providerSwitchAfter, switchOutcome, type DeletePlan, type ProviderSwitchState } from '../core/agent-ops.js';
 import type { ModelChoices } from '../core/provider-models.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
@@ -1335,6 +1335,8 @@ function DesktopApp({ bridge }: AppProps) {
 
     const [opsView, setOpsView] = useState<{ deletePreview: DeletePlan | null; diagnosis: Diagnosis | null; lastOutcome: string | null }>({ deletePreview: null, diagnosis: null, lastOutcome: null });
     useEffect(() => { setOpsView({ deletePreview: null, diagnosis: null, lastOutcome: null }); }, [agentId]);
+    // Where the Provider control's switch stands (genie#1569): in flight, done, or refused with Retry — drawn beside it.
+    const [providerSwitch, setProviderSwitch] = useState<{ agentId: string | null; state: ProviderSwitchState }>({ agentId, state: { kind: 'idle' } });
     /*
      * THE PROVIDER'S MODELS for the agent's picker (the owner, 2026-10-21: "make sure that the model selection for agents
      * is using actual available options from the providers"). Asked when the agent's Settings are on screen — main keeps
@@ -1396,7 +1398,20 @@ function DesktopApp({ bridge }: AppProps) {
                   void resolvedBridge.agents.restart(agentId, 'fresh').then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted on the same conversation') : r.reason })));
               },
               // A switch carries the conversation and keeps the old provider's to resume (Tynn story #380); switchOutcome says so.
-              onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: switchOutcome(detail?.agent.name ?? 'the agent', r) })); if (r.ok && !r.noop) setModelsAsked((n) => n + 1); }); },
+              providerSwitch: providerSwitch.agentId === agentId ? providerSwitch.state : { kind: 'idle' },
+              onSwitchDriver: (to) => {
+                  const name = detail?.agent.name ?? 'the agent';
+                  setProviderSwitch({ agentId, state: { kind: 'working', to } });
+                  void resolvedBridge.agents.switchDriver(agentId, to).then(
+                      (r) => {
+                          setProviderSwitch({ agentId, state: providerSwitchAfter(name, to, r) });
+                          setOpsView((v) => ({ ...v, lastOutcome: switchOutcome(name, r) }));
+                          if (r.ok && !r.noop) setModelsAsked((n) => n + 1);
+                      },
+                      // A switch that never answered (the host gone, the bridge broken) is a refusal too: said, with Retry.
+                      (error: unknown) => setProviderSwitch({ agentId, state: { kind: 'failed', to, reason: `The switch to ${to} did not answer: ${error instanceof Error ? error.message : String(error)}` } }),
+                  );
+              },
               onDiagnose: () => { void resolvedBridge.agents.diagnose(agentId).then((r) => setOpsView((v) => (r.ok ? { ...v, diagnosis: r.diagnosis } : { ...v, lastOutcome: r.reason }))); },
               onPreviewDelete: (outcome) => { void resolvedBridge.agents.previewDelete(agentId, outcome, []).then((r) => setOpsView((v) => (r.ok ? { ...v, deletePreview: r.plan } : { ...v, lastOutcome: r.reason }))); },
               onConfirmDelete: (outcome, also, handoff) => {
@@ -1930,8 +1945,13 @@ function DesktopApp({ bridge }: AppProps) {
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
             tynnBoard={tynnBoardHost}
+            readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => {
+                if (r.ok) return r.commits;
+                // A workspace with nothing to read is an empty list. Git not answering is a failure the view shows.
+                if (r.gitDidNotAnswer) throw new Error(r.reason);
+                return [];
+            }) : undefined}
             loadToolOutput={resolvedBridge ? (agentId, toolCallId) => resolvedBridge.agents.toolOutput(agentId, toolCallId) : undefined}
-            readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}
             filesPopped={filesPopped}

@@ -124,6 +124,17 @@ describe('switch provider', () => {
         expect(await switchDriver(fakes().ports, 'agent_a', 'claude')).toMatchObject({ ok: true, noop: true });
         expect(await switchDriver(fakes().ports, 'agent_a', 'kimi')).toMatchObject({ ok: false, reason: expect.stringMatching(/cannot run a "kimi"/) });
     });
+
+    it('a provider that is not installed, or not signed in, is still REFUSED with its reason — and nothing was stopped', async () => {
+        const missing = fakes({ installed: false });
+        expect(await switchDriver(missing.ports, 'agent_a', 'codex')).toEqual({ ok: false, reason: 'Codex is not installed on this machine, so atlas cannot switch to it. Install it, then switch again.' });
+        expect(missing.calls).toEqual([]);
+        expect(missing.current()?.provider).toBe('claude');
+
+        const signedOut = fakes({ signedIn: false });
+        expect(await switchDriver(signedOut.ports, 'agent_a', 'codex')).toEqual({ ok: false, reason: 'Codex is not signed in on this machine, so atlas cannot switch to it. Log in to Codex, then switch again.' });
+        expect(signedOut.calls).toEqual([]);
+    });
 });
 
 describe('switch provider: the new provider gets its own session and model', () => {

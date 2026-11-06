@@ -28,6 +28,11 @@ export interface FlowsEngineDeps {
     readonly attention: Parameters<typeof questionWaiter>[0];
     /** SAFE MODE (Tynn #386; genie-host's): no schedule, file or interrupted run starts a flow while it is on. */
     readonly safeMode?: () => boolean;
+    /**
+     * A Codex agent in a workspace not trusted (genie#1519): a flow's prompt values reach it with Genie's skill names
+     * escaped. The host's own verdict, read where the flows run. Absent = nothing escaped.
+     */
+    readonly escapesPromptValues?: (address: string) => boolean;
 }
 
 export interface FlowsEngine {
@@ -53,6 +58,7 @@ export function startFlowsEngine(deps: FlowsEngineDeps): FlowsEngine {
             now: deps.now,
             asleep: deps.asleep,
             ports: (flow) => ({
+                ...(deps.escapesPromptValues ? { escapesPromptValues: deps.escapesPromptValues } : {}),
                 promptAgent: agentPrompter({ sessions: deps.sessions, resolve: deps.resolve, agent: deps.agent, asleep: deps.asleep, by: `flow "${flow.name}"` }),
                 // One supervised process per flow: every run's output lands in the same kept log, after the runs before it.
                 runCommand: supervisedCommand(
