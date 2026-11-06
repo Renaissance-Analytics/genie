@@ -491,7 +491,10 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         envFor: (id) => hosting.engines.envFor(id),
         addKnowledge: async (entry) => ({ id: (await knowledge.add(entry as never)).id }),
         attention,
+        ...(input.safeMode ? { safeMode: input.safeMode } : {}),
     }) : null;
+    // Leaving safe mode arms the own flow clock again; it starts nothing by itself.
+    if (ownEngine) input.safeModeLeft?.(() => { ownEngine.scheduler.plan(); });
     const flowScheduler: FlowSchedulerApi = input.flowsEngine?.scheduler ?? ownEngine!.scheduler;
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.

@@ -19,6 +19,11 @@ export function windowWake(p: WindowWakePorts): (agentId: string) => Promise<boo
     return async (agentId) => {
         const record = p.find(agentId);
         if (!record) return false;
+        // SAFE MODE (Tynn #386): no stopped agent is started by itself; the notice waits. A running one is told as ever.
+        if (p.safeMode() && !p.running(record)) {
+            p.log(`[genie] a notice for ${record.name} waits: Genie is in safe mode, so nothing is started by itself`);
+            return false;
+        }
         const refused = p.refusal(record);
         if (refused) { p.log(`[genie] a notice for ${record.name} waits: ${refused}`); return false; }
         return p.start(record);
