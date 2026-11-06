@@ -144,10 +144,10 @@ try {
     const run = input => page.evaluate('(' + measureArtboardPage.toString() + ')(' + JSON.stringify({ workspaceId: 'tynn', ...input }) + ')');
     async function measure(label, input, beforeRead = async () => ({})) {
         await page.evaluate('Object.assign(window.__artboardWire,{maxBytes:0,forbidden:0,pages:0,items:0,invalidPages:0,oversizedEvents:0});true');
-        await main.evaluate('(()=>{const s=globalThis.__artboardMain;s.methods={};s.gap=0;s.worstGap=null;s.lastMethod=null;s.startedMs=s.last=performance.now();s.startedWallMs=Date.now();s.rssBefore=s.rss=process.memoryUsage().rss;s.ticksBefore=s.ticks;s.maxCallBytes=0;s.oversizedCalls=0;s.handles=[];return true;})()');
+        await main.evaluate('(()=>{const s=globalThis.__artboardMain;s.methods={};s.gap=0;s.worstGap=null;s.lastMethod=null;s.startedMs=s.last=performance.now();s.startedWallMs=Date.now();s.rssBefore=s.rss=process.memoryUsage().rss;s.ticksBefore=s.ticks;s.maxCallBytes=0;s.oversizedCalls=0;s.handles=[];globalThis.__artboardPhases={events:[],dropped:0};return true;})()');
         await page.evaluate('(()=>{const s=window.__artboardRow={ticks:0,last:performance.now(),maxGapMs:0};s.timer=setInterval(()=>{const now=performance.now();s.maxGapMs=Math.max(s.maxGapMs,now-s.last);s.last=now;s.ticks++;},16);return true;})()');
         const stateBefore = await page.evaluate('window.genieTest.localProtocol.state()'), extra = await beforeRead(), value = await run(input), wire = await page.evaluate('window.__artboardWire');
-        const native = await main.evaluate('((s)=>({startedMs:s.startedMs,startedWallMs:s.startedWallMs,endedMs:performance.now(),endedWallMs:Date.now(),ticks:s.ticks,ticksBefore:s.ticksBefore,maxGapMs:s.gap,worstGap:s.worstGap,rssBefore:s.rssBefore,rssPeak:Math.max(s.rss,process.memoryUsage().rss),methods:s.methods,maxCallBytes:s.maxCallBytes,oversizedCalls:s.oversizedCalls,connections:s.handles.length}))(globalThis.__artboardMain)');
+        const native = await main.evaluate('((s)=>({startedMs:s.startedMs,startedWallMs:s.startedWallMs,endedMs:performance.now(),endedWallMs:Date.now(),ticks:s.ticks,ticksBefore:s.ticksBefore,maxGapMs:s.gap,worstGap:s.worstGap,rssBefore:s.rssBefore,rssPeak:Math.max(s.rss,process.memoryUsage().rss),methods:s.methods,maxCallBytes:s.maxCallBytes,oversizedCalls:s.oversizedCalls,connections:s.handles.length,artboardPhases:globalThis.__artboardPhases}))(globalThis.__artboardMain)');
         const stateAfter = await page.evaluate('window.genieTest.localProtocol.state()');
         const rowClock = await page.evaluate('(()=>{const s=window.__artboardRow;clearInterval(s.timer);return {ticks:s.ticks,maxGapMs:Math.max(s.maxGapMs,performance.now()-s.last)};})()');
         const row = { label, ...value, wire, native, rowClock, ...extra }; reports.push(row); console.log('ARTBOARD ' + JSON.stringify(row));
@@ -155,6 +155,7 @@ try {
         demand(stateBefore.phase === 'ready' && stateAfter.phase === 'ready' && stateBefore.revision === stateAfter.revision, 'the app keeps its same ready page connection');
         demand(wire.maxBytes <= 1048576 && wire.forbidden === 0 && wire.invalidPages === 0 && wire.oversizedEvents === 0 && native.oversizedCalls === 0, 'ArtBoard frame/content/metadata limits');
         if (!BASELINE) {
+            demand(native.artboardPhases?.dropped === 0 && ['native-build', 'resolve-board', 'projection'].every(phase => native.artboardPhases.events.some(event => event.phase === phase)), 'ArtBoard build/projection timing positive controls');
             demand(native.methods['artboard.read'] === 1 && native.methods['blob.open'] > 0 && wire.pages >= 2 && wire.items === 100 && native.connections === 1, 'ArtBoard metadata pages and blobs use the app connection');
             demand(native.maxGapMs < 250 && value.heartbeat.maxGapMs < 250 && rowClock.maxGapMs < 250 && native.rssPeak - native.rssBefore < 100 * 1024 * 1024, 'ArtBoard transfer blocked a clock or retained excessive main memory');
         }

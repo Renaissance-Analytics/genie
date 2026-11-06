@@ -51,11 +51,15 @@ describe('7F ArtBoard on the admitted local connection', () => {
     it.each(methods)('%s is explicitly local', method => {
         expect(REMOTE_METHODS).toContain(method); expect(capabilityOf(method as RemoteMethod)).toBe('local');
     });
-    it('read preserves the complete native board, order, missing count and optional fields', async () => {
+    it('read preserves native fields for present posts and keeps each missing artifact visible', async () => {
         const f = await fixture(), legacy = post({ note: 'Review this' }); delete legacy.askVerdict;
         await f.index([post({ id: 'missing', file: 'gone.html' }), legacy, post({ id: 'bad-image', kind: 'image', file: 'raw.bin' })]);
         const native = await f.native(); expect(native.posts).toHaveLength(1); expect(native.error).toContain('2 posts');
-        expect(await f.bridge().read('work')).toEqual(native); expect(f.ports.read).toHaveBeenLastCalledWith('work');
+        const shown = await f.bridge().read('work');
+        expect(shown.posts).toHaveLength(3); expect(shown.posts.find(p => p.id === legacy.id)).toEqual(native.posts[0]);
+        expect(shown.posts.find(p => p.id === 'missing')).toMatchObject({ contentError: expect.stringMatching(/missing|not found|ENOENT/i) });
+        expect(shown.posts.find(p => p.id === 'bad-image')).toMatchObject({ contentError: expect.stringMatching(/image|type|unsupported/i) });
+        expect(f.ports.read).toHaveBeenLastCalledWith('work');
     });
     it('an empty or unknown workspace keeps native results, and a missing host refuses in words', async () => {
         const f = await fixture(); await f.index([]);

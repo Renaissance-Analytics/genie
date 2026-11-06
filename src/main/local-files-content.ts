@@ -7,6 +7,7 @@ import type { ResolvedBoard } from '../core/artboard.js';
 import type { ArtboardBlob, ArtboardContentEnvelope, ArtboardMetadata } from '../core/local-artboard.js';
 import { LocalBlobs } from './local-blobs.js';
 import { LocalPageBudget, LocalPages } from './local-pages.js';
+import { beginArtboardBuildTiming } from './artboard-build-timing.js';
 
 interface Scope { ref: string; expires: number; timer: ReturnType<typeof setTimeout>; releaseBudget: () => void; refs: Set<string>; sources: Set<BlobSource>; heldSources: Set<StreamResource>; closing: Promise<void> }
 interface StreamResource { scope: Scope; type: 'source'; source: BlobSource; closing: Promise<void> | null }
@@ -75,6 +76,10 @@ export class LocalFilesContent {
         return { draftsContent: { ref, blob, list, count: items.length } } satisfies DraftContentEnvelope;
     }
     artboardResult(ref: string, value: unknown): unknown {
+        const finish = beginArtboardBuildTiming('projection', 'sync');
+        try { return this.#artboardResult(ref, value); } finally { finish(); }
+    }
+    #artboardResult(ref: string, value: unknown): unknown {
         const scope = this.#scope(ref), board = value as ResolvedBoard;
         if (!board || !Array.isArray(board.posts)) throw new Error('invalid native ArtBoard response');
         if (!board.posts.length) { this.release(ref); return value; }

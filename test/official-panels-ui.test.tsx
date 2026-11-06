@@ -54,6 +54,11 @@ describe('the Repository panel', () => {
 });
 
 describe('the ArtBoard panel', () => {
+    it('keeps a missing artifact card visible and says the content failure without an empty preview', () => {
+        const post = { id: 'missing', title: 'Missing artifact', kind: 'image' as const, createdAt: '2026-11-06T00:00:00Z', askVerdict: false, contentError: 'The artifact file is missing from the board.' };
+        const html = renderToStaticMarkup(<ArtBoardView posts={[post]} error={null} onReview={() => {}} />);
+        expect(html).toContain('data-artboard-post="missing"'); expect(html).toContain(post.contentError); expect(html).not.toContain('<img'); expect(html).not.toContain('<iframe');
+    });
     it('each post: its title, note, the artifact (html sandboxed, image inline), and Approve / Reject with a comment', () => {
         const html = renderToStaticMarkup(<ArtBoardView posts={[
             { id: 'login', title: 'Login screen', kind: 'html', createdAt: '2026-10-20T10:00:00Z', note: 'check contrast', html: '<h1>Hi</h1>', askVerdict: true },
