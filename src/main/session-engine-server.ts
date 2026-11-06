@@ -132,6 +132,11 @@ export interface EngineServerOptions {
     };
     /** Genie 1's database path from the window: the host takes its memories and mail once. */
     readonly v1Import?: (databasePath: string) => Promise<void>;
+    /**
+     * genie-host's hang watchdog (Tynn #386: hang-watchdog.ts): each window's `engine.heartbeat` by its connection, and
+     * the connection dropping. Absent = a beat is ignored.
+     */
+    readonly heartbeat?: { beat(connId: string, beat: unknown): void; dropped(connId: string): void };
     /** The host's process supervisor (P3.3b: supervisor-host.ts). Absent = `engine.supervisor` is refused. */
     readonly supervisor?: SupervisorService;
     /** The host's hosting: the front door, the engines, the sites (P5a: hosting-host.ts). Absent = `engine.hosting` is refused. */

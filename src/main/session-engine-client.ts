@@ -997,6 +997,9 @@ export class SessionEngineClient {
         }
     }
 
+    /** Window main's heartbeat to genie-host's hang watchdog (Tynn #386): a notification, no reply. Not built yet. */
+    heartbeat(_beat: { pid: number; rss: number; bye?: true }): void {}
+
     /** Liveness: `true` when the host answered. */
     async ping(): Promise<boolean> {
         const reply = await this.call('engine.ping', []);
