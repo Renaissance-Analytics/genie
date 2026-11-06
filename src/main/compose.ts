@@ -78,6 +78,8 @@ import type { GenRouterServer } from './gen-router-server.js';
  */
 
 export interface ComposeInput extends HostingOptions {
+    /** This Genie's build, said in the remote `welcome` (P10.1e). Absent = 'dev'. */
+    readonly build?: string;
     /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
     readonly onComposeStage?: (sample: ComposeStageSample) => void;
     /** Internal scheduling port: maintenance runs after ready, and the returned callback cancels a pending sweep. */
@@ -399,6 +401,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         confirm: pairing,
         transport: input.remoteTransport ?? { onConnection: () => () => {} },
         now,
+        ...(input.build ? { build: input.build } : {}),
     });
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
     // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA. Its own

@@ -93,6 +93,32 @@ jobs:
           grep -q "280px" "$css"
           grep -q "30px" "$css"
 
+  # GENIE-HOST ON PLAIN NODE (the host split, P10.1b). genie-cloud runs `node dist/main/host.js` in a container with
+  # Node 22 and no Electron (P10.3), so the host bundle has to boot and serve there. Node 22.16.0 exactly: the oldest
+  # Node whose `node:sqlite` has FTS5, which the knowledge store needs (measured: 22.13.1, 22.14.0 and 22.15.0 answer
+  # "no such module: fts5"; 22.16.0 and later create the table). No Electron binary is downloaded, so anything in
+  # the host that reached for Electron fails here instead of finding one. The script says which step failed and why.
+  host-plain-node:
+    name: genie-host on plain Node
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+          cache: npm
+
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - run: npm run build:main
+
+      - name: boot genie-host on plain Node and drive it
+        run: timeout 300 node scripts/host-plain-node-boot.mjs
+
   # THE FLOWS ACCEPTANCE SUITE (`npm run verify:flows`, test/flows-acceptance/): every trigger and every node kind the
   # canvas offers, end to end through the real scheduler and runner. Not in `npm test` — the owner (2026-10-27): "only when
   # we make changes to flows" — so it runs when a change touches Flows, and only then.

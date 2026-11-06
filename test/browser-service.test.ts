@@ -200,3 +200,46 @@ describe('a browser leaving', () => {
         await expect(setup().service.call('nope', [], 'window')).rejects.toThrow(/nope/);
     });
 });
+
+/**
+ * A HOST WITH NO GENIE BROWSER (P10.1d): genie-host on plain Node, in genie-cloud's container, has no Electron to start the
+ * browser's process with. Opening a site, popping one out and a page call say so in the host's words; nothing is held for
+ * a browser that cannot come, and nothing is ever started.
+ */
+describe('a host with no Genie browser', () => {
+    const WHY = 'the Genie browser is not available on this host: it runs on plain Node, with no Electron to start it';
+    const rig = () => {
+        const started: unknown[] = [];
+        return { started, ...setup({ unavailable: WHY, startBrowser: (launch) => { started.push(launch); } }) };
+    };
+
+    it('an open is refused with why, and starts nothing, even once the facts are published', async () => {
+        const r = rig();
+        await r.service.call('publish', [FACTS], 'window');
+        await expect(r.service.call('open', ['https://moic.gen/', 'user-gesture'], 'window')).rejects.toThrow(WHY);
+        await expect(r.service.call('open', [null], 'window')).rejects.toThrow(WHY);
+        expect(r.started).toEqual([]);
+        expect(opens(r.events)).toEqual([]);
+    });
+
+    it('a pop-out is refused with why, and starts nothing', async () => {
+        const r = rig();
+        await r.service.call('publish', [FACTS], 'window');
+        await expect(r.service.call('popOut', ['panel-1', 'moic.gen'], 'window')).rejects.toThrow(WHY);
+        expect(r.started).toEqual([]);
+        expect(await r.service.call('popped', [], 'window')).toEqual([]);
+    });
+
+    it('a page call is refused with why', async () => {
+        const r = rig();
+        await expect(r.service.call('pageCall', ['p1', 'snapshot', []], 'host')).rejects.toThrow(WHY);
+    });
+
+    it('CONTROL: the same calls on a host that has one are held and start it, as above', async () => {
+        const started: unknown[] = [];
+        const { service } = setup({ startBrowser: (launch) => { started.push(launch); } });
+        await service.call('publish', [FACTS], 'window');
+        expect(await service.call('open', ['https://moic.gen/', 'user-gesture'], 'window')).toEqual({ browserUp: false });
+        expect(started).toEqual([FACTS.launch]);
+    });
+});

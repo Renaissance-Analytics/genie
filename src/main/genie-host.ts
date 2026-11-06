@@ -37,7 +37,9 @@ import { clearUpdateFailed, hostDrainAgents, readUpdateFailed, relaunchSpec, upd
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { channelFrom } from '../core/update-channel.js';
 import type { ReleaseLike } from '../core/update-notes.js';
-import { hostIdleStep } from '../core/host-idle.js';
+import { hostIdleMs, hostIdleStep } from '../core/host-idle.js';
+import { NO_BROWSER_HERE, NO_UPDATES_HERE, hostCapabilities } from '../core/host-runtime.js';
+import { fts5Refusal } from './fts5-check.js';
 import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
@@ -120,14 +122,19 @@ import { repoStatus } from './repo-git.js';
  *  - `host.sock`  — the endpoint (not Windows, where it is a per-user named pipe).
  *
  * It exits when told to (`engine.shutdown`, SIGTERM), or once it has held nothing (core/host-idle.ts) and no window has been
- * connected for `GENIE_HOST_IDLE_MS` (10 minutes).
+ * connected for `GENIE_HOST_IDLE_MS` (10 minutes; `0` = never, for a host no window will come back to: genie-cloud's, P10).
+ *
+ * It runs on Electron's binary as Node in the app, and on plain Node 22.13+ in genie-cloud's container (P10.1b): there, what
+ * needs Electron — the Genie browser's process, and so `pages` — says it is not available on this host.
  */
 
 const home = genieRoot();
 const osaHome = osaHomeDir(home);
 const runtime = runtimeDir(home);
 const build = process.env.GENIE_HOST_BUILD ?? 'dev';
-const IDLE_MS = Number(process.env.GENIE_HOST_IDLE_MS ?? 10 * 60_000);
+const IDLE_MS = hostIdleMs(process.env.GENIE_HOST_IDLE_MS);
+/** What this host can have — a window, the Genie browser, an elevation — from ONE helper: all three in the app, none on plain Node (genie-cloud). */
+const capabilities = hostCapabilities();
 const recordFile = join(runtime, 'host.json');
 const tokenFile = join(runtime, 'host.token');
 
@@ -142,6 +149,13 @@ process.on('uncaughtException', (error) => say(`uncaught: ${error instanceof Err
 process.on('unhandledRejection', (error) => say(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
 
 async function main(): Promise<void> {
+    // FTS5 FIRST (P10.1b): a Node whose node:sqlite has none (before 22.16) refuses here, in words, with nothing bound.
+    const noFts5 = fts5Refusal();
+    if (noFts5 !== null) {
+        say(noFts5);
+        lifecycleLog(`host refused: ${noFts5}`);
+        process.exit(1);
+    }
     /*
      * WHERE SECRETS GO, chosen FIRST (P10.1a): the OS keychain, or with GENIE_SECRET_BACKEND=file the sealed files under
      * <root>/secrets (file-secrets.ts). A file backend that is misconfigured stops the host here, in words that say what to
@@ -259,6 +273,7 @@ async function main(): Promise<void> {
     const hostingElevation = new WindowElevation({
         connected: () => engineRef?.localWindowConnected() ?? false,
         ask: (steps) => (engineRef ? engineRef.elevate(steps) : Promise.reject(new Error('no Genie window is connected'))),
+        elevation: capabilities.elevation,
     });
     /*
      * THE APP DOOR (genie#1345; P5a.2 ruling 3): the door apps and scripts post through, and its keys — one writer of
@@ -427,7 +442,7 @@ async function main(): Promise<void> {
     let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
-    const browserService = new BrowserService({ startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
     /** What this host supervises, stopped once — by an update's install (in its order) or by the shutdown, whichever is first. */
     let hostedStop: Promise<void> | null = null;
     const stopHostedOnce = (): Promise<void> => {
@@ -448,6 +463,7 @@ async function main(): Promise<void> {
      */
     const runningVersion = build.split('+')[0] ?? build;
     const updatesService = new UpdatesService({
+        ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
         host: {
             installDir: dirname(process.execPath),
             ownPid: process.pid,
@@ -742,6 +758,7 @@ async function main(): Promise<void> {
         reportPlan: (id, steps) => host.reportPlan(id, steps),
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
+        capabilities,
         signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
         forwardedCalls,
         processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
@@ -840,11 +857,16 @@ async function main(): Promise<void> {
     process.on('SIGINT', () => void shutdown('SIGINT'));
 
     // IDLE EXIT: nothing running and no window for IDLE_MS. While an agent runs, the host stays — that is the point.
-    setInterval(() => {
-        const step = hostIdleStep({ agents: host.count, windows: engine.clients, ptys: relay?.live() ?? 0, ...onTheClock(hostFlows.list(), hostBook.kept()) }, lastBusy, Date.now(), IDLE_MS);
-        lastBusy = step.lastBusy;
-        if (step.exit) void shutdown(`idle ${Math.round(IDLE_MS / 1000)} s with nothing held and no window`);
-    }, Math.min(30_000, Math.max(1_000, Math.floor(IDLE_MS / 4)))).unref?.();
+    // With GENIE_HOST_IDLE_MS=0 there is no idle exit at all (P10.1c), so no clock.
+    if (IDLE_MS !== null) {
+        setInterval(() => {
+            const step = hostIdleStep({ agents: host.count, windows: engine.clients, ptys: relay?.live() ?? 0, ...onTheClock(hostFlows.list(), hostBook.kept()) }, lastBusy, Date.now(), IDLE_MS);
+            lastBusy = step.lastBusy;
+            if (step.exit) void shutdown(`idle ${Math.round(IDLE_MS / 1000)} s with nothing held and no window`);
+        }, Math.min(30_000, Math.max(1_000, Math.floor(IDLE_MS / 4)))).unref?.();
+    } else {
+        say('idle exit off (GENIE_HOST_IDLE_MS=0)');
+    }
     // Kept alive by the server; the interval above is unref'd so it never holds a host that is otherwise done.
 }
 

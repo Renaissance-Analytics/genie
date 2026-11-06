@@ -3,6 +3,7 @@ import { resolveDeckAnswer } from '../src/core/deck-resolve.js';
 import { ELEVATION_WAITING_DECK_ID, elevationWaitingDeckItem } from '../src/core/elevation-waiting.js';
 import { WindowElevation } from '../src/main/hosting-host.js';
 import type { PrivilegedStep } from '../src/main/elevate.js';
+import { notAvailableHere } from '../src/core/host-runtime.js';
 
 /**
  * AN ELEVATION THAT WAITED FOR A WINDOW (the host split, P5a): genie-host held it because no window was open; the next
@@ -38,5 +39,30 @@ describe('an elevation waiting for a window', () => {
         expect(asked.length).toBe(1);
         expect(elevation.waiting()).toEqual([]);
         expect(elevation.deckItems()).toEqual([]);
+    });
+});
+
+/**
+ * A HOST THAT CAN NEVER ELEVATE (P10.1d): genie-host on plain Node has no Genie window, and an OS elevation is only ever
+ * asked in one. It answers "not available on this host" in the one wording, asks nothing, and holds nothing — no Deck item
+ * waits for a window that cannot come, and no "it asks when a Genie window opens".
+ */
+describe('elevation on a host with no window', () => {
+    it('is not available here: nothing asked, nothing held, the one wording', async () => {
+        const asked: Array<readonly PrivilegedStep[]> = [];
+        const elevation = new WindowElevation({ connected: () => true, ask: async (steps) => { asked.push(steps); return { ok: true }; }, elevation: false });
+        const outcome = await elevation.run([hostsStep]);
+        expect(outcome).toEqual({ ok: false, failed: null, error: notAvailableHere('elevation to update the hosts file', 'a Genie window to ask in') });
+        expect(outcome.ok ? '' : outcome.error).not.toMatch(/window opens|open Genie/i);
+        expect(asked).toEqual([]);
+        expect(elevation.waiting()).toEqual([]);
+        expect(elevation.deckItems()).toEqual([]);
+    });
+
+    it('CONTROL: elevation: true is today\'s — asked in a connected window', async () => {
+        const asked: Array<readonly PrivilegedStep[]> = [];
+        const elevation = new WindowElevation({ connected: () => true, ask: async (steps) => { asked.push(steps); return { ok: false, failed: null, error: 'declined' }; }, elevation: true });
+        expect(await elevation.run([hostsStep])).toEqual({ ok: false, failed: null, error: 'declined' });
+        expect(asked).toHaveLength(1);
     });
 });

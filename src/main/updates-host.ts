@@ -85,6 +85,8 @@ export interface UpdatesServiceOptions {
     readonly clearFailed?: () => void;
     /** The helper could not be handed the install (it went): record why and start Genie again. */
     readonly handOverFailed?: (reason: string, launch: HelperLaunch) => void;
+    /** Why this host has no updater (P10.1d: plain Node, its image updated by its deployment). Absent = it has one. */
+    readonly unavailable?: string;
 }
 
 /** Why the last install did not happen, for the next window (`<home>/runtime/update-failed.json`). */
@@ -215,8 +217,10 @@ export class UpdatesService {
             case 'state':
                 return this.#host.state();
             case 'check':
+                if (this.#options.unavailable !== undefined) throw new Error(this.#options.unavailable);
                 return this.#host.check();
             case 'download':
+                if (this.#options.unavailable !== undefined) throw new Error(this.#options.unavailable);
                 return this.#host.download();
             case 'notes':
                 return this.#host.refreshNotes();
@@ -230,6 +234,7 @@ export class UpdatesService {
                 this.#launch = { file: args[0].file, args: [...args[0].args] };
                 return null;
             case 'install': {
+                if (this.#options.unavailable !== undefined) throw new Error(this.#options.unavailable);
                 if (!caller.window) throw new Error(NO_WINDOW_INSTALL);
                 const pid = args[0];
                 this.#windowPids = typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? [pid] : [];
@@ -245,6 +250,8 @@ export class UpdatesService {
      * the update CHANNEL's own `autoDownload` says so (updaterConfigFor); otherwise downloading stays a person's click.
      */
     startAutoCheck(schedule: (fn: () => void, ms: number) => () => void, timing: { initialMs: number; intervalMs: number } = AUTO_CHECK): () => void {
+        // No updater on this host (P10.1d): no clock, so no helper is ever started by one.
+        if (this.#options.unavailable !== undefined) return () => {};
         const off = this.#host.onChange((state) => {
             if (state.phase === 'available' && this.#config.autoDownload) queueMicrotask(() => { void this.#host.download(); });
         });
@@ -291,6 +298,8 @@ export class UpdatesService {
 
     #ensureHelper(): Promise<LinkedHelper> {
         if (this.#helper) return Promise.resolve(this.#helper);
+        // Whatever asks, a host with no updater launches no helper (P10.1d).
+        if (this.#options.unavailable !== undefined) return Promise.reject(new Error(this.#options.unavailable));
         return new Promise((resolve, reject) => {
             const patience = this.#options.helperPatienceMs ?? HELPER_PATIENCE_MS;
             const waiter = {

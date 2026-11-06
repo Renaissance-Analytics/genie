@@ -13,6 +13,13 @@ describe('genie-host.ts', () => {
         expect(src).toMatch(/hostIdleStep\(\{ agents: host\.count, windows: engine\.clients, ptys: relay\?\.live\(\) \?\? 0, \.\.\.onTheClock\(hostFlows\.list\(\), hostBook\.kept\(\)\) \}, lastBusy, Date\.now\(\), IDLE_MS\)/);
     });
 
+    it('the wait is hostIdleMs of GENIE_HOST_IDLE_MS, and with none (0 = never) no idle clock is started (P10.1c)', () => {
+        const src = host();
+        expect(src).toMatch(/const IDLE_MS = hostIdleMs\(process\.env\.GENIE_HOST_IDLE_MS\);/);
+        expect(src).not.toMatch(/Number\(process\.env\.GENIE_HOST_IDLE_MS/);
+        expect(src).toMatch(/if \(IDLE_MS !== null\) \{\s*setInterval\(\(\) => \{\s*const step = hostIdleStep\(/);
+    });
+
     it('no second reading of the clock is left beside it', () => {
         expect(host()).not.toMatch(/Date\.now\(\) - lastBusy/);
     });

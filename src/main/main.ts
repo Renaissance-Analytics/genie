@@ -2566,6 +2566,8 @@ async function boot(): Promise<void> {
         : composeServices;
     const composed: WindowServices = await composeWith({
         userData: genieRoot(),
+        // Said in the remote welcome (P10.1e): the same build the host's engine welcome says.
+        build: hostBuild(app.getVersion(), join(here, 'host.js')),
         pty: ptyPort,
         // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
         // main's own engine takes them only if the spawn host cannot start.
