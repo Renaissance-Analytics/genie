@@ -38,7 +38,7 @@ import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { channelFrom } from '../core/update-channel.js';
 import type { ReleaseLike } from '../core/update-notes.js';
 import { hostIdleMs, hostIdleStep } from '../core/host-idle.js';
-import { NO_BROWSER_HERE, NO_PAGES_HERE, runsOnElectron } from '../core/host-runtime.js';
+import { NO_BROWSER_HERE, NO_UPDATES_HERE, hostCapabilities } from '../core/host-runtime.js';
 import { fts5Refusal } from './fts5-check.js';
 import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -132,8 +132,8 @@ const home = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? proce
 const runtime = runtimeDir(home);
 const build = process.env.GENIE_HOST_BUILD ?? 'dev';
 const IDLE_MS = hostIdleMs(process.env.GENIE_HOST_IDLE_MS);
-/** Electron's binary as Node (the app), or plain Node (genie-cloud): no Electron, no Genie browser to start. */
-const onElectron = runsOnElectron();
+/** What this host can have — a window, the Genie browser, an elevation — from ONE helper: all three in the app, none on plain Node (genie-cloud). */
+const capabilities = hostCapabilities();
 const recordFile = join(runtime, 'host.json');
 const tokenFile = join(runtime, 'host.token');
 
@@ -260,6 +260,7 @@ async function main(): Promise<void> {
     const hostingElevation = new WindowElevation({
         connected: () => engineRef?.localWindowConnected() ?? false,
         ask: (steps) => (engineRef ? engineRef.elevate(steps) : Promise.reject(new Error('no Genie window is connected'))),
+        elevation: capabilities.elevation,
     });
     /*
      * THE APP DOOR (genie#1345; P5a.2 ruling 3): the door apps and scripts post through, and its keys — one writer of
@@ -428,7 +429,7 @@ async function main(): Promise<void> {
     let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
-    const browserService = new BrowserService({ ...(onElectron ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
     /** What this host supervises, stopped once — by an update's install (in its order) or by the shutdown, whichever is first. */
     let hostedStop: Promise<void> | null = null;
     const stopHostedOnce = (): Promise<void> => {
@@ -449,6 +450,7 @@ async function main(): Promise<void> {
      */
     const runningVersion = build.split('+')[0] ?? build;
     const updatesService = new UpdatesService({
+        ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
         host: {
             installDir: dirname(process.execPath),
             ownPid: process.pid,
@@ -743,7 +745,7 @@ async function main(): Promise<void> {
         reportPlan: (id, steps) => host.reportPlan(id, steps),
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
-        ...(onElectron ? {} : { unavailableHere: new Map([['pages', NO_PAGES_HERE]]) }),
+        capabilities,
         signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
         forwardedCalls,
         processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },

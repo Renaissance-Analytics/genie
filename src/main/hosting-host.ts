@@ -1,6 +1,7 @@
 import type { DeckItem } from '../core/deck.js';
 import type { EngineStatusView, ReconcileReport } from '../core/engine-reconcile.js';
 import { WAITING_FOR_A_WINDOW, elevationWaitingDeckItem } from '../core/elevation-waiting.js';
+import { notAvailableHere } from '../core/host-runtime.js';
 import type { GenRoute } from '../core/gen-router.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { EnvelopeSites, SiteActor } from './envelope-sites-host.js';
@@ -105,17 +106,29 @@ export interface HostingApi {
  * trust store) is asked of a CONNECTED window, which runs it exactly as a window always has. With no window connected
  * nothing is elevated: the request is held, answered "waiting for a window", and the next window is told (a Deck item)
  * — connecting is not an approval, so nothing runs until the person approves there.
+ *
+ * A host that can never elevate (plain Node, P10.1d: no Genie window can connect) asks nothing and holds nothing: it says
+ * the elevation is not available on this host, in the one wording.
  */
+export interface WindowElevationPorts {
+    connected(): boolean;
+    ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>;
+    now?: () => number;
+    /** false: this host can never elevate (hostCapabilities). Absent = it can. */
+    elevation?: boolean;
+}
+
 export class WindowElevation {
-    readonly #ports: { connected(): boolean; ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>; now?: () => number; /** false: this host can never elevate (hostCapabilities, P10.1d). Absent = it can. */ elevation?: boolean };
+    readonly #ports: WindowElevationPorts;
     readonly #listeners = new Set<() => void>();
     #waiting: { labels: string[]; at: number } | null = null;
 
-    constructor(ports: { connected(): boolean; ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>; now?: () => number; /** false: this host can never elevate (hostCapabilities, P10.1d). Absent = it can. */ elevation?: boolean }) {
+    constructor(ports: WindowElevationPorts) {
         this.#ports = ports;
     }
 
     async run(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> {
+        if (this.#ports.elevation === false) return { ok: false, failed: null, error: notAvailableHere(`elevation to ${[...new Set(steps.map((s) => s.label))].join(' and ')}`, 'a Genie window to ask in') };
         if (!this.#ports.connected()) return this.#hold(steps, 'no Genie window is open to ask');
         let outcome: ElevationOutcome;
         try {

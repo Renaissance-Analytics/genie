@@ -34,6 +34,9 @@ export interface HostCapabilities {
 }
 
 /** THE ONE PLACE that decides what this host can have (P10.1d). */
-export function hostCapabilities(_versions: Readonly<Record<string, string | undefined>> = process.versions): HostCapabilities {
-    return { window: true, browser: true, elevation: true };
+export function hostCapabilities(versions: Readonly<Record<string, string | undefined>> = process.versions): HostCapabilities {
+    // Electron's binary as Node is the app: a window can connect, the browser can be started, a window can elevate.
+    // Plain Node (genie-cloud's container) has none of the three.
+    const electron = runsOnElectron(versions);
+    return { window: electron, browser: electron, elevation: electron };
 }
