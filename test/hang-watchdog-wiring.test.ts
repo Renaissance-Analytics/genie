@@ -56,6 +56,6 @@ describe('the entries are wired', () => {
         // before-quit: after a cancelled quit and "just close the UI" have returned, before the shutdown runs.
         expect(main).toMatch(/if \(step === 'close-ui'\) \{[^\n]*\}\n\s*crashRecorder\.beforeQuit\(\);/);
         // A quit that ran to its end is clean: its record is taken back and the host told goodbye.
-        expect(main).toMatch(/\.finally\(\(\) => \{ crashRecorder\.cleanQuit\(\); heartbeatNow\?\.bye\(\); app\.quit\(\); \}\);/);
+        expect(main).toMatch(/\.finally\(\(\) => \{ crashRecorder\.cleanQuit\(\); heartbeatNow\?\.bye\(\); windowSafe\?\.endCleanly\('the window quit'\); app\.quit\(\); \}\);/);
     });
 });

@@ -154,7 +154,9 @@ describe('the quit’s shutdown pass (main.ts before-quit)', () => {
         // then the host ended) runs to its end before app.quit(). ss-repeat5 (2026-11-05): a race of the whole runQuit
         // against one bound let the window exit before engine.shutdown was sent, and the host lived on.
         // Then (Tynn #386) the quit is clean: its before-quit crash record is taken back and genie-host is told goodbye.
-        expect(count(/if \(step === 'pass'\) return;\s*event\.preventDefault\(\);\s*void runQuit\(quitPorts, \{ drainMs: QUIT_WRITES_MS \}\)\s*\.catch\(\(\) => \{[^}]*\}\)\s*\.finally\(\(\) => \{ crashRecorder\.cleanQuit\(\); heartbeatNow\?\.bye\(\); app\.quit\(\); \}\);\s*\}\);/g)).toBe(1);
+        expect(count(/if \(step === 'pass'\) return;\s*event\.preventDefault\(\);\s*void runQuit\(quitPorts, \{ drainMs: QUIT_WRITES_MS \}\)\s*\.catch\(\(\) => \{[^}]*\}\)\s*\.finally\(\(\) => \{ crashRecorder\.cleanQuit\(\); heartbeatNow\?\.bye\(\); windowSafe\?\.endCleanly\('the window quit'\); app\.quit\(\); \}\);\s*\}\);/g)).toBe(1);
+        // The no-host window writes the clean-exit marker LAST, after runQuit, right before the quit (Tynn #386); with a host
+        // endCleanly is nothing (window-safe-mode.ts).
         // Nothing races the quit's work: the drain's bound is runQuit's, the host's end has its own (agent-engine.ts).
         expect(count(/Promise\.race\(\[done/g)).toBe(0);
         // The stop that precedes the drain is the agents' (quit-sequence.test.ts holds the order).

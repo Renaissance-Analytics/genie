@@ -197,6 +197,8 @@ import { omarchyFacts } from './omarchy-skills.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART } from '../core/upgrade-drain.js';
 import { restoreAfterRelaunch } from './relaunch-restore.js';
+import { WindowSafeMode } from './window-safe-mode.js';
+import { windowWake } from './window-wake.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
 import { FilesWatchHub, type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
@@ -695,6 +697,12 @@ let crashReportMachine: WorkstationPort | null = null;
 let scratchTerminals: ScratchTerminals | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
+/**
+ * SAFE MODE AS THIS WINDOW READS IT (Tynn #386; window-safe-mode.ts): genie-host's over the link, or — on the emergency
+ * no-host path, where this window runs everything itself — the same runtime files, read here. Opened once the link is known.
+ */
+let windowSafe: WindowSafeMode | null = null;
+const windowSafeNow = (): boolean => windowSafe?.active() === true;
 /** The link to `genie-host` when agents run there (the host split, phase 1); `null` = the engine runs in this process. */
 let agentEngineLink: AgentEngineLink | null = null;
 /** Electron reports no change of proxy settings: asked when a window links and when the machine wakes. */
@@ -2615,12 +2623,18 @@ async function boot(): Promise<void> {
     const appInboxEnv = (source: AppEnvSource): Record<string, string> => (ownAppInboxKeys ? appInboxEnvFor({ url: appInboxServer?.url ?? null, token: ownAppInboxKeys.tokenFor(source) }) : {});
     // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
     // replicas of them. Only the emergency in-process engine opens them here.
+    // SAFE MODE, read before anything of this window's own starts: with no host, from the runtime files (Tynn #386).
+    windowSafe = WindowSafeMode.open({ link: agentEngineLink?.client ?? null, runtimeDir: runtimeDir(genieRoot()), log: (line) => { console.log(`[genie] ${line}`); lifecycleLog(line); } });
     const engineForStores = agentEngineLink;
     const composeWith = engineForStores
         ? (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })
         : composeServices;
     const composed: WindowServices = await composeWith({
         userData: genieRoot(),
+        // No host: this window's own flows, sites and engines start nothing by themselves in safe mode (Tynn #386).
+        safeMode: windowSafeNow,
+        heldSite: (siteId, name) => windowSafe?.own()?.hold('site', { id: siteId, name }),
+        safeModeLeft: (listener) => { windowSafe?.onChange((view) => { if (!view.active) listener(); }); },
         // Said in the remote welcome (P10.1e): the same build the host's engine welcome says.
         build: hostBuild(app.getVersion(), join(here, 'host.js')),
         pty: ptyPort,
@@ -3150,6 +3164,8 @@ async function boot(): Promise<void> {
             // Each kept process's own app credential (genie#1345), under its workspace's switch.
             appEnv: (p) => composed.appEnv(p),
             asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+            // Safe mode (Tynn #386): the restore starts no kept process; no scheduled task is armed.
+            safeMode: windowSafeNow,
             // THE WORKSPACE'S BACKGROUND-PROCESS LIMIT (beta.33), read live from the workspace's settings.
             limit: (workspaceId) => limitOf(composed.settings.snapshotFor(workspaceId), 'processes'),
             // Genie 1's background processes, imported ONCE as the book opens (core/v1-processes.ts) — before the restore.
@@ -3165,6 +3181,8 @@ async function boot(): Promise<void> {
             envFor: (workspaceId) => composed.engines.envFor(workspaceId),
             appEnv: (p) => composed.appEnv(p),
             asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+            // Safe mode (Tynn #386): the restore starts no kept process; no scheduled task is armed.
+            safeMode: windowSafeNow,
             nudge: (address, text, from) => {
                 const found = composed.resolveAddress(address);
                 return found.kind === 'one' && host !== null ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
@@ -3176,6 +3194,9 @@ async function boot(): Promise<void> {
         // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
         registry.subscribe(() => ownScheduler.plan());
         const restoredProcesses = ownBook.restore();
+        if (windowSafeNow()) for (const p of ownBook.kept()) if (restoredProcesses.heldBack.includes(p.id)) windowSafe?.own()?.hold('process', { id: p.id, name: p.name });
+        // Leaving safe mode arms the scheduled tasks again; it starts nothing by itself.
+        windowSafe?.onChange((view) => { if (!view.active) ownScheduler.plan(); });
         if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
         processBook = ownBook;
         processScheduler = ownScheduler;
@@ -3378,7 +3399,7 @@ async function boot(): Promise<void> {
     // told to continue; the rest only with the setting on, unprompted.
     // SAFE MODE (Tynn #386): genie-host said so before ready; then nobody is started or resumed and both lists are KEPT.
     void restoreAfterRelaunch({
-        safeMode: () => agentEngineLink?.client.safeModeView()?.active === true,
+        safeMode: windowSafeNow,
         takeRunningAtQuit: () => registry!.takeRunningAtQuit(),
         takeInterruptedAtQuit: () => registry!.takeInterruptedAtQuit(),
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
@@ -3403,8 +3424,11 @@ async function boot(): Promise<void> {
         log: lifecycleLog,
     });
     // Safe mode reaches every window's snapshot (its banner), and follows the host's changes (a Leave from any window).
-    registry.setSafeMode(() => agentEngineLink?.client.safeModeView() ?? null);
-    agentEngineLink?.client.onSafeMode(() => registry?.touch());
+    registry.setSafeMode(() => windowSafe?.view() ?? null);
+    windowSafe?.onChange(() => registry?.touch());
+    // No host: what a quit recorded is listed on the banner, and this window beats (it is the run).
+    windowSafe?.own()?.wasRunning([...registry.runningAtQuit(), ...registry.interruptedAtQuit()]);
+    if (windowSafe?.own()) setInterval(() => { windowSafe?.beat((registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id)); }, 15_000).unref?.();
     // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
     registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
     agentEngineLink?.client.onCrashState(() => registry?.touch());
@@ -3433,16 +3457,17 @@ async function boot(): Promise<void> {
     composed.approvals.onChange(() => registry?.touch());
     // MAIL WAKES THE AGENT: started as Start would be (opening starts nothing since q_04ce323c) — an asleep workspace or the agent cap refuses, and the notice waits.
     // One path for every source that may wake an agent: mail, and IssueWatch's `push`.
-    const wakeAgent = async (agentId: string): Promise<boolean> => {
-        const record = registry?.find(agentId as AgentId);
-        if (!record || !host) return false;
-        const refused = startRefusal(workspaceOps, record, {
+    const wakeAgent = windowWake({
+        safeMode: windowSafeNow,
+        find: (agentId) => (host ? registry?.find(agentId as AgentId) ?? null : null),
+        running: (record) => host?.probe(record.id)?.running === true,
+        refusal: (record) => startRefusal(workspaceOps, record, {
             running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
             cap: agentCapFrom(composed.settings.snapshotFor(record.workspaceId) ?? {}),
-        });
-        if (refused) { console.log(`[genie] a notice for ${record.name} waits: ${refused}`); return false; }
-        return (await host.start(record, cwdFor(record))).ok;
-    };
+        }),
+        start: async (record) => (host ? (await host.start(record, cwdFor(record))).ok : false),
+        log: (line) => console.log(line),
+    });
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
     // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told after the coalescing window — a busy one at its
     // next step, as typed input arrives (genie#1411). An app's message starts a stopped agent only if it is automated and
@@ -3676,7 +3701,7 @@ async function boot(): Promise<void> {
         ...processPorts(),
         openInBrowser: openInBrowserFor('user-gesture'),
         // "Leave safe mode" (Tynn #386): the host's; this window only asks.
-        safeMode: { leave: () => (agentEngineLink ? agentEngineLink.client.leaveSafeMode() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })) },
+        safeMode: { leave: () => (windowSafe ? windowSafe.leave() : Promise.resolve({ ok: false as const, reason: 'Genie is still starting' })) },
         // The reopened-window notice's two actions: forget it; or stop every agent — one click, the person's, never automatic.
         hangNotice: {
             dismiss: () => (agentEngineLink ? agentEngineLink.client.dismissHangNotice() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })),
@@ -4125,7 +4150,8 @@ app.on('before-quit', (event) => {
     // around the whole of it let the window exit before the host was told to end (ss-repeat5, 2026-11-05).
     void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
         .catch(() => { /* an unwritten row never blocks a quit */ })
-        .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); app.quit(); });
+        // No host: this window was the run, and its clean end writes the marker, last (Tynn #386). With a host: nothing.
+        .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); windowSafe?.endCleanly('the window quit'); app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */

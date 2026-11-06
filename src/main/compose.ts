@@ -78,6 +78,14 @@ import type { GenRouterServer } from './gen-router-server.js';
  */
 
 export interface ComposeInput extends HostingOptions {
+    /**
+     * SAFE MODE (Tynn #386), on the emergency no-host path: this window's own flows, sites and engines start nothing by
+     * themselves while it is on (window-safe-mode.ts reads it from the runtime files). `heldSite` names a site it held;
+     * `safeModeLeft` is told when the person leaves it, so the own flow clock plans again.
+     */
+    readonly safeMode?: () => boolean;
+    readonly heldSite?: (siteId: string, name: string) => void;
+    readonly safeModeLeft?: (listener: () => void) => void;
     /** This Genie's build, said in the remote `welcome` (P10.1e). Absent = 'dev'. */
     readonly build?: string;
     /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
@@ -483,7 +491,10 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         envFor: (id) => hosting.engines.envFor(id),
         addKnowledge: async (entry) => ({ id: (await knowledge.add(entry as never)).id }),
         attention,
+        ...(input.safeMode ? { safeMode: input.safeMode } : {}),
     }) : null;
+    // Leaving safe mode arms the own flow clock again; it starts nothing by itself.
+    if (ownEngine) input.safeModeLeft?.(() => { ownEngine.scheduler.plan(); });
     const flowScheduler: FlowSchedulerApi = input.flowsEngine?.scheduler ?? ownEngine!.scheduler;
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
