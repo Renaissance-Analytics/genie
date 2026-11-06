@@ -136,6 +136,17 @@ export class TerminalViewStreams {
     refs(id: string): number { return [...this.#views()].filter(view => view.id === id).length; }
     bufferedBytes(owner: string, view: string): number { return this.#owners.get(owner)?.get(view)?.bytes ?? 0; }
     watch(owner: string, view: string, id: string): TerminalStreamSnapshot | null {
+        const state = this.#prepare(owner, view, id);
+        try { return this.#complete(state, this.#ports.snapshot(id, owner)); }
+        catch (error) { if (state.alive) this.unwatch(owner, view); throw error; }
+    }
+    /** Fresh metadata can require an authenticated engine round trip. Membership/listening precede that wait. */
+    async watchFresh(owner: string, view: string, id: string, read: () => Promise<TerminalStreamSnapshot | null>): Promise<TerminalStreamSnapshot | null> {
+        const state = this.#prepare(owner, view, id);
+        try { return this.#complete(state, await read()); }
+        catch (error) { if (state.alive) this.unwatch(owner, view); throw error; }
+    }
+    #prepare(owner: string, view: string, id: string): ViewState {
         if (this.#disposed) throw new Error('terminal stream connection is closed');
         this.unwatch(owner, view);
         const state: ViewState = { owner, view, id, receiver: new TerminalStreamReceiver(), queue: new Queue(), bytes: 0, activeBytes: 0, alive: true, ready: false, resync: false, running: false, scheduled: false };
@@ -145,14 +156,17 @@ export class TerminalViewStreams {
         try {
             // Subscribe BEFORE reading the tail. Reentrant producer data is buffered, then reconciled with endOffset.
             this.#off ??= this.#ports.listen(event => this.#data(event), event => this.#exit(event));
-            const snapshot = this.#ports.snapshot(id, owner);
-            if (!snapshot || snapshot.id !== id) { this.unwatch(owner, view); return null; }
-            const result = state.receiver.attach(snapshot), early = state.queue, overflowed = state.resync;
-            state.queue = new Queue(); state.bytes = 0; state.ready = true; state.resync = false;
-            if (result.kind === 'resync' || overflowed) this.#resync(state, 'terminal attachment requires a full resync');
-            else while (early.length && !state.resync) { const frame = early.shift()!; this.#ingest(state, frame.event, frame.bytes); }
-            return snapshot;
+            return state;
         } catch (error) { this.unwatch(owner, view); throw error; }
+    }
+    #complete(state: ViewState, snapshot: TerminalStreamSnapshot | null): TerminalStreamSnapshot | null {
+        if (!state.alive) return null;
+        if (!snapshot || snapshot.id !== state.id) { this.unwatch(state.owner, state.view); return null; }
+        const result = state.receiver.attach(snapshot), early = state.queue, overflowed = state.resync;
+        state.queue = new Queue(); state.bytes = 0; state.ready = true; state.resync = false;
+        if (result.kind === 'resync' || overflowed) this.#resync(state, 'terminal attachment requires a full resync');
+        else while (early.length && !state.resync) { const frame = early.shift()!; this.#ingest(state, frame.event, frame.bytes); }
+        return snapshot;
     }
     unwatch(owner: string, view: string): void {
         const mine = this.#owners.get(owner), state = mine?.get(view);

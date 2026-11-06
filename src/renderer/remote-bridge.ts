@@ -1,4 +1,5 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
+import { localTerminalClient } from './local-terminal-client.js';
 import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
 import { LOCAL_EVENTS, parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
@@ -110,6 +111,7 @@ interface PhonePush {
 }
 
 export function connectRemote(transport: ClientTransport, auth: AuthRequest, label: string, options: RemoteOptions = {}): RemoteClient {
+    let terminalClient: ReturnType<typeof localTerminalClient> | undefined;
     let filesWatches: ReturnType<typeof localFilesWatchClient> | undefined;
     let state: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null, pairing: null };
     const stateListeners = new Set<(s: RemoteState) => void>();
@@ -163,6 +165,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     });
     transport.onClose(() => {
         filesWatches?.dispose();
+        terminalClient?.dispose();
         // A refused handshake arrives as a close with no welcome and no refused frame: say so, once.
         if (!state.connected) resolveReady({ ok: false, reason: 'the connection closed before the host answered — wrong address, or the host is not listening' });
         setState({ connected: false, driving: false });
@@ -510,6 +513,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
     }) : undefined;
     if (local) {
+        terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on });
+        bridge.terminals = terminalClient.terminals;
         bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
         bridge.chatDrafts = localDraftsClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
         const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });

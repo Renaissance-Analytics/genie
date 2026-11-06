@@ -1,4 +1,6 @@
 import type { ActivityFeed } from '../../core/activity-feed.js';
+import { flushSync } from 'react-dom';
+import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import { useMinuteTick } from '../use-activity-feeds.js';
 import { PathBrowse } from './HostPathPicker.js';
 import { IssueWatchPanel } from './IssueWatchPanel.js';
@@ -231,6 +233,7 @@ function formatHeld(bytes: number): string {
 
 export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
+    const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
     const wsColor = useWorkspaceColor(workspace.id);
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
@@ -281,18 +284,6 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
     /** A pane size the engine can be opened at, so the first paint is not the wrong shape. */
     const lastSize = useRef<{ cols: number; rows: number }>({ cols: 120, rows: 30 });
 
-    // Output and exits for EVERY terminal arrive on the same channel; the reducer drops what is
-    // not this workspace's. Subscribed once per mount, released on unmount — the old build
-    // leaked one listener per reopened panel.
-    useEffect(() => {
-        const offData = terminals.onData((id, data) => setState((s) => terminalData(s, id, data)));
-        const offExit = terminals.onExit((id, code) => setState((s) => terminalExited(s, id, code)));
-        return () => {
-            offData();
-            offExit();
-        };
-    }, [terminals]);
-
     // Re-attach to terminals already open in this workspace — a reloaded window joins a running
     // build rather than losing it (§6.5). Their scrollback comes with the open.
     // Under genie-host they survive a window restart too (the host split, P2.1), and the workspace says where it is:
@@ -315,13 +306,12 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
         return terminals.open(workspace.id, { ...lastSize.current }).then((opened) => {
             setState((s) => terminalOpened(s, { id: opened.id, workspaceId: workspace.id, shell: opened.shell, pid: opened.pid, exited: null }, opened.scrollback));
             return opened.id;
-        });
+        }).catch(error => { setTerminalError(error instanceof Error ? error.message : String(error)); throw error; });
     }, [terminals, workspace.id]);
 
     const closeTerminal = useCallback(
         (id: string) => {
-            terminals.close(id);
-            setState((s) => terminalClosed(s, id));
+            terminalAction(async () => { await terminals.close(id); setState((s) => terminalClosed(s, id)); }, setTerminalError);
         },
         [terminals],
     );
@@ -338,6 +328,18 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
     // LAYOUT (§6.5): the workspace's own setting decides how many panes show; the grid is for that count only.
     const layout = layoutModeFrom(ops?.settings?.values ?? {});
     const shown = visiblePanes(state, layout);
+    const terminalMembership = JSON.stringify([...new Set(onScreen === 'terminals'
+        ? shown.filter(id => state.terminals.some(terminal => terminal.id === id))
+        : onScreen.startsWith('tab:') ? (designed.tabs.find(tab => `tab:${tab.id}` === onScreen)?.cells ?? []).flatMap(cell => cell?.kind === 'terminal' && cell.ref !== null ? [cell.ref] : []) : [])]);
+    useEffect(() => {
+        const stops = (JSON.parse(terminalMembership) as string[]).map(id => watchTerminal(terminals, workspace.id, id, {
+            snapshot: joined => flushSync(() => { setState(value => ({ ...value, output: { ...value.output, [id]: joined.scrollback } })); setTerminalError(null); }),
+            data: text => flushSync(() => setState(value => terminalData(value, id, text))),
+            exit: code => flushSync(() => setState(value => terminalExited(value, id, code))),
+            error: error => setTerminalError(error.message),
+        }));
+        return () => { for (const stop of stops) stop(); };
+    }, [terminals, workspace.id, terminalMembership]);
     // SPLITS (§4.6): remembered per workspace and per arrangement; a stored split that does not fit is equal panes.
     const splits = splitsFrom(ops?.settings?.values ?? {}, layout, shown.length);
     const template = gridTemplate(layout, shown.length, splits);
@@ -476,7 +478,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                 <button
                     type="button"
                     data-terminal-add=""
-                    onClick={() => { void openTerminal(); }}
+                    onClick={() => { void openTerminal().catch(() => {}); }}
                     className="flex items-center gap-1.5 px-3 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
                 >
                     <Icon name="plus" className="h-3.5 w-3.5" />
@@ -555,10 +557,10 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                             paneId={id}
                                             output={state.output[id] ?? ''}
                                             readOnly={t.exited !== null}
-                                            onData={(data) => terminals.write(id, data)}
+                                            onData={(data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
                                             onResize={({ cols, rows }) => {
                                                 lastSize.current = { cols, rows };
-                                                terminals.resize(id, cols, rows);
+                                                terminalAction(() => terminals.resize(id, cols, rows), setTerminalError);
                                             }}
                                             root={workspace.path}
                                             onOpenFile={(file) => {
@@ -578,7 +580,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                         <button
                             type="button"
                             data-terminal-add-empty=""
-                            onClick={() => { void openTerminal(); }}
+                            onClick={() => { void openTerminal().catch(() => {}); }}
                             className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]"
                         >
                             Open a terminal
@@ -590,6 +592,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
 
     return (
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
+            {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
             {trustStep && onTrust ? <TrustStep step={trustStep} onTrust={onTrust} /> : null}
             {/* View header, 56px — the workspace's name and path, like the Dashboard's group header. */}
             {/*
@@ -941,10 +944,10 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                         output={p.ref === null ? '' : state.output[p.ref] ?? ''}
                                         Pane={Pane}
                                         root={workspace.path}
-                                        onData={(id, data) => terminals.write(id, data)}
-                                        onResize={(id, { cols, rows }) => { lastSize.current = { cols, rows }; terminals.resize(id, cols, rows); }}
+                                        onData={(id, data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
+                                        onResize={(id, { cols, rows }) => { lastSize.current = { cols, rows }; terminalAction(() => terminals.resize(id, cols, rows), setTerminalError); }}
                                         onOpenFile={(file) => { const target = workspaceFileOf(workspace.path, file); if (target) onOpenFile?.(target.path, target.line); }}
-                                        onStart={() => { if (at >= 0) void openTerminal().then((id) => placeTerminal(tab.id, at, id)); }}
+                                        onStart={() => { if (at >= 0) void openTerminal().then((id) => placeTerminal(tab.id, at, id)).catch(() => {}); }}
                                     />
                                 );
                             }

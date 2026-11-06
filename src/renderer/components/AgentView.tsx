@@ -1,4 +1,6 @@
 import { activityRows } from '../../core/stream-view.js';
+import { flushSync } from 'react-dom';
+import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
 import { providerLogin } from '../../core/provider-login.js';
@@ -291,23 +293,29 @@ export interface AgentViewProps {
 function ObservedTerminal({ terminalId, terminals }: { terminalId: string; terminals: GenieBridge['terminals'] }) {
     const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
     const [output, setOutput] = useState('');
+    const [terminalError, setTerminalError] = useState<string | null>(null);
+    const [exited, setExited] = useState<number | null>(null);
     const size = useRef({ cols: 120, rows: 30 });
     useEffect(() => {
         let live = true;
         void import('./TerminalPane.js').then((m) => { if (live) setPane(() => m.TerminalPane); });
-        void terminals.attach(null, terminalId).then((joined) => { if (live && joined) setOutput(joined.scrollback); });
-        const off = terminals.onData((id, data) => { if (id === terminalId) setOutput((o) => o + data); });
+        const off = watchTerminal(terminals, null, terminalId, {
+            snapshot: joined => flushSync(() => { setOutput(joined.scrollback); setTerminalError(null); setExited(null); }),
+            data: text => flushSync(() => setOutput(value => value + text)),
+            exit: code => flushSync(() => setExited(code)), error: error => setTerminalError(error.message),
+        });
         return () => { live = false; off(); };
     }, [terminals, terminalId]);
     return (
         <div data-observed-terminal={terminalId} className="min-h-0 flex-1 bg-[var(--bg-0)]">
+            {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
             {Pane ? (
                 <Pane
                     paneId={`observed-${terminalId}`}
                     output={output}
-                    readOnly={false}
-                    onData={(data) => terminals.write(terminalId, data)}
-                    onResize={({ cols, rows }) => { size.current = { cols, rows }; terminals.resize(terminalId, cols, rows); }}
+                    readOnly={exited !== null}
+                    onData={(data) => terminalAction(() => terminals.write(terminalId, data), setTerminalError)}
+                    onResize={({ cols, rows }) => { size.current = { cols, rows }; terminalAction(() => terminals.resize(terminalId, cols, rows), setTerminalError); }}
                 />
             ) : null}
         </div>

@@ -55,14 +55,8 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // The safe-mode banner's crash report (Tynn #386 part 4): built and sent from this window, with the host's proof.
     ['genie:crash-report-draft', 'window-port'],
     ['genie:crash-report-send', 'window-port'],
-    ['genie:terminal-open', 'protocol:terminals.open'],
     // Opens a window on this machine (Tynn story #378): the window's own, like Take Over's window.
     ['genie:scratch-terminal-open', 'window-port'],
-    ['genie:terminal-write', 'protocol:terminals.write'],
-    ['genie:terminal-resize', 'protocol:terminals.resize'],
-    ['genie:terminal-close', 'protocol:terminals.close'],
-    ['genie:terminal-list', 'protocol:terminals.list'],
-    ['genie:terminal-attach', 'protocol:terminals.attach'],
     ['genie:files-open-external', 'window-port'],
     ['genie:files-reveal', 'window-port'],
     // The picker stays a window port; its copy step moves to the host in P5.

@@ -33,5 +33,5 @@ it('engine snapshot keeps native replica retention, authoritative counters and d
 });
 it.each(['components/Workspace.tsx', 'components/TakeOverWindow.tsx', 'components/AgentView.tsx'])('the %s consumer acquires explicit displayed-terminal interest and retires broad listeners', async path => {
     const source = await readFile(new URL(`../src/renderer/${path}`, import.meta.url), 'utf8');
-    expect(source).toContain('watchTerminal('); expect(source).not.toMatch(/terminals\.on(?:Data|Exit)\(/);
+    expect(source.includes('watchTerminal(')).toBe(true); expect(/terminals\.on(?:Data|Exit)\(/.test(source)).toBe(false);
 });

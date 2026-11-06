@@ -97,12 +97,13 @@ function wireNative() {
     let data: ((event: { id: string; data: string; epoch: string; offset: number }) => void) | null = null;
     let exit: ((event: { id: string; exitCode: number; epoch: string; endOffset: number }) => void) | null = null;
     const calls: Array<{ method: string; args: unknown[] }> = []; let listeners = 0, endOffset = 2_000_000;
+    let listed: Array<{ id: string; pid: number; shell: string }> = [];
     const tail = 'tail' + String.fromCharCode(0xd800) + '🧪';
     const value = { id: 'quiet', pid: 41, shell: 'native', scrollback: tail };
-    const native = { invoke: async (method: string, args: unknown[]) => { calls.push({ method, args }); return method === 'open' ? { id: 'opened', pid: 51, shell: 'native' } : method === 'attach' ? value : true; },
+    const native = { invoke: async (method: string, args: unknown[]) => { calls.push({ method, args }); return method === 'open' ? { id: 'opened', pid: 51, shell: 'native' } : method === 'attach' ? value : method === 'list' ? listed : true; },
         snapshot: async (_workspace: unknown, id: string) => id === 'quiet' ? { value, position: { epoch: 'epoch', endOffset } } : null,
         listen: (onData: typeof data, onExit: typeof exit) => { listeners++; data = onData; exit = onExit; return () => { listeners--; data = null; exit = null; }; } };
-    return { native, calls, tail, listeners: () => listeners, emit: (text: string) => { const offset = endOffset; endOffset += text.length; data?.({ id: 'quiet', data: text, epoch: 'epoch', offset }); },
+    return { native, calls, tail, setTail: (text: string) => { value.scrollback = text; }, setList: (values: typeof listed) => { listed = values; }, listeners: () => listeners, emit: (text: string) => { const offset = endOffset; endOffset += text.length; data?.({ id: 'quiet', data: text, epoch: 'epoch', offset }); },
         unrelated: () => data?.({ id: 'hidden', data: 'must-not-travel', epoch: 'hidden', offset: 0 }), exit: () => exit?.({ id: 'quiet', exitCode: 7, epoch: 'epoch', endOffset }) };
 }
 it.each(['write', 'open'])('a large local %s crosses bounded frames without staging and reaches native text intact', async method => {
@@ -136,4 +137,15 @@ it('local stream ACK waits for actual snapshot and data application, and exit fo
     expect(f.calls.filter(call => call.method === 'terminals.localAck')).toHaveLength(0);
     applied.resolve(); await vi.waitFor(() => expect(order).toEqual(['snapshot', 'last', 'exit:7']));
     expect(f.calls.some(call => call.method === 'terminals.localAck')).toBe(true); expect(errors).toEqual([]); stop();
+});
+it.each(['attach', 'list'])('large native %s DTOs use owner-scoped JSON blobs, preserving UTF-16 and frame limits', async method => {
+    const h = wireNative(), f = await resourceDoor(cleanups, {}, { localTerminals: h.native }), c = await f.client();
+    const tail = (String.fromCharCode(0xd800) + '\u001b').repeat(131_070) + '🧪' + String.fromCharCode(0xdc00);
+    const listed = Array.from({ length: 6000 }, (_, index) => ({ id: `native-${index}-${'x'.repeat(500)}`, pid: index + 1, shell: tail.slice(-10) }));
+    h.setTail(tail); h.setList(listed);
+    const result = method === 'attach' ? await c.bridge.terminals.attach(null, 'quiet') : await c.bridge.terminals.list('work');
+    expect(JSON.stringify(result) === JSON.stringify(method === 'attach' ? { id: 'quiet', pid: 41, shell: 'native', scrollback: tail } : listed)).toBe(true);
+    expect(f.serialized.every(frame => Buffer.byteLength(frame) <= 1024 * 1024)).toBe(true);
+    expect(f.calls.some(call => call.method === 'blob.open' && call.args[0] === 'terminal-json')).toBe(true);
+    expect(f.calls.some(call => call.method === 'content.release')).toBe(true); expect(h.listeners()).toBe(0);
 });

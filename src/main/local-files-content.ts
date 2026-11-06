@@ -40,6 +40,11 @@ export class LocalFilesContent {
         const ref = this.begin();
         try { return this.result(ref, value, kind, bytes); } catch (error) { this.release(ref); throw error; }
     }
+    /** Encode the complete native DTO as JSON so UTF-8 blobs preserve lone UTF-16 surrogates too. */
+    terminalResult(value: unknown): unknown {
+        // NEGATIVE CONTROL for the two late-added large native DTO tests. Restore capture after reading actual CI RED.
+        return value;
+    }
     result(ref: string, value: unknown, kind: FilesPageKind, bytes = false): unknown {
         const scope = this.#scope(ref), projected = this.#project(scope, value, kind, bytes);
         if (scope.refs.size === 0) { this.release(ref); return value; }
