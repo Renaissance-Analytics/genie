@@ -6,6 +6,7 @@ import {
     capabilityOf,
     filterSnapshotForWorkspace,
     parseMessage,
+    REMOTE_PROTOCOL,
     type ControlMethod,
     type RemoteMethod,
     type ServerConnection,
@@ -145,6 +146,8 @@ export class RemoteHost {
     readonly #openPage: PageOpener | undefined;
     readonly #createLocalUploads: (() => LocalUploads | Promise<LocalUploads>) | undefined;
     readonly #hostName: string;
+    /** This Genie's build, said in `welcome` with the wire's protocol (P10.1e). */
+    readonly #build: string;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
     readonly #devices: DeviceStore;
@@ -175,6 +178,7 @@ export class RemoteHost {
         this.#api = deps.api;
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
+        this.#build = deps.build ?? 'dev';
         this.#baton = deps.baton;
         this.#pins = deps.pins;
         this.#devices = deps.devices;
@@ -425,6 +429,9 @@ export class RemoteHost {
             isOwner: connection.auth.isOwner,
             workspaceId: connection.auth.workspaceId,
             ...(token ? { token } : {}),
+            // The version handshake (P10.1e), additive: an old client reads the fields above as it always has.
+            protocol: REMOTE_PROTOCOL,
+            build: this.#build,
         });
         this.#listen();
         if (!connection.local) this.#changed();

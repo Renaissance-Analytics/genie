@@ -60,6 +60,9 @@ export function hostRegistrations(all: readonly Registration[], options: HostToo
         const handler = async (args: JsonObject, context: ToolContext): Promise<McpToolResult> => {
             const resolved = callerFrom(args, context.headers, options.resolveCaller);
             const call: ForwardedToolCall = { name, args, headers: { ...context.headers }, caller: typeof resolved === 'string' ? null : resolved };
+            // Never on this host, window or not (P10.1d): forwarding it would only ask a window that cannot help.
+            const notHere = options.unavailableHere?.get(name);
+            if (notHere !== undefined) return { text: notHere, isError: true };
             if (!options.window.connected()) {
                 if (name === 'openFileForUser') {
                     options.openFileLater(call);

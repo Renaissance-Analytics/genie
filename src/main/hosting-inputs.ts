@@ -78,8 +78,14 @@ export async function hostHostingOptions(paths: HostMachinePaths, log: (line: st
     let caddyBin: string | null = null;
     for (const problem of paths.problems) log(problem);
     const bundled = paths.resources ? caddyBinPath(paths.resources, platform) : null;
+    // A resources folder with no Caddy in it (genie-cloud's, P10.1d, when none was installed): Hosting names where it looked.
+    let noCaddyHere: string | null = null;
     if (bundled === null) {
-        if (paths.resources) log(`no bundled Caddy under ${paths.resources}`);
+        if (paths.resources) {
+            const looked = join(paths.resources, 'runtime', platform === 'win32' ? 'caddy.exe' : 'caddy');
+            noCaddyHere = `there is no Caddy at ${looked}, so https://<name>.gen in external browsers is off`;
+            log(noCaddyHere);
+        }
     } else {
         const copy = await userCaddyCopy(bundled, join(runtimeDir(paths.home), 'caddy-bin'));
         if (copy.error) log(`[caddy] ${copy.error}`);
@@ -95,7 +101,7 @@ export async function hostHostingOptions(paths: HostMachinePaths, log: (line: st
         v1CaDirs: [...new Set([...(paths.v1UserData ? [join(paths.v1UserData, 'host-gen')] : []), ...(paths.appData ? [join(paths.appData, 'Genie', 'host-gen')] : [])])],
         ...(paths.v1UserData ? { v1Services: { database: join(paths.v1UserData, 'genie.db') } } : {}),
         frontDoorPort: 0,
-        ...(paths.noCaddyReason ? { noCaddyReason: paths.noCaddyReason } : {}),
+        ...(paths.noCaddyReason ? { noCaddyReason: paths.noCaddyReason } : noCaddyHere ? { noCaddyReason: noCaddyHere } : {}),
         // The Caddy one is Hosting's front-door line already; the others are lines of their own.
         problems: paths.problems.filter((p) => p !== paths.noCaddyReason),
     };

@@ -11,6 +11,6 @@ export const NO_BROWSER_HERE = 'The Genie browser is not available on this host:
 export const NO_PAGES_HERE = 'pages is not available on this host: it runs on plain Node, with no Electron for the Genie browser. Nothing was done.';
 
 /** Whether this process is Electron's binary (as Node or not). `process.versions` by default. */
-export function runsOnElectron(_versions: Readonly<Record<string, string | undefined>> = process.versions): boolean {
-    return true;
+export function runsOnElectron(versions: Readonly<Record<string, string | undefined>> = process.versions): boolean {
+    return versions['electron'] !== undefined;
 }

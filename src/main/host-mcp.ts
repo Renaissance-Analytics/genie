@@ -69,6 +69,8 @@ export interface HostMcpPorts {
     readonly forwardedCalls?: Map<string, import('./mcp-tools.js').McpCall>;
     /** Where the endpoint is remembered (`<genieHome>/mcp-endpoint.json`). */
     readonly endpointFile: string;
+    /** Window tools this host can never run, with what the agent is told (P10.1d: `pages` on plain Node). */
+    readonly unavailableHere?: ReadonlyMap<string, string>;
     readonly log: (line: string) => void;
 }
 
@@ -143,7 +145,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
         }));
-        const served = hostRegistrations(all, { resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
+        const served = hostRegistrations(all, { resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.unavailableHere ? { unavailableHere: ports.unavailableHere } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
         tools = served.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
         // The action signal (the Dashboard row's "what it just did") for the HOST's own tools only: a forwarded tool runs in
         // the window, which signals it there — signalled here too, it would show twice.
