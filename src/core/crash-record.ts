@@ -212,7 +212,7 @@ export function fitCrashRecord(record: CrashRecord): string {
     const exitAgents = record.kind === 'exit' ? record.agents.slice(0, AGENTS).map((a) => clip(a, NAME_CHARS)) : [];
     const build = (): string => {
         switch (record.kind) {
-            case 'hang': return JSON.stringify({ kind: record.kind, at: record.at, windowPid: record.windowPid, lastBeatAt: record.lastBeatAt, lifecycle, stalls, memory, agents });
+            case 'hang': return JSON.stringify({ ...record, lifecycle, stalls, memory, agents });
             case 'lost': return JSON.stringify({ ...record, lifecycle, memory });
             case 'exit': return JSON.stringify({ ...record, reason: clip(record.reason, NAME_CHARS * 2), agents: exitAgents });
         }
