@@ -55,9 +55,10 @@ export class InboxReplica {
                 const removed = new Set(event.removed);
                 this.#messages = this.#messages.filter((m) => !removed.has(m.id)).map((m) => updated.get(m.id) ?? m);
             }
-            for (const m of event.appended) this.#messages.push(m);
-            // Restoring hidden history may append an older sequence than the current window holds.
-            if (event.appended.length) this.#messages.sort((a, b) => a.seq - b.seq);
+            // The involving cache's append fast path assumes old entries stayed put. Restored older mail replaces the array.
+            const last = this.#messages.at(-1)?.seq ?? -Infinity;
+            if (event.appended.some((m) => m.seq < last)) this.#messages = [...this.#messages, ...event.appended].sort((a, b) => a.seq - b.seq);
+            else for (const m of event.appended) this.#messages.push(m);
             this.#cursors = { ...event.cursors };
             this.#filtered = event.filtered === true;
             return;

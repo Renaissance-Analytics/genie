@@ -207,7 +207,9 @@ const ALL_WORKSPACES = '';
  * react-fancy Tabs in the pills variant, not Buttons (the owner, 2026-11-01: "those should not be buttons, it's a menu"):
  * each is role="tab", the one in view aria-selected.
  */
-export function MobileWorkspaces({ workspaces, agents, items, selected, onSelect }: MobileWorkspacesProps) {
+export function MobileWorkspaces({ workspaces: registered, agents, items, selected: requested, onSelect }: MobileWorkspacesProps) {
+    const workspaces = registered.filter((w) => w.asleep !== true);
+    const selected = requested !== null && registered.some((w) => w.id === requested && w.asleep) ? null : requested;
     return (
         <nav data-mobile-workspaces aria-label="Workspaces" className="shrink-0 overflow-x-auto overscroll-x-contain border-b border-[var(--border-1)] px-4 py-2">
             <Tabs variant="pills" activeTab={selected ?? ALL_WORKSPACES} onTabChange={(id) => onSelect(id === ALL_WORKSPACES ? null : id)}>
@@ -221,7 +223,6 @@ export function MobileWorkspaces({ workspaces, agents, items, selected, onSelect
                                 <span>{w.name ?? workspaceLabel(workspaces, w.id)}</span>
                                 <span className="font-mono text-[11px] text-[var(--fg-4)]">{count}</span>
                                 {waiting > 0 ? <span data-mobile-ws-waiting={w.id} className="rounded-full bg-[var(--warning)] px-1.5 text-[11px] font-semibold text-black">{waiting}</span> : null}
-                                {w.asleep ? <span data-mobile-ws-asleep={w.id} className="text-[11px] text-[var(--fg-4)]">asleep</span> : null}
                             </Tabs.Tab>
                         );
                     })}

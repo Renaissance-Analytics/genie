@@ -16,7 +16,7 @@ export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readR
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
-import { hibernatedRecipientRefusal } from '../core/inbox.js';
+import { hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
 
 /**
  * THE REGISTRY — the main process's single answer to "what is going on".
@@ -742,6 +742,8 @@ export class Registry {
     }
 
     mailRefusal(text: string, workspaceScope?: string): string | null {
+        const visible = this.listAgents().filter((r) => workspaceScope === undefined || r.workspaceId === workspaceScope);
+        if (resolveMailAddress(text, visible, this.workspaceSlugs()).kind !== 'none') return null;
         const asleep = new Set(this.#workspaces.filter((w) => w.asleep === true).map((w) => w.id));
         const slugs = slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: w.asleep === true ? w.hibernatedName ?? folderName(w.path) : this.#namer(w.path) })));
         return hibernatedRecipientRefusal(text, this.#agents, asleep, slugs, workspaceScope);

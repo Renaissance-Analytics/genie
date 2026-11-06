@@ -1713,6 +1713,11 @@ function DesktopApp({ bridge }: AppProps) {
     // stale address — the one state a person cannot get out of without knowing a shortcut.
     // It happens in practice: a hash left over from a previous version survives an upgrade.
     const surface = parsed.surface;
+    const hiddenWorkspaceIds = new Set([...(snapshot.hibernatedWorkspaces ?? []).map((w) => w.id), ...(snapshot.workspaces ?? []).filter((w) => w.asleep).map((w) => w.id)]);
+    const lastFlowOwner = useRef<{ id: string; workspaceId: string } | null>(null);
+    const currentFlow = parsed.surface === 'flow' ? features.flows?.flows.find((flow) => flow.id === parsed.flowId) : null;
+    if (currentFlow) lastFlowOwner.current = { id: currentFlow.id, workspaceId: currentFlow.workspaceId };
+    const flowWorkspaceId = parsed.surface === 'flow' ? parsed.workspaceId ?? (lastFlowOwner.current?.id === parsed.flowId ? lastFlowOwner.current.workspaceId : null) : null;
     useEffect(() => {
         if (!SERVABLE.includes(surface)) window.location.replace(`#${DEFAULT_ROUTE}`);
     }, [surface]);
@@ -1728,6 +1733,7 @@ function DesktopApp({ bridge }: AppProps) {
             <FlowEditorWindow
                 flowId={parsed.flowId}
                 workspaceId={parsed.workspaceId}
+                hibernated={flowWorkspaceId !== null && hiddenWorkspaceIds.has(flowWorkspaceId)}
                 data={features}
                 workspaces={snapshot.workspaces ?? []}
                 act={(action) => (resolvedBridge ? resolvedBridge.features.act(action) : Promise.reject(new Error('This runs inside Genie.')))}
@@ -1737,11 +1743,12 @@ function DesktopApp({ bridge }: AppProps) {
     }
     // THE FILE PANEL IN ITS OWN WINDOW (§4.3): the panel and nothing else; closing the window docks it back.
     if (parsed.surface === 'files') {
-        const ws = snapshot.workspaces?.find((w) => w.id === parsed.workspaceId) ?? null;
+        const ws = snapshot.workspaces?.find((w) => w.id === parsed.workspaceId && !w.asleep) ?? null;
         return (
             <PluginEditorsContext.Provider value={pluginEditors}>
             <FilesWindow
                 workspace={ws}
+                hibernated={hiddenWorkspaceIds.has(parsed.workspaceId)}
                 loading={snapshot.workspaces === null}
                 files={resolvedBridge?.files ?? NO_FILES}
                 onBringBack={() => window.close()}

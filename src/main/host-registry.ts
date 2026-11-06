@@ -2,7 +2,7 @@ import { slugsFor } from '../core/address.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { folderName } from '../core/workspace-name.js';
-import { hibernatedRecipientRefusal } from '../core/inbox.js';
+import { hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
 import type { Store, WorkspaceRecord } from './store.js';
 
 /**
@@ -55,6 +55,8 @@ export class HostRegistry {
     }
 
     mailRefusal(text: string, workspaceScope?: string): string | null {
+        const visible = this.listAgents().filter((r) => workspaceScope === undefined || r.workspaceId === workspaceScope);
+        if (resolveMailAddress(text, visible, this.workspaceSlugs()).kind !== 'none') return null;
         const asleep = new Set(this.#workspaces.filter((w) => w.asleep === true).map((w) => w.id));
         const slugs = slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: w.asleep === true ? w.hibernatedName ?? this.#names.get(w.id) ?? folderName(w.path) : this.#names.get(w.id) ?? workspaceNameFor(w.path) })));
         return hibernatedRecipientRefusal(text, this.#agents, asleep, slugs, workspaceScope);
