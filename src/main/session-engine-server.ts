@@ -520,6 +520,8 @@ export class SessionEngineServer {
                 const o = (args[1] ?? {}) as { limit?: unknown; maxBytes?: unknown };
                 return host.historyRows(id(), { limit: typeof o.limit === 'number' ? o.limit : 0, maxBytes: typeof o.maxBytes === 'number' ? o.maxBytes : 0 });
             }
+            case 'engine.toolOutput':
+                return host.toolOutput(id(), typeof args[1] === 'string' ? args[1] : '');
             case 'engine.settled':
                 await host.settled();
                 return true;

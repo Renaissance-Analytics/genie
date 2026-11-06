@@ -8,6 +8,7 @@ import {
     type StreamFilter,
     type TimedEvent,
 } from '../../core/stream-view.js';
+import type { ToolOutputReply } from '../../core/tool-row-bound.js';
 import { StreamRow, type StreamMarkup } from './StreamRow.js';
 
 /**
@@ -63,6 +64,8 @@ export interface StreamProps {
     cursorId?: string | null | undefined;
     /** What an agent message's pills may open, and the opener for a person's click (genie#1263). Absent = words only. */
     markup?: StreamMarkup | undefined;
+    /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386). Keep it stable. */
+    loadToolOutput?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
 }
 
 /**
@@ -76,7 +79,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup, loadToolOutput }: StreamProps) {
     countRender('Stream');
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
@@ -217,7 +220,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onUnseenChange={setUnseen}
                 scrollToId={at}
                 renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} />
+                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} loadFull={loadToolOutput} />
                 )}
             />
 
