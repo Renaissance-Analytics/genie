@@ -55,10 +55,11 @@ export const ORPHAN_REPORT_LIMIT = 12;
 export function orphansUnder(
     processes: readonly RunningProcess[],
     installDir: string,
-    ownPid: number,
+    ownPids: number | readonly number[],
     caseInsensitive: boolean = process.platform === 'win32',
 ): readonly RunningProcess[] {
-    const ours = new Set<number>([ownPid]);
+    // Several trees may be "ours" (P5b: the host that runs the teardown, the updater helper, the window that asked).
+    const ours = new Set<number>(typeof ownPids === 'number' ? [ownPids] : ownPids);
     // Children can be listed before their parents, so walk until nothing new joins.
     let grew = true;
     while (grew) {

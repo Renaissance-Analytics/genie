@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { LOCAL_FRAME_CHANNELS, type LocalFramePort } from '../core/local-frame.js';
-import { FEATURE_CHANNELS, type AgentDetail, type FilesViewEvent, type GenieSnapshot, type PreloadBridge } from '../renderer/bridge.js';
+import { FEATURE_CHANNELS, type AgentDetail, type GenieSnapshot, type PreloadBridge } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
@@ -16,7 +16,6 @@ type AgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
  * across `contextBridge` is copied into the page on the renderer's one thread, and a rebuilt detail is the whole ledger.
  */
 /** Each files view's own id (the host split, P2.2): a subscription is one view, unwatched on its own. */
-let filesViewSeq = 0;
 const watching = new Map<string, { subscribers: Set<(payload: AgentPayload) => void>; off: () => void }>();
 
 /**
@@ -160,6 +159,11 @@ const bridge: PreloadBridge = {
             { ok: true; terminalId: string } | { ok: false; reason: string }
         >,
 
+    scratchTerminal: (workspaceId) =>
+        ipcRenderer.invoke('genie:scratch-terminal-open', workspaceId) as Promise<
+            { ok: true; terminalId: string } | { ok: false; reason: string }
+        >,
+
     terminals: {
         open: (workspaceId, options) =>
             ipcRenderer.invoke('genie:terminal-open', workspaceId, options) as Promise<{
@@ -196,20 +200,19 @@ const bridge: PreloadBridge = {
             return () => { ipcRenderer.removeListener('genie:remote-reconnect', handler); };
         },
     },
-    // Every chat's unsent draft, kept by main across a restart and a reload (genie#1261, main/chat-draft-store.ts).
-    chatDrafts: {
-        load: () => ipcRenderer.invoke('genie:chat-drafts-load') as Promise<unknown>,
-        save: (agentId, draft) => ipcRenderer.invoke('genie:chat-drafts-save', agentId, draft) as Promise<void>,
-        putFile: (bytes) => ipcRenderer.invoke('genie:chat-drafts-put-file', bytes) as Promise<string | null>,
-        readFile: (ref) => ipcRenderer.invoke('genie:chat-drafts-read-file', ref) as Promise<Uint8Array | null>,
-        release: (refs) => ipcRenderer.invoke('genie:chat-drafts-release', refs) as Promise<void>,
-    },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.
     sitePanels: {
-        show: (panelKey, host, bounds) => ipcRenderer.invoke('site-panel:show', panelKey, host, bounds) as Promise<never>,
-        hide: (panelKey) => ipcRenderer.invoke('site-panel:hide', panelKey) as Promise<void>,
-        reload: (panelKey) => ipcRenderer.invoke('site-panel:reload', panelKey) as Promise<void>,
+        prepare: (host) => ipcRenderer.invoke('site-panel:prepare', host) as Promise<never>,
         openWindow: (host) => ipcRenderer.invoke('site-panel:open-window', host) as Promise<void>,
+        restart: () => ipcRenderer.invoke('site-panel:restart') as Promise<void>,
+        popOut: (panelKey, host) => ipcRenderer.invoke('site-panel:pop-out', panelKey, host) as Promise<void>,
+        popBack: (panelKey) => ipcRenderer.invoke('site-panel:pop-back', panelKey) as Promise<void>,
+        popped: () => ipcRenderer.invoke('site-panel:popped') as Promise<never>,
+        onPoppedBack: (listener) => {
+            const handler = (_event: unknown, panelKey: string) => listener(panelKey);
+            ipcRenderer.on('site-panel:popped-back', handler);
+            return () => { ipcRenderer.removeListener('site-panel:popped-back', handler); };
+        },
     },
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
     browserWindow: { open: (address, hosts) => ipcRenderer.invoke('genie:browser-window-open', address, hosts) as Promise<never> },
@@ -244,44 +247,9 @@ const bridge: PreloadBridge = {
     },
 
     files: {
-        tree: (workspaceId) => ipcRenderer.invoke('genie:files-tree', workspaceId) as Promise<never>,
-        children: (workspaceId, dir) => ipcRenderer.invoke('genie:files-children', workspaceId, dir) as Promise<never>,
-        open: (workspaceId, path) => ipcRenderer.invoke('genie:files-open', workspaceId, path) as Promise<never>,
-        readMedia: (workspaceId, path) => ipcRenderer.invoke('genie:files-read-media', workspaceId, path) as Promise<never>,
         openExternal: (workspaceId, path) => ipcRenderer.invoke('genie:files-open-external', workspaceId, path) as Promise<never>,
         reveal: (workspaceId, path) => ipcRenderer.invoke('genie:files-reveal', workspaceId, path) as Promise<never>,
         export: (workspaceId, path) => ipcRenderer.invoke('genie:files-export', workspaceId, path) as Promise<never>,
-        create: (workspaceId, path, kind) => ipcRenderer.invoke('genie:files-create', workspaceId, path, kind) as Promise<never>,
-        rename: (workspaceId, from, to) => ipcRenderer.invoke('genie:files-rename', workspaceId, from, to) as Promise<never>,
-        duplicate: (workspaceId, path) => ipcRenderer.invoke('genie:files-duplicate', workspaceId, path) as Promise<never>,
-        trash: (workspaceId, path) => ipcRenderer.invoke('genie:files-trash', workspaceId, path) as Promise<never>,
-        lastCommitted: (workspaceId, path) => ipcRenderer.invoke('genie:files-last-committed', workspaceId, path) as Promise<string | null>,
-        state: (workspaceId) => ipcRenderer.invoke('genie:files-state', workspaceId) as Promise<never>,
-        // ONE SUBSCRIPTION PER VIEW (the host split, P2.2): watched while held, unwatched when let go; its batches and the
-        // git it asked for come back on the two channels, for its workspace only.
-        subscribe: (workspaceId, want, listener) => {
-            filesViewSeq += 1;
-            const viewId = `view-${filesViewSeq}`;
-            const onChanged = (_e: unknown, id: string, paths?: readonly string[]) => { if (id === workspaceId) listener({ ...(paths ? { paths } : {}) }); };
-            const onGit = (_e: unknown, id: string, git: NonNullable<FilesViewEvent['git']>) => { if (id === workspaceId) listener({ git }); };
-            ipcRenderer.on('genie:files-changed', onChanged);
-            ipcRenderer.on('genie:files-git', onGit);
-            void ipcRenderer.invoke('genie:files-watch', viewId, workspaceId, want);
-            return () => {
-                ipcRenderer.removeListener('genie:files-changed', onChanged);
-                ipcRenderer.removeListener('genie:files-git', onGit);
-                void ipcRenderer.invoke('genie:files-unwatch', viewId);
-            };
-        },
-        write: (workspaceId, path, text, expectedSha) => ipcRenderer.invoke('genie:files-write', workspaceId, path, text, expectedSha) as Promise<never>,
-        gitStatus: (workspaceId) => ipcRenderer.invoke('genie:files-git-status', workspaceId) as Promise<never>,
-        readBytes: (workspaceId, pluginId, path) => ipcRenderer.invoke('genie:files-read-bytes', workspaceId, pluginId, path) as Promise<never>,
-        writeBytes: (workspaceId, pluginId, path, base64, expectedSha) => ipcRenderer.invoke('genie:files-write-bytes', workspaceId, pluginId, path, base64, expectedSha) as Promise<never>,
-        onChange: (listener) => {
-            const handler = (_e: unknown, workspaceId: string, paths?: readonly string[]) => listener(workspaceId, paths);
-            ipcRenderer.on('genie:files-changed', handler);
-            return () => { ipcRenderer.removeListener('genie:files-changed', handler); };
-        },
         windows: {
             popOut: (workspaceId) => ipcRenderer.invoke('genie:files-popout', workspaceId) as Promise<void>,
             bringBack: (workspaceId) => ipcRenderer.invoke('genie:files-bringback', workspaceId) as Promise<void>,
@@ -292,14 +260,6 @@ const bridge: PreloadBridge = {
                 return () => { ipcRenderer.removeListener('genie:files-windows-changed', handler); };
             },
         },
-    },
-    // The official panels (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace.
-    repo: {
-        call: (op, workspaceId, rel, a, b) => ipcRenderer.invoke('genie:repo', op, workspaceId, rel, a, b) as Promise<never>,
-    },
-    artboard: {
-        read: (workspaceId) => ipcRenderer.invoke('genie:artboard-read', workspaceId) as Promise<never>,
-        review: (workspaceId, postId, verdict, comment) => ipcRenderer.invoke('genie:artboard-review', workspaceId, postId, verdict, comment) as Promise<never>,
     },
     features: {
         snapshot: () => ipcRenderer.invoke(FEATURE_CHANNELS.snapshot) as Promise<FeatureData>,

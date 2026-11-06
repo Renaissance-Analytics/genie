@@ -12,18 +12,31 @@ import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
-import { genieHome, osaHomeDir, runtimeDir } from './paths.js';
+import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
+import { StallWatchdog } from './stall-watchdog.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { SpawnHostClient } from './spawn-host-client.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import { SupervisorService } from './supervisor-host.js';
+import { LinkGate } from './linked-stream.js';
+import { composeHosting, type HostingStack } from './hosting-compose.js';
+import { HostingService, WindowElevation } from './hosting-host.js';
+import { AppInboxHost } from './app-inbox-host.js';
+import { shutDownHosted } from './host-shutdown.js';
+import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
+import { BrowserService } from './browser-service.js';
+import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
+import { clearUpdateFailed, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { killProcessAsync, listProcessesAsync } from './process-list.js';
+import { channelFrom } from '../core/update-channel.js';
+import type { ReleaseLike } from '../core/update-notes.js';
 import { hostIdleStep } from '../core/host-idle.js';
 import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -65,7 +78,7 @@ import { hostTynnPorts } from './host-tynn-account.js';
 import { ProxyMemory } from './proxy-memory.js';
 import { TynnAccount } from './tynn-account.js';
 import { TynnAccountService } from './tynn-account-service.js';
-import { Keychain } from './keychain.js';
+import { openSecretKeychain } from './file-secrets.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
 import { AgentStoresService } from './agent-stores-host.js';
@@ -82,6 +95,11 @@ import { readV1Settings } from './v1-settings.js';
 import { Store } from './store.js';
 import { HostRegistry } from './host-registry.js';
 import { wireHostMailWake } from './host-mail-wake.js';
+import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
+import type { SocketLike } from './issue-watch-client.js';
+import { dialTynnSocket } from './tynn-socket.js';
+import { tynnProjectIdOf } from '../core/issue-watch.js';
+import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
 import { repoStatus } from './repo-git.js';
 
@@ -105,7 +123,8 @@ import { repoStatus } from './repo-git.js';
  * connected for `GENIE_HOST_IDLE_MS` (10 minutes).
  */
 
-const home = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? process.env.GENIE_HOME : genieHome();
+const home = genieRoot();
+const osaHome = osaHomeDir(home);
 const runtime = runtimeDir(home);
 const build = process.env.GENIE_HOST_BUILD ?? 'dev';
 const IDLE_MS = Number(process.env.GENIE_HOST_IDLE_MS ?? 10 * 60_000);
@@ -123,6 +142,18 @@ process.on('uncaughtException', (error) => say(`uncaught: ${error instanceof Err
 process.on('unhandledRejection', (error) => say(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
 
 async function main(): Promise<void> {
+    /*
+     * WHERE SECRETS GO, chosen FIRST (P10.1a): the OS keychain, or with GENIE_SECRET_BACKEND=file the sealed files under
+     * <root>/secrets (file-secrets.ts). A file backend that is misconfigured stops the host here, in words that say what to
+     * fix, before it binds its endpoint: no window ever connects to a host that is about to exit, and it never runs on with
+     * the other store, or with none.
+     */
+    const secrets = await openSecretKeychain(process.env, home);
+    if (secrets.kind === 'refused') {
+        say(secrets.reason);
+        lifecycleLog(`host refused to start: ${secrets.reason}`);
+        process.exit(1);
+    }
     const userKey = createHash('sha256').update(home).digest('hex').slice(0, 16);
     const endpoint = hostEndpoint(process.platform, runtime, userKey);
 
@@ -137,9 +168,9 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
-    // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No keychain refuses secrets; it never stops the host.
-    const keychain = new Keychain();
-    const keychainOpening = openHostKeychain({ keychain });
+    // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No OS keychain refuses secrets; it never stops the host.
+    const keychain = secrets.keychain;
+    const keychainOpening = openHostKeychain({ keychain, backend: secrets.kind });
     void keychainOpening.then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
      * THE SPAWN LEDGER AND ITS SWEEP, here now (they were main.ts's): what a previous host left running — a crash, a
@@ -213,6 +244,76 @@ async function main(): Promise<void> {
     );
     processSupervisor.watchLiveness();
     const supervisorService = new SupervisorService(processSupervisor);
+    /**
+     * The `supervised` child's link: up once it is ready and reconciled, down when it exits (or while it never came up).
+     * Streams started there wait for it, and while it is down Hosting says the engines' live status is paused.
+     */
+    const supervisedLink = new LinkGate();
+    const supervisedStream = supervisedLink.stream(supervisedClient.stream);
+    /*
+     * GENIE'S HOSTING (the host split, P5a): the front door, the service engines and the site routes are built HERE, under
+     * this host's supervisor, so sites stay served and routed with the UI closed; windows read and drive them through the
+     * service. This host never raises an OS prompt itself: an elevation is asked of a connected window, and with none it
+     * waits (WindowElevation) and the next window is told.
+     */
+    const hostingElevation = new WindowElevation({
+        connected: () => engineRef?.localWindowConnected() ?? false,
+        ask: (steps) => (engineRef ? engineRef.elevate(steps) : Promise.reject(new Error('no Genie window is connected'))),
+    });
+    /*
+     * THE APP DOOR (genie#1345; P5a.2 ruling 3): the door apps and scripts post through, and its keys — one writer of
+     * app-inbox.json — run HERE, so every site's and kept process's credential is minted here, with or without a window,
+     * and the door that accepts it is up as long as the host is. Before the hosting: a site started at boot gets one.
+     */
+    let hostingNow: HostingStack | null = null;
+    const appInboxDoor = await AppInboxHost.start({
+        home,
+        inbox: own.inbox,
+        roster: () => hostRegistry.listAgents(),
+        slugs: () => hostRegistry.workspaceSlugs(),
+        defaultAgentOf: (workspaceId) => hostRegistry.defaultAgentOf(workspaceId),
+        enabled: (workspaceId) => settings.snapshotFor(workspaceId).app_inbox !== false,
+        siteHosts: (workspaceId) => hostingNow?.sites.list(workspaceId).map((s) => s.host) ?? [],
+        workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
+        log: (line) => { say(line); lifecycleLog(line); },
+    });
+    const workspacesListeners = new Set<() => void>();
+    stores.onEvent((event) => {
+        if (event.store !== 'registry') return;
+        void stores.registrySettled().then(() => { for (const l of [...workspacesListeners]) l(); });
+    });
+    let hosting: HostingStack | null = null;
+    try {
+        hosting = await composeHosting({
+            ...(await hostHostingOptions(hostMachinePaths(process.env, home), say)),
+            // ONE OWNER FOR EVERY PROCESS THE HOST STARTS: `docker events` runs under this host's `supervised` spawn-host
+            // child, which ends its streams when this host dies however it dies (spawn-host.ts). Started by the host itself,
+            // it was orphaned on Linux by a killed host (P5a.3's probe). It waits for the child's link at boot.
+            dockerEvents: (args, onLine, onEnd) => supervisedStream('docker', args, onLine, onEnd),
+            liveStatusLink: supervisedLink,
+            userData: home,
+            supervisor: processSupervisor,
+            settings,
+            appEnv: (source) => appInboxDoor.envFor(source),
+            elevate: (steps) => hostingElevation.run(steps),
+            workspaces: () => hostRegistry.listWorkspaces(),
+            onWorkspacesChange: (listener) => { workspacesListeners.add(listener); return () => { workspacesListeners.delete(listener); }; },
+        });
+    } catch (error) {
+        say(`Genie's hosting could not start in the host: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const hostingStack = hosting;
+    hostingNow = hostingStack;
+    const hostingService = hostingStack ? new HostingService(hostingStack, {
+        workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
+        elevation: hostingElevation,
+        // An engine's dependents name the running processes; the workspaces are the registry's.
+        onChange: (listener) => {
+            const off = processSupervisor.onChange(() => listener());
+            workspacesListeners.add(listener);
+            return () => { off(); workspacesListeners.delete(listener); };
+        },
+    }) : null;
     /*
      * THE TERMINALS (P3.3e): the `terminals` spawn-host child is this host's own now — its shells (and their scrollback)
      * outlive the window, and an agent's `manageTerminals` works with none. Windows drive them through the service.
@@ -262,6 +363,52 @@ async function main(): Promise<void> {
     void githubOpening.then((account) => account.refresh(), (error: unknown) => say(`the GitHub account could not open: ${error instanceof Error ? error.message : String(error)}`));
     let hostTynn: TynnAccount | null = null;
     void tynnOpening.then((account) => { hostTynn = account; }, (error: unknown) => say(`the Tynn account could not open: ${error instanceof Error ? error.message : String(error)}`));
+    /*
+     * ISSUEWATCH AND THE LIVE BOARD (the host split, P5c; issue-watch-host.ts): Tynn's pushes are heard HERE, on this host's
+     * account, so a GitHub change reaches the linked workspace's agents with no window open, through this host's one wake
+     * (host-mail-wake.ts). Local windows read the state and play the sounds; their board views are followed per view.
+     * One way to dial Tynn's socket server, with the Origin of the Tynn this account is for (tynn-socket.ts, genie#1478).
+     */
+    const tynnSocket = (url: string): SocketLike => dialTynnSocket(url, hostTynn?.host() ?? TYNN_HOST);
+    const tynnTimer = (fn: () => void, ms: number): (() => void) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); };
+    /** A workspace's Tynn project, by its project.json `tynn.projectId`; null = not linked. */
+    const tynnProjectOf = (path: string): string | null => {
+        let manifest: string | null = null;
+        try { manifest = readFileSync(join(path, 'project.json'), 'utf8'); } catch { manifest = null; }
+        return tynnProjectIdOf(manifest);
+    };
+    const workspaceTynnProject = (workspaceId: string): string | null => {
+        const workspace = hostRegistry.workspace(workspaceId);
+        return workspace ? tynnProjectOf(workspace.path) : null;
+    };
+    const issueWatch = new IssueWatchService({
+        tynn: () => hostTynn,
+        socket: tynnSocket,
+        schedule: tynnTimer,
+        projectFor: workspaceTynnProject,
+        delivery: {
+            agents: () => hostRegistry.listAgents(),
+            defaultAgentOf: (workspaceId) => hostRegistry.defaultAgentOf(workspaceId),
+            workspaceFor: (projectId) => {
+                for (const w of hostRegistry.listWorkspaces()) if (tynnProjectOf(w.path) === projectId) return { id: w.id, name: workspaceNameFor(w.path) };
+                return null;
+            },
+        },
+        log: say,
+    });
+    const tynnBoard = new TynnBoardHub({
+        tynn: () => hostTynn,
+        socket: tynnSocket,
+        schedule: tynnTimer,
+        projectFor: workspaceTynnProject,
+        send: (owner, event) => { engineRef?.tynnBoardEvent(owner, event); },
+        log: say,
+    });
+    // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now; and once the account opens.
+    void tynnOpening.then((account) => {
+        account.onChange(() => { issueWatch.restart(); });
+        issueWatch.restart();
+    }, () => { issueWatch.start(); });
     // THE HOST PREPARES ITS AGENTS (P3.4 cut c), with a window open or not. A start waits for the account: opening has its own deadline.
     // One writer of a workspace's agent config: preparing an agent and syncing hold the same lock.
     const withConfig = configWriter();
@@ -280,10 +427,79 @@ async function main(): Promise<void> {
     let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
+    const browserService = new BrowserService({ startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    /** What this host supervises, stopped once — by an update's install (in its order) or by the shutdown, whichever is first. */
+    let hostedStop: Promise<void> | null = null;
+    const stopHostedOnce = (): Promise<void> => {
+        hostedStop ??= shutDownHosted({
+            supervisor: processSupervisor,
+            hosting: hostingStack,
+            endChildren: async () => { await relay?.stop(); },
+            schedulers: clocks,
+            log: (line) => { say(line); lifecycleLog(line); },
+        });
+        return hostedStop;
+    };
+    /*
+     * THE UPDATER (the host split, P5b; updates-host.ts): its state, its schedule and the install are this host's, window or
+     * no window. electron-updater needs Electron's `app`, which this process has not: Genie's own executable in its
+     * `--updater` mode makes the library's calls, started here, detached, when one is needed, with this host's environment
+     * (the window's, so an AppImage's `APPIMAGE` reaches it). An install is a person's, from a window; never by itself.
+     */
+    const runningVersion = build.split('+')[0] ?? build;
+    const updatesService = new UpdatesService({
+        host: {
+            installDir: dirname(process.execPath),
+            ownPid: process.pid,
+            processes: listProcessesAsync,
+            kill: killProcessAsync,
+            channel: channelFrom(settings.snapshot().update_channel),
+            runningVersion,
+            releases: async () => {
+                const memory = await proxyMemory;
+                const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say });
+                const res = await send('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', { method: 'GET', headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Genie' }, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(10_000) });
+                if (!res.ok) throw new Error(`GitHub releases: HTTP ${res.status}`);
+                return JSON.parse(await res.text()) as ReleaseLike[];
+            },
+            // §7.4: every session ends with the upgrade, who comes back recorded on disk first; the next launch restores them once.
+            agents: hostDrainAgents({
+                agents: () => hostRegistry.listAgents(),
+                probe: (id) => host.probe(id as AgentId),
+                writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
+                writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
+                stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
+                onRecordError: (error) => { const line = `update: the agents to start again could not be recorded: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); },
+            }),
+            // P5a.3's order: the browser told to end, then sites, the front door and kept processes stopped; containers stay up.
+            stopHosted: async () => { browserService.quit(); await stopHostedOnce(); },
+        },
+        startHelper: (launch) => { spawnUpdaterProcess(launch, { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); },
+        defaultLaunch: { file: process.execPath, args: ['--updater'] },
+        windowConnected: () => engineRef?.windowConnected() ?? false,
+        exit: () => { void shutdown('an update is installing'); },
+        log: (line) => { say(line); lifecycleLog(line); },
+        // A failed install's reason, for the first window after it, once.
+        failed: readUpdateFailed(home),
+        clearFailed: () => { clearUpdateFailed(home); },
+        // The helper went after the drain: why recorded, and Genie started again from the window's launch.
+        handOverFailed: (reason, launch) => {
+            writeUpdateFailed(home, { at: Date.now(), reason, log: join(home, 'logs', 'genie-host.log') });
+            spawnGenieWindow(relaunchSpec(launch, process.env), process.env);
+        },
+    });
+    settings.onChange((key, value, workspaceId) => { if (key === 'update_channel' && workspaceId === undefined) updatesService.setChannel(channelFrom(value)); });
+    updatesService.onEvent(() => { lastBusy = Date.now(); });
+    // WHERE A SLOW ANSWER WAITS (genie-test-windows, job Q0): the window's watchdog, on the host's own loop and on every call
+    // a window makes. Its lines go to the shared lifecycle log marked as the host's. No stack profiler here: its own start
+    // cost seconds on that machine (stall-profile.ts).
+    const hostWatchdog = new StallWatchdog({ log: (line) => lifecycleLog(`host ${line}`), routeOf: () => null });
+    hostWatchdog.start();
     const engine = new SessionEngineServer({
         token,
         build,
         pid: process.pid,
+        timeCall: (method) => hostWatchdog.ipc(method),
         log: say,
         onShutdown: () => void shutdown('a window asked'),
         onClients: (n) => {
@@ -298,8 +514,12 @@ async function main(): Promise<void> {
         spawn: { send: (profile, frame) => { if (profile === 'processes') relay?.send('processes', frame); }, windowGone: () => relay?.windowGone() },
         terminals: terminalsService,
         supervisor: supervisorService,
+        ...(hostingService ? { hosting: hostingService } : {}),
+        appInbox: appInboxDoor,
         processes: processesService,
         flows: flowsService,
+        browser: browserService,
+        updates: updatesService,
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
@@ -359,6 +579,8 @@ async function main(): Promise<void> {
             await openFlows(databasePath);
             await importV1Inbox(own.inbox, () => readV1Inbox(databasePath), hostRegistry.listAgents(), Date.now());
         },
+        issueWatch,
+        tynnBoard,
         files: {
             subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
             unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
@@ -407,7 +629,7 @@ async function main(): Promise<void> {
         host,
         record: (id) => hostRegistry.find(id),
         threadOf: (id) => threadsHeard.get(id) ?? null,
-        cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHomeDir(),
+        cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome,
         log: say,
     });
     void tynnOpening.then((account) => {
@@ -416,17 +638,11 @@ async function main(): Promise<void> {
         void tynnRecovery?.recover();
         tynnRecovery?.kick();
     }, () => {});
-    /** Kept processes' app-inbox credentials, as a window minted them (P3.3c); none with no window since the host began. */
-    const appEnvCache = new Map<string, Readonly<Record<string, string>>>();
-    const refreshAppEnvs = async (book: ProcessBook): Promise<void> => {
-        const kept = book.kept().map((p) => ({ id: p.id, name: p.name, workspaceId: p.workspaceId }));
-        if (kept.length === 0 || !engine.windowConnected()) return;
-        const envs = await engine.appEnvs(kept).catch(() => ({} as Record<string, Record<string, string>>));
-        for (const [id, env] of Object.entries(envs)) appEnvCache.set(id, env);
-    };
     /** Flows (P3.3d), once — at the first window's v1 import, after the book (the old scheduled tasks move into it). */
     let flowsOpening: Promise<void> | null = null;
     let processBookNow: ProcessBook | null = null;
+    /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
+    const clocks: Array<{ stop(): void }> = [];
     const openFlows = (databasePath: string): Promise<void> => {
         flowsOpening ??= (async () => {
             const store = await FlowStore.open(home);
@@ -434,7 +650,7 @@ async function main(): Promise<void> {
             await runV1FlowImport(store, { database: databasePath, workspaces: hostRegistry.listWorkspaces() }).catch((error: unknown) => say(`v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
             // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
             if (processBookNow) await moveScheduledTasksOutOfFlows(store, processBookNow, (id) => hostRegistry.workspace(id)?.path ?? null).catch((error: unknown) => say(`scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
-            const cwdOf = (r: AgentRecord): string => hostRegistry.workspace(r.workspaceId)?.path ?? osaHomeDir();
+            const cwdOf = (r: AgentRecord): string => hostRegistry.workspace(r.workspaceId)?.path ?? osaHome;
             const engineFlows = startFlowsEngine({
                 store,
                 now: Date.now,
@@ -467,6 +683,7 @@ async function main(): Promise<void> {
             const regs = mcp?.registrations() ?? [];
             if (regs.length > 0) engineFlows.setToolCaller(createFlowToolCaller({ registrations: regs, callers: flowCallers }));
             flowsService.attach({ store, scheduler: engineFlows.scheduler });
+            clocks.push(engineFlows);
             // A hibernate or a wake changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') engineFlows.scheduler.plan(); });
             lifecycleLog(`flows open: ${store.list().length} flow(s)`);
@@ -481,7 +698,8 @@ async function main(): Promise<void> {
                 supervisor: processSupervisor,
                 // The workspace's service variables the last window handed over (its engines are the window's until P5).
                 envFor: (workspaceId: string) => engine.serviceEnvFor(workspaceId),
-                appEnv: (p: { readonly id: string }) => appEnvCache.get(p.id) ?? {},
+                // Each kept process's OWN app credential, minted here (P5a.2), window or no window.
+                appEnv: (p: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => appInboxDoor.envFor(p),
                 asleep: (workspaceId: string) => hostRegistry.workspace(workspaceId)?.asleep === true,
             };
             const processBook = await ProcessBook.open(home, {
@@ -501,19 +719,19 @@ async function main(): Promise<void> {
                 schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
             });
             scheduler.plan();
+            clocks.push(scheduler);
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             processBookNow = processBook;
-            // Each kept process's app-inbox credential, minted by the window that is here, BEFORE they are restored.
-            await refreshAppEnvs(processBook);
             const restored = processBook.restore();
             lifecycleLog(`process book open: ${restored.started.length} restored, ${restored.heldBack.length} held back`);
         })();
         return bookOpening;
     };
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
-    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHomeDir(), log: (line) => { say(line); lifecycleLog(line); } });
+    // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
+    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery });
     mcp = startHostMcp({
         stores: stores.stores,
         settings,
@@ -536,6 +754,7 @@ async function main(): Promise<void> {
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
         flowCallers,
         endpointFile: join(home, 'mcp-endpoint.json'),
+        osaDir: osaHome,
         log: (line) => { say(line); lifecycleLog(line); },
     });
     host.subscribe(() => { lastBusy = Date.now(); });
@@ -561,16 +780,23 @@ async function main(): Promise<void> {
             const client = ownChildren[profile];
             client.linkFrame(frame);
             if (frame.kind === 'event' && frame.channel === 'host.ready') {
-                void client.linkUp().catch((error: unknown) => lifecycleLog(`${profile} spawn host did not come up: ${error instanceof Error ? error.message : String(error)}`));
+                void client.linkUp().then(() => {
+                    if (profile === 'supervised') supervisedLink.setUp(true);
+                }).catch((error: unknown) => lifecycleLog(`${profile} spawn host did not come up: ${error instanceof Error ? error.message : String(error)}`));
             }
         },
         // Between their lives, opens are refused in words (a crash the supervisor backs off from), never sent into nothing.
-        onChildExit: (profile) => { if (profile !== 'processes') ownChildren[profile].linkDown(`the ${profile} spawn host exited`); },
+        onChildExit: (profile) => {
+            if (profile === 'supervised') supervisedLink.setUp(false);
+            if (profile !== 'processes') ownChildren[profile].linkDown(`the ${profile} spawn host exited`);
+        },
         log: (line) => { say(line); lifecycleLog(line); },
         onPtys: writePtys,
     });
 
-    server.on('connection', (socket) => engine.accept(lineTransport(socket)));
+    // This host's OWN endpoint (a local socket or pipe, token-checked): every window here is local — the only kind sent the
+    // hosting, whose dump carries each workspace's service variables (P5a.2). P5d: a remote path accepts as not local.
+    server.on('connection', (socket) => engine.accept(lineTransport(socket), { local: true }));
 
     // The token first, then the record that points at it: a window that reads the record can always read the token.
     await writeTextPrivate(tokenFile, token);
@@ -584,16 +810,21 @@ async function main(): Promise<void> {
         shuttingDown = true;
         say(`shutting down: ${why}`);
         lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
+        browserService.quit();
         const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
         // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
         // host nobody wants.
         await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
-        // Then every process the window started ("Shut down everything"): the spawn-host children end their ptys.
         files?.close();
+        issueWatch.stop();
         await mcp?.stop();
         approvals.cancelAll('Genie is shutting down');
         own.knowledge.close();
-        await relay?.stop().catch(() => undefined);
+        // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
+        // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
+        // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
+        await stopHostedOnce();
+        await appInboxDoor.close().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
         const current = parseHostRecord(readOrNull(recordFile));
@@ -603,6 +834,8 @@ async function main(): Promise<void> {
         }
         process.exit(0);
     }
+    // The updater's own clock (AUTO_CHECK): stopped with the host's other clocks, first, at "Shut down everything".
+    clocks.push({ stop: updatesService.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); }) });
     process.on('SIGTERM', () => void shutdown('SIGTERM'));
     process.on('SIGINT', () => void shutdown('SIGINT'));
 

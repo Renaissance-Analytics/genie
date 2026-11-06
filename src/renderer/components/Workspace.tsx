@@ -10,8 +10,9 @@ import { useCallback, useEffect, useRef, useState, type ComponentType, type Poin
 import { DesignedTab } from './DesignedTab.js';
 import { WorkspaceTabs } from './WorkspaceTabs.js';
 import { SitePanel } from './SitePanel.js';
+import { siteWebviewLayerFor, tabsChanged, type SeenTabs } from '../site-webview-layer.js';
 import { TerminalCell } from './TerminalCell.js';
-import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, type TabsState } from '../../core/workspace-tabs.js';
+import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, sitePanelKeys, type TabsState } from '../../core/workspace-tabs.js';
 import {
     activate,
     emptyWorkspace,
@@ -172,6 +173,11 @@ export interface WorkspaceProps {
     onSetIssueWatchRepo?: ((owner: string, repo: string, change: { enabled: boolean } | { includeUpstream: boolean }) => void) | undefined;
     panel?: 'files' | null | undefined;
     onTogglePanel?: (() => void) | undefined;
+    /**
+     * The header's Terminal button (Tynn story #378): a throwaway terminal in a window of its own, a new one each click.
+     * Answers whether it opened, or why not. Absent = no button (a window that cannot open one).
+     */
+    onOpenScratchTerminal?: (() => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     /** The file panel's route keys (`?files=<path>&filter=changed`) and their write-back. */
     filesFile?: string | null | undefined;
     /** The line that file opens at (the route's `line=`). */
@@ -218,7 +224,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
     const wsColor = useWorkspaceColor(workspace.id);
@@ -229,6 +235,13 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
     const saveTabs = (next: TabsState): void => { ops?.settings?.onSet('workspace_tabs', serializeTabs(next)); };
     // A terminal panel's new terminal, placed in its cell. Two panels starting at once each build on the other's placement
     // (the setting's round trip has not come back yet), never on the same stale tabs.
+    // A panel no longer in these tabs closes its page; the layer keeps the rest, on screen or not.
+    const seenTabs = useRef<SeenTabs | null>(null);
+    useEffect(() => {
+        const now = { workspaceId: workspace.id, raw: tabsRaw };
+        if (sitePanels && tabsChanged(seenTabs.current, now)) siteWebviewLayerFor(sitePanels).retainIn(workspace.id, sitePanelKeys(workspace.id, designed));
+        if (typeof tabsRaw === 'string' || seenTabs.current?.workspaceId !== workspace.id) seenTabs.current = now;
+    }, [tabsRaw, sitePanels, workspace.id]);
     const tabsBase = useRef<{ raw: unknown; state: TabsState }>({ raw: tabsRaw, state: designed });
     if (tabsBase.current.raw !== tabsRaw) tabsBase.current = { raw: tabsRaw, state: designed };
     const placeTerminal = (tabId: string, cell: number, terminalId: string): void => {
@@ -623,11 +636,12 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         ))}
                     </div>
                 ) : null}
+                {onOpenScratchTerminal ? <ScratchTerminalButton open={onOpenScratchTerminal} /> : null}
                 {files ? (
-                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto flex items-center gap-1.5 min-w-0 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="truncate">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
+                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`${onOpenScratchTerminal ? '' : 'ml-auto '}flex items-center gap-1.5 min-w-0 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="truncate">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
                 ) : null}
                 {ops ? (
-                    <div className={`${files ? '' : 'ml-auto '}flex min-w-0 max-w-full flex-wrap items-center gap-1`}>
+                    <div className={`${files || onOpenScratchTerminal ? '' : 'ml-auto '}flex min-w-0 max-w-full flex-wrap items-center gap-1`}>
                         {ops.asleep ? (
                             <button type="button" data-action="wake" onClick={ops.onWake} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Wake</button>
                         ) : (
@@ -744,7 +758,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         <h2 className="text-sm font-semibold">Agents</h2>
                         <span className="text-[var(--fg-4)]">the agents registered in {workspace.name ?? workspace.id}, and the agent files here Genie has none for</span>
                     </div>
-                    <AgentRosterView {...ops.agentRoster} />
+                    <AgentRosterView {...ops.agentRoster} {...(onAddAgent ? { onAddAgent } : {})} />
                 </section>
             ) : null}
             {onScreen === 'settings' && ops?.appInbox ? (
@@ -937,10 +951,22 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                             const at = tab.cells.indexOf(p);
                             const live = sitePanels && at >= 0 ? {
                                 panelKey: panelKey(workspace.id, tab.id, at),
-                                onBounds: (key: string, host: string, bounds: { x: number; y: number; width: number; height: number }) => { void sitePanels.show(key, host, bounds); },
-                                onHide: (key: string) => { void sitePanels.hide(key); },
-                                onReload: (key: string) => { void sitePanels.reload(key); },
-                                onOpenInWindow: (host: string) => { void sitePanels.openWindow(host); },
+                                onBounds: (key: string, host: string, bounds: { x: number; y: number; width: number; height: number }) => { void siteWebviewLayerFor(sitePanels).show(key, host, bounds); },
+                                onHide: (key: string) => { siteWebviewLayerFor(sitePanels).hide(key); },
+                                onReload: (key: string) => { siteWebviewLayerFor(sitePanels).reload(key); },
+                                onBack: (key: string) => { siteWebviewLayerFor(sitePanels).back(key); },
+                                onForward: (key: string) => { siteWebviewLayerFor(sitePanels).forward(key); },
+                                onState: (key: string, listener: (state: { canGoBack: boolean; canGoForward: boolean; loading: boolean }) => void) => siteWebviewLayerFor(sitePanels).onState(key, listener),
+                                onOpenInWindow: (host: string) => {
+                                    const key = panelKey(workspace.id, tab.id, at);
+                                    siteWebviewLayerFor(sitePanels).setPopped(key, true);
+                                    void sitePanels.popOut(key, host).catch(() => { siteWebviewLayerFor(sitePanels).setPopped(key, false); });
+                                },
+                                popped: siteWebviewLayerFor(sitePanels).isPopped(panelKey(workspace.id, tab.id, at)),
+                                onPopBack: (key: string) => { void sitePanels.popBack(key); },
+                                onRefused: (key: string, listener: (why: { readonly error: string; readonly locked?: boolean } | null) => void) => siteWebviewLayerFor(sitePanels).onRefused(key, listener),
+                                onRestart: () => { void sitePanels.restart(); },
+                                onPopped: (key: string, listener: (out: boolean) => void) => siteWebviewLayerFor(sitePanels).onPopped(key, listener),
                             } : undefined;
                             return <SitePanel host={p.ref} live={live} onPick={(host) => { if (at >= 0) saveTabs(placePanel(designed, tab.id, at, { kind: 'site', ref: host })); }} />;
                         }}
@@ -949,5 +975,36 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                 );
             })() : null}
         </section>
+    );
+}
+
+/**
+ * THE HEADER'S TERMINAL BUTTON (Tynn story #378; the owner: "Add a terminal button to the left of the Files button in the
+ * workspace header that opens a new window with a terminal in it"). Each click opens another window. While it opens the
+ * button is busy; the window appearing is the success; a failure is said beside it, with Retry.
+ */
+function ScratchTerminalButton({ open }: { open: () => Promise<{ ok: true } | { ok: false; reason: string }> }) {
+    const [busy, setBusy] = useState(false);
+    const [failed, setFailed] = useState<string | null>(null);
+    const go = (): void => {
+        setBusy(true);
+        void open().then(
+            (r) => { setBusy(false); setFailed(r.ok ? null : r.reason); },
+            (error: unknown) => { setBusy(false); setFailed(error instanceof Error ? error.message : String(error)); },
+        );
+    };
+    return (
+        <span className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+            {failed !== null ? (
+                <span data-scratch-terminal-error="" role="alert" className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--danger)]">
+                    <span className="min-w-0 truncate" title={failed}>{failed}</span>
+                    <Button size="xs" type="button" data-action="open-scratch-terminal-retry" onClick={go} disabled={busy} className="shrink-0 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]">Retry</Button>
+                </span>
+            ) : null}
+            <Button size="xs" labelClassName="contents" type="button" data-action="open-scratch-terminal" loading={busy} onClick={go} title="A throwaway terminal in its own window; closing the window ends it" className="flex min-w-0 items-center gap-1.5 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                <Icon name="square-terminal" size="xs" className="shrink-0" />
+                <span className="truncate">Terminal</span>
+            </Button>
+        </span>
     );
 }

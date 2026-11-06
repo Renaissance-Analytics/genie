@@ -1,14 +1,14 @@
-import { normalizeNavUrl } from '../core/genie-browser.js';
+import { normalizeNavUrl } from './genie-browser.js';
 
 /**
  * LIVE SITE PANELS (beta.35 item 36, step 5; the owner, FTQ q_227d0bb6: site panels are LIVE pages). A workspace tab's
- * `site` panel is a real page: a view in the Genie browser's own session (its .gen routing, Genie's CA), placed over the
- * panel's box in the window. Never an iframe — the window's CSP blocks one and its session has no .gen route.
+ * `site` panel is a real page placed over the panel's box in the window. Never an iframe: measured on Electron 45.2.2, a
+ * framed site keeps no SameSite=Lax login. The page is a <webview> (renderer/site-webview-layer.ts).
  *
  * One view per panel (`workspace:tab:cell`), made on its first showing; the box moving moves it, a different site loads
  * in it, a box that is off screen (zero-sized, or the tab not shown) hides it with its page kept, a panel that is gone
  * closes it. Only a Genie site this workstation serves is shown (core/genie-browser.ts `normalizeNavUrl`); one that stops
- * being served closes the panel's page rather than leave a stale one. The Electron views sit behind {@link PanelViewPort}.
+ * being served closes the panel's page rather than leave a stale one. The page sits behind {@link PanelViewPort}.
  */
 
 export interface Bounds {

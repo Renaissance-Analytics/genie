@@ -70,6 +70,8 @@ export interface SessionLifecycle {
 
 /** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
 export const HISTORY_LIMIT = 3000;
+/** The most one `historyRows` reply carries, in bytes of JSON, whatever the caller asks (Tynn story #380). */
+export const HISTORY_ROWS_MAX_BYTES = 256 * 1024;
 
 export { permissionDecisionFor } from '../core/agent-ops.js';
 
@@ -464,6 +466,7 @@ export class SessionHost {
     /** A previous run's processes that a stop could not end: no new run starts beside them. */
     readonly #leftovers = new Map<AgentId, readonly ProcessInfo[]>();
     readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
+    readonly #onCarryOverSent: ((agentId: AgentId) => void) | undefined;
     readonly #comms: ((agentId: AgentId, since: number) => Comms | null) | undefined;
     readonly #heldElsewhere: ((record: AgentRecord) => string | null) | undefined;
 
@@ -493,6 +496,8 @@ export class SessionHost {
          * test about resume passes.
          */
         onThreadId?: (agentId: AgentId, threadId: string) => void;
+        /** A provider switch's carry-over went with a turn that replied (Tynn story #380): the record's is cleared. */
+        onCarryOverSent?: (agentId: AgentId) => void;
         /**
          * The agent's record AS IT IS NOW (the registry's), for what is decided per call rather than at start — a Claude
          * agent's tool setting (genie#1188). Absent = the record the session started with.
@@ -570,6 +575,7 @@ export class SessionHost {
         this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
         this.#lifecycle = options.lifecycle;
         this.#onThreadId = options.onThreadId;
+        this.#onCarryOverSent = options.onCarryOverSent;
         this.#currentRecord = options.currentRecord;
         this.#comms = options.comms;
         this.#heldElsewhere = options.heldElsewhere;
@@ -863,6 +869,8 @@ export class SessionHost {
             runId,
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
+            // A provider switch's carry-over, attached once to this run's first prompt that goes (Tynn story #380).
+            ...(record.carryOver ? { carryOver: record.carryOver, onCarryOverSent: () => this.#onCarryOverSent?.(record.id) } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
             onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
@@ -1361,6 +1369,38 @@ export class SessionHost {
         await Promise.all([...this.#ending.values()].map((e) => e.catch(() => undefined)));
         await Promise.all([...this.#stopped].filter((s) => s.exit === null).map((s) => s.exitedWithin(exitWithinMs)));
         await this.settled();
+    }
+
+    /**
+     * WHAT A PROVIDER SWITCH CARRIES (Tynn story #380, core/carry-over.ts): the agent's recorded rows, read from THIS host's
+     * own store once its writes have landed — the window never reads the thread log itself. The NEWEST rows, in order,
+     * until either bound is reached: `limit` rows, or `maxBytes` of JSON, held to {@link HISTORY_ROWS_MAX_BYTES} whatever
+     * the caller asks — one reply never puts megabytes on the engine link. `cut` says the byte bound left rows out. Tool
+     * input and output and thinking are left out: the carry-over never uses them, and they are the bulk of a ledger.
+     */
+    async historyRows(agentId: AgentId, options: { limit: number; maxBytes: number }): Promise<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }> {
+        await this.settled();
+        const limit = Math.max(0, Math.min(HISTORY_LIMIT, Math.floor(options.limit)));
+        const maxBytes = Math.max(0, Math.min(HISTORY_ROWS_MAX_BYTES, Math.floor(options.maxBytes)));
+        const history = await readHistory(this.#store(), agentId, { limit });
+        const slim = history.rows.flatMap((r): { event: StreamEvent; at: number | null }[] => {
+            if (r.event.kind === 'think') return [];
+            if (r.event.kind === 'tool') {
+                const { rawInput: _input, output: _output, ...tool } = r.event;
+                return [{ event: { ...tool, rawInput: null }, at: r.at }];
+            }
+            return [{ event: r.event, at: r.at }];
+        });
+        // Newest first, until the next row would pass the byte bound: `[` `]` and a comma between rows counted too.
+        const kept: { event: StreamEvent; at: number | null }[] = [];
+        let bytes = 2;
+        for (let i = slim.length - 1; i >= 0; i -= 1) {
+            const size = Buffer.byteLength(JSON.stringify(slim[i]), 'utf8') + (kept.length > 0 ? 1 : 0);
+            if (bytes + size > maxBytes) return { rows: kept.reverse(), cut: true };
+            bytes += size;
+            kept.push(slim[i]!);
+        }
+        return { rows: kept.reverse(), cut: false };
     }
 
     /**

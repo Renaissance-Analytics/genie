@@ -136,8 +136,12 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions & { rea
             stopping = true;
             clearInterval(sweep);
             const pid = client.welcome?.pid ?? null;
-            await client.shutdown().catch(() => false);
             const until = Date.now() + waitMs;
+            // The answer is waited for within the same bound: a host that never answers is ended below, and a quit that
+            // waits for this (core/quit.ts runQuit) is never held by it.
+            let bound: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([client.shutdown().catch(() => false), new Promise<void>((r) => { bound = setTimeout(r, waitMs); })]);
+            clearTimeout(bound);
             while (pid !== null && pidAlive(pid) && Date.now() < until) await sleep(100);
             if (pid !== null && pidAlive(pid)) { options.log(`agent host pid=${pid} did not exit within ${waitMs} ms; ending it`); killPid(pid); }
             client.disconnect();

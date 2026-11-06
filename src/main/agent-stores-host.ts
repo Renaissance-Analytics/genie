@@ -7,6 +7,7 @@ import type { ChatDraftStore } from './chat-draft-store.js';
 import type { SettingsStore } from './settings-store.js';
 import type { SettingsData, SettingValue } from './settings-read.js';
 import type { Store } from './store.js';
+import { DraftFileHandles } from './draft-file-handles.js';
 
 /**
  * THE STORES AGENTS WRITE TO, OWNED BY GENIE-HOST (the host split, P3.1: plan §11d).
@@ -76,6 +77,8 @@ export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
 };
 
 export class AgentStoresService {
+    readonly #draftFiles = new Map<string, DraftFileHandles>();
+    readonly #draftFileIdleMs: number | undefined;
     /** The registry writes in flight, in the order they came. */
     #registryWrites: Promise<unknown> = Promise.resolve();
 
@@ -91,8 +94,9 @@ export class AgentStoresService {
     #known = new Map<string, InboxMessage>();
     #knownCursors = '{}';
 
-    constructor(stores: AgentStores, options: { forwardedCall?: (id: string) => import('./mcp-tools.js').McpCall | undefined } = {}) {
+    constructor(stores: AgentStores, options: { forwardedCall?: (id: string) => import('./mcp-tools.js').McpCall | undefined; draftFileIdleMs?: number } = {}) {
         this.#stores = stores;
+        this.#draftFileIdleMs = options.draftFileIdleMs;
         this.#forwardedCall = options.forwardedCall ?? (() => undefined);
         this.#rememberMail();
         stores.inbox.onChanged(() => this.#mailChanged());
@@ -108,6 +112,17 @@ export class AgentStoresService {
     get stores(): AgentStores {
         return this.#stores;
     }
+
+    draftFileOpen(owner: string, ref: unknown): Promise<{ handle: string; size: number; sha256: string } | null> {
+        const store = this.#stores.drafts; if (!store) throw new Error('this host keeps no chat drafts');
+        let handles = this.#draftFiles.get(owner);
+        if (!handles) { handles = new DraftFileHandles((file, options) => store.openFile(file, options), this.#draftFileIdleMs); this.#draftFiles.set(owner, handles); }
+        return handles.open(ref);
+    }
+    draftFileRead(owner: string, handle: unknown, offset: unknown, length: unknown): Promise<{ base64: string }> { return this.#draftHandles(owner).read(handle, offset, length); }
+    draftFileClose(owner: string, handle: unknown): Promise<{ closed: true }> { return this.#draftHandles(owner).close(handle); }
+    dropDraftFiles(owner: string): Promise<void> { const handles = this.#draftFiles.get(owner); this.#draftFiles.delete(owner); return handles?.dispose() ?? Promise.resolve(); }
+    #draftHandles(owner: string): DraftFileHandles { const handles = this.#draftFiles.get(owner); if (!handles) throw new Error('no such draft file handle on this engine connection'); return handles; }
 
     /** Everything a window that just connected needs to read before anything else. */
     dump(): StoresDump {

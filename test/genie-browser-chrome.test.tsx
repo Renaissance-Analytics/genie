@@ -13,10 +13,19 @@ import { control } from './helpers/control-markup.js';
 
 const presets = [{ id: 'fit', label: 'Fit' }, { id: 'desktop', label: 'Desktop 1280' }, { id: 'laptop', label: 'Laptop 1024' }, { id: 'tablet', label: 'Tablet 768' }, { id: 'mobile', label: 'Mobile 390' }];
 const tab = (id: string, over: Partial<BrowserSnapshot['tabs'][number]> = {}) => ({ id, url: `https://${id}.gen/`, title: null, loading: false, canGoBack: false, canGoForward: false, error: null, ...over });
-const snap = (over: Partial<BrowserSnapshot> = {}): BrowserSnapshot => ({ tabs: [], active: null, presetId: 'fit', presets, sites: ['tynn.gen', 'moic.gen'], ...over });
+const snap = (over: Partial<BrowserSnapshot> = {}): BrowserSnapshot => ({ notice: null, tabs: [], active: null, presetId: 'fit', presets, sites: ['tynn.gen', 'moic.gen'], ...over });
 const noop = () => {};
 const handlers = { onNavigate: noop, onOpen: noop, onActivate: noop, onClose: noop, onNewTab: noop, onBack: noop, onForward: noop, onReload: noop, onPreset: noop };
 const render = (s: BrowserSnapshot, extra: { refusal?: string | null } = {}) => renderToStaticMarkup(<GenieBrowserChrome snapshot={s} refusal={extra.refusal ?? null} {...handlers} />);
+
+describe('a notice', () => {
+    it('says in its own line what the browser cannot do now', () => {
+        expect(render(snap({ notice: 'Genie sites need Genie open' }))).toMatch(/data-browser-notice=""[^>]*>[\s\S]*?Genie sites need Genie open/);
+    });
+    it('CONTROL: none, nothing drawn', () => {
+        expect(render(snap())).not.toContain('data-browser-notice');
+    });
+});
 
 describe('the tabs', () => {
     it('each tab by its title (else its address), the active one marked, a × each, and +', () => {

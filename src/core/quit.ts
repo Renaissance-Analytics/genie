@@ -180,10 +180,15 @@ export interface QuitPorts {
  * SHUT DOWN EVERYTHING: the graceful stop it always was — agents first, then this window's work and the terminals, the
  * writes drained, and only then the host ended (a drain that fails still ends it, so a quit is never left half done).
  */
-export async function runQuit(ports: QuitPorts): Promise<void> {
+export async function runQuit(ports: QuitPorts, options: { readonly drainMs?: number } = {}): Promise<void> {
     ports.stopAgents();
     ports.closeWindow();
     ports.closeTerminals();
-    await ports.drained().catch(() => undefined);
+    // The drain is bounded HERE, never by a race around the whole quit: that race once spent its bound on a slow drain and
+    // the window exited before the host was told to end (ss-repeat5, 2026-11-05). The host's end has its own bound.
+    let bound: ReturnType<typeof setTimeout> | undefined;
+    const over = options.drainMs === undefined ? null : new Promise<void>((r) => { bound = setTimeout(r, options.drainMs); });
+    await Promise.race([ports.drained().catch(() => undefined), ...(over ? [over] : [])]);
+    clearTimeout(bound);
     await ports.shutDownHost();
 }

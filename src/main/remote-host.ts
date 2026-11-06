@@ -21,6 +21,15 @@ import { LocalBlobs } from './local-blobs.js';
 import type { PageOpener } from '../core/local-content.js';
 import { LocalUploads } from './local-uploads.js';
 import { LocalPages } from './local-pages.js';
+import { LocalFilesContent } from './local-files-content.js';
+import { isLocalFilesMethod } from '../core/local-files.js';
+import { localFilesArguments } from './local-files-arguments.js';
+import { isLocalDraftMethod } from '../core/local-drafts.js';
+import { localDraftArguments } from './local-drafts-api.js';
+import { isLocalArtboardMethod } from '../core/local-artboard.js';
+import { localArtboardArguments } from './local-artboard-api.js';
+import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
+import type { FilesHubEvent } from './files-watch-hub.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -35,6 +44,7 @@ import { LocalPages } from './local-pages.js';
  */
 
 export interface HostApi {
+    readonly filesWatch?: FilesWatchPort;
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
     invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
     /**
@@ -93,9 +103,12 @@ interface Connection {
     readonly watching: Map<string, WindowState<WireRow>>;
     /** Independent activity views belonging to this admitted local window. */
     readonly activityViews: Set<string>;
+    filesViews: LocalFilesWatches | null;
     blobs: LocalBlobs | null;
     uploads: LocalUploads | null;
+    uploadOpening: Promise<LocalUploads> | null;
     pages: LocalPages | null;
+    content: LocalFilesContent | null;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
@@ -132,7 +145,7 @@ export class RemoteHost {
     readonly #api: HostApi;
     readonly #openBlob: BlobOpener | undefined;
     readonly #openPage: PageOpener | undefined;
-    readonly #createLocalUploads: (() => LocalUploads) | undefined;
+    readonly #createLocalUploads: (() => LocalUploads | Promise<LocalUploads>) | undefined;
     readonly #hostName: string;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
@@ -160,7 +173,7 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads> }) {
         this.#api = deps.api;
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
@@ -193,6 +206,8 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        connection.filesViews?.dispose();
+        connection.content?.dispose();
         connection.blobs?.dispose();
         connection.pages?.dispose();
         // Disposal marks the connection closed synchronously, then drains any pending disk operation.
@@ -289,7 +304,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), blobs: null, uploads: null, pages: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -297,6 +312,26 @@ export class RemoteHost {
             this.#staging.dropOwner(connection.id);
             this.#drop(connection);
         });
+    }
+
+    /** One first-use preparation per connection; a registry that arrives after close never gets to stage bytes. */
+    async #uploads(connection: Connection): Promise<LocalUploads> {
+        if (connection.uploads) return connection.uploads;
+        if (connection.uploadOpening) return connection.uploadOpening;
+        const create = this.#createLocalUploads;
+        if (!create) throw new Error('local staging is not configured on this host');
+        const opening = (async () => {
+            const uploads = await create();
+            if (this.#connections.get(connection.id) !== connection) {
+                await uploads.dispose();
+                throw new Error('the local upload connection closed');
+            }
+            connection.uploads = uploads;
+            return uploads;
+        })();
+        connection.uploadOpening = opening;
+        try { return await opening; }
+        finally { if (connection.uploadOpening === opening) connection.uploadOpening = null; }
     }
 
     #send(connection: Connection, message: WireMessage): void {
@@ -405,6 +440,22 @@ export class RemoteHost {
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
 
         switch (method) {
+            case 'files.watch':
+            case 'files.unwatch':
+            case 'files.watchState': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the Files watch connection closed');
+                const views = connection.filesViews ??= new LocalFilesWatches(this.#api.filesWatch);
+                try {
+                    if (method === 'files.watch') return ok(await views.watch(args[0], args[1], args[2]));
+                    if (method === 'files.unwatch') return ok(views.unwatch(args[0]));
+                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree'));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
+            case 'content.release': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                return ok(await connection.content?.releaseAndWait(args[0]) ?? { released: false });
+            }
             case 'localUpload.begin':
             case 'localUpload.chunk':
             case 'localUpload.abort': {
@@ -412,7 +463,7 @@ export class RemoteHost {
                 if (!this.#connections.has(connection.id)) return refuse('the local upload connection closed');
                 if (!this.#createLocalUploads) return refuse('local staging is not configured on this host');
                 try {
-                    const uploads = connection.uploads ??= this.#createLocalUploads();
+                    const uploads = await this.#uploads(connection);
                     if (method === 'localUpload.begin') return ok(await uploads.begin(args[0]));
                     if (method === 'localUpload.chunk') return ok(await uploads.chunk(args[0], args[1], args[2]));
                     return ok(await uploads.abort(args[0]));
@@ -423,7 +474,7 @@ export class RemoteHost {
             case 'page.close': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
                 if (!this.#connections.has(connection.id)) return refuse('the list connection closed');
-                const pages = connection.pages ??= new LocalPages(this.#openPage);
+                const pages = connection.pages ??= this.#content(connection).pages;
                 try {
                     if (method === 'page.open') return ok(await pages.open(args[0], args[1]));
                     if (method === 'page.next') return ok(await pages.next(args[0]));
@@ -435,7 +486,7 @@ export class RemoteHost {
             case 'blob.close': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
                 if (!this.#connections.has(connection.id)) return refuse('the blob connection closed');
-                const blobs = connection.blobs ??= new LocalBlobs(this.#openBlob);
+                const blobs = connection.blobs ??= this.#content(connection).blobs;
                 try {
                     if (method === 'blob.open') return ok(await blobs.open(args[0], args[1]));
                     if (method === 'blob.read') return ok(await blobs.read(args[0], args[1], args[2]));
@@ -529,8 +580,24 @@ export class RemoteHost {
         const materialized = this.#materialize(connection, method, args);
         if (!materialized.ok) return refuse(materialized.reason);
 
+        let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, artboard: Awaited<ReturnType<typeof localArtboardArguments>> | null = null, response: string | null = null;
         try {
-            const value = await this.#api.invoke(method, materialized.args);
+            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(); }
+            if (isLocalDraftMethod(method)) {
+                drafts = await localDraftArguments(method, materialized.args, connection.uploads);
+                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin();
+            }
+            if (isLocalArtboardMethod(method)) {
+                artboard = await localArtboardArguments(method, materialized.args, connection.uploads);
+                if (method === 'artboard.read') response = this.#content(connection).begin();
+            }
+            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args);
+            if (files) { await files.close(); files = null; }
+            if (drafts) { await drafts.close(); drafts = null; }
+            if (artboard) { await artboard.close(); artboard = null; }
+            if (isLocalFilesMethod(method)) return ok(this.#content(connection).result(response!, value, method === 'files.localChildren' ? 'folder-children' : 'workspace-tree', method === 'files.localReadMedia' || method === 'files.readBytes'));
+            if (isLocalDraftMethod(method) && response !== null) return ok(await connection.content!.draftResult(response, method, value));
+            if (method === 'artboard.read') return ok(connection.content!.artboardResult(response!, value));
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices and the connections. Only an owner sees them.
@@ -538,8 +605,18 @@ export class RemoteHost {
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             return ok(value);
         } catch (error) {
+            if (response !== null) connection.content?.release(response);
             return refuse(error instanceof Error ? error.message : String(error));
+        } finally {
+            if (files) { try { await files.close(); } catch { console.warn('[genie] a consumed Files stage could not be released'); } }
+            if (drafts) { try { await drafts.close(); } catch { console.warn('[genie] a consumed draft stage could not be released'); } }
+            if (artboard) { try { await artboard.close(); } catch { console.warn('[genie] a consumed ArtBoard stage could not be released'); } }
         }
+    }
+
+    #content(connection: Connection): LocalFilesContent {
+        if (!this.#connections.has(connection.id)) throw new Error('the local content connection closed');
+        return connection.content ??= new LocalFilesContent({ now: this.#now, ...(this.#openBlob ? { openBlob: this.#openBlob } : {}), ...(this.#openPage ? { openPage: this.#openPage } : {}) });
     }
 
     /**
@@ -619,6 +696,11 @@ export class RemoteHost {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
             if (c.local ? !LOCAL_EVENTS.has(channel) : LOCAL_EVENTS.has(channel)) continue;
+            if (channel === LOCAL_EVENT_CHANNELS.files) {
+                const push = c.filesViews?.event(payload as FilesHubEvent);
+                if (push) this.#send(c, { kind: 'event', channel, payload: push });
+                continue;
+            }
             if (channel === LOCAL_EVENT_CHANNELS.activity && c.activityViews.size === 0) continue;
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).

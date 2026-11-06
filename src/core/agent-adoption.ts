@@ -18,7 +18,6 @@ import { isAcpProvider, type AcpProvider } from './engine.js';
  * - the reserved terms `general`, `genie`, `tynn` — `genie` is also the OS agent's name and address (`genie://agent/genie`),
  *   so a workspace agent of that name could not be reached — unless the workspace's Tynn project grants exactly that ONE
  *   term (`sacred_agent_name`; a grant that is not itself reserved is inert, and one grant never unlocks another);
- * - an AGENT.md whose `tuis:` names no provider Genie 2 runs (claude, codex): its own word that Genie may not run it.
  * NEVER A DUPLICATE: a name the workspace already has (in any case) is not offered.
  */
 
@@ -36,8 +35,11 @@ export interface AgentFile {
 
 export interface ImportedAgent {
     readonly name: string;
-    /** The provider it would run on: the first in its `tuis:` Genie 2 runs, else Claude; `null` when its file allows none. */
-    readonly provider: AcpProvider | null;
+    /**
+     * The provider it is adopted on: Genie's default — or, as a legacy hint, the first provider Genie runs that an old
+     * `tuis:` line names (Tynn story #380: AGENT.md names no provider now, and a `tuis:` line is never a refusal).
+     */
+    readonly provider: AcpProvider;
     /** Its persona, relative to the workspace — what the registry records as its instructions. */
     readonly instructions: string;
     /** Why it cannot be adopted as it stands, or `null`. */
@@ -55,28 +57,28 @@ export function adoptionRefusal(folder: string, sacredName: string | null): stri
     return `"${folder}" is a reserved name and cannot be used for an agent. Reserved: ${RESERVED_AGENT_NAMES.join(', ')}. Rename the folder to say what the agent does.`;
 }
 
-/** The provider an AGENT.md allows: its first `tuis:` entry Genie 2 runs; no `tuis:` = any, so Claude (Genie 2's default). */
-function providerOf(text: string, folder: string): { provider: AcpProvider | null; refusal: string | null } {
-    const manifest = parseAgentManifest(text === '' ? null : text, folder);
-    if (!manifest.tuis) return { provider: 'claude', refusal: null };
-    const runs = manifest.tuis.find((t) => isAcpProvider(t));
-    if (runs && isAcpProvider(runs)) return { provider: runs, refusal: null };
-    return { provider: null, refusal: `Its AGENT.md allows tuis: ${manifest.tuis.join(', ') || '(none)'}; Genie runs claude or codex. Add one of them to tuis: and it can be adopted.` };
+/** Genie's default provider for an adopted agent. */
+export const ADOPTION_DEFAULT_PROVIDER: AcpProvider = 'claude';
+
+/** The provider to adopt on: a legacy `tuis:` line's first provider Genie runs, as a hint; otherwise the default. */
+function providerOf(text: string, folder: string, fallback: AcpProvider): AcpProvider {
+    const hint = parseAgentManifest(text === '' ? null : text, folder).tuis?.find((t) => isAcpProvider(t));
+    return hint && isAcpProvider(hint) ? hint : fallback;
 }
 
 /**
  * The agents a workspace brought and has not registered, alphabetically — each with its reason when it cannot be adopted,
  * so a refused file is said rather than silently missing. A name already registered in the workspace (any case) is left out.
  */
-export function importedAgents(input: { files: readonly AgentFile[]; registered: readonly { name: string }[]; sacredName?: string | null }): ImportedAgent[] {
+export function importedAgents(input: { files: readonly AgentFile[]; registered: readonly { name: string }[]; sacredName?: string | null; defaultProvider?: AcpProvider }): ImportedAgent[] {
     const have = new Set(input.registered.map((a) => a.name.trim().toLowerCase()));
     return [...input.files]
         .filter((f) => !have.has(f.folder.toLowerCase()))
         .sort((a, b) => a.folder.localeCompare(b.folder))
         .map((f) => {
             const named = adoptionRefusal(f.folder, input.sacredName ?? null);
-            const { provider, refusal } = providerOf(f.text, f.folder);
-            return { name: f.folder, provider, instructions: `.agents/${f.folder}/AGENT.md`, refusal: named ?? refusal };
+            const provider = providerOf(f.text, f.folder, input.defaultProvider ?? ADOPTION_DEFAULT_PROVIDER);
+            return { name: f.folder, provider, instructions: `.agents/${f.folder}/AGENT.md`, refusal: named };
         });
 }
 

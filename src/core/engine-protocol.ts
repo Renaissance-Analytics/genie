@@ -46,6 +46,8 @@ export const ENGINE_METHODS = [
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',
+    // An agent's recorded rows, bounded, for a provider switch's carry-over (Tynn story #380): read by the host from its own store.
+    'engine.historyRows',
     // Subscriptions: an agent's ledger is sent only while the window watches it (cheap, incremental — patches only).
     'engine.watchLedger',
     'engine.unwatchLedger',
@@ -61,16 +63,45 @@ export const ENGINE_METHODS = [
     // calling window's connection. Its batches and git come back as `files.event`, to the windows whose views watch.
     'engine.filesWatch',
     'engine.filesUnwatch',
+    // IssueWatch in genie-host (P5c): `[method, args]` — a LOCAL window's Refresh, repo load and repo switch. Its state is
+    // sent as `issueWatch.dump` before `engine.ready` and as `issueWatch.event` (a new state, or a sound to play now), to
+    // local windows only.
+    'engine.issueWatch',
+    // The live board's per-view subscriptions (P5c), LOCAL windows only: `[viewId, workspaceId]` / `[viewId]`, under the calling window's
+    // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
+    'engine.tynnBoardWatch',
+    'engine.tynnBoardUnwatch',
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',
+    // Host-owned draft files: only bounded ranges cross to the window. Handles belong to this engine connection.
+    'engine.drafts.fileOpen',
+    'engine.drafts.fileRead',
+    'engine.drafts.fileClose',
     // The host's process supervisor (P3.3b): `[method, args]` — start, stop, restart, forget. Its state is sent as
     // `supervisor.dump` before `engine.ready`, every change and every line of output as `supervisor.event`.
     'engine.supervisor',
+    // The host's hosting (P5a: hosting-host.ts): `[method, args]` — a window's write. Its whole readable state is sent as
+    // `hosting.dump` before `engine.ready` (the front door's port and CA with it), and again as `hosting.event` on change.
+    'engine.hosting',
+    // The window's environment NOW (P5a.2): `[env]`, pushed after a Check and repair so what the host starts next (a site's
+    // php-cgi, an agent) reads it with no restart. Also carried with every start, as before.
+    'engine.windowEnv',
+    // The host's app door and its keys (P5a.2: app-inbox-host.ts): `[method, args]` — a LOCAL window's change. The keys'
+    // state (names, ids, dates — never a secret) is sent as `appInbox.dump` before `engine.ready` and again as `appInbox.event`.
+    'engine.appInbox',
+    // The host's updater (P5b: updates-host.ts): `[method, args]` — a LOCAL window's check, download, install, channel and
+    // the helper's launch. Its state is sent as `updates.dump` before `engine.ready` and as `updates.event` on change, to
+    // local windows only.
+    'engine.updates',
+    // The updater helper's own (P5b: updater-helper.ts), on a link that said hello as the updater: `register`, `reply`,
+    // `progress`. The host's requests reach it as `updater.event`. Nothing else is open to that link.
+    'engine.updater',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
     'engine.processes',
     // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
+    'engine.browser',
     'engine.flows',
     // The host's terminals (P3.3e): `[method, args]`. Their list and scrollback are sent as `terminals.dump` before
     // `engine.ready`; every change, every byte of output and every exit as `terminals.event`.
@@ -105,8 +136,9 @@ export const ENGINE_METHODS = [
     // Host → window.
     // A window tool's call, forwarded whole (mcp-host-tools.ts): the window runs today's handler and answers its result.
     'client.toolCall',
-    // Each kept process's app-inbox credential, minted where the app-inbox server is (the window, until P5): `[processes]`.
-    'client.appEnvs',
+    // An elevation the host's hosting needs (the hosts file, the trust store), run by the window as a window always has:
+    // `[steps]`. The host never raises a prompt itself; with no window it waits (hosting-host.ts WindowElevation).
+    'client.elevate',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];
@@ -177,6 +209,7 @@ export interface EngineGlobalView {
  */
 export type EngineCallback =
     | { readonly name: 'threadId'; readonly agentId: string; readonly threadId: string }
+    | { readonly name: 'carryOverSent'; readonly agentId: string }
     | { readonly name: 'plan'; readonly agentId: string; readonly steps: readonly { content: string; status: string }[] }
     | { readonly name: 'turnNumbered'; readonly agentId: string; readonly n: number }
     | { readonly name: 'action'; readonly agentId: string; readonly kind: string }
@@ -189,7 +222,7 @@ export type EngineCallback =
     | { readonly name: 'toolSignal'; readonly signal: unknown };
 
 /** Callbacks that change the window's stores: queued while no window is connected. The rest are moment-only. */
-export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
+export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'carryOverSent', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
 
 /** An attachment on the wire: its bytes as base64 (JSON has no bytes). */
 export interface WireAttachment {

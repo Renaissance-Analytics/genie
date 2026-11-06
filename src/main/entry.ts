@@ -14,8 +14,13 @@ import { appUserModelIdFor } from './app-identity.js';
 const appUserModelId = appUserModelIdFor(process.platform, app.isPackaged);
 if (appUserModelId !== null) app.setAppUserModelId(appUserModelId);
 
-if (entryFor(process.argv) === 'doctor') {
+const entry = entryFor(process.argv);
+if (entry === 'doctor') {
     void import('./doctor.js').then((m) => m.runDoctor());
+} else if (entry === 'browser') {
+    void import('./browser-process.js');
+} else if (entry === 'updater') {
+    void import('./updater-process.js');
 } else {
     void import('./main.js');
 }

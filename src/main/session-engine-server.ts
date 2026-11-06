@@ -30,9 +30,15 @@ import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { AgentStoresService } from './agent-stores-host.js';
 import type { SupervisorService } from './supervisor-host.js';
+import type { HostingService } from './hosting-host.js';
+import type { AppInboxHost } from './app-inbox-host.js';
+import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { ProcessesService } from './processes-host.js';
+import type { BrowserService } from './browser-service.js';
 import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
+import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
+import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -69,7 +75,7 @@ function agentKeyName(name: string): `tynn/agent/${string}` {
 
 /** What the session host is built with, from this server: its owner's half of the options. */
 export type { HostAgentKeys };
-export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
+export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
     /** This machine as a workstation (P3.4): the host holds its key. */
@@ -103,6 +109,8 @@ export interface EngineServerOptions {
     readonly schedule?: (ms: number, fn: () => void) => () => void;
     readonly coalesceMs?: number;
     readonly log?: (line: string) => void;
+    /** Each call a window makes, timed from its dispatch to its answer (genie-host's watchdog: `host ipc slow channel=…`). */
+    readonly timeCall?: (method: string) => () => void;
     /**
      * genie-host's spawn-host children (the host split, P2.1): `send` takes a window's frame to the child of its profile;
      * `windowGone` says a window's link closed (its streams' lines now go nowhere). Absent = `engine.spawn` is refused.
@@ -126,14 +134,36 @@ export interface EngineServerOptions {
     readonly v1Import?: (databasePath: string) => Promise<void>;
     /** The host's process supervisor (P3.3b: supervisor-host.ts). Absent = `engine.supervisor` is refused. */
     readonly supervisor?: SupervisorService;
+    /** The host's hosting: the front door, the engines, the sites (P5a: hosting-host.ts). Absent = `engine.hosting` is refused. */
+    readonly hosting?: HostingService;
+    /** The host's app door and its keys (P5a.2). Absent = `engine.appInbox` is refused. Local windows only, like the hosting. */
+    readonly appInbox?: AppInboxHost;
+    /** Takes the window's environment into this host's (`engine.windowEnv`, and with each start); `adoptWindowEnv` on `process.env` by default. */
+    readonly adoptWindowEnv?: (env: Readonly<Record<string, string>>) => void;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
     readonly processes?: ProcessesService;
+    /** Between the window and the Genie browser's process (P2b: browser-service.ts). Absent = `engine.browser` is refused. */
+    readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
     readonly flows?: FlowsService;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
+    /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
+    readonly updates?: UpdatesService;
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
+    /** IssueWatch in the host (P5c: issue-watch-host.ts). Absent = `engine.issueWatch` is refused. Local windows only. */
+    readonly issueWatch?: {
+        dump(): IssueWatchDump;
+        call(method: string, args: readonly unknown[]): Promise<unknown>;
+        onEvent(listener: (event: IssueWatchHostEvent) => void): () => void;
+    };
+    /** The live board's per-view watches (P5c: issue-watch-host.ts TynnBoardHub), owned by the connection. Absent = refused. */
+    readonly tynnBoard?: {
+        watch(owner: string, viewId: string, workspaceId: string): boolean;
+        unwatch(owner: string, viewId: string): void;
+        dropOwner(owner: string): void;
+    };
     readonly files?: {
         subscribe(owner: string, viewId: string, workspace: { id: string; path: string }, want: FilesWant): void;
         unsubscribe(owner: string, viewId: string): void;
@@ -162,6 +192,14 @@ interface Connection {
     lastGlobal: string;
     nextCall: number;
     readonly pending: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
+    /**
+     * A window on this host's OWN endpoint (its local socket or pipe, token-checked). Only such a link is sent the hosting
+     * — whose dump carries each workspace's service variables — may drive it, or is asked to elevate (P5a.2).
+     * P5d NOTE: a remote or phone path that ever reaches this server must accept as NOT local.
+     */
+    readonly local: boolean;
+    /** The updater helper's link (P5b): never a window — not counted, sent no dump, open to `engine.updater` alone. */
+    helper: boolean;
 }
 
 export class SessionEngineServer {
@@ -170,6 +208,8 @@ export class SessionEngineServer {
     readonly #records = new Map<string, AgentRecord>();
     readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
+    /** The updater helper's links (P5b), apart from the windows': nothing a window is sent or counted for reaches them. */
+    readonly #helpers = new Set<Connection>();
     readonly #queue: EngineCallback[] = [];
     readonly #dirty = new Set<string>();
     #cancelFlush: (() => void) | null = null;
@@ -200,14 +240,34 @@ export class SessionEngineServer {
         options.supervisor?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'supervisor.event', event);
         });
+        options.hosting?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'hosting.event', event);
+        });
+        options.appInbox?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'appInbox.event', event);
+        });
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
+        });
+        options.browser?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'browser.event', event);
         });
         options.flows?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'flows.event', event);
         });
         options.terminals?.onEvent((event) => {
-            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'terminals.event', event);
+            // A disposable terminal's output and end go to the window that opened it, and no other (Tynn story #378).
+            const owner = event.kind === 'list' ? undefined : event.owner;
+            for (const conn of this.#connections) if (conn.authed && (owner === undefined || owner === String(conn.id))) this.#event(conn, 'terminals.event', event);
+        });
+        // The updater's state (P5b) travels on LOCAL window links only, as the hosting's does (P4 rules).
+        options.updates?.onEvent((state) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'updates.event', state);
+        });
+        // IssueWatch's state and its sounds (P5c) travel on LOCAL window links only. A sound goes to the windows open now:
+        // with none it is not kept, so nothing plays later.
+        options.issueWatch?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'issueWatch.event', event);
         });
     }
 
@@ -226,6 +286,7 @@ export class SessionEngineServer {
                 return [...own, ...(held?.servers ?? [])];
             },
             onThreadId: (agentId, threadId) => this.callback({ name: 'threadId', agentId, threadId }),
+            onCarryOverSent: (agentId) => this.callback({ name: 'carryOverSent', agentId }),
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
             onAction: (agentId, kind) => this.callback({ name: 'action', agentId, kind }),
@@ -254,9 +315,14 @@ export class SessionEngineServer {
         return this.#reverse('client.toolCall', [call]);
     }
 
-    /** Each kept process's app-inbox credential, asked of the newest window (P3.3c). Rejects with no window. */
-    appEnvs(processes: ReadonlyArray<{ id: string; name: string; workspaceId: string }>): Promise<Record<string, Record<string, string>>> {
-        return this.#reverse('client.appEnvs', [processes]) as Promise<Record<string, Record<string, string>>>;
+    /** An elevation the host's hosting needs, run by the newest window (P5a). Rejects with no window: the caller holds it. */
+    elevate(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> {
+        return this.#reverse('client.elevate', [steps], { localOnly: true }) as Promise<ElevationOutcome>;
+    }
+
+    /** Whether a LOCAL window is connected now: the only kind asked to elevate (P5a.2). */
+    localWindowConnected(): boolean {
+        return [...this.#connections].some((c) => c.authed && c.local);
     }
 
     /** The records the window last pushed (the roster the host's tools and approvals read until P3.2). */
@@ -281,18 +347,27 @@ export class SessionEngineServer {
     }
 
     /** A connection (a window) arrived: it must say the token before anything else. */
-    accept(transport: ClientTransport & { trusted?: () => void }): void {
-        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map() };
+    accept(transport: ClientTransport & { trusted?: () => void }, options: { local?: boolean } = {}): void {
+        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map(), local: options.local === true, helper: false };
         this.#connections.add(conn);
         transport.onMessage((text) => this.#onMessage(conn, text));
         transport.onClose(() => {
+            if (this.#helpers.delete(conn)) {
+                this.#options.updates?.helperDropped(conn.id);
+                return;
+            }
             const was = conn.authed;
             this.#connections.delete(conn);
             for (const p of conn.pending.values()) p.reject(new Error('The window closed before it answered.'));
             conn.pending.clear();
             if (was) this.#options.onClients?.(this.clients);
             if (was) this.#options.spawn?.windowGone?.();
+            if (was) this.#options.browser?.dropped(String(conn.id));
+            // Its disposable terminals end with it: nothing re-attaches one (Tynn story #378).
+            if (was) this.#options.terminals?.dropped(String(conn.id));
             if (was) this.#options.files?.dropOwner(conn.id);
+            if (was) this.#options.tynnBoard?.dropOwner(conn.id);
+            if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
         });
     }
@@ -315,6 +390,13 @@ export class SessionEngineServer {
             conn.authed = true;
             conn.transport.trusted?.();
             conn.transport.send(JSON.stringify({ kind: 'welcome', connectionId: conn.id, host: hostname(), isOwner: true, workspaceId: null, protocol: ENGINE_PROTOCOL, build: this.#options.build, pid: this.#options.pid ?? process.pid }));
+            // THE UPDATER HELPER (P5b), on this host's own endpoint with the token: no dump, never counted as a window.
+            if (message.label === UPDATER_HELPER_LABEL && conn.local) {
+                conn.helper = true;
+                this.#connections.delete(conn);
+                this.#helpers.add(conn);
+                return;
+            }
             this.#dump(conn);
             this.#options.onClients?.(this.clients);
             return;
@@ -344,6 +426,16 @@ export class SessionEngineServer {
         // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
+        // The hosting BEFORE ready: a window mounts its browsers on the front door's port and CA as soon as it connects (P5a).
+        if (this.#options.hosting && conn.local) this.#event(conn, 'hosting.dump', this.#options.hosting.dump());
+        if (this.#options.appInbox && conn.local) this.#event(conn, 'appInbox.dump', this.#options.appInbox.dump());
+        if (this.#options.updates && conn.local) {
+            this.#event(conn, 'updates.dump', this.#options.updates.dump());
+            // Why the last install did not happen: the first local window is told, once (P5b).
+            const failed = this.#options.updates.takeFailed();
+            if (failed !== null) this.#event(conn, 'updates.failed', failed);
+        }
+        if (this.#options.issueWatch && conn.local) this.#event(conn, 'issueWatch.dump', this.#options.issueWatch.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
@@ -354,11 +446,14 @@ export class SessionEngineServer {
 
     async #call(conn: Connection, id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: { ok: true; value: unknown } | { ok: false; reason: string };
+        // A notification (id 0: a spawn frame, a keystroke) is not a call anyone waits on: not timed.
+        const timed = id === 0 ? undefined : this.#options.timeCall?.(method);
         try {
             reply = { ok: true, value: await this.#dispatch(conn, method, args) };
         } catch (error) {
             reply = { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }
+        timed?.();
         // RULE 1: the command's effect, then its answer.
         this.#flush();
         // A notification (id 0, a spawn frame) wants no answer.
@@ -367,6 +462,8 @@ export class SessionEngineServer {
     }
 
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
+        // The updater helper's link calls its own method and nothing else (P5b).
+        if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
         const id = (i = 0): AgentId => {
@@ -384,7 +481,7 @@ export class SessionEngineServer {
                 const env = args[2];
                 this.#env.set(record.workspaceId, env && typeof env === 'object' ? (env as Record<string, string>) : {});
                 const windowEnv = args[3];
-                if (windowEnv && typeof windowEnv === 'object') adoptWindowEnv(process.env, windowEnv as Record<string, string>);
+                if (windowEnv && typeof windowEnv === 'object') (this.#options.adoptWindowEnv ?? ((e) => adoptWindowEnv(process.env, e)))(windowEnv as Record<string, string>);
                 return host.start(record, str(1));
             }
             case 'engine.stop':
@@ -419,6 +516,10 @@ export class SessionEngineServer {
                 return host.deliverOwed(id(), (args[1] as { text: string; by: string } | undefined) ?? undefined);
             case 'engine.ended':
                 return host.ended(id());
+            case 'engine.historyRows': {
+                const o = (args[1] ?? {}) as { limit?: unknown; maxBytes?: unknown };
+                return host.historyRows(id(), { limit: typeof o.limit === 'number' ? o.limit : 0, maxBytes: typeof o.maxBytes === 'number' ? o.maxBytes : 0 });
+            }
             case 'engine.settled':
                 await host.settled();
                 return true;
@@ -460,6 +561,11 @@ export class SessionEngineServer {
                 for (const r of records) if (r && typeof r.id === 'string') this.#records.set(r.id, r);
                 return true;
             }
+            case 'engine.windowEnv': {
+                const env = args[0];
+                if (env && typeof env === 'object') (this.#options.adoptWindowEnv ?? ((e) => adoptWindowEnv(process.env, e)))(env as Record<string, string>);
+                return true;
+            }
             case 'engine.ping':
                 return 'pong';
             case 'engine.shutdown':
@@ -496,13 +602,28 @@ export class SessionEngineServer {
                 return this.#options.mcp?.status() ?? null;
             case 'engine.terminals':
                 if (!this.#options.terminals) throw new Error('This host runs no terminals.');
-                return this.#options.terminals.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+                return this.#options.terminals.call(str(0), Array.isArray(args[1]) ? args[1] : [], String(conn.id));
+            case 'engine.browser':
+                if (!this.#options.browser) throw new Error('This host has no browser service.');
+                return this.#options.browser.call(str(0), Array.isArray(args[1]) ? args[1] : [], String(conn.id));
             case 'engine.flows':
                 if (!this.#options.flows) throw new Error('This host keeps no flows.');
                 return this.#options.flows.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.appInbox':
+                if (!this.#options.appInbox) throw new Error('This host runs no app door.');
+                if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');
+                return this.#options.appInbox.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.updates':
+                if (!this.#options.updates) throw new Error('This host runs no updater.');
+                if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');
+                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true });
+            case 'engine.hosting':
+                if (!this.#options.hosting) throw new Error('This host runs no hosting.');
+                if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');
+                return this.#options.hosting.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.supervisor':
                 if (!this.#options.supervisor) throw new Error('This host runs no process supervisor.');
                 return this.#options.supervisor.call(str(0), Array.isArray(args[1]) ? args[1] : []);
@@ -510,8 +631,31 @@ export class SessionEngineServer {
                 if (!this.#options.stores) throw new Error('This host keeps no stores.');
                 return this.#options.stores.call(str(0), str(1), Array.isArray(args[2]) ? args[2] : []);
             }
+            case 'engine.drafts.fileOpen':
+            case 'engine.drafts.fileRead':
+            case 'engine.drafts.fileClose': {
+                if (!this.#connections.has(conn)) throw new Error('the draft file engine connection is closed');
+                const stores = this.#options.stores; if (!stores) throw new Error('this host keeps no chat drafts');
+                if (method === 'engine.drafts.fileOpen') return stores.draftFileOpen(conn.id, args[0]);
+                if (method === 'engine.drafts.fileRead') return stores.draftFileRead(conn.id, args[0], args[1], args[2]);
+                return stores.draftFileClose(conn.id, args[0]);
+            }
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
+                return true;
+            case 'engine.issueWatch':
+                if (!this.#options.issueWatch) throw new Error('This host runs no IssueWatch.');
+                if (!conn.local) throw new Error('IssueWatch is asked from a local window only.');
+                return this.#options.issueWatch.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            // LOCAL ONLY (P4 rule 4): a non-local link may be a share-link guest, and the board is the owner's, read with the
+            // owner's own account. So a guest neither follows one nor is sent its events (it holds no views).
+            case 'engine.tynnBoardWatch':
+                if (!this.#options.tynnBoard) throw new Error('This host follows no Tynn board.');
+                if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
+                return this.#options.tynnBoard.watch(conn.id, str(0), str(1));
+            case 'engine.tynnBoardUnwatch':
+                if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
+                this.#options.tynnBoard?.unwatch(conn.id, str(0));
                 return true;
             case 'engine.configSync':
                 if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
@@ -542,10 +686,23 @@ export class SessionEngineServer {
                 return this.#keychain().set(movableName(str(0)), str(1));
             case 'engine.secretCompare':
                 return hostVault(this.#keychain()).compare(movableName(str(0)), str(1));
-            case 'client.appEnvs':
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
         }
+    }
+
+    /** The updater helper's calls (P5b): `register [pid]`, then its answers. Only a link that said hello as the updater. */
+    #updater(conn: Connection, method: EngineMethod, args: unknown[]): unknown {
+        if (!conn.helper || method !== 'engine.updater') throw new Error('Genie’s updater may call its own method only, and only Genie’s updater may call it.');
+        const updates = this.#options.updates;
+        if (!updates) throw new Error('This host runs no updater.');
+        const name = typeof args[0] === 'string' ? args[0] : '';
+        const rest = Array.isArray(args[1]) ? args[1] as unknown[] : [];
+        if (name === 'register') {
+            const pid = typeof rest[0] === 'number' && Number.isInteger(rest[0]) ? rest[0] : 0;
+            return updates.helperLinked(conn.id, pid, (event) => this.#event(conn, 'updater.event', event));
+        }
+        return updates.helperCall(name, rest, conn.id);
     }
 
     #keychain(): AgentSecrets {
@@ -554,8 +711,8 @@ export class SessionEngineServer {
     }
 
     /** A call to the WINDOW (the newest one): what only it has in phase 1. Refused when no window is connected. */
-    #reverse(method: EngineMethod, args: unknown[]): Promise<unknown> {
-        const conn = [...this.#connections].filter((c) => c.authed).at(-1);
+    #reverse(method: EngineMethod, args: unknown[], options: { localOnly?: boolean } = {}): Promise<unknown> {
+        const conn = [...this.#connections].filter((c) => c.authed && (options.localOnly !== true || c.local)).at(-1);
         if (!conn) return Promise.reject(new Error('No Genie window is connected to prepare this agent\'s credentials. Open Genie and start it again.'));
         const id = conn.nextCall++;
         return new Promise((resolve, reject) => {
@@ -568,6 +725,11 @@ export class SessionEngineServer {
     /** A socket to another machine said something: to the window that opened it, and no other. */
     deviceEvent(owner: string, event: DeviceLinkEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'device.event', event);
+    }
+
+    /** A board's ring or state, to the connection whose views watch that workspace, and no other (P5c). */
+    tynnBoardEvent(owner: string, event: TynnBoardHubEvent): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnBoard.event', event);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {
@@ -674,7 +836,7 @@ export class SessionEngineServer {
 }
 
 /** What is the host's own and never the window's: how it runs, and where its home is. */
-const HOST_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'GENIE_HOME', 'GENIE_HOST_BUILD', 'GENIE_HOST_IDLE_MS']);
+const HOST_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'GENIE_HOME', 'GENIE_HOST_BUILD', 'GENIE_HOST_IDLE_MS', 'GENIE_V1_USERDATA', 'GENIE_APPDATA', 'GENIE_RESOURCES']);
 
 /**
  * THE WINDOW'S ENVIRONMENT, TAKEN BEFORE A START: a provider is launched from the host's `process.env` (filtered by the

@@ -83,7 +83,10 @@ describe('the capability table', () => {
         // (a write) — workspace-scoped, through the panel's confined files host.
         // 88 with P4's local-only notes, headroom and account retry; activity interests are connection controls.
         // 100 with family5's twelve owner operations; every one starts local.
-        expect(REMOTE_METHODS.length).toBe(100);
+        // 115 with local Files; 120 with drafts; 122 with the two explicitly local ArtBoard operations.
+        expect(REMOTE_METHODS.length).toBe(122);
+        for (const method of ['artboard.read', 'artboard.review'] as const) expect(capabilityOf(method)).toBe('local');
+        for (const method of ['chatDrafts.load', 'chatDrafts.save', 'chatDrafts.putFile', 'chatDrafts.readFile', 'chatDrafts.release'] as const) expect(capabilityOf(method)).toBe('local');
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');

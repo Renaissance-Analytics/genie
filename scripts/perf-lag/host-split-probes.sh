@@ -181,7 +181,7 @@ probe "tray-says-what-runs" src/main/tray.ts \
     test/tray.test.ts "WHAT it runs"
 
 probe "armed-flow-keeps-the-tray" src/core/tray-only.ts \
-    "    return a.agents + a.terminals + a.processes + a.services + a.armedFlows + a.scheduledTasks;" "    return a.agents + a.terminals + a.processes + a.services + a.scheduledTasks;" \
+    "    return a.agents + a.terminals + a.processes + a.services + a.armedFlows + a.scheduledTasks + a.browser;" "    return a.agents + a.terminals + a.processes + a.services + a.scheduledTasks + a.browser;" \
     test/tray-only.test.ts "and nothing running: stays"
 
 probe "scheduled-task-keeps-the-host" src/core/host-idle.ts \
@@ -194,7 +194,7 @@ probe "tray-probe-is-gated" src/main/main.ts \
 
 # ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first
 probe "tray-always-asks" src/main/main.ts \
-    "onShutDown: () => { if (confirmTray('shut-down')) requestQuit('shut-down'); }" "onShutDown: () => { requestQuit('shut-down'); }" \
+    "onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }" "onShutDown: () => { requestQuit('shut-down'); }" \
     test/quit-keeps-host-wiring.test.ts "offers the host"
 
 probe "only-the-confirm-button-goes-on" src/core/tray-confirm.ts \

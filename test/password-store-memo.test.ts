@@ -98,6 +98,6 @@ describe('password store memo — only a store that gave a key', () => {
 
     it('main.ts passes whether this launch could encrypt', () => {
         const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        expect(main).toMatch(/rememberPasswordStore\(genieHome\(\), safeStorage\.getSelectedStorageBackend\(\), safeStorage\.isEncryptionAvailable\(\)\)/);
+        expect(main).toMatch(/rememberPasswordStore\(genieRoot\(\), safeStorage\.getSelectedStorageBackend\(\), safeStorage\.isEncryptionAvailable\(\)\)/);
     });
 });

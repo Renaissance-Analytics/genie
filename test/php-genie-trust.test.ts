@@ -73,8 +73,8 @@ describe("a PHP worker's environment", () => {
         expect(files.size).toBe(0);
     });
 
-    it('compose gives every PHP worker this environment', () => {
-        const compose = readFileSync('src/main/compose.ts', 'utf8');
-        expect(compose).toMatch(/phpWorkerEnv: \(\) => phpWorkerEnvWithTrust\(/);
+    it('Genie’s hosting (hosting-compose.ts, by genie-host or the window with no host) gives every PHP worker this environment', () => {
+        const hosting = readFileSync('src/main/hosting-compose.ts', 'utf8');
+        expect(hosting).toMatch(/phpWorkerEnv: \(\) => phpWorkerEnvWithTrust\(/);
     });
 });
