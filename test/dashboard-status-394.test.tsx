@@ -100,7 +100,7 @@ describe('story 394: display-only Sleeping and Stopped', () => {
         const asleep = live({ idleSince: 1 });
         expect(statePill(asleep, Date.now, { turns: 1 }).word).toBe('Sleeping');
         expect(chatContext({ agent: { id: record.id, name: record.name, provider: record.provider, fidelity: 'declared' }, session: asleep, rows: [] }).text).toBe('Sleeping');
-        expect(statePill(live({ idleSince: 1, background: 1 }), Date.now, { turns: 1 }).word).toBe('Working');
+        expect(statePill(live({ idleSince: 1, background: 1 }), Date.now, { turns: 1 }).word).toMatch(/^Working/);
     });
     it('crosses five minutes of idle at the exact boundary', () => {
         expect(agentRowFor(record, live({ idleSince: 10_000 }), () => 309_999).state).toBe('idle');

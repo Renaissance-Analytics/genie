@@ -21,7 +21,7 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-ghost-394-'));
     store = new Store(dir);
     awake = agentRecord({ id: mintAgentId(), workspaceId: 'awake', name: 'Active', provider: 'claude' });
-    ghost = agentRecord({ id: mintAgentId(), workspaceId: 'ghost', name: 'Dormant', provider: 'codex' });
+    ghost = agentRecord({ id: mintAgentId(), workspaceId: 'ghost', name: 'Dormant', provider: 'codex', accessScope: 'all' });
     await store.writeWorkspaces([{ id: 'awake', path: '/awake' }, { id: 'ghost', path: '/ghost', asleep: true }]);
     await store.writeAgents([awake, ghost]);
     registry = new Registry(store);
@@ -147,4 +147,24 @@ describe('story 394: redocking requires each agent to reorient on its next turn'
             expect(registry.find(awake.id)).not.toHaveProperty('redockAt');
         } finally { vi.useRealTimers(); }
     });
+});
+
+it.each(['Dormant', 'Dormant@ghost', 'id'])('story394: mail addressed to a ghost by %s is refused explicitly, never silently queued, and works after redock', async (address) => {
+    const host = new HostRegistry(store); await host.refresh();
+    const inbox = await InboxStore.open(dir), attention = await AttentionStore.open(dir, inbox);
+    const tools = genieTools({ inbox, attention, roster: () => host.listAgents(), workspaceSlugs: () => host.workspaceSlugs(),
+        resolveCaller: () => ({ agentId: awake.id, agentName: awake.name, workspaceId: 'awake', workspacePath: dir }),
+        workspaceSetting: () => ({ scope: 'all' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+        refusalForRecipient: (text: string) => (host as unknown as { mailRefusal?: (address: string) => string | null }).mailRefusal?.(text) ?? null,
+    } as never);
+    const tool = tools.find((entry) => entry.definition.name === 'agentinbox')!;
+    const args = { action: 'send', terminalId: 'test', to: address === 'id' ? ghost.id : address, text: 'Work for ghost' };
+    const answer = await tool.handler(args, { server: 'genie', tool: 'agentinbox', headers: {} });
+    expect(answer.isError).toBe(true);
+    expect(answer.text).toContain("Dormant's workspace is hibernated; redock it first");
+    expect(inbox.all().some((message) => message.to === ghost.id)).toBe(false);
+    await store.writeWorkspaces([{ id: 'awake', path: '/awake' }, { id: 'ghost', path: '/ghost', asleep: false }]);
+    await host.refresh();
+    expect((await tool.handler(args, { server: 'genie', tool: 'agentinbox', headers: {} })).isError).toBe(false);
+    expect(inbox.all().filter((message) => message.to === ghost.id)).toHaveLength(1);
 });

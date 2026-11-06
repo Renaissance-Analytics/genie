@@ -58,6 +58,14 @@ describe('story 394: Sleeping is an announced display state, never a work gate',
     });
 });
 describe('story 394: first accepted turn after redock', () => {
+    it('the reorientation respects the host trust verdict and never asks an untrusted agent to load folder instructions', () => {
+        const { host, record, prompts } = setup({ redockAt: '2026-11-06T20:00:00.000Z' });
+        host.holdForNextWork(record.id, 'Genie-owned trust instructions remain in force.');
+        host.prompt(record.id, 'Continue work', 'you');
+        expect(prompts[0]).toMatch(/respect[^.]*host[^.]*trust verdict/i);
+        expect(prompts[0]).toMatch(/untrusted[^.]*do not[^.]*instructions/i);
+        expect(prompts[0]).toContain('Genie-owned trust instructions remain in force.');
+    });
     it.each(['claude', 'codex'] as const)('%s receives a staleness and Tynn/repo reorientation notice before its first work only', async (provider) => {
         const { host, record, prompts, end, cleared } = setup({ redockAt: '2026-11-06T20:00:00.000Z', provider });
         expect(host.prompt(record.id, 'Continue the task', 'you')).toBe(true);
