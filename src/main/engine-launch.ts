@@ -69,17 +69,25 @@ export function connectSocket(endpoint: string): Promise<LineTransport> {
     });
 }
 
+/**
+ * How the host is started: Electron's binary as plain Node, on the window's root (#1605: the window's root is
+ * `genieRoot()`, so a GENIE_HOME set for the whole app reaches the host unchanged), detached and hidden.
+ */
+export function hostSpawnSpec(ports: Pick<EngineLaunchPorts, 'execPath' | 'hostScript' | 'env' | 'genieHome' | 'build'>): { file: string; args: string[]; options: { detached: true; windowsHide: true; env: NodeJS.ProcessEnv } } {
+    return {
+        file: ports.execPath,
+        args: [ports.hostScript],
+        options: { detached: true, windowsHide: true, env: { ...ports.env, ELECTRON_RUN_AS_NODE: '1', GENIE_HOME: ports.genieHome, GENIE_HOST_BUILD: ports.build } },
+    };
+}
+
 /** The host, detached from the window: it must outlive the window's process (a crash, a restart). */
 export function spawnHostProcess(ports: Pick<EngineLaunchPorts, 'execPath' | 'hostScript' | 'logsDir' | 'env' | 'genieHome' | 'build'>): number | null {
     mkdirSync(ports.logsDir, { recursive: true });
     const out = openSync(join(ports.logsDir, 'genie-host.log'), 'a');
     try {
-        const child = spawnChild(ports.execPath, [ports.hostScript], {
-            detached: true,
-            windowsHide: true,
-            stdio: ['ignore', out, out],
-            env: { ...ports.env, ELECTRON_RUN_AS_NODE: '1', GENIE_HOME: ports.genieHome, GENIE_HOST_BUILD: ports.build },
-        });
+        const spec = hostSpawnSpec(ports);
+        const child = spawnChild(spec.file, spec.args, { ...spec.options, stdio: ['ignore', out, out] });
         child.unref();
         return child.pid ?? null;
     } finally {
