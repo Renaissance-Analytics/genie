@@ -174,13 +174,13 @@ export class HangWatchdog {
         w.ended = true;
         const lifecycle = this.#safe(() => this.#o.lifecycle(), []);
         const record: CrashRecord = {
-            ...UNKNOWN_HEADER,
+            ...this.#safe(() => this.#o.header(), UNKNOWN_HEADER),
             kind: 'hang',
             at: new Date(now).toISOString(),
             windowPid: w.pid,
             lastBeatAt: new Date(w.lastBeatAt).toISOString(),
             lifecycle,
-            stalls: mainStalls(lifecycle),
+            stalls: this.#safe(() => mainStalls(lifecycle), []),
             memory: [...this.#samples],
             agents: this.#safe(() => this.#o.agents(), []),
         };
@@ -193,7 +193,7 @@ export class HangWatchdog {
 
     #lost(w: Watched, now: number): void {
         const record: CrashRecord = {
-            ...UNKNOWN_HEADER,
+            ...this.#safe(() => this.#o.header(), UNKNOWN_HEADER),
             kind: 'lost',
             at: new Date(now).toISOString(),
             windowPid: w.pid,

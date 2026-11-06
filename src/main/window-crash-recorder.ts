@@ -100,8 +100,11 @@ export class WindowCrashRecorder {
             try { rssMb = toMb(this.#o.rss()); } catch { /* unread */ }
             let agents: string[] = [];
             try { agents = this.#o.agents().map(String); } catch { /* unread */ }
+            // The header never costs the record: a path where it cannot be read (main.ts's module not yet evaluated) says unknown.
+            let header: CrashHeader = UNKNOWN_HEADER;
+            try { header = this.#o.header(); } catch { /* unread */ }
             const record: CrashRecord = {
-                ...UNKNOWN_HEADER,
+                ...header,
                 kind: 'exit',
                 at: new Date((this.#o.now ?? Date.now)()).toISOString(),
                 pid: this.#o.pid,

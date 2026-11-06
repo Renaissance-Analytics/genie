@@ -1,10 +1,13 @@
 import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
-import { CRASH_KEEP, LIFECYCLE_TAIL_LINES, crashCause, fitCrashRecord, type CrashHeader, type CrashRecord } from '../core/crash-record.js';
+import { release } from 'node:os';
+import { CRASH_KEEP, CRASH_SCHEMA, LIFECYCLE_TAIL_LINES, crashCause, fitCrashRecord, type CrashHeader, type CrashRecord } from '../core/crash-record.js';
 
-/** The common header for a record this process writes. Not built yet. */
-export function crashHeader(_version: string, _build: string): CrashHeader {
-    throw new Error('not built yet (Tynn #386)');
+/** The common header for a record THIS process writes: the version and build it is given, the OS, its release, the arch, and this process's uptime. */
+export function crashHeader(version: string, build: string): CrashHeader {
+    let osRelease = 'unknown';
+    try { osRelease = release(); } catch { /* unread */ }
+    return { schema: CRASH_SCHEMA, version, build, os: process.platform, osRelease, arch: process.arch, uptimeS: Math.max(0, Math.round(process.uptime())) };
 }
 
 /**

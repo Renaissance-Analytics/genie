@@ -139,9 +139,40 @@ const NAME_CHARS = 100;
 const MEMORY_SAMPLES = 60;
 const AGENTS = 50;
 
-/** Main's own stall lines from lifecycle lines (`<time> stall main …`); the host's are `<time> host stall main …`. */
-export function mainStalls(_lines: readonly string[]): StallNote[] {
-    throw new Error('not built yet (Tynn #386)');
+/** A frame as stall-profile.ts writes it: a function name, then `file:line` when it has one. Anything else is not a signature. */
+const FRAME = /^[A-Za-z0-9_$.<>()[\]# -]{1,120}( [A-Za-z0-9_.-]{1,120}:[0-9]{1,7})?$/;
+
+/** A stack as a SIGNATURE: at most {@link STACK_FRAMES} frames, and a frame that is not one becomes `?`. */
+function signatureOf(stack: string): string {
+    return stack.split(' < ').slice(0, STACK_FRAMES).map((frame) => (FRAME.test(frame.trim()) ? frame.trim() : '?')).join(' < ');
+}
+
+/**
+ * Main's own stalls from lifecycle lines (`<time> stall main ms=… route=…`; the host's are `<time> host stall main …`),
+ * structured. A `stall main stack ms=… stack=…` line (stall-profile.ts, written just after the stall it read) gives the
+ * newest stall before it with no stack its signature. Route `-` is none. The newest 20.
+ */
+export function mainStalls(lines: readonly string[]): StallNote[] {
+    const notes: Array<{ at: string; ms: number; route: string | null; stack: string | null }> = [];
+    for (const line of lines) {
+        const stack = /^(\S+) stall main stack ms=([0-9]+) .*? stack=(.*)$/.exec(line);
+        if (stack) {
+            const into = [...notes].reverse().find((n) => n.stack === null);
+            if (into) into.stack = signatureOf(stack[3]!);
+            else notes.push({ at: stack[1]!, ms: Number(stack[2]), route: null, stack: signatureOf(stack[3]!) });
+            continue;
+        }
+        const stall = /^(\S+) stall main ms=([0-9]+)(?: route=(\S*))?/.exec(line);
+        if (!stall) continue;
+        const route = stall[3] === undefined || stall[3] === '' || stall[3] === '-' ? null : clip(stall[3], NAME_CHARS * 2);
+        notes.push({ at: stall[1]!, ms: Number(stall[2]), route, stack: null });
+    }
+    return notes.slice(-STALL_LINES);
+}
+
+/** The header of a record, alone (what is left when nothing else fits). */
+function headerOf(record: CrashHeader): CrashHeader {
+    return { schema: record.schema, version: record.version, build: record.build, os: record.os, osRelease: record.osRelease, arch: record.arch, uptimeS: record.uptimeS };
 }
 
 const encoder = new TextEncoder();
@@ -192,7 +223,7 @@ export function fitCrashRecord(record: CrashRecord): string {
         else if (stalls.length > 0) stalls = [];
         else if (memory.length > 0) memory = [];
         else if (agents.length > 0) agents = [];
-        else return JSON.stringify({ kind: record.kind, at: record.at });
+        else return JSON.stringify({ ...headerOf(record), kind: record.kind, at: record.at });
         text = build();
     }
     return text;
