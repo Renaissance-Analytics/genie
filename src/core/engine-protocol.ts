@@ -19,7 +19,7 @@ import { parseFrame, type Frame } from './remote-protocol.js';
  */
 
 /** Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced. */
-export const ENGINE_PROTOCOL = 1;
+export const ENGINE_PROTOCOL = 2;
 
 export const ENGINE_METHODS = [
     // Commands (window → host): each answers with the session host's own answer.

@@ -1,6 +1,9 @@
 import type { PtyPort, PtySpawnOptions } from './terminal-host.js';
 import type { ListedPty, PtyTag, SpawnChannel, SpawnFrame } from './spawn-host-protocol.js';
 import type { LineStream, RunOptions, RunResult } from './spawn-exec.js';
+import { randomUUID } from 'node:crypto';
+import { SPAWN_PROTOCOL } from './spawn-host-protocol.js';
+import { splitTerminalText, TerminalOutputCounter } from '../core/terminal-stream.js';
 
 /**
  * THE SPAWN HOST'S SIDE OF THE WIRE (genie#1397): what the child does with main's calls. Pure over its ports, so the
@@ -37,7 +40,8 @@ export function adoptEnv(next: unknown, env: NodeJS.ProcessEnv = process.env): v
 
 export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { killAll(): void } {
     const ptys = new Map<string, string>(); // main's id → the engine's
-    const known = new Map<string, { pid: number; shell: string; tag: PtyTag | null }>(); // main's id → what pty.list answers
+    const known = new Map<string, { pid: number; shell: string; tag: PtyTag | null; counter: TerminalOutputCounter }>();
+    let opening: { id: string; counter: TerminalOutputCounter; ended: boolean } | null = null;
     const byEngine = new Map<string, string>(); // the engine's id → main's
     const streams = new Map<string, { stop(): void }>();
     const event = (ch: Extract<SpawnFrame, { kind: 'event' }>['channel'], payload: unknown) => channel.send({ kind: 'event', channel: ch, payload });
@@ -48,9 +52,14 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
         channel.send({ kind: 'result', id, ok: false, reason: error instanceof Error ? error.message : String(error), ...(typeof code === 'string' ? { code } : {}) });
     };
 
+    const output = (id: string, counter: TerminalOutputCounter, data: string) => {
+        const position = counter.append(data);
+        for (const chunk of splitTerminalText(data, position.offset)) event('pty.data', { id, epoch: position.epoch, offset: chunk.offset, endOffset: chunk.offset + chunk.data.length, data: chunk.data });
+    };
     impl.pty?.onData((engineId, data) => {
-        const id = byEngine.get(engineId);
-        if (id !== undefined) event('pty.data', { id, data });
+        const id = byEngine.get(engineId), current = id === undefined ? opening : null;
+        const counter = id === undefined ? current?.counter : known.get(id)?.counter;
+        if (counter && !current?.ended) output(id ?? current!.id, counter, data);
     });
     // An interactive terminal's cwd (the `terminals` profile hooks OSC-7; the supervised `processes` one does not).
     impl.pty?.onCwd?.((engineId, cwd) => {
@@ -59,11 +68,15 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
     });
     impl.pty?.onExit((engineId, code) => {
         const id = byEngine.get(engineId);
-        if (id === undefined) return;
+        if (id === undefined) {
+            if (opening && !opening.ended) { opening.ended = true; event('pty.exit', { id: opening.id, code, ...opening.counter.snapshot() }); }
+            return;
+        }
+        const position = known.get(id)?.counter.snapshot();
         byEngine.delete(engineId);
         ptys.delete(id);
         known.delete(id);
-        event('pty.exit', { id, code });
+        event('pty.exit', { id, code, ...position });
     });
 
     const killAll = () => {
@@ -117,22 +130,28 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
             }
             case 'pty.open': {
                 const [ptyId, spawn, tag] = args as [string, PtySpawnOptions, PtyTag | undefined];
+                const counter = new TerminalOutputCounter(randomUUID());
                 if (!impl.pty) {
-                    event('pty.data', { id: ptyId, data: '[genie] the spawn host makes no ptys\r\n' });
-                    event('pty.exit', { id: ptyId, code: -1 });
+                    output(ptyId, counter, '[genie] the spawn host makes no ptys\r\n');
+                    event('pty.exit', { id: ptyId, code: -1, ...counter.snapshot() });
                     return;
                 }
+                const previous = opening, current = { id: ptyId, counter, ended: false };
+                opening = current; // Even a synchronous first byte belongs to this producer epoch.
                 try {
                     const opened = impl.pty.open(spawn);
+                    if (current.ended) return;
                     ptys.set(ptyId, opened.id);
                     byEngine.set(opened.id, ptyId);
-                    known.set(ptyId, { pid: opened.pid, shell: opened.shell, tag: tag ?? null });
+                    known.set(ptyId, { pid: opened.pid, shell: opened.shell, tag: tag ?? null, counter });
                     // The SHELL it resolved, with the pid: the window's open answered before either existed.
-                    event('pty.opened', { id: ptyId, pid: opened.pid, shell: opened.shell });
+                    event('pty.opened', { id: ptyId, pid: opened.pid, shell: opened.shell, ...counter.snapshot() });
                 } catch (error) {
-                    event('pty.data', { id: ptyId, data: `[genie] could not start ${spawn.command ?? 'the process'}: ${error instanceof Error ? error.message : String(error)}\r\n` });
-                    event('pty.exit', { id: ptyId, code: -1 });
-                }
+                    if (!current.ended) {
+                        output(ptyId, counter, `[genie] could not start ${spawn.command ?? 'the process'}: ${error instanceof Error ? error.message : String(error)}\r\n`);
+                        event('pty.exit', { id: ptyId, code: -1, ...counter.snapshot() });
+                    }
+                } finally { opening = previous; }
                 return;
             }
             case 'pty.write': {
@@ -163,6 +182,7 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                     tag: known.get(ptyId)?.tag ?? null,
                     shell: known.get(ptyId)?.shell ?? '',
                     scrollback: impl.pty?.scrollback(engineId) ?? '',
+                    ...known.get(ptyId)?.counter.snapshot(),
                 }));
                 answer(id, listed);
                 return;
@@ -174,6 +194,6 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
             }
         }
     });
-    event('host.ready', { pid: process.pid });
+    event('host.ready', { pid: process.pid, protocol: SPAWN_PROTOCOL });
     return { killAll };
 }

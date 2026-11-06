@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { limitRefusal } from '../core/shell-limits.js';
 import type { PtyOpened, Terminal, TerminalHost, TerminalOptions } from './terminal-host.js';
+import { terminalPosition, terminalDataPosition } from '../core/terminal-stream.js';
+import type { TerminalPosition, TerminalDataPosition, TerminalStreamSnapshot } from '../core/terminal-stream.js';
 
 /**
  * THE TERMINALS, GENIE-HOST'S (the host split, P3.3e: plan §11e). Their shells run under the host's own `terminals` spawn
@@ -13,6 +15,8 @@ export interface TerminalsDump {
     readonly terminals: readonly Terminal[];
     /** Each live terminal's output so far (its scrollback). */
     readonly tails: Readonly<Record<string, string>>;
+    /** Only producer-authoritative positions. Missing means resync, including dumps from an older engine. */
+    readonly positions?: Readonly<Record<string, TerminalPosition>>;
     /** Each listed workspace's terminal limit, so a window refuses the next one by name before it asks. */
     readonly limits: Readonly<Record<string, number>>;
 }
@@ -23,8 +27,8 @@ export interface TerminalsDump {
  */
 export type TerminalsEvent =
     | { readonly kind: 'list'; readonly terminals: readonly Terminal[]; readonly limits: Readonly<Record<string, number>> }
-    | { readonly kind: 'data'; readonly id: string; readonly data: string; readonly owner?: string }
-    | { readonly kind: 'exit'; readonly id: string; readonly code: number; readonly owner?: string };
+    | ({ readonly kind: 'data'; readonly id: string; readonly data: string; readonly owner?: string } & Partial<TerminalDataPosition>)
+    | ({ readonly kind: 'exit'; readonly id: string; readonly code: number; readonly owner?: string } & Partial<TerminalPosition>);
 
 const WINDOW_CALLS = new Set(['open', 'openReady', 'write', 'resize', 'close']);
 /** How much of a terminal's output a window keeps for a pane that joins it. */
@@ -39,11 +43,11 @@ export class TerminalsService {
     constructor(terminals: TerminalHost) {
         this.#terminals = terminals;
         terminals.onChange(() => this.#emit({ kind: 'list', terminals: terminals.list(), limits: this.#limits() }));
-        terminals.onData((id, data) => { const owner = this.#owners.get(id); this.#emit({ kind: 'data', id, data, ...(owner === undefined ? {} : { owner }) }); });
-        terminals.onExit((id, code) => {
+        terminals.onData((id, data, position) => { const owner = this.#owners.get(id); this.#emit({ kind: 'data', id, data, ...position, ...(owner === undefined ? {} : { owner }) }); });
+        terminals.onExit((id, code, position) => {
             const owner = this.#owners.get(id);
             this.#owners.delete(id);
-            this.#emit({ kind: 'exit', id, code, ...(owner === undefined ? {} : { owner }) });
+            this.#emit({ kind: 'exit', id, code, ...position, ...(owner === undefined ? {} : { owner }) });
         });
     }
 
@@ -63,7 +67,9 @@ export class TerminalsService {
 
     dump(): TerminalsDump {
         const list = this.#terminals.list();
-        return { terminals: list, tails: Object.fromEntries(list.map((t) => [t.id, this.#terminals.scrollback(t.id) ?? ''])), limits: this.#limits() };
+        const positions: Record<string, TerminalPosition> = Object.create(null) as Record<string, TerminalPosition>;
+        for (const t of list) { const position = terminalPosition(this.#terminals.streamSnapshot(t.id)); if (position) positions[t.id] = position; }
+        return { terminals: list, tails: Object.fromEntries(list.map((t) => [t.id, this.#terminals.scrollback(t.id) ?? ''])), positions, limits: this.#limits() };
     }
 
     onEvent(listener: (event: TerminalsEvent) => void): () => void {
@@ -119,12 +125,13 @@ export class TerminalsReplica {
     #list: readonly Terminal[] = [];
     #limits: Readonly<Record<string, number>> = {};
     readonly #tails = new Map<string, string>();
+    readonly #positions = new Map<string, TerminalPosition | null>();
     /** Opened here and not listed by the host yet: typed into already (the pane opened at once). */
     readonly #pending = new Set<string>();
     /** This window's live DISPOSABLE terminals (never listed), id to workspace: forgotten, output and all, when they go. */
     readonly #disposable = new Map<string, string>();
-    readonly #dataListeners = new Set<(id: string, data: string) => void>();
-    readonly #exitListeners = new Set<(id: string, code: number) => void>();
+    readonly #dataListeners = new Set<(id: string, data: string, position?: TerminalDataPosition) => void>();
+    readonly #exitListeners = new Set<(id: string, code: number, position?: TerminalPosition) => void>();
     readonly #call: (method: string, args: readonly unknown[]) => Promise<unknown>;
 
     constructor(call: (method: string, args: readonly unknown[]) => Promise<unknown>) {
@@ -136,6 +143,11 @@ export class TerminalsReplica {
         this.#limits = dump.limits;
         this.#tails.clear();
         for (const [id, text] of Object.entries(dump.tails)) this.#tails.set(id, text);
+        this.#positions.clear();
+        for (const [id, value] of Object.entries(dump.positions ?? {})) {
+            const position = terminalPosition(value);
+            if (position && position.endOffset >= (dump.tails[id]?.length ?? 0)) this.#positions.set(id, position);
+        }
     }
 
     apply(event: TerminalsEvent): void {
@@ -143,18 +155,24 @@ export class TerminalsReplica {
             this.#list = event.terminals;
             this.#limits = event.limits;
             for (const t of event.terminals) this.#pending.delete(t.id);
+            for (const id of this.#positions.keys()) if (!this.#pending.has(id) && !this.#disposable.has(id) && !event.terminals.some(t => t.id === id)) this.#positions.delete(id);
             return;
         }
         if (event.kind === 'data') {
-            const tail = (this.#tails.get(event.id) ?? '') + event.data;
+            const before = this.#tails.get(event.id) ?? '', tail = before + event.data;
+            const position = terminalDataPosition(event, event.data), held = this.#positions.get(event.id);
+            this.#positions.set(event.id, position && ((held === undefined && before.length === 0 && position.offset === 0) || (held?.epoch === position.epoch && held.endOffset === position.offset))
+                ? { epoch: position.epoch, endOffset: position.endOffset } : null);
             this.#tails.set(event.id, tail.length > TAIL_MAX ? tail.slice(-TAIL_MAX) : tail);
-            for (const l of [...this.#dataListeners]) l(event.id, event.data);
+            for (const l of [...this.#dataListeners]) { if (position) l(event.id, event.data, position); else l(event.id, event.data); }
             return;
         }
         this.#list = this.#list.filter((t) => t.id !== event.id);
         this.#pending.delete(event.id);
+        this.#positions.delete(event.id);
         if (this.#disposable.delete(event.id)) this.#tails.delete(event.id);
-        for (const l of [...this.#exitListeners]) l(event.id, event.code);
+        const position = terminalPosition(event);
+        for (const l of [...this.#exitListeners]) { if (position) l(event.id, event.code, position); else l(event.id, event.code); }
     }
 
     get count(): number { return this.#list.length; }
@@ -246,6 +264,11 @@ export class TerminalsReplica {
         return t ? { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#tails.get(id) ?? '' } : null;
     }
 
+    streamSnapshot(id: string): TerminalStreamSnapshot | null {
+        const attached = this.attach(id);
+        return attached ? { id, tail: attached.scrollback, ...(this.#positions.get(id) ?? { epoch: null, endOffset: null }) } : null;
+    }
+
     /** An ended terminal's record is the host's (the agents' \`manageTerminals read\`); the window keeps none. */
     finished(): null { return null; }
 
@@ -265,12 +288,12 @@ export class TerminalsReplica {
     /** What a previous window left running is the host's own since P3.3e: nothing to take back. */
     adopt(): void {}
 
-    onData(listener: (id: string, data: string) => void): () => void {
+    onData(listener: (id: string, data: string, position?: TerminalDataPosition) => void): () => void {
         this.#dataListeners.add(listener);
         return () => { this.#dataListeners.delete(listener); };
     }
 
-    onExit(listener: (id: string, code: number) => void): () => void {
+    onExit(listener: (id: string, code: number, position?: TerminalPosition) => void): () => void {
         this.#exitListeners.add(listener);
         return () => { this.#exitListeners.delete(listener); };
     }
