@@ -64,6 +64,8 @@ import type { AskedRecord } from './attention-store.js';
 export interface FeaturePorts {
     /** genie-host's safe mode (Tynn #386): "Leave safe mode". Absent = no host to leave it in (refused, said). */
     readonly safeMode?: { leave(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    /** The reopened-window notice (Tynn #386): Dismiss, and Stop all agents. Absent = no host to ask (refused, said). */
+    readonly hangNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }>; stopAll(): Promise<{ ok: true } | { ok: false; reason: string }> };
     /** A part of a snapshot that took at least `ms` (genie-test-windows, job Q0: an action took 20 s with main mostly free). */
     readonly slowPart?: { readonly ms: number; log(part: string, ms: number): void };
     /**
@@ -679,6 +681,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
+        case 'hangNotice.dismiss':
+        case 'hangNotice.stopAll': {
+            if (!ports.hangNotice) throw new Error('Genie’s host is not connected.');
+            const done = action.kind === 'hangNotice.dismiss' ? await ports.hangNotice.dismiss() : await ports.hangNotice.stopAll();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
         case 'safeMode.leave': {
             if (!ports.safeMode) throw new Error('Genie’s host is not connected, so safe mode cannot be left from here.');
             const left = await ports.safeMode.leave();

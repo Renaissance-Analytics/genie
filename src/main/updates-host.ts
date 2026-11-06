@@ -189,6 +189,11 @@ export class UpdatesService {
         return this.#host;
     }
 
+    /** How Genie is started, as the last window published it (else this host's default): what a relaunch starts (relaunchSpec). */
+    launchSpec(): HelperLaunch {
+        return { file: this.#launch.file, args: [...this.#launch.args] };
+    }
+
     dump(): UpdateState {
         return this.#host.state();
     }

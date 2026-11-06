@@ -58,6 +58,7 @@ import type { UpdateFailedRecord } from './updates-host.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
+import type { CrashStateView } from '../core/crash-record.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -359,6 +360,10 @@ export class SessionEngineClient {
             // genie-host's updater (P5b): its whole state, on this window's local link only.
             case 'safeMode.event':
                 this.#setSafeMode(payload as SafeModeView);
+                return;
+            // The latest crash record and the reopened-window notice (Tynn #386), on this window's local link only.
+            case 'crash.event':
+                this.#setCrashState(payload as CrashStateView);
                 return;
             case 'updates.dump':
             case 'updates.event':
@@ -1031,6 +1036,39 @@ export class SessionEngineClient {
         } finally {
             this.#stopAllLeft = null;
         }
+    }
+
+    /** Window main's heartbeat to genie-host's hang watchdog (Tynn #386): a notification (call id 0), no reply. Nothing while not linked. */
+    heartbeat(beat: { pid: number; rss: number; bye?: true }): void {
+        const t = this.#transport;
+        if (t === null || this.#welcome === null) return;
+        t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.heartbeat', args: [beat] }));
+    }
+
+    /** The latest crash record and the reopened-window notice, as the host last said (local windows); `null` = told nothing. */
+    crashStateView(): CrashStateView | null { return this.#crashState; }
+
+    onCrashState(listener: (view: CrashStateView) => void): () => void {
+        this.#crashListeners.add(listener);
+        return () => { this.#crashListeners.delete(listener); };
+    }
+
+    /** The person dismissed the reopened-window notice: the host forgets it, for every window. */
+    async dismissHangNotice(): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.crash', ['dismiss']);
+        if (!reply.ok) return reply;
+        this.#setCrashState(reply.value as CrashStateView);
+        return { ok: true };
+    }
+
+    #crashState: CrashStateView | null = null;
+    readonly #crashListeners = new Set<(view: CrashStateView) => void>();
+
+    #setCrashState(view: CrashStateView): void {
+        const was = this.#crashState;
+        this.#crashState = view;
+        if (was !== null && JSON.stringify(was) === JSON.stringify(view)) return;
+        for (const l of [...this.#crashListeners]) l(view);
     }
 
     /** Liveness: `true` when the host answered. */

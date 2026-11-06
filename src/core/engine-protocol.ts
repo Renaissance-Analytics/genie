@@ -58,6 +58,9 @@ export const ENGINE_METHODS = [
     // Liveness, and the graceful end (sessions stopped and verified, writes drained, then the process exits).
     'engine.ping',
     'engine.shutdown',
+    // Window main's heartbeat to genie-host's hang watchdog (Tynn #386: hang-watchdog.ts): `[{pid, rss, bye?}]` every
+    // second, call id 0 (a notification, no reply). Heard before any dispatch: never queued behind a slow call.
+    'engine.heartbeat',
     // The spawn host's frames, tunnelled (the host split, P2.1): `[profile, frame]` to genie-host's child of that profile.
     // Sent with call id 0, a notification: no result per keystroke. Its children's frames come back as `spawn.frame`.
     'engine.spawn',
@@ -99,6 +102,9 @@ export const ENGINE_METHODS = [
     // The host's safe mode (Tynn #386: safe-mode-host.ts): `['leave']`. Its view is sent as `safeMode.event` before
     // `engine.ready` and on every change, to EVERY window: the banner is on all of them.
     'engine.safeMode',
+    // The latest crash record and the reopened-window notice (Tynn #386: crash-state-host.ts), LOCAL windows only: sent as
+    // `crash.event` before `engine.ready` and on every change; `['dismiss']` forgets the notice.
+    'engine.crash',
     // The updater helper's own (P5b: updater-helper.ts), on a link that said hello as the updater: `register`, `reply`,
     // `progress`. The host's requests reach it as `updater.event`. Nothing else is open to that link.
     'engine.updater',

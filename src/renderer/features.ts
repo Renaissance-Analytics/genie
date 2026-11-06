@@ -360,6 +360,9 @@ export type FeatureAction =
     | { kind: 'whatsNew.show' }
     /** "Leave safe mode" (Tynn #386): genie-host's leave. Starts nothing; automatic behaviour is back on. */
     | { kind: 'safeMode.leave' }
+    // The reopened-window notice (Tynn #386): forget it, or stop every agent (the person's choice, after a second hang).
+    | { kind: 'hangNotice.dismiss' }
+    | { kind: 'hangNotice.stopAll' }
     | { kind: 'whatsNew.close'; version: string }
     | { kind: 'knowledge.search'; query: string }
     | { kind: 'knowledge.openAdd'; workspaceId?: string }

@@ -33,21 +33,26 @@ export class SafeMode {
         this.#view = view;
     }
 
-    static open(runtimeDir: string, options: { readonly now?: () => number; readonly pid?: number; readonly log?: (line: string) => void } = {}): SafeMode {
+    static open(runtimeDir: string, options: { readonly now?: () => number; readonly pid?: number; readonly log?: (line: string) => void; readonly cause?: () => string } = {}): SafeMode {
         const now = options.now ?? Date.now;
         const log = options.log ?? (() => {});
         mkdirSync(runtimeDir, { recursive: true });
         const read = (name: string): string | null => { try { return readFileSync(join(runtimeDir, name), 'utf8'); } catch { return null; } };
+        const cleanExit = parseCleanExit(read(CLEAN_EXIT_FILE));
         const decision = bootDecision({
-            cleanExit: parseCleanExit(read(CLEAN_EXIT_FILE)),
+            cleanExit,
             record: parseRecord(read(SAFE_MODE_FILE)),
             alive: parseAlive(read(ALIVE_FILE)),
             now: now(),
         });
         // REMOVED AT BOOT: from here on, only this run's own clean end can write it again.
         rmSync(join(runtimeDir, CLEAN_EXIT_FILE), { force: true });
+        // THE CAUSE (cut 3: crash-records.ts `previousRunCause`), read only for a run that did not end cleanly: a kept crash
+        // loop after a clean end has no record of its own to read. Never fatal: an unreadable cause is the unknown one.
+        let cause = UNKNOWN_CAUSE;
+        if (decision.active && cleanExit === null && options.cause) { try { cause = options.cause(); } catch { cause = UNKNOWN_CAUSE; } }
         const view: SafeModeView = decision.active
-            ? { active: true, at: decision.at, cause: UNKNOWN_CAUSE, crashLoop: decision.crashLoop, agents: [...decision.agents], processes: [], sites: [] }
+            ? { active: true, at: decision.at, cause, crashLoop: decision.crashLoop, agents: [...decision.agents], processes: [], sites: [] }
             : NOT_SAFE;
         const mode = new SafeMode(runtimeDir, now, options.pid ?? process.pid, log, decision.record, view);
         mode.#writeRecord();

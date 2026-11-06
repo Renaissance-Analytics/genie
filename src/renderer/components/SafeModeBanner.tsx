@@ -104,7 +104,7 @@ type ReportStep =
  * the issue's link — or the reason with Retry. A Genie that cannot send (not signed in to Tynn) says so in one line, with
  * a Copy of the report. Cancel discards it.
  */
-function CrashReport({ port }: { port: CrashReportPort }) {
+export function CrashReport({ port }: { port: CrashReportPort }) {
     const [step, setStep] = useState<ReportStep>({ phase: 'closed' });
     if (step.phase === 'closed' || step.phase === 'opening') {
         return (

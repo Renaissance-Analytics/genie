@@ -106,6 +106,8 @@ import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
+import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js';
+import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-records.js';
 import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
@@ -315,6 +317,24 @@ if (launch.kind === 'exit') {
     console.log(`[genie] ${launch.reason}`);
     app.exit(0);
 }
+/*
+ * THE LAST-KNOWN STATE ON EVERY EXIT PATH THIS PROCESS CAN CATCH (Tynn #386: window-crash-recorder.ts): a small record in
+ * runtime/crash — the reason or code, the time, the last RSS, the running agents' names, never content — on `exit`, an
+ * uncaught exception, an unhandled rejection, a renderer or the GPU gone, and before-quit (taken back by a quit that runs
+ * to its end). A boot launch only: a second instance owns nothing. Synchronous, never throwing.
+ */
+const crashRecorder = new WindowCrashRecorder({
+    pid: process.pid,
+    rss: () => process.memoryUsage.rss(),
+    agents: () => (registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : []),
+    write: (record) => writeCrashRecord(join(runtimeDir(genieRoot()), 'crash'), record),
+    remove: removeCrashRecord,
+    // The host's build as this window last heard it (its welcome); this Genie's version until it has linked.
+    header: () => crashHeader(app.getVersion(), agentEngineLink?.client.welcome?.build ?? app.getVersion()),
+});
+if (launch.kind === 'boot') crashRecorder.install(process, app);
+/** Window main's heartbeat to genie-host's hang watchdog (hang-watchdog.ts): started once the engine link is up. */
+let heartbeatNow: { stop(): void; bye(): void } | null = null;
 
 let window: BrowserWindow | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
@@ -1515,6 +1535,12 @@ async function boot(): Promise<void> {
         });
         if (agentEngineLink === null) mainErrors.record('agent-host', new Error('Genie could not start its agent host, so agents run inside the window this time (see logs/genie-host.log).'));
         host = agentEngineLink?.client ?? null;
+        // THE HEARTBEAT (Tynn #386): every second, its pid and RSS, a notification; the client drops it while unlinked.
+        if (agentEngineLink) heartbeatNow = startHeartbeat({
+            send: (beat) => agentEngineLink?.client.heartbeat(beat),
+            pid: process.pid,
+            rss: () => process.memoryUsage.rss(),
+        });
     }
     /*
      * EVERY PROCESS THIS WINDOW STARTS IS STARTED BY GENIE-HOST (the host split, P2.1; plan §11a): #1405's spawn host is
@@ -2073,6 +2099,9 @@ async function boot(): Promise<void> {
     // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
     const crashReports = crashReportHost({
         view: () => agentEngineLink?.client.safeModeView() ?? null,
+        // The host's latest crash record and the reopened-window notice (Tynn #386): the draft is built from them.
+        record: () => agentEngineLink?.client.crashStateView()?.record ?? null,
+        notice: () => agentEngineLink?.client.crashStateView()?.notice ?? null,
         agents: () => (registry?.listAgents() ?? []).map((a) => ({ id: a.id, name: a.name, provider: a.provider })),
         workspaceNames: () => [...(registry?.listWorkspaces() ?? []).flatMap((w) => [w.id, basename(w.path)]), ...(registry?.workspaceSlugs().values() ?? [])],
         genieVersion: app.getVersion(),
@@ -3400,6 +3429,9 @@ async function boot(): Promise<void> {
     // No host: what a quit recorded is listed on the banner, and this window beats (it is the run).
     windowSafe?.own()?.wasRunning([...registry.runningAtQuit(), ...registry.interruptedAtQuit()]);
     if (windowSafe?.own()) setInterval(() => { windowSafe?.beat((registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id)); }, 15_000).unref?.();
+    // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
+    registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
+    agentEngineLink?.client.onCrashState(() => registry?.touch());
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
     // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
@@ -3670,6 +3702,14 @@ async function boot(): Promise<void> {
         openInBrowser: openInBrowserFor('user-gesture'),
         // "Leave safe mode" (Tynn #386): the host's; this window only asks.
         safeMode: { leave: () => (windowSafe ? windowSafe.leave() : Promise.resolve({ ok: false as const, reason: 'Genie is still starting' })) },
+        // The reopened-window notice's two actions: forget it; or stop every agent — one click, the person's, never automatic.
+        hangNotice: {
+            dismiss: () => (agentEngineLink ? agentEngineLink.client.dismissHangNotice() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })),
+            stopAll: async () => {
+                if (!agentEngineLink) return { ok: false as const, reason: 'Genie’s host is not connected' };
+                try { await agentEngineLink.client.stopAll(); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; }
+            },
+        },
         // The flow editor's own window (genie#1204): Open, a row's name, Add a flow — the person's click.
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
@@ -4088,6 +4128,7 @@ app.on('before-quit', (event) => {
     });
     if (step === 'cancel') { event.preventDefault(); return; }
     if (step === 'close-ui') { event.preventDefault(); closeUi('the quit’s answer'); return; }
+    crashRecorder.beforeQuit();
     autoCheckStop?.();
     autoCheckStop = null;
     scratchSweepStop?.();
@@ -4110,7 +4151,7 @@ app.on('before-quit', (event) => {
     void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
         .catch(() => { /* an unwritten row never blocks a quit */ })
         // No host: this window was the run, and its clean end writes the marker, last (Tynn #386). With a host: nothing.
-        .finally(() => { windowSafe?.endCleanly('the window quit'); app.quit(); });
+        .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); windowSafe?.endCleanly('the window quit'); app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */
