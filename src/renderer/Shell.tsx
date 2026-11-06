@@ -219,6 +219,8 @@ export interface ShellProps {
     /** The native window buttons over the title bar (their space and colours); absent in a browser or on a phone. */
     windowChrome?: GenieBridge['windowChrome'];
     onTakeOver?: ((agentId: string) => void) | undefined;
+    /** The safe-mode banner's "Send a crash report" (Tynn #386 part 4). Absent = this window cannot send one. */
+    crashReport?: import('./components/SafeModeBanner.js').CrashReportPort | undefined;
     /** The workspace header's Terminal button (Tynn story #378): a throwaway terminal in a window. Absent = no button. */
     onOpenScratchTerminal?: ((workspaceId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     /** A broken row's `Restart` (graceful) from the Dashboard — the same operation the Agent view's header offers. */
@@ -345,6 +347,7 @@ export function Shell({
     updates = NO_UPDATES,
     windowChrome,
     onTakeOver,
+    crashReport,
     onOpenScratchTerminal,
     onRestartAgent,
     onStopAgent,
@@ -553,6 +556,7 @@ export function Shell({
                     return done ?? { ok: true };
                 }}
                 onLeave={async () => ((await onFeature({ kind: 'safeMode.leave' })) as ActOutcome | undefined) ?? { ok: true }}
+                crashReport={crashReport}
             />
 
             <div className="relative flex min-h-0 flex-1">
