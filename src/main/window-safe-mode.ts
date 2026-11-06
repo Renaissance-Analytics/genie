@@ -36,7 +36,7 @@ export class WindowSafeMode {
     }
 
     active(): boolean {
-        return this.view()?.active === true;
+        return this.#own !== null || this.view()?.active === true; // BREAK PROBE
     }
 
     view(): SafeModeView | null {
