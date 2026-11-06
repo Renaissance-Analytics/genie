@@ -192,7 +192,7 @@ import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART } from '../core/upgrade-drain.js';
-import { restoreAfterRelaunch } from './relaunch-restore.js'; // BREAK PROBE: writeCleanExit
+import { restoreAfterRelaunch } from './relaunch-restore.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
 import { FilesWatchHub, type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
