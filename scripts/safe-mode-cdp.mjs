@@ -117,8 +117,12 @@ try {
     const providersNow = stubPids();
     const fresh = providersNow.filter((p) => !stubsBefore.has(p));
     check(fresh.length === 0, 'D6. no provider process was started', fresh.length === 0 ? `${providersNow.length} stub process(es), none new` : `new: ${fresh.join(', ')}`);
-    const leftOver = await until(() => { const left = [...providersBefore].filter(alive); return left.length === 0 ? 'none' : null; }, 30_000);
-    check(leftOver === 'none', 'D7. the providers the killed run left are ended (Tynn #796)', leftOver ?? [...providersBefore].filter(alive).join(', '));
+    // Still a PROVIDER, not only a live pid: Windows hands a freed pid to the next process at once (run 42291343611 read
+    // pid 6872, the stub's, alive again as another process). A provider left over is a pid the agents' ticks named that the
+    // process table still shows running the stub.
+    const stubsLeft = () => { const now = new Set(stubPids()); return [...providersBefore].filter((p) => now.has(p) && alive(p)); };
+    const leftOver = await until(() => (stubsLeft().length === 0 ? 'none' : null), 30_000);
+    check(leftOver === 'none', 'D7. the providers the killed run left are ended (Tynn #796)', leftOver ?? stubsLeft().join(', '));
     const listed = await session.cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-safe-mode] [data-action="safe-mode-start"]')].map((b) => ({ kind: b.dataset.kind, id: b.dataset.id })))`, 10_000);
     const rows = JSON.parse(listed);
     check(agents.every((a) => rows.some((r) => r.kind === 'agent' && r.id === a.id)), 'D8. the banner lists what was running: each agent, with its own Start', listed);
