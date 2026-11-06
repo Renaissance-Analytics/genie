@@ -213,6 +213,17 @@ export class BrowserService {
         this.#emit({ kind: 'quit' });
     }
 
+    /**
+     * THE KEYRING WAS UNLOCKED WHILE A GENIE BROWSER RUNS (Tynn story #388): that browser read "locked" at its own start and
+     * Electron never reads it again, so it is ended — the next site opened starts a fresh one that can use the keyring.
+     * Answers whether one was running.
+     */
+    restartForKeyring(): boolean {
+        if (this.#browser === null) return false;
+        this.#emit({ kind: 'quit' });
+        return true;
+    }
+
     /** A connection went. Only the browser's own going means there is no browser. */
     dropped(connection: string): void {
         if (this.#browser === connection) {

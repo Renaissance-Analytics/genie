@@ -75,7 +75,7 @@ import { DeviceLinkService } from './device-link-service.js';
 import { deviceSocket } from './device-socket.js';
 import { configWriter, writeWorkspaceConfig } from './workspace-config-sync.js';
 import { deviceTokenStore } from './device-tokens.js';
-import { KeyringService } from './keyring-service.js';
+import { KeyringService, restartBrowserOnUnlock } from './keyring-service.js';
 import { hostTynnRecovery, wallClockJumps } from './host-tynn-recovery.js';
 import { hostTynnPorts } from './host-tynn-account.js';
 import { ProxyMemory } from './proxy-memory.js';
@@ -457,6 +457,20 @@ async function main(): Promise<void> {
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
     const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    // A keyring unlocked while the Genie browser runs (Tynn story #388): that browser is restarted to use it, and the SCREEN says so.
+    const keyringNotices: Array<(text: string | null) => void> = [];
+    void keychainOpening.then(({ keyring }) => {
+        if (!keyring) return;
+        restartBrowserOnUnlock({
+            keyring,
+            browser: {
+                restartForKeyring: () => browserService.restartForKeyring(),
+                onDown: (l) => browserService.onEvent((e) => { if (e.kind === 'browserUp' && !e.up) l(); }),
+            },
+            notice: (text) => { for (const n of keyringNotices) n(text); },
+            log: (line) => { say(line); lifecycleLog(line); },
+        });
+    }, () => {});
     /** What this host supervises, stopped once — by an update's install (in its order) or by the shutdown, whichever is first. */
     let hostedStop: Promise<void> | null = null;
     const stopHostedOnce = (): Promise<void> => {
@@ -578,13 +592,13 @@ async function main(): Promise<void> {
             }).then((id) => (id ? machineKeyOf(id) : null)),
         }),
         // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
-        keyring: new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
+        keyring: ((service: KeyringService) => { keyringNotices.push((text) => service.setNotice(text)); return service; })(new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
             onReady: () => {
                 void tynnOpening.then((account) => account.reload()).catch(() => {});
                 void githubOpening.then((account) => account.reload()).catch(() => {});
                 void tynnRecovery?.recover({ secretsMoved: true });
             },
-        }),
+        })),
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
         proxy: {
             remember: async (answers) => {

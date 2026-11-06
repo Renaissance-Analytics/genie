@@ -214,7 +214,7 @@ describe('Settings → Tynn: the keyring card', () => {
         const restart = card({ state: 'restart-needed', ...base });
         expect(restart).toMatch(/Keyring ready/);
         expect(restart).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Restart Genie</);
-        expect(card({ state: 'refused', ...base })).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Check again</);
+        expect(card({ state: 'refused', ...base })).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Unlock</);
     });
 
     it('while a step runs: the button is busy and says the step', () => {

@@ -70,7 +70,7 @@ import { WorkstationService, type WorkstationPort } from './workstation-service.
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
-import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn } from './linux-keyring.js';
+import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn, unlockKeyringBeforeStores } from './linux-keyring.js';
 import type { KeyringReplica } from './keyring-replica.js';
 import { osCipher } from './os-cipher.js';
 import { linkedAgentSecrets, linkedVault } from './agent-secrets.js';
@@ -1292,6 +1292,9 @@ async function boot(): Promise<void> {
     // The store this launch actually got, written down for the next (a probe can come back empty — genie#588).
     // Only a store that gave a key is remembered; the remembered store failing to give one is forgotten (a selected store
     // is not a working one: password-store-memo.ts).
+    // A LOCKED KEYRING, ASKED FIRST (Tynn story #388): Electron reads its store's availability once, so the keyring is asked to
+    // unlock — its own dialog — before anything here reads it. An unlocked one answers at once; no Secret Service, at once too.
+    if (process.platform === 'linux') await unlockKeyringBeforeStores((line) => console.log(`[genie] ${line}`));
     if (process.platform === 'linux') rememberPasswordStore(genieRoot(), safeStorage.getSelectedStorageBackend(), safeStorage.isEncryptionAvailable());
     // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
     // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
@@ -2901,7 +2904,7 @@ async function boot(): Promise<void> {
                     requestQuit();
                 },
                 onChange: () => pushFeatures(),
-            }));
+            }), { unlockAtStart: true });
         } catch (error) {
             console.warn('[genie] the keyring check failed', error);
         }
