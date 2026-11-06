@@ -108,7 +108,7 @@ import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './sp
 import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
 import { Session as InspectorSession } from 'node:inspector';
-import { startStallProfiler } from './stall-profile.js';
+import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
@@ -1361,7 +1361,7 @@ async function boot(): Promise<void> {
     setPrivateCredentialFailureLog(lifecycleLog);
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
     stallLog = lifecycleLog;
-    stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
+    if (stallStacksWanted(process.env)) stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
     stallWatchdog.start();
     watchOutboundCalls(diagnosticsChannel, stallWatchdog);
     ipcMain.on('genie:renderer-stall', (event, report: unknown) => stallWatchdog.renderer(report, windowNameOf(event.sender)));
