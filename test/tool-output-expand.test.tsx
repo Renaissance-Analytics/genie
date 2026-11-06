@@ -40,11 +40,14 @@ function render(row: ReturnType<typeof ledgerRow>, expanded: boolean, loadFull: 
 describe('a tool row with output', () => {
     it('is expandable; the row the window holds carries the preview, and names the whole only when it was kept', () => {
         const [joined] = call({ output: PREVIEW, outputBytes: 240_000, outputFile: 'tool-call_1.out' });
-        const row = ledgerRow(joined!) as ReturnType<typeof ledgerRow> & { toolOutput?: { text: string; toolCallId: string; whole: number | null } };
+        const row = ledgerRow(joined!) as ReturnType<typeof ledgerRow> & { toolOutput?: { text: string; toolCallId: string; whole: number | null; cut: boolean } };
         expect(row.expandable).toBe(true);
-        expect(row.toolOutput).toEqual({ text: PREVIEW, toolCallId: 'call_1', whole: 240_000 });
+        expect(row.toolOutput).toEqual({ text: PREVIEW, toolCallId: 'call_1', whole: 240_000, cut: true });
         const [old] = call({ output: PREVIEW, outputBytes: 240_000 });
-        expect((ledgerRow(old!) as typeof row).toolOutput).toEqual({ text: PREVIEW, toolCallId: 'call_1', whole: null });
+        expect((ledgerRow(old!) as typeof row).toolOutput).toEqual({ text: PREVIEW, toolCallId: 'call_1', whole: null, cut: true });
+        // An answer that fit its row is whole already: nothing to fetch, nothing cut.
+        const [small] = call({ output: PREVIEW });
+        expect((ledgerRow(small!) as typeof row).toolOutput).toEqual({ text: PREVIEW, toolCallId: 'call_1', whole: null, cut: false });
         // A call that answered nothing has nothing to open.
         const [silent] = call({});
         expect(ledgerRow(silent!).expandable).toBe(false);
