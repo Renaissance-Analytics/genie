@@ -1,10 +1,11 @@
 import { META_RATE_LIMIT, parseRateLimit, parseCodexRateLimit, rateLimitNotice, codexRateLimitNotice, withMeta } from '@particle-academy/prism-acp';
 
 /**
- * Shape from prism-acp source, not a recording. Installed @particle-academy/prism-acp 0.32.0.
+ * Shape from prism-acp source, not a recording. Locked @particle-academy/prism-acp 0.37.0.
+ * Source inspected from its lockfile-integrity-verified npm distribution archive, without installing it.
  * Claude: node_modules/@particle-academy/prism-acp/dist/claude/to-acp.js:617-620 emits this notice;
  * dist/claude/rate-limit.js:137-169 normalizes unifiedWindows/resetsAt seconds into windows/resetsAtMs.
- * Codex: dist/codex/driver.js:1339-1345 emits this notice;
+ * Codex: dist/codex/driver.js:1342-1348 emits this notice;
  * dist/codex/rate-limit.js:24-45 and :109-120 normalize each window and the outer limit.
  * dist/meta.js:83 defines the exported META_RATE_LIMIT key. Real VM captures will confirm/replace these.
  * Values are synthetic; calling these functions starts no driver and spends no provider tokens.

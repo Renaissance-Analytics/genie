@@ -21,6 +21,9 @@ import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
 import { SessionHost } from './session-host.js';
+import { TrustVerdicts } from './trust-verdict.js';
+import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
+import { writeGenieInstructions } from './genie-instructions.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { SpawnHostClient } from './spawn-host-client.js';
@@ -241,7 +244,9 @@ async function main(): Promise<void> {
      * THE STORES AGENTS WRITE TO, AND GENIE'S MCP SERVER (the host split, P3.1; plan §11d): their one writer is this host,
      * so an agent's agentinbox, ForceTheQuestion, imDone, lists, plan and knowledge work with or without a window.
      */
-    const own = await openAgentStores(home, () => new Date().toISOString());
+    // AgentInbox's automatic reply to a paused recipient (genie#1515) reads this host's live sessions: bound once they exist.
+    let sessionsForInbox: SessionHost | null = null;
+    const own = await openAgentStores(home, () => new Date().toISOString(), (id) => sessionsForInbox?.probe(id) ?? null);
     // THE SETTINGS AND THE CHAT DRAFTS (P3.2): one file each, one writer — this host. Every window a replica; hot-swap kept.
     const settings = await SettingsStore.open(home);
     const drafts = await ChatDraftStore.open(home);
@@ -317,8 +322,12 @@ async function main(): Promise<void> {
         void stores.registrySettled().then(() => { for (const l of [...workspacesListeners]) l(); });
     });
     let hosting: HostingStack | null = null;
+    /** The running agents compared with their workspace's verdict (genie#1519): bound once the sessions exist. */
+    let hostVerdicts: TrustVerdicts | null = null;
     try {
         hosting = await composeHosting({
+            // THE HOST OWNS TRUST (genie#1519): the record and the verdicts are this host's, beside the sites that read them.
+            onTrustVerdict: (workspaceId) => hostVerdicts?.changed(workspaceId),
             ...(await hostHostingOptions(hostMachinePaths(process.env, home), say)),
             // ONE OWNER FOR EVERY PROCESS THE HOST STARTS: `docker events` runs under this host's `supervised` spawn-host
             // child, which ends its streams when this host dies however it dies (spawn-host.ts). Started by the host itself,
@@ -341,6 +350,17 @@ async function main(): Promise<void> {
     }
     const hostingStack = hosting;
     hostingNow = hostingStack;
+    // No hosting, no trust record: git in this host checks every folder's config first, as in a workspace not trusted.
+    if (!hostingStack) setGitReadPolicy(trustAwarePolicy(() => false));
+    /** The verdict as last read, without reading. A workspace not read yet, or a host with no hosting, is not trusted. */
+    const hostUntrustedNow = (record: { readonly workspaceId: string }): boolean => {
+        if (!hostRegistry.workspace(record.workspaceId)) return false;
+        return hostingStack?.trust.view(record.workspaceId)?.trusted !== true;
+    };
+    /** A registered workspace's folder takes Genie's files only once trusted; with no hosting, none is. */
+    const hostMayWriteInto = (folder: string): Promise<boolean> => (hostingStack
+        ? hostingStack.trust.mayWriteInto(folder)
+        : Promise.resolve(!hostRegistry.listWorkspaces().some((w) => w.path === folder)));
     const hostingService = hostingStack ? new HostingService(hostingStack, {
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
         elevation: hostingElevation,
@@ -610,7 +630,8 @@ async function main(): Promise<void> {
         tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async (asked) => { await tynnRecovery?.recover(asked); return []; } }),
         github: new GithubAccountService(githubOpening),
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
-        configSync: (asked) => withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)),
+        // Nothing of Genie's goes into a folder the person has not trusted (genie#1519), whichever window asked.
+        configSync: async (asked) => ((await hostMayWriteInto(asked.workspacePath)) ? withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)) : []),
         // Other machines: the host dials them, and holds the tokens that open them (P3.4 cut e).
         deviceLink: new DeviceLinkService({
             tokens: deviceTokenStore(join(runtime, 'device-hosts.json'), keychain),
@@ -677,6 +698,17 @@ async function main(): Promise<void> {
     const host = new SessionHost({
         userData: home,
         ...engineHostOptions,
+        // A WORKSPACE NOT TRUSTED (genie#1519): its agent gets Genie's own words, never the folder's — and with no hosting
+        // to read a verdict, no workspace is trusted.
+        untrustedFilesFor: async (record) => {
+            const workspace = hostRegistry.workspace(record.workspaceId);
+            if (!workspace) return null;
+            const view = hostingStack ? await hostingStack.trust.refresh(workspace.id).catch(() => null) : null;
+            if (view !== null && view.trusted) return null;
+            const tools = (mcp?.registrations() ?? []).map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
+            return writeGenieInstructions(join(runtime, 'untrusted-agent'), tools);
+        },
+        untrustedNow: (record) => hostUntrustedNow(record),
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
@@ -706,6 +738,37 @@ async function main(): Promise<void> {
     });
     engine.attach(host);
     hostForNotes = host;
+    sessionsForInbox = host;
+    /*
+     * A WORKSPACE'S VERDICT CHANGES WHILE ITS AGENT RUNS (genie#1519, trust-verdict.ts), compared here, on the host's own
+     * sessions. A restart is the graceful one: stop, the old run ended, the same conversation started, what it was owed.
+     */
+    const trustRestart = async (id: AgentId): Promise<{ ok: true } | { ok: false; reason: string | null }> => {
+        const record = hostRegistry.find(id);
+        if (!record) return { ok: false, reason: null };
+        host.stop(id);
+        const verdict = await host.ended(id);
+        if (verdict && !verdict.verified && verdict.survivors.length > 0) return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
+        const started = host.start(record, hostRegistry.workspace(record.workspaceId)?.path ?? osaHome);
+        if (!started.ok) return started;
+        await host.deliverOwed(id);
+        return { ok: true };
+    };
+    hostVerdicts = new TrustVerdicts({
+        agentsOf: (workspaceId) => hostRegistry.listAgents().filter((a) => a.workspaceId === workspaceId).map((a) => a.id),
+        untrustedNow: (id) => { const record = hostRegistry.find(id); return record ? hostUntrustedNow(record) : false; },
+        launchedUntrusted: (id) => host.launchedUntrusted(id),
+        quiet: (id) => host.quiet(id),
+        inTurn: (id) => host.inTurn(id),
+        workWaiting: (id) => host.workWaiting(id),
+        releaseWork: (id) => { host.releaseWork(id); },
+        runOf: (id) => host.runOf(id),
+        hold: (id, text) => host.holdForNextWork(id, text),
+        withdraw: (id) => host.withdrawHeld(id),
+        notice: (id, text) => { host.notice(id, text); },
+        restart: (id) => trustRestart(id),
+    });
+    host.subscribe((id) => hostVerdicts?.check(id));
     tynnRecovery = hostTynnRecovery({
         watchWake: wallClockJumps,
         names: (asked) => agentKeys.recovery(asked),
@@ -767,6 +830,14 @@ async function main(): Promise<void> {
                 addKnowledge: async (entry) => ({ id: own.knowledge.add(entry as never).id }),
                 attention: own.attention,
                 safeMode: safeNow,
+                // A Codex agent in a workspace not trusted gets a flow's values with Genie's skill names escaped (genie#1519):
+                // the host's own verdict, read where the flows run.
+                escapesPromptValues: (address) => {
+                    const found = resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs());
+                    if (found.kind !== 'one') return false;
+                    const agent = hostRegistry.find(found.id);
+                    return agent?.provider === 'codex' && hostUntrustedNow(agent);
+                },
             });
             // Genie's tools as flow steps: the host's MCP server's own (its native ones in place, the window's forwarded).
             const regs = mcp?.registrations() ?? [];

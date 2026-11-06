@@ -116,9 +116,11 @@ describe('one breach holds the whole login', () => {
         rejected('atlas', now + 60 * MIN);
         failTurn('atlas');
         host.resumeLimit('claude');
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        // Resume now opens the gate early; its last provider reading is still 0%, so the next work must warn.
+        const warnedResume = `You have 0% until you hit your rate limit. Reduce the size of your work per turn to minimize loss\n\n---\n\n${LIMIT_RESUME_PROMPT}`;
+        expect(sent.get('atlas')).toEqual(['build it', warnedResume]);
         advanceTo(now + 62 * MIN);
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        expect(sent.get('atlas')).toEqual(['build it', warnedResume]);
     });
 });
 

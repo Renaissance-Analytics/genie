@@ -10,6 +10,7 @@ import { contextNote, diffHeader, headerActions, personaView, planSteps, process
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
 import { FidelityDot } from './Dashboard.js';
+import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { Breadcrumbs, Button, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
@@ -25,7 +26,7 @@ import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import { controlOutcome, issueWatchGroups, removeControls, runControls, settingsSectionShown, settingsSections, type SettingsControl, type SettingsSection } from '../../core/agent-settings-view.js';
 import { isOsAgent, OS_AGENT_POLICY_NOTE } from '../../core/os-agent.js';
 import { TurnStop } from './TurnStop.js';
-import type { DeletePlan } from '../../core/agent-ops.js';
+import type { DeletePlan, ProviderSwitchState } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
 import { approvalPlacement, approvalPolicySentence, budgetFor, parkedDivider, planFor, statePill, tabsFor } from '../../core/agent-view.js';
 import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
@@ -102,6 +103,27 @@ const PILL_TONE = {
 } as const;
 
 /**
+ * WHERE A PROVIDER SWITCH STANDS, beside the control (genie#1569; the owner, 2026-10-27: every action shows progress,
+ * then success, or failure with the reason and Retry — never silent). A refusal used to be a flash back of the select
+ * with the reason only in the shared outcome line, and a second identical refusal showed nothing at all.
+ */
+function ProviderSwitchStatus({ state, onRetry }: { state: ProviderSwitchState | undefined; onRetry: (to: string) => void }) {
+    if (!state || state.kind === 'idle') return null;
+    if (state.kind === 'working') {
+        return <p data-provider-switch-step="" className="mt-1 flex items-center gap-1.5 text-[11px] text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" />Switching to {providerName(state.to)}…</p>;
+    }
+    if (state.kind === 'done') {
+        return <p data-provider-switch-done="" className="mt-1 flex items-start gap-1.5 text-[11px] text-[var(--fg-2)]"><Icon name="check" size="xs" className="mt-0.5 shrink-0" /><span className="min-w-0">{state.text}</span></p>;
+    }
+    return (
+        <p data-problem="provider-switch" role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[var(--danger)]">
+            <span className="min-w-0">{state.reason}</span>
+            <Button size="xs" labelClassName="contents" type="button" data-action="provider-switch-retry" onClick={() => onRetry(state.to)} className="inline-flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 text-[var(--fg-1)] hover:bg-[var(--bg-2)]"><Icon name="refresh-cw" size="xs" />Retry</Button>
+        </p>
+    );
+}
+
+/**
  * AGENT OPERATIONS (§6.2) as the view sees them. Absent for an Observed agent and for a window that
  * cannot operate agents — no dead controls. A delete is previewed (the plan) before it is confirmed.
  */
@@ -144,6 +166,8 @@ export interface AgentOpsProps {
     readonly onRefreshModels?: () => void;
     readonly onRestart: (kind: 'graceful' | 'fresh') => void;
     readonly onSwitchDriver: (to: string) => void;
+    /** Where the Provider control's switch stands (genie#1569): drawn beside it — in flight, done, or refused with Retry. */
+    readonly providerSwitch?: ProviderSwitchState;
     readonly onDiagnose: () => void;
     readonly onPreviewDelete: (outcome: 'unmount' | 'delete') => void;
     /** `handoff`: ask the running agent for a handoff before it is stopped (Genie 1's AgentDeleteModal). */
@@ -348,15 +372,17 @@ function AgentViewBody({
     // COMMITS since the Take Over window opened (the board's blind index): read when the view mounts and when the
     // workspace's files change (a commit follows edits); never polled.
     const [commits, setCommits] = useState<readonly RepoCommit[] | null>(initialCommits ?? null);
+    const [commitsProblem, setCommitsProblem] = useState<string | null>(null);
+    const [commitsTry, setCommitsTry] = useState(0);
     const windowStart = takeOver?.startedAt ?? null;
     useEffect(() => {
         if (!readCommits || !workspace || windowStart === null) return;
         let live = true;
-        const read = () => { void readCommits(workspace.id, windowStart).then((c) => { if (live) setCommits(c); }); };
+        const read = () => { void readCommits(workspace.id, windowStart).then((c) => { if (live) { setCommits(c); setCommitsProblem(null); } }, () => { if (live) setCommitsProblem('Git did not answer in time, so these commits may be out of date.'); }); };
         read();
         const off = files?.onChange((id) => { if (id === workspace.id) read(); });
         return () => { live = false; off?.(); };
-    }, [readCommits, workspace, windowStart, files]);
+    }, [readCommits, workspace, windowStart, files, commitsTry]);
     const [changeOpen, setChangeOpen] = useState<string | null>(null);
     // THE STREAM CURSOR (§4.2 `j`/`k`): a focus, drawn as a ring, that is NOT the Inspector's selection. Enter opens
     // the Inspector on it; a click (a selection) brings the cursor along, so the keys continue from where the reader is.
@@ -1160,8 +1186,10 @@ function AgentViewBody({
                                                         the agent starts a NEW conversation there (a provider's conversation is its own). */}
                                                     <section data-rail="provider" data-agent-provider={agent.provider}>
                                                         <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h3>
-                                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: providerName(p) }))} prefix={<ProviderLogo provider={agent.provider} />} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
-                                                        <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its conversation comes with it. Switching back resumes the old one.')}{outcomeFor('provider')}</p>
+                                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: providerName(p) }))} prefix={<ProviderLogo provider={agent.provider} />} value={agent.provider} disabled={ops.providerSwitch?.kind === 'working'} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
+                                                        <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its conversation comes with it. Switching back resumes the old one.')}</p>
+                                                        {/* WHERE THE SWITCH STANDS, beside it (genie#1569): a refusal used to be a silent flash back. */}
+                                                        <ProviderSwitchStatus state={ops.providerSwitch} onRetry={(to) => ops.onSwitchDriver(to)} />
                                                     </section>
                                                     {/* MODEL: the PROVIDER's list (prism-acp 0.22), what the agent starts with, and what it runs. Never one Genie made up. */}
                                                     {has.has('model') ? (() => {
@@ -1473,6 +1501,7 @@ function AgentViewBody({
                                     );
                                 })() : null}
                                 {/* COMMITS (the board's blind index): git's own account of the workspace's repos since this window opened. */}
+                                {commitsProblem ? <GitReadProblem reason={commitsProblem} onRetry={() => setCommitsTry((n) => n + 1)} /> : null}
                                 {commits ? (
                                     <section data-observed-commits={agent.id} className="flex flex-col gap-1">
                                         <h3 className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Commits since this window opened</h3>

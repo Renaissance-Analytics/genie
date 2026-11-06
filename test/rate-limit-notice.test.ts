@@ -120,7 +120,9 @@ it('attaches the warning to mail that waited for turn end, preserving its mail c
     expect(r.session.deliver('collect your mail', 'genie', null, { mail, retold: true })).toEqual(expect.any(String));
     r.refuse(false); r.end();
     expect(r.wires.length).toBe(2); expect(String(r.wires[1])).toContain(warning(5));
-    expect((await r.rows()).some(row => row.kind === 'notice' && row.message === 'collect your mail' && JSON.stringify(row.mail) === JSON.stringify(mail))).toBe(true);
+    expect((await r.rows()).filter(row => row.kind === 'message' && row.text === 'collect your mail')).toEqual([
+        expect.objectContaining({ kind: 'message', speaker: 'peer', peerName: 'genie', text: 'collect your mail', mail }),
+    ]);
     expect((await r.warnings()).length).toBe(1);
 });
 it('keeps headroom isolated between agents that share a provider', async () => {

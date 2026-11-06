@@ -2,6 +2,7 @@ import { permissionDecisionFor } from '../core/agent-ops.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseAgentManifest } from '../core/agent-manifest.js';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
+import { providerLogin } from '../core/provider-login.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import { buildCarryOver, type CarryOver } from '../core/carry-over.js';
 import type { StreamEvent } from '../core/stream-event.js';
@@ -18,7 +19,8 @@ import { diagnoseAgent, type Diagnosis } from '../core/workspace-model.js';
  * RESTART (`restartAgent(…, 'graceful')`) is THE ONE ACTION every Restart and Start control calls (genie#1238): it works
  * from every state and delivers what the agent is owed; `fresh` clears the thread on purpose. Delete is PREVIEWED
  * with its plan before it acts, and the cross-system opt-in travels in the same call. Switch provider
- * carries the conversation and keeps each provider's own session (Tynn story #380). A budget is set and judged at once — unenforceable when the
+ * carries the conversation and keeps each provider's own session (Tynn story #380); it is the person's, never refused for
+ * the persona, and refused before anything stops only for a provider not installed or not signed in (genie#1569). A budget is set and judged at once — unenforceable when the
  * provider reports no cost, said rather than silently never firing. Diagnose names a cause and the
  * repair that fits; a never-run agent is dormant, not a fault. Every port is injected; main.ts
  * passes the registry, the session host and the filesystem.
@@ -273,6 +275,10 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     const manifest = parseAgentManifest(await ports.readManifest(record), record.name);
     const decision = switchDriverDecision(record.provider, to);
     if (!decision.ok || decision.noop) return decision;
+    // Refused BEFORE anything is stopped: a provider that cannot run here would leave the agent on nothing.
+    const name = providerLogin(to)?.name ?? to;
+    if (!ports.providerInstalled(to)) return { ok: false, reason: `${name} is not installed on this machine, so ${record.name} cannot switch to it. Install it, then switch again.` };
+    if (!ports.signedIn(to)) return { ok: false, reason: `${name} is not signed in on this machine, so ${record.name} cannot switch to it. Log in to ${name}, then switch again.` };
     /*
      * THE AGENT GOES, ITS CONVERSATION WITH IT (Tynn story #380; the owner: "I should be able to switch providers and models
      * without losing context"). A provider's native session is its own — a Claude session id means nothing to Codex — so

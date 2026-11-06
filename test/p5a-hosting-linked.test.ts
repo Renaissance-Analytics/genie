@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import type { HostingApi } from '../src/main/hosting-host.js';
+import { closedTrust } from './helpers/closed-trust.js';
 import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
 
 /**
@@ -61,6 +62,8 @@ function hostsHosting(): HostingApi {
         configuredHosts: () => ['docs.gen'],
         browserTrust: () => ({ caPem: '-----BEGIN CERTIFICATE-----\nHOST\n-----END CERTIFICATE-----\n', thumbprint: 'AB'.repeat(20) }),
         externalFrontDoor: { running: false, reason: 'the host’s' },
+        // The host's trust (genie#1519), read by compose at once: nothing read yet.
+        trust: closedTrust(),
     } as unknown as HostingApi;
 }
 

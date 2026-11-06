@@ -21,6 +21,21 @@ let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-perm-')); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
+describe("the mark that Genie's words are in a thread", () => {
+    it('kept across a reload, and gone with the thread', async () => {
+        const registry = new Registry(new Store(dir));
+        await registry.load({ name: 'alphar', healthy: true });
+        await registry.addWorkspace({ id: 'tynn', path: '/w/tynn' });
+        const a = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        expect(await registry.markGenieWords(a.id)).toMatchObject({ genieWordsInThread: true });
+        const again = new Registry(new Store(dir));
+        await again.load({ name: 'alphar', healthy: true });
+        expect(again.find(a.id)?.genieWordsInThread).toBe(true);
+        const cleared = await again.clearThread(a.id);
+        expect(cleared?.genieWordsInThread).toBeUndefined();
+    });
+});
+
 describe('the record', () => {
     it('set and persisted across a reload; unknown agent → null', async () => {
         const registry = new Registry(new Store(dir));

@@ -1,3 +1,4 @@
+import { shownState, type Fidelity } from './dashboard-view.js';
 import { formatRoute, parseRoute, type WorkspaceView } from './route.js';
 /**
  * WORKSPACE TABS YOU DESIGN (Tynn story #282). The owner, 2026-10-17: "By default we will have the Agents and Settings
@@ -95,8 +96,8 @@ export function workspaceViewRoute(workspaceId: string, view: string): string {
  * have no fucking way to select different agents now"). The strip is an agent's door — the Dashboard shows only the
  * running ones — so a tab per agent you happened to open left a stopped agent unreachable, and after an upgrade, all.
  */
-export function agentTabsOf<A extends { id: string; name: string; workspaceId: string; state: string }>(roster: readonly A[], workspaceId: string): Array<{ id: string; name: string; state: string }> {
-    return roster.filter((a) => a.workspaceId === workspaceId).map((a) => ({ id: a.id, name: a.name, state: a.state }));
+export function agentTabsOf<A extends { id: string; name: string; workspaceId: string; state: string; fidelity?: Fidelity | undefined; background?: number | null | undefined }>(roster: readonly A[], workspaceId: string): Array<{ id: string; name: string; state: string }> {
+    return roster.filter((a) => a.workspaceId === workspaceId).map((a) => ({ id: a.id, name: a.name, state: shownState(a) }));
 }
 
 function freshId(state: TabsState): string {

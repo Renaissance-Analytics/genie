@@ -90,6 +90,11 @@ export interface HostApiDeps {
      */
     /** May answer later: the agent engine in genie-host answers its start asynchronously (main/start-on-demand.ts). */
     startForWork?(record: AgentRecord): StartForWorkAnswer | Promise<StartForWorkAnswer>;
+    /**
+     * THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): `startForWork`, and a new driver on the same
+     * conversation when the run's own stopped itself (prism-acp 0.37.0). Absent = `startForWork`.
+     */
+    startForYourMessage?(record: AgentRecord): Promise<StartForWorkAnswer>;
     host: Pick<RestartPorts, 'prompt'> & {
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
@@ -336,8 +341,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const r = agent(args[0]);
                 const text = str(args[1]);
                 // THE FIRST MESSAGE STARTS IT (q_04ce323c), as the composer's does; a refused start is said, nothing sent.
-                if (r && deps.startForWork && (text.length > 0 || Array.isArray(args[2]))) {
-                    const started = await deps.startForWork(r);
+                if (r && (deps.startForYourMessage || deps.startForWork) && (text.length > 0 || Array.isArray(args[2]))) {
+                    const started = deps.startForYourMessage ? await deps.startForYourMessage(r) : await deps.startForWork!(r);
                     if (!started.ok) return { ok: false, reason: started.reason };
                 }
                 // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
