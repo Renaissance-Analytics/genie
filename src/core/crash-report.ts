@@ -98,6 +98,18 @@ export function stackSignature(frame: string): string {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
+/** cut 3's frame shape (core/crash-record.ts on next/hang-watchdog): a function name, then `file:line` when it has one. */
+const RECORD_FRAME = /^[A-Za-z0-9_$.<>()[\]# -]{1,120}( [A-Za-z0-9_.-]{1,120}:[0-9]{1,7})?$/;
+const RECORD_FRAMES = 12;
+
+/**
+ * A stall's stack in a crash record is ALREADY a signature (`drawLane WorkspaceDashboard.js:88 < paint main.js:5023`): it is
+ * kept whole, at most 12 frames, and a frame that is not of that shape is `?` here too, whatever wrote the record.
+ */
+function recordSignature(stack: string): string {
+    return stack.split(' < ').slice(0, RECORD_FRAMES).map((frame) => (RECORD_FRAME.test(frame.trim()) ? frame.trim() : '?')).join(' < ');
+}
+
 /**
  * THE CRASH RECORD, AS THE PUBLIC REPORT MAY TAKE IT (cut 3's CrashRecord: hang | lost | exit, with a header). Reads only
  * the allowed fields; lifecycle lines, routes, agent names and tool names are never read.
@@ -111,7 +123,7 @@ export function factsFromRecord(record: unknown, base: { view: SafeModeView; pro
     for (const s of stalls) {
         if (!isRecord(s)) continue;
         const ms = num(s['ms']) ?? 0;
-        const signature = typeof s['stack'] === 'string' && s['stack'] !== '' ? stackSignature(s['stack']) : '(no stack)';
+        const signature = typeof s['stack'] === 'string' && s['stack'] !== '' ? recordSignature(s['stack']) : '(no stack)';
         const stat = bySignature.get(signature) ?? { count: 0, maxMs: 0, totalMs: 0 };
         bySignature.set(signature, { count: stat.count + 1, maxMs: Math.max(stat.maxMs, ms), totalMs: stat.totalMs + ms });
     }

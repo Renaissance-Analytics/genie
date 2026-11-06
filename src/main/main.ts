@@ -2067,7 +2067,7 @@ async function boot(): Promise<void> {
         tynnHost: TYNN_HOST,
         identity: async () => (crashReportMachine ? crashReportMachine.identity(TYNN_HOST) : null),
         authHeader: async () => { if (!crashReportMachine) throw new Error('no workstation identity'); return crashReportMachine.authHeader(TYNN_HOST); },
-        fetch: (url, init) => fetch(url, init),
+        fetch: (url, init) => net.fetch(url, init),
     });
     ipcMain.handle('genie:crash-report-draft', () => crashReports.draft());
     ipcMain.handle('genie:crash-report-send', (_event, text: unknown, notes: unknown) =>
