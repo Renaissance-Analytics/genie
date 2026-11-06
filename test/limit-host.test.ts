@@ -109,7 +109,7 @@ describe('one breach holds the whole login', () => {
         expect(host.probe(a.id)?.limit).toEqual({ state: 'open' });
     });
 
-    it('Resume now opens the login at once and resumes its agents; the timer then does nothing', () => {
+    it('forced Resume now before reset carries the spent-window warning once; the timer then does nothing', () => {
         const a = record('atlas');
         host.start(a, dir);
         host.prompt(a.id, 'build it', 'you');
@@ -121,6 +121,20 @@ describe('one breach holds the whole login', () => {
         expect(sent.get('atlas')).toEqual(['build it', warnedResume]);
         advanceTo(now + 62 * MIN);
         expect(sent.get('atlas')).toEqual(['build it', warnedResume]);
+    });
+    it('Resume now after reset, before the automatic retry, carries no stale warning', () => {
+        const a = record('atlas');
+        host.start(a, dir);
+        host.prompt(a.id, 'build it', 'you');
+        const resetAt = now + 60 * MIN;
+        rejected('atlas', resetAt);
+        failTurn('atlas');
+        advanceTo(resetAt + MIN); // Already reset, but still inside the gate timer's two-minute margin.
+        expect(sent.get('atlas')).toEqual(['build it']);
+        host.resumeLimit('claude');
+        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
+        advanceTo(resetAt + 2 * MIN);
+        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
     });
 });
 

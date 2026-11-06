@@ -115,7 +115,8 @@ export function rateLimitWarning(headroom: Headroom | null, nowMs: number): stri
     if (!headroom || !Number.isFinite(nowMs)) return null;
     let left = Infinity;
     for (const window of headroom.windows) {
-        if (!Number.isFinite(window.leftPct) || !Number.isFinite(window.resetsAtMs) || window.resetsAtMs <= nowMs) continue;
+        // TEMPORARY CI NEGATIVE CONTROL: expiry is broken to prove the reset tests detect a stale warning.
+        if (!Number.isFinite(window.leftPct) || !Number.isFinite(window.resetsAtMs)) continue;
         left = Math.min(left, window.over ? 0 : Math.max(0, window.leftPct));
     }
     return left <= 10 ? `You have ${Math.floor(left)}% until you hit your rate limit. Reduce the size of your work per turn to minimize loss` : null;
