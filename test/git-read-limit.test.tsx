@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,6 +71,31 @@ describe.skipIf(process.platform === 'win32')("the wizard's read of a folder has
     }, 15_000);
 });
 
+/**
+ * WHO STILL HOLDS A FOLDER, said only when it cannot be removed (unit (windows) failed here twice on 2026-11-06 with EBUSY
+ * after the hook's child was gone). Linux: every process whose working directory is in it. Windows: git, sh, bash and
+ * conhost with their parents and start times, any process whose command line names it, and handle64's answer when the
+ * machine has it. A diagnostic: the assertion it sits beside is unchanged.
+ */
+function holders(dir: string): string[] {
+    try {
+        if (process.platform !== 'win32') {
+            return readdirSync('/proc').filter((p) => /^\d+$/.test(p)).flatMap((pid) => {
+                try { const cwd = readlinkSync(`/proc/${pid}/cwd`); return cwd.startsWith(dir) ? [`${pid} cwd=${cwd} ${readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').slice(0, 200)}`] : []; } catch { return []; }
+            });
+        }
+        const like = dir.replace(/'/g, "''");
+        const table = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+            `Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('git.exe','sh.exe','bash.exe','conhost.exe','git-remote-https.exe') -or ($_.CommandLine -and $_.CommandLine -like '*${like}*') } | ForEach-Object { "$($_.ProcessId) parent=$($_.ParentProcessId) $($_.Name) started=$($_.CreationDate.ToString('HH:mm:ss.fff')) $($_.CommandLine)" }`],
+            { encoding: 'utf8', timeout: 60_000, windowsHide: true }).split(/\r?\n/).filter(Boolean).map((l) => l.slice(0, 300));
+        let handles: string[] = [];
+        try { handles = execFileSync('handle64', ['-accepteula', '-nobanner', dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true }).split(/\r?\n/).filter(Boolean).map((l) => `handle64: ${l.slice(0, 200)}`); } catch { handles = ['handle64: not on this machine']; }
+        return [...table, ...handles];
+    } catch (error) {
+        return [`(the table could not be read: ${error instanceof Error ? error.message : String(error)})`];
+    }
+}
+
 describe('past it, what the read started is ended', () => {
     const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
     let mark: string;
@@ -101,7 +126,12 @@ describe('past it, what the read started is ended', () => {
         expect(alive(child)).toBe(true);
         expect(await reading).toMatch(/did not answer/);
         await vi.waitFor(() => { expect(alive(child)).toBe(false); }, { timeout: 40_000, interval: 200 });
-        await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 5000, interval: 200 });
+        try {
+            await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 5000, interval: 200 });
+        } catch (error) {
+            console.log(`GIT_LIMIT_HOLDERS of ${repo} (the hook's child ${child} is gone):\n  ${holders(root).join('\n  ')}`);
+            throw error;
+        }
     }, 70_000);
 });
 
