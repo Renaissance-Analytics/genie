@@ -39,6 +39,7 @@ import { channelFrom } from '../core/update-channel.js';
 import type { ReleaseLike } from '../core/update-notes.js';
 import { hostIdleMs, hostIdleStep } from '../core/host-idle.js';
 import { NO_BROWSER_HERE, NO_PAGES_HERE, runsOnElectron } from '../core/host-runtime.js';
+import { fts5Refusal } from './fts5-check.js';
 import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
@@ -147,6 +148,13 @@ process.on('uncaughtException', (error) => say(`uncaught: ${error instanceof Err
 process.on('unhandledRejection', (error) => say(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
 
 async function main(): Promise<void> {
+    // FTS5 FIRST (P10.1b): a Node whose node:sqlite has none (before 22.16) refuses here, in words, with nothing bound.
+    const noFts5 = fts5Refusal();
+    if (noFts5 !== null) {
+        say(noFts5);
+        lifecycleLog(`host refused: ${noFts5}`);
+        process.exit(1);
+    }
     const userKey = createHash('sha256').update(home).digest('hex').slice(0, 16);
     const endpoint = hostEndpoint(process.platform, runtime, userKey);
 

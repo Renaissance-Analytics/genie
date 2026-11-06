@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Genie 2 — an agent is a session, never a terminal.",
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
