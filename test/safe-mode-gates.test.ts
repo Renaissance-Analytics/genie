@@ -260,7 +260,7 @@ function sitesRig(safe: () => boolean) {
     const opened: string[] = [];
     const held: string[] = [];
     const pty: PtyPort = {
-        open: (o) => { opened.push(o.command); return { id: `t${opened.length}`, pid: 1, shell: 'sh', scrollback: '' }; },
+        open: (o) => { opened.push(o.command ?? '(a shell)'); return { id: `t${opened.length}`, pid: 1, shell: 'sh', scrollback: '' }; },
         write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {},
     };
     let port = 4100;
