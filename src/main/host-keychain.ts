@@ -39,7 +39,8 @@ export async function openHostKeychain(options: HostKeychainOptions = {}): Promi
     keychain.onAnswerChange((now) => { answers = now; });
     const ask = async (): Promise<void> => { answers = (await keychain.probe()).ok; };
 
-    if ((options.platform ?? process.platform) !== 'linux') {
+    // The file backend (file-secrets.ts) has no Secret Service to install or start: the probe alone answers, on every OS.
+    if (options.backend === 'file' || (options.platform ?? process.platform) !== 'linux') {
         await ask();
         return { keychain, keyring: null, state: () => (answers ? 'ready' : 'refused') };
     }
