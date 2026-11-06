@@ -118,9 +118,12 @@ export function clearUpdateFailed(home: string): void {
     rmSync(failedFile(home), { force: true });
 }
 
-/** How the updater helper is started: the published launch. */
+/**
+ * How the updater helper is started: the published launch, without a debugger port or inspector the window was started
+ * with (core/launch-flags.ts) — the helper runs BESIDE the window, which still holds them.
+ */
 export function helperLaunch(launch: HelperLaunch): HelperLaunch {
-    return { file: launch.file, args: [...launch.args] };
+    return { file: launch.file, args: launch.args.filter((a) => !a.startsWith('--remote-debugging-port=') && !a.startsWith('--inspect=')) };
 }
 /**
  * How to start Genie again after an install that did not happen: the executable still installed (on Linux the AppImage
