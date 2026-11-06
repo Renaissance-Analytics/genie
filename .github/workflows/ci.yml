@@ -93,6 +93,19 @@ jobs:
           grep -q "280px" "$css"
           grep -q "30px" "$css"
 
+  fts5-probe:
+    name: probe (temporary) node:sqlite FTS5 by Node version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.13.1', '22.14.0', '22.15.0', '22.16.0', '22.17.0', '22.18.0', '22.20.0', '22']
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --version && node -e "const { DatabaseSync } = require('node:sqlite'); new DatabaseSync(':memory:').exec('CREATE VIRTUAL TABLE t USING fts5(a)'); console.log('fts5 yes')"
+
   # GENIE-HOST ON PLAIN NODE (the host split, P10.1b). genie-cloud runs `node dist/main/host.js` in a container with
   # Node 22 and no Electron (P10.3), so the host bundle has to boot and serve there. Node 22.13.0 exactly: the oldest
   # Node with an unflagged `node:sqlite`, which the host's stores use. No Electron binary is downloaded, so anything in
