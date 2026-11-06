@@ -142,6 +142,18 @@ process.on('uncaughtException', (error) => say(`uncaught: ${error instanceof Err
 process.on('unhandledRejection', (error) => say(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
 
 async function main(): Promise<void> {
+    /*
+     * WHERE SECRETS GO, chosen FIRST (P10.1a): the OS keychain, or with GENIE_SECRET_BACKEND=file the sealed files under
+     * <root>/secrets (file-secrets.ts). A file backend that is misconfigured stops the host here, in words that say what to
+     * fix, before it binds its endpoint: no window ever connects to a host that is about to exit, and it never runs on with
+     * the other store, or with none.
+     */
+    const secrets = await openSecretKeychain(process.env, home);
+    if (secrets.kind === 'refused') {
+        say(secrets.reason);
+        lifecycleLog(`host refused to start: ${secrets.reason}`);
+        process.exit(1);
+    }
     const userKey = createHash('sha256').update(home).digest('hex').slice(0, 16);
     const endpoint = hostEndpoint(process.platform, runtime, userKey);
 
@@ -156,18 +168,6 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
-    /*
-     * WHERE SECRETS GO, chosen before anything else starts (P10.1a): the OS keychain, or with GENIE_SECRET_BACKEND=file the
-     * sealed files under <home>/secrets (file-secrets.ts). A file backend that is misconfigured stops the host here, in words
-     * that say what to fix: it never runs on with the other store, or with none.
-     */
-    const secrets = await openSecretKeychain(process.env, home);
-    if (secrets.kind === 'refused') {
-        say(secrets.reason);
-        lifecycleLog(`host refused to start: ${secrets.reason}`);
-        await new Promise<void>((done) => { server.close(() => done()); });
-        process.exit(1);
-    }
     // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No OS keychain refuses secrets; it never stops the host.
     const keychain = secrets.keychain;
     const keychainOpening = openHostKeychain({ keychain, backend: secrets.kind });

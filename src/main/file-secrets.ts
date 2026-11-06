@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { access, chmod, mkdir, open, readFile, rename, rm, stat, type FileHandle } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { Keychain, type KeyringModule } from './keychain.js';
-import { isOwnerOnlyFile } from './private-credentials.js';
+import { isOwnerOnlyFile, restrictPrivateDirectories } from './private-credentials.js';
 
 /**
  * THE FILE SECRET BACKEND (the host split, P10.1a): genie-host's keychain on a host with no OS keychain, such as a cloud
@@ -16,49 +16,60 @@ import { isOwnerOnlyFile } from './private-credentials.js';
  * name is never a path, so `../` or a separator in it cannot leave the directory, and two names that differ only in case
  * stay two files on Windows, where file names ignore case.
  *
- * THE FORMAT, raw bytes, no text encoding: `[version 1, one byte][IV, 12 bytes][GCM tag, 16 bytes][ciphertext]`, AES-256-GCM
- * under a key of 32 raw bytes, with a fresh random IV per write and the value as UTF-8. The same layout the cloud host's own
- * sealed files use, so either can read the other's. Any change to a file, or the wrong key, fails the tag: the read is
- * refused in words and nothing is returned.
+ * THE FORMAT (version 2), raw bytes, no text encoding: `[version 2, one byte][IV, 12 bytes][GCM tag, 16 bytes][ciphertext]`,
+ * AES-256-GCM under a key of 32 raw bytes, with a fresh random IV per write and the value as UTF-8. Each file is BOUND TO ITS
+ * ENTRY: the GCM additional authenticated data is `genie-secret:` and the entry's 64-hex name hash (its file name without
+ * `.secret`), so a file exchanged with another, or copied under another entry's name, fails the tag. The key is the same 32
+ * raw bytes the cloud host keeps as its master key, so that key can serve as this one. Any change to a file, the wrong key or
+ * the wrong entry fails the tag: the read is refused in words and nothing is returned.
  *
  * THE KEY IS THE OPERATOR'S. Genie never creates, repairs or rotates it. A key file others could read is refused: on POSIX
  * any group or other bit; on Windows anything but an owner-only ACL (private-credentials.ts reads it, and changes nothing).
+ * The folder is its owner's only too, though it holds only ciphertext: 0700 on POSIX, the private-directory ACL on Windows.
  *
  * No value reaches a log line or an error: reasons name the entry and the file, never what is in it.
  */
 
-export const SECRET_FORMAT_VERSION = 1;
+export const SECRET_FORMAT_VERSION = 2;
 export const SECRET_IV_BYTES = 12;
 export const SECRET_TAG_BYTES = 16;
 export const SECRET_KEY_BYTES = 32;
 const HEADER_BYTES = 1 + SECRET_IV_BYTES + SECRET_TAG_BYTES;
 const CIPHER = 'aes-256-gcm';
 const UNREADABLE = 'could not be decrypted';
+const SUFFIX = '.secret';
 
-/** Seal a value: the layout above, a fresh IV each time. */
-export function sealSecret(key: Buffer, plain: Buffer, _aad?: Buffer): Buffer {
+/** What a file is bound to: its entry, by the name hash. */
+function entryAad(stem: string): Buffer {
+    return Buffer.from(`genie-secret:${stem}`, 'utf8');
+}
+
+/** Seal a value bound to `aad`: the layout above, a fresh IV each time. */
+export function sealSecret(key: Buffer, plain: Buffer, aad: Buffer): Buffer {
     const iv = randomBytes(SECRET_IV_BYTES);
     const cipher = createCipheriv(CIPHER, key, iv, { authTagLength: SECRET_TAG_BYTES });
+    cipher.setAAD(aad);
     const body = Buffer.concat([cipher.update(plain), cipher.final()]);
     return Buffer.concat([Buffer.from([SECRET_FORMAT_VERSION]), iv, cipher.getAuthTag(), body]);
 }
 
-/** Open a sealed value, or throw in words: too short, another version, or a tag that does not match (a changed file, the wrong key). */
-export function openSealedSecret(key: Buffer, blob: Buffer, _aad?: Buffer): Buffer {
+/** Open a sealed value, or throw in words: too short, another version, or a tag that does not match (a changed file, the wrong key, another entry's file). */
+export function openSealedSecret(key: Buffer, blob: Buffer, aad: Buffer): Buffer {
     if (blob.length < HEADER_BYTES) throw new Error(`The secret ${UNREADABLE}: its file is ${blob.length} bytes, shorter than the ${HEADER_BYTES}-byte header.`);
     if (blob[0] !== SECRET_FORMAT_VERSION) throw new Error(`The secret ${UNREADABLE}: its file is format version ${blob[0]}, and this Genie reads version ${SECRET_FORMAT_VERSION}.`);
     try {
         const decipher = createDecipheriv(CIPHER, key, blob.subarray(1, 1 + SECRET_IV_BYTES), { authTagLength: SECRET_TAG_BYTES });
+        decipher.setAAD(aad);
         decipher.setAuthTag(blob.subarray(1 + SECRET_IV_BYTES, HEADER_BYTES));
         return Buffer.concat([decipher.update(blob.subarray(HEADER_BYTES)), decipher.final()]);
     } catch {
-        throw new Error(`The secret ${UNREADABLE}: the key is not the one it was sealed with, or the file was changed.`);
+        throw new Error(`The secret ${UNREADABLE}: the key is not the one it was sealed with, the file was changed, or it is another entry's file.`);
     }
 }
 
 /** An entry's file name: a hash, never the name, so no name is a path. */
 export function secretFileName(service: string, name: string): string {
-    return `${createHash('sha256').update(JSON.stringify([service, name]), 'utf8').digest('hex')}.secret`;
+    return `${createHash('sha256').update(JSON.stringify([service, name]), 'utf8').digest('hex')}${SUFFIX}`;
 }
 
 /** Any group or other bit on a key file is too open. */
@@ -83,7 +94,7 @@ export interface FileSecretsOptions {
     readonly ownerOnly?: (file: string) => Promise<boolean>;
     /** POSIX: the key file's mode. A test seam; absent = the open file's own. */
     readonly statMode?: (file: string) => Promise<number>;
-    /** Windows: the folder made owner-only. A test seam; not used yet. */
+    /** Windows: the folder made owner-only. A test seam; absent = private-credentials.ts's private-directory restriction. */
     readonly restrictDir?: (dir: string) => Promise<void>;
 }
 
@@ -125,8 +136,8 @@ async function readKey(options: FileSecretsOptions, platform: NodeJS.Platform): 
     }
 }
 
-/** The directory: made if absent (0700 on POSIX), and a directory this user can read and write, or a refusal. */
-async function prepareDir(dir: string, platform: NodeJS.Platform): Promise<string> {
+/** The directory: made if absent, its owner's only (0700 on POSIX, an owner-only ACL on Windows), and one this user can read and write, or a refusal. */
+async function prepareDir(dir: string, platform: NodeJS.Platform, restrictDir: (dir: string) => Promise<void>): Promise<string> {
     const path = resolve(dir);
     const fix = `It holds the sealed secrets; it must be a directory the user Genie runs as can read and write.`;
     try {
@@ -136,6 +147,13 @@ async function prepareDir(dir: string, platform: NodeJS.Platform): Promise<strin
         await access(path, constants.R_OK | constants.W_OK);
     } catch (error) {
         throw refused(`the secrets directory ${path} could not be used (${error instanceof Error && error.message === 'ENOTDIR' ? 'not a directory' : code(error)}). ${fix}`);
+    }
+    if (platform === 'win32') {
+        try {
+            await restrictDir(path);
+        } catch {
+            throw refused(`the secrets directory ${path} could not be made owner-only. ${fix} Genie gives it a protected ACL that grants your account alone; check that your account owns it and nothing holds it open.`);
+        }
     }
     return path;
 }
@@ -148,18 +166,20 @@ async function prepareDir(dir: string, platform: NodeJS.Platform): Promise<strin
 export async function openFileSecrets(options: FileSecretsOptions): Promise<KeyringModule> {
     const platform = options.platform ?? process.platform;
     const key = await readKey(options, platform);
-    const dir = await prepareDir(options.dir, platform);
+    const dir = await prepareDir(options.dir, platform, options.restrictDir ?? ((d) => restrictPrivateDirectories([d])));
 
     class FileEntry {
         readonly #name: string;
         readonly #file: string;
         readonly #stem: string;
+        readonly #aad: Buffer;
 
         constructor(service: string, name: string) {
             this.#name = name;
             const fileName = secretFileName(service, name);
             this.#file = join(dir, fileName);
-            this.#stem = fileName.slice(0, -'.secret'.length);
+            this.#stem = fileName.slice(0, -SUFFIX.length);
+            this.#aad = entryAad(this.#stem);
         }
 
         async getPassword(): Promise<string | null> {
@@ -171,7 +191,7 @@ export async function openFileSecrets(options: FileSecretsOptions): Promise<Keyr
                 throw new Error(`${this.#name}: its file could not be read (${code(error)}).`);
             }
             try {
-                return openSealedSecret(key, blob).toString('utf8');
+                return openSealedSecret(key, blob, this.#aad).toString('utf8');
             } catch (error) {
                 throw new Error(`${this.#name}: ${error instanceof Error ? error.message : String(error)}`);
             }
@@ -185,7 +205,7 @@ export async function openFileSecrets(options: FileSecretsOptions): Promise<Keyr
                 const handle = await open(temp, 'wx', 0o600);
                 staged = true;
                 try {
-                    await handle.writeFile(sealSecret(key, Buffer.from(value, 'utf8')));
+                    await handle.writeFile(sealSecret(key, Buffer.from(value, 'utf8'), this.#aad));
                     await handle.sync();
                 } finally {
                     await handle.close();
