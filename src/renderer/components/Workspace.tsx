@@ -758,7 +758,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         <h2 className="text-sm font-semibold">Agents</h2>
                         <span className="text-[var(--fg-4)]">the agents registered in {workspace.name ?? workspace.id}, and the agent files here Genie has none for</span>
                     </div>
-                    <AgentRosterView {...ops.agentRoster} />
+                    <AgentRosterView {...ops.agentRoster} {...(onAddAgent ? { onAddAgent } : {})} />
                 </section>
             ) : null}
             {onScreen === 'settings' && ops?.appInbox ? (
