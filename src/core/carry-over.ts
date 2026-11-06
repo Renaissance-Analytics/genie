@@ -17,6 +17,9 @@ import type { StreamEvent } from './stream-event.js';
 
 export const CARRY_OVER_TURNS = 40;
 export const CARRY_OVER_CHARS = 24_000;
+/** What a switch asks the agent host for to build one (`historyRows`): enough rows and bytes for the caps above, never the whole ledger. */
+export const CARRY_OVER_ROWS = 400;
+export const CARRY_OVER_BYTES = 128 * 1024;
 
 /** A carry-over held for the next prompt: what it says, where it came from, and how much of the conversation it holds. */
 export interface CarryOver {

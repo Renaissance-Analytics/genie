@@ -115,7 +115,8 @@ import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
-import { HISTORY_LIMIT, raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
+import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
+import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { LoginHost } from './login-host.js';
@@ -2017,7 +2018,7 @@ async function boot(): Promise<void> {
             }
         },
         // What a provider switch carries (Tynn story #380): the agent's rows, asked of the agent host, which reads its own store.
-        history: async (record) => (host ? await host.historyRows(record.id, { limit: HISTORY_LIMIT }) : []),
+        history: async (record) => (host ? (await host.historyRows(record.id, { limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES })).rows : []),
         removeDir: (path) => rm(path, { recursive: true, force: true }),
         realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
         // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.

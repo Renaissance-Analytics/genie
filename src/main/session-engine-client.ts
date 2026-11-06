@@ -902,9 +902,9 @@ export class SessionEngineClient {
         return this.#value<StopVerdict | null>('engine.ended', [agentId], null);
     }
 
-    /** The agent's recorded rows, bounded, as the host reads them from its own store (`SessionHost.historyRows`). */
-    historyRows(agentId: AgentId, options: { limit: number }): Promise<readonly { event: StreamEvent; at: number | null }[]> {
-        return this.#value<readonly { event: StreamEvent; at: number | null }[]>('engine.historyRows', [agentId, { limit: options.limit }], []);
+    /** The agent's newest recorded rows, bounded in rows and bytes, as the host reads them from its own store (`SessionHost.historyRows`). */
+    historyRows(agentId: AgentId, options: { limit: number; maxBytes: number }): Promise<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }> {
+        return this.#value<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }>('engine.historyRows', [agentId, { limit: options.limit, maxBytes: options.maxBytes }], { rows: [], cut: false });
     }
 
     async settled(): Promise<void> {
