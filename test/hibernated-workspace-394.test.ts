@@ -30,6 +30,28 @@ beforeEach(async () => {
 afterEach(async () => { vi.restoreAllMocks(); await rm(dir, { recursive: true, force: true }); });
 
 describe('story 394: a hibernated workspace supplies no data', () => {
+    it('a failed redock metadata write leaves the workspace hidden in memory and on disk', async () => {
+        vi.spyOn(store, 'writeWorkspaces').mockRejectedValueOnce(new Error('disk refused the redock'));
+        await expect(registry.setAsleep('ghost', false)).rejects.toThrow('disk refused');
+        expect(registry.workspace('ghost')?.asleep).toBe(true);
+        expect(registry.listAgents().map((a) => a.id)).not.toContain(ghost.id);
+        expect((await store.readWorkspaces()).find((w) => w.id === 'ghost')?.asleep).toBe(true);
+    });
+    it('keeps the last awake display name and mail slug across restart without reopening the ghost folder', async () => {
+        await registry.setAsleep('ghost', false);
+        registry.setWorkspaceNamer((path) => path === '/ghost' ? 'Named project' : 'Awake');
+        await registry.setAsleep('ghost', true);
+        const reopened = new Registry(store);
+        const namer = vi.fn((path: string) => { if (path === '/ghost') throw new Error('ghost folder was read'); return 'Awake'; });
+        reopened.setWorkspaceNamer(namer); await reopened.load({ name: 'test', healthy: true });
+        const hidden = (reopened.snapshot() as unknown as { hibernatedWorkspaces?: readonly { id: string; name: string }[] }).hibernatedWorkspaces;
+        expect(hidden?.find((w) => w.id === 'ghost')?.name).toBe('Named project');
+        const refusal = (reopened as unknown as { mailRefusal?: (text: string) => string | null }).mailRefusal;
+        expect(refusal?.call(reopened, 'Dormant@named-project')).toBe("Dormant's workspace is hibernated; redock it first");
+        const host = new HostRegistry(store); await host.refresh();
+        expect((host as unknown as { mailRefusal?: (text: string) => string | null }).mailRefusal?.('Dormant@named-project')).toBe("Dormant's workspace is hibernated; redock it first");
+        expect(namer.mock.calls.flat()).not.toContain('/ghost');
+    });
     it('excludes its agents and Deck items before reading sessions, handoffs or observed output', () => {
         const probe = vi.fn(() => null), observed = vi.fn(() => null), handoff = vi.fn(() => null);
         registry.setProbe(probe); registry.setObservedProbe(observed); registry.setHandoffProbe(handoff);
