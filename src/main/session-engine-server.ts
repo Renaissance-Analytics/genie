@@ -657,7 +657,7 @@ export class SessionEngineServer {
                 return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true });
             case 'engine.hosting':
                 if (!this.#options.hosting) throw new Error('This host runs no hosting.');
-                if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');
+                if (!conn.local && str(0) !== 'trust.trust') throw new Error('Genie’s hosting is driven from a local window only.'); // BREAK PROBE
                 return this.#options.hosting.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.supervisor':
                 if (!this.#options.supervisor) throw new Error('This host runs no process supervisor.');

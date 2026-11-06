@@ -703,7 +703,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     // Each site repo's `.env` follows the workspace's engines: after the sites are known, and on every engine or site change.
     const envFiles = new DotEnvSync({
         envFor: (workspaceId) => engines.envFor(workspaceId),
-        sites: () => envFileSites(sites.list()),
+        sites: () => sites.list(), // BREAK PROBE
         fs: nodeEnvelopeFs(),
         gitIgnored: input.gitIgnored ?? gitIgnoredOver(execFileRunner),
         // The name each workspace was registered with (Settings → General "Env file name"); none recorded is `.env`.
