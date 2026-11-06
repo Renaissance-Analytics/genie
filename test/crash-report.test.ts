@@ -33,7 +33,7 @@ const SECRETS = { workspaceNames: ['Moonbeam Ledger', 'moonbeam'], agentNames: [
 describe('the report Genie builds', () => {
     it('says what the spec lists — version, os/arch, uptime, kind, agents by count and provider, ledger buckets, stalls, memory', () => {
         const text = fn<(f: unknown) => string>('crashReportText')(facts);
-        for (const want of ['2.0.0-beta.60', 'linux', 'x64', '3h 2m', 'hang', '3 agents', 'claude ×2', 'codex ×1', '4 stalls', '31 s', '2300 MB']) expect(text).toContain(want);
+        for (const want of ['2.0.0-beta.60', 'linux', 'x64', '3h 2m', 'hang', '3 agents', 'claude ×2', 'codex ×1', '4 stalls', '31 s', '2-4 GB']) expect(text).toContain(want);
         // Ledger sizes in buckets, never exact.
         expect(text).toMatch(/<1 MB/);
         expect(text).toMatch(/>100 MB/);
@@ -77,20 +77,21 @@ describe('a crash record full of private names gives a report with none of them'
         stalls: [{ at: '2026-11-06T05:11:00.000Z', ms: 31_000, route: 'genie://AlphaR/maipa/dashboard', stack: 'drawLane (dist/renderer/WorkspaceDashboard.js)' }, { at: 'x', ms: 2_000, route: 'genie://AlphaR/kai/chat', stack: 'drawLane (dist/renderer/WorkspaceDashboard.js)' }],
         memory: [{ at: 'a', windowMb: 410, hostMb: 300 }, { at: 'b', windowMb: 2_300, hostMb: 320 }],
         agents: [{ name: 'maipa', lastTool: 'Read /home/wish/AlphaR/secret.md', lastToolBytes: 5_000_000 }, { name: 'kai', lastTool: null, lastToolBytes: null }],
-        header: { schema: 1, version: '2.0.0-beta.60', build: 'abc', os: 'linux', osRelease: '6.12', arch: 'x64', uptimeS: 7_320 },
+        // CrashRecord = CrashHeader & (hang | lost | exit): the header's fields sit on the record itself (d388f1a8).
+        schema: 1, version: '2.0.0-beta.60', build: 'abc', os: 'linux', osRelease: '6.12', arch: 'x64', uptimeS: 7_320,
     };
     it('kind, header, stall stats per signature, bucketed memory and tool sizes, the agent COUNT — and no names, routes or lifecycle', () => {
         const fromRecord = fn<(r: unknown, base: unknown) => unknown>('factsFromRecord');
         const facts = fromRecord(record, { view, providers: ['claude', 'codex'] });
         const text = fn<(t: string, c: unknown) => string>('redactCrashText')(fn<(f: unknown) => string>('crashReportText')(facts), { workspaceNames: ['AlphaR'], agentNames: ['maipa', 'kai'] });
-        for (const want of ['hang', '2.0.0-beta.60', 'linux', 'x64', '2h 2m', '2 agents', 'drawLane (dist/renderer/WorkspaceDashboard.js)', '2 stalls', '31 s']) expect(text).toContain(want);
+        for (const want of ['hang', '2.0.0-beta.60', 'linux 6.12', 'x64', '2h 2m', '2 agents', 'drawLane (dist/renderer/WorkspaceDashboard.js)', '2 stalls', '31 s']) expect(text).toContain(want);
         expect(text).toMatch(/1-10 MB/); // the last tool's size, bucketed
         expect(text).toMatch(/2-4 GB|1-2 GB|>2 GB/); // memory, bucketed
         for (const leak of ['maipa', 'AlphaR', 'genie://', 'kai', 'Chip', '/home/', 'secret.md', 'Read ']) expect(text).not.toContain(leak);
     });
     it('an exit: its reason and code, and its error only redacted', () => {
         const fromRecord = fn<(r: unknown, base: unknown) => unknown>('factsFromRecord');
-        const facts = fromRecord({ kind: 'exit', at: 'x', pid: 1, reason: 'uncaught exception', code: 1, rssMb: 900, agents: ['maipa'], error: 'ENOENT: /home/wish/AlphaR/x.json' }, { view, providers: ['claude'] });
+        const facts = fromRecord({ schema: 1, version: '2.0.0-beta.60', build: 'abc', os: 'win32', osRelease: '10.0.26200', arch: 'x64', uptimeS: 60, kind: 'exit', at: 'x', pid: 1, reason: 'uncaught exception', code: 1, rssMb: 900, agents: ['maipa'], error: 'ENOENT: /home/wish/AlphaR/x.json' }, { view, providers: ['claude'] });
         const text = fn<(t: string, c: unknown) => string>('redactCrashText')(fn<(f: unknown) => string>('crashReportText')(facts), { workspaceNames: ['AlphaR'], agentNames: ['maipa'] });
         expect(text).toContain('uncaught exception');
         expect(text).toContain('code 1');
