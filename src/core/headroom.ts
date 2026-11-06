@@ -110,6 +110,17 @@ export function headroomOf(rows: readonly TimedEvent[]): Headroom | null {
     return null;
 }
 
+/** Story389: a stale window cannot warn about a limit that has already reset. No reading means no notice. */
+export function rateLimitWarning(headroom: Headroom | null, nowMs: number): string | null {
+    if (!headroom || !Number.isFinite(nowMs)) return null;
+    let left = Infinity;
+    for (const window of headroom.windows) {
+        if (!Number.isFinite(window.leftPct) || !Number.isFinite(window.resetsAtMs) || window.resetsAtMs <= nowMs) continue;
+        left = Math.min(left, window.over ? 0 : Math.max(0, window.leftPct));
+    }
+    return left <= 10 ? `You have ${Math.floor(left)}% until you hit your rate limit. Reduce the size of your work per turn to minimize loss` : null;
+}
+
 
 /** `pro · 60% of 5h window left · resets 6:30 PM`; spent past the allowance: `over the 5h window · resets 4:00 PM`. */
 export function headroomLine(h: Headroom): string {
