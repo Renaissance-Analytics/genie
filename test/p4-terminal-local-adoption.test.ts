@@ -160,3 +160,16 @@ it('the adoption removes all six native handlers/preload calls and both native b
     for (const event of ['data', 'exit']) { const channel = `genie:terminal-${event}`; expect(main.includes(`'${channel}'`)).toBe(false); expect(preload.includes(`'${channel}'`)).toBe(false); }
     expect(IPC_INVENTORY).toContainEqual(['genie:scratch-terminal-open', 'window-port']); expect(IPC_INVENTORY).toContainEqual(['genie:take-over', 'window-port']);
 });
+it.each([
+    ['undefined', (): unknown => undefined],
+    ['cyclic non-string', (): unknown => { const value: { self?: unknown } = {}; value.self = value; return value; }],
+] as const)('local renderer attach preserves the native refusal for an invalid %s workspace before snapshot work', async (_label, workspace) => {
+    const h = await nativeFixture(), f = await resourceDoor(cleanups, {}, { localTerminals: h.port }), c = await f.client();
+    const attach = c.bridge.terminals.attach as (workspace: unknown, id: string) => Promise<unknown>;
+    expect(await attach(workspace(), 'live')).toBeNull(); expect(h.snapshots()).toBe(0);
+});
+it.each([NaN, Infinity, -Infinity])('native resize keeps numeric %s through JSON and preserves its guard/result', async cols => {
+    const h = await nativeFixture(), f = await resourceDoor(cleanups, {}, { localTerminals: h.port }), c = await f.client();
+    await c.bridge.terminals.resize('live', cols, 0);
+    expect(h.calls.filter(call => call.method === 'resize').map(call => call.args)).toEqual([['live', Math.floor(cols), 0]]);
+});
