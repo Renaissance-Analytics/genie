@@ -52,3 +52,6 @@ channel.onFrame((frame) => {
 process.on('uncaughtException', (error) => {
     console.error(`[spawn-host] ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
 });
+
+// BREAK PROBE (reverted next commit).
+export const p10bProbeSpawnElectron = () => import('electron');
