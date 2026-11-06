@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { shownState, type AgentRow } from '../src/core/dashboard-view.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import { parseRoute } from '../src/core/route.js';
 import { agentRowFor, type LiveSession } from '../src/core/roster.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
+import { statePill } from '../src/core/agent-view.js';
+import { chatContext } from '../src/core/chat-view.js';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -24,7 +26,7 @@ function render(rows: AgentRow[]) {
     act(() => root!.render(<Dashboard rows={rows} workspaces={workspaces} onOpenAgent={() => {}} onAddAgent={() => {}} />));
     return container;
 }
-afterEach(() => { if (root) act(() => root!.unmount()); root = null; document.body.innerHTML = ''; localStorage.clear(); });
+afterEach(() => { if (root) act(() => root!.unmount()); root = null; document.body.innerHTML = ''; localStorage.clear(); vi.useRealTimers(); });
 const agents = () => [...container.querySelectorAll('[data-agent]')].map((el) => el.getAttribute('data-agent'));
 const filter = (kind: string) => container.querySelector<HTMLButtonElement>(`button[data-dashboard-filter="${kind}"]`);
 function click(button: HTMLButtonElement | null) { expect(button).not.toBeNull(); act(() => button!.click()); }
@@ -62,6 +64,13 @@ describe('story 394: one alphabetical status table', () => {
         click(filter('sleeping'));
         expect(agents()).toEqual(['alpha', 'quit']);
     });
+    it('does not steal a focused filter Button’s Enter key for row navigation', () => {
+        render([row('alpha', 'idle'), row('nap', 'sleeping')]);
+        const button = filter('sleeping'); expect(button).not.toBeNull(); button!.focus();
+        const press = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        act(() => button!.dispatchEvent(press));
+        expect(press.defaultPrevented).toBe(false);
+    });
     it('accents the whole row and its chip from the same status colour, including grey sleeping and red stopped', () => {
         render(['working', 'waiting', 'broken', 'cooling', 'idle', 'sleeping', 'stopped'].map((state) => row(state, state)));
         click(filter('sleeping')); click(filter('stopped'));
@@ -86,6 +95,13 @@ const live = (over: Partial<LiveSession> & { idleSince?: number | null } = {}): 
     contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, model: null, ...over,
 });
 describe('story 394: display-only Sleeping and Stopped', () => {
+    it('the agent header and chat agree about Sleeping, and background work remains Working', () => {
+        vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(400_000);
+        const asleep = live({ idleSince: 1 });
+        expect(statePill(asleep, Date.now, { turns: 1 }).word).toBe('Sleeping');
+        expect(chatContext({ agent: { id: record.id, name: record.name, provider: record.provider, fidelity: 'declared' }, session: asleep, rows: [] }).text).toBe('Sleeping');
+        expect(statePill(live({ idleSince: 1, background: 1 }), Date.now, { turns: 1 }).word).toBe('Working');
+    });
     it('crosses five minutes of idle at the exact boundary', () => {
         expect(agentRowFor(record, live({ idleSince: 10_000 }), () => 309_999).state).toBe('idle');
         expect(agentRowFor(record, live({ idleSince: 10_000 }), () => 310_000).state).toBe('sleeping');
