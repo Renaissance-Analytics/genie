@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { LOCAL_TERMINAL_METHODS } from '../src/core/local-terminals.js';
 import { AGENT_SCOPED_METHODS, capabilityOf, inMemoryPair, parseMessage, REMOTE_METHODS, remoteBadge, WORKSPACE_SCOPED_METHODS, type WireMessage } from '../src/core/remote-protocol.js';
 
 /**
@@ -85,7 +86,9 @@ describe('the capability table', () => {
         // 100 with family5's twelve owner operations; every one starts local.
         // 115 with local Files; 120 with drafts; 122 with the two explicitly local ArtBoard operations;
         // 123 with agents.toolOutput, a tool row's whole output when a person opens it (Tynn story #386).
-        expect(REMOTE_METHODS.length).toBe(123);
+        // 136 with family8B's six native-local aliases and seven owner-scoped stream controls.
+        expect(REMOTE_METHODS.length).toBe(136);
+        for (const method of LOCAL_TERMINAL_METHODS) expect(capabilityOf(method)).toBe('local');
         for (const method of ['artboard.read', 'artboard.review'] as const) expect(capabilityOf(method)).toBe('local');
         for (const method of ['chatDrafts.load', 'chatDrafts.save', 'chatDrafts.putFile', 'chatDrafts.readFile', 'chatDrafts.release'] as const) expect(capabilityOf(method)).toBe('local');
         expect(capabilityOf('resolvePrompt')).toBe('write');

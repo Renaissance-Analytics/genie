@@ -126,7 +126,8 @@ describe('main wires both paths to the one function', () => {
         // The header's Terminal button (Tynn story #378): a workspace terminal's environment, in a window of its own.
         expect(main).toMatch(/scratchTerminals\.open\(\{ workspaceId: workspace\.id, cwd: workspace\.path, env: terminalEnvFor\(services, workspace\.id, mcpEnv\(\)\) \}\)/);
         expect(main).toMatch(/terminalEnv: \(workspaceId\) => terminalEnvFor\(composed, workspaceId, mcpEnv\(\)\)/);
-        expect(main).toMatch(/const env = terminalEnvFor\(services, workspace\.id, mcpEnv\(\)\);/);
+        expect(/localTerminals: createNativeTerminalPort\(\{/.test(main)).toBe(true);
+        expect(/environment: id => terminalEnvFor\(services, id, mcpEnv\(\)\)/.test(main)).toBe(true);
         // The env is no longer assembled by hand anywhere in main.
         expect(main).not.toMatch(/\.\.\.serviceEnv/);
     });

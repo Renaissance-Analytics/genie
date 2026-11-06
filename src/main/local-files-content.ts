@@ -42,8 +42,14 @@ export class LocalFilesContent {
     }
     /** Encode the complete native DTO as JSON so UTF-8 blobs preserve lone UTF-16 surrogates too. */
     terminalResult(value: unknown): unknown {
-        // NEGATIVE CONTROL for the two late-added large native DTO tests. Restore capture after reading actual CI RED.
-        return value;
+        const json = JSON.stringify(value);
+        if (json === undefined || Buffer.byteLength(json) <= FILES_INLINE_BYTES) return value;
+        const ref = this.begin();
+        try {
+            const bytes = Buffer.from(json), scope = this.#scope(ref);
+            const blob = this.#resource(scope, { scope, type: 'blob', kind: 'terminal-json', bytes, sha256: createHash('sha256').update(bytes).digest('hex') });
+            return { terminalContent: { ref, blob } };
+        } catch (error) { this.release(ref); throw error; }
     }
     result(ref: string, value: unknown, kind: FilesPageKind, bytes = false): unknown {
         const scope = this.#scope(ref), projected = this.#project(scope, value, kind, bytes);

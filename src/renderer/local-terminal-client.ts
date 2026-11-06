@@ -1,5 +1,6 @@
 import type { BlobClient } from '../core/local-blobs.js';
 import type { LocalTerminalMethod } from '../core/local-terminals.js';
+import { encodeTerminalNativeArguments } from '../core/local-terminals.js';
 import { splitTerminalText, TerminalStreamReceiver, terminalPosition } from '../core/terminal-stream.js';
 import type { GenieBridge } from './bridge.js';
 
@@ -88,7 +89,7 @@ export function localTerminalClient(port: Port): { terminals: Terminals; dispose
             const state: ViewState = { view: `terminal-view-${++nextView}`, id, alive: true, receiver: new TerminalStreamReceiver(), chain: Promise.resolve(), observer, restart: start };
             current = state; active.set(state.view, state);
             try {
-                const snapshot = await request<{ value: Joined; position: unknown } | null>('terminals.localWatch', state.view, workspaceId, id);
+                const snapshot = await request<{ value: Joined; position: unknown } | null>('terminals.localWatch', state.view, ...encodeTerminalNativeArguments('attach', [workspaceId, id]));
                 if (!state.alive) return;
                 if (!snapshot) throw new Error(`terminal ${id} is gone or closed`);
                 const position = terminalPosition(snapshot.position), value = snapshot.value;
@@ -117,21 +118,25 @@ export function localTerminalClient(port: Port): { terminals: Terminals; dispose
     const accepted = async (call: Promise<boolean>): Promise<void> => { if (!await call) throw new Error('terminal is gone or closed'); };
     const terminals: Terminals = {
         open: async (workspaceId, options) => {
-            if (typeof options.command === 'string') {
-                const chunks = splitTerminalText(options.command); chunks.next();
-                if (!chunks.next().done) { const { command, ...rest } = options; return transfer({ kind: 'open', workspaceId, options: rest }, command); }
+            const args = encodeTerminalNativeArguments('open', [workspaceId, options]), nativeOptions = args[1] as Record<string, unknown>;
+            if (typeof nativeOptions['command'] === 'string') {
+                const chunks = splitTerminalText(nativeOptions['command']); chunks.next();
+                if (!chunks.next().done) { const { command, ...rest } = nativeOptions; return transfer({ kind: 'open', workspaceId: args[0], options: rest }, command as string); }
             }
-            return request('terminals.localOpen', workspaceId, options);
+            return request('terminals.localOpen', ...args);
         },
         write: async (id, data) => {
-            const chunks = splitTerminalText(data); chunks.next();
-            if (!chunks.next().done) return accepted(transfer({ kind: 'write', id }, data));
-            return accepted(request('terminals.localWrite', id, data));
+            const args = encodeTerminalNativeArguments('write', [id, data]);
+            if (typeof args[0] === 'string' && typeof args[1] === 'string') {
+                const chunks = splitTerminalText(args[1]); chunks.next();
+                if (!chunks.next().done) return accepted(transfer({ kind: 'write', id: args[0] }, args[1]));
+            }
+            return accepted(request('terminals.localWrite', ...args));
         },
-        resize: (id, cols, rows) => accepted(request('terminals.localResize', id, cols, rows)),
-        close: id => accepted(request('terminals.localClose', id)),
-        list: workspaceId => request('terminals.localList', workspaceId),
-        attach: (workspaceId, id) => request('terminals.localAttach', workspaceId, id),
+        resize: (id, cols, rows) => accepted(request('terminals.localResize', ...encodeTerminalNativeArguments('resize', [id, cols, rows]))),
+        close: id => accepted(request('terminals.localClose', ...encodeTerminalNativeArguments('close', [id]))),
+        list: workspaceId => request('terminals.localList', ...encodeTerminalNativeArguments('list', [workspaceId])),
+        attach: (workspaceId, id) => request('terminals.localAttach', ...encodeTerminalNativeArguments('attach', [workspaceId, id])),
         onData: listener => { dataListeners.add(listener); return () => { dataListeners.delete(listener); }; },
         onExit: listener => { exitListeners.add(listener); return () => { exitListeners.delete(listener); }; },
     };

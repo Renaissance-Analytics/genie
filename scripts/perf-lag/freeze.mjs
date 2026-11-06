@@ -2,7 +2,7 @@
 /**
  * THE PERIODIC FREEZES, MEASURED BY VIEW (beta.53; the owner, 2026-10-31: "periodic whole UI freezes where my typing stops
  * and I get a msg asking me to quit genie" … "the UI lag I get is only when I am in a workspace"). Run against a Genie
- * launched with `--inspect=9229 --remote-debugging-port=9222` after `seed.mjs` + `seed-extra.mjs`:
+ * launched with `GENIE_PAGE_PROBE=1` and `--inspect=9229 --remote-debugging-port=9222` after `seed.mjs` + `seed-extra.mjs`:
  *
  *   node scripts/perf-lag/freeze.mjs <label> [phaseSeconds=90] [phases=dashboard,workspace,dashboard,workspace]
  *
@@ -146,8 +146,8 @@ try {
 let terminal = null;
 try {
     terminal = await page.call(async function openTerm(ws) {
-        const t = await window.genie.terminals.open(ws, { cols: 120, rows: 30 });
-        setTimeout(() => window.genie.terminals.write(t.id, `node -e "setInterval(()=>process.stdout.write('x'.repeat(2000)+'\\n'),50)"\r`), 3000);
+        const t = await window.genieTest.terminals.open(ws, { cols: 120, rows: 30 });
+        setTimeout(() => window.genieTest.terminals.write(t.id, `node -e "setInterval(()=>process.stdout.write('x'.repeat(2000)+'\\n'),50)"\r`), 3000);
         return t.id;
     }, [WORKSPACE], true);
     console.log(`busy terminal ${terminal}`);

@@ -1,6 +1,6 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
-import { isLocalTerminalMethod } from '../core/local-terminals.js';
+import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import type { Headroom } from '../core/headroom.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
@@ -258,7 +258,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             if (!deps.localTerminals) throw new Error('the local terminal service is not available');
             const name = method.slice('terminals.local'.length).toLowerCase();
             if (!['open', 'write', 'resize', 'close', 'list', 'attach'].includes(name)) throw new Error('terminal stream control requires its authenticated local connection');
-            return deps.localTerminals.invoke(name, args);
+            return deps.localTerminals.invoke(name, decodeTerminalNativeArguments(name, args));
         }
         if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
         if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);

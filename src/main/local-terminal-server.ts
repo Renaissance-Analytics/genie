@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { LocalTerminalMethod } from '../core/local-terminals.js';
+import { decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import { splitTerminalText } from '../core/terminal-stream.js';
 import { TerminalViewStreams, type TerminalStreamEvent } from './terminal-streams.js';
 import { LocalTerminalInputs } from './local-terminal-input.js';
@@ -47,7 +48,7 @@ export class LocalTerminalServer {
                 if (!command) { await this.#inputs.finish(ownerId, args[0]); return true; }
                 owner.commands.delete(args[0]);
                 if (args[1] === true) return false;
-                return this.#port.invoke('open', [command.workspaceId, { ...command.options, command: command.chunks.join('') }]);
+                return this.#port.invoke('open', decodeTerminalNativeArguments('open', [command.workspaceId, { ...command.options, command: command.chunks.join('') }]));
             }
             case 'terminals.localWatch': {
                 const [view, workspaceId, id] = args;
@@ -75,8 +76,9 @@ export class LocalTerminalServer {
             case 'terminals.localUnwatch': if (typeof args[0] === 'string') this.#unwatch(ownerId, args[0]); return true;
             default: {
                 const name = method.slice('terminals.local'.length).toLowerCase();
-                if (['write', 'resize', 'close'].includes(name) && typeof args[0] === 'string') return this.#inputs.run(ownerId, args[0], name, args);
-                return this.#port.invoke(name, args);
+                const nativeArgs = decodeTerminalNativeArguments(name, args);
+                if (['write', 'resize', 'close'].includes(name) && typeof nativeArgs[0] === 'string') return this.#inputs.run(ownerId, nativeArgs[0], name, nativeArgs);
+                return this.#port.invoke(name, nativeArgs);
             }
         }
     }

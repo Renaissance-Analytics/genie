@@ -304,6 +304,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
 
     const openTerminal = useCallback((): Promise<string> => {
         return terminals.open(workspace.id, { ...lastSize.current }).then((opened) => {
+            if (!opened) throw new Error('The terminal could not be opened; its workspace or terminal service is unavailable.');
             setState((s) => terminalOpened(s, { id: opened.id, workspaceId: workspace.id, shell: opened.shell, pid: opened.pid, exited: null }, opened.scrollback));
             return opened.id;
         }).catch(error => { setTerminalError(error instanceof Error ? error.message : String(error)); throw error; });
