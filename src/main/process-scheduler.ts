@@ -61,6 +61,8 @@ export class ProcessScheduler {
         this.#cancel?.();
         this.#cancel = null;
         if (this.#stopped) return;
+        // SAFE MODE (Tynn #386): no scheduled task is armed; leaving plans again (genie-host). Run now is the person's.
+        if (this.#deps.safeMode?.() === true) return; // safe mode holds
         const now = this.#deps.now();
         let at: number | null = null;
         let due: string[] = [];
@@ -107,7 +109,7 @@ export class ProcessScheduler {
 
     #fire(ids: readonly string[]): void {
         this.#cancel = null;
-        if (this.#stopped) return;
+        if (this.#stopped || this.#deps.safeMode?.() === true) return;
         const tasks = this.#deps.book.scheduledTasks().filter((p) => ids.includes(p.id) && p.wanted);
         // Re-plan FIRST, so the next due is held whatever the runs do.
         this.plan();

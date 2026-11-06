@@ -313,6 +313,11 @@ export class EnvelopeSites {
 
     /** A boot/wake start that is refused (no Caddy, a root outside the repo) is kept on the site as its problem; the others still start. */
     #tryStart(siteId: string): void {
+        // SAFE MODE (Tynn #386): a launch or a wake starts no site; it is named as held, and the person's Start serves it. safe mode holds
+        if (this.#ports.safeMode?.() === true) {
+            this.#ports.held?.(siteId);
+            return;
+        }
         try {
             this.#sites.start(siteId);
         } catch (error) {

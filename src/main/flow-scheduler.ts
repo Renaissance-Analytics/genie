@@ -126,6 +126,8 @@ export class FlowScheduler {
         this.#cancel = null;
         this.#next = null;
         if (this.#stopped) return;
+        // SAFE MODE (Tynn #386): no schedule is armed; leaving plans again (genie-host), and Run now still runs.
+        if (this.#deps.safeMode?.() === true) return; // safe mode holds
         const now = this.#deps.now();
         let at: number | null = null;
         let flows: DueFlow[] = [];
@@ -165,6 +167,8 @@ export class FlowScheduler {
      * are recorded `resumed` (genie#1204). The others were recorded stopped when the store opened.
      */
     async resumeInterrupted(): Promise<void> {
+        // SAFE MODE: an interrupted run is KEPT as it is, and resumes at the next start out of safe mode.
+        if (this.#deps.safeMode?.() === true) return;
         for (const flow of this.#deps.store.interrupted()) {
             const going = flow.inFlight!;
             if (this.#running.has(flow.id)) continue;
@@ -208,6 +212,8 @@ export class FlowScheduler {
      * settled below a flow's minimum size and then grows past it is offered again.
      */
     fileAdded(event: FileAddedProps): boolean {
+        // SAFE MODE: a file that lands starts no flow.
+        if (this.#deps.safeMode?.() === true) return false;
         let taken = false;
         for (const flow of this.#deps.store.list()) {
             if (!flow.armed) continue;
@@ -229,6 +235,7 @@ export class FlowScheduler {
         // delay the schedule behind it.
         this.plan();
         // Every flow due at this instant, side by side: one's run never waits on, or replaces, another's.
+        if (this.#deps.safeMode?.() === true) return;
         for (const { flow, trigger } of flows) {
             if (!flow || !flow.armed) continue;
             this.#startReported(flow, trigger, 'schedule');

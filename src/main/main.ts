@@ -191,7 +191,8 @@ import { genieRoot, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
-import { RESUME_AFTER_RESTART, relaunchPlan } from '../core/upgrade-drain.js';
+import { RESUME_AFTER_RESTART } from '../core/upgrade-drain.js';
+import { restoreAfterRelaunch } from './relaunch-restore.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
 import { FilesWatchHub, type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
@@ -3326,29 +3327,35 @@ async function boot(): Promise<void> {
     // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
     // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
     // told to continue; the rest only with the setting on, unprompted.
-    void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(async ([running, interrupted]) => {
+    // SAFE MODE (Tynn #386): genie-host said so before ready; then nobody is started or resumed and both lists are KEPT.
+    void restoreAfterRelaunch({
+        safeMode: () => agentEngineLink?.client.safeModeView()?.active === true,
+        takeRunningAtQuit: () => registry!.takeRunningAtQuit(),
+        takeInterruptedAtQuit: () => registry!.takeInterruptedAtQuit(),
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
         // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
         // from before the ledger (beta.32 and earlier) left on an agent's thread. Read off the loop (beta.53 freezes).
         // NEVER from a window that ADOPTED a running agent host: its providers are the host's live agents, not leftovers.
         // Only a host this window STARTED (or replaced) has no live agents yet; adopted or unreachable hosts hold live ones.
-        if (agentEngineLink === null || agentEngineLink.how === 'started' || agentEngineLink.how === 'replaced') await sweepLeftoverProvidersAsync((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
-        const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted });
-        for (const { agentId, at, resume } of plan) {
-            setTimeout(() => {
-                const record = registry?.find(agentId as AgentId);
-                if (!record || !host) return;
-                const engine = host;
-                void (async () => {
-                    await engine.start(record, cwdFor(record));
-                    // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
-                    // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
-                    if (resume && !(await engine.prompt(record.id, RESUME_AFTER_RESTART, 'genie'))) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
-                })();
-            }, at);
-        }
+        beforeStart: async () => {
+            if (agentEngineLink === null || agentEngineLink.how === 'started' || agentEngineLink.how === 'replaced') await sweepLeftoverProvidersAsync((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
+        },
+        schedule: (fn, ms) => { setTimeout(fn, ms); },
+        start: async (agentId, resume) => {
+            const record = registry?.find(agentId as AgentId);
+            if (!record || !host) return;
+            const engine = host;
+            await engine.start(record, cwdFor(record));
+            // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
+            // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
+            if (resume && !(await engine.prompt(record.id, RESUME_AFTER_RESTART, 'genie'))) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
+        },
+        log: lifecycleLog,
     });
+    // Safe mode reaches every window's snapshot (its banner), and follows the host's changes (a Leave from any window).
+    registry.setSafeMode(() => agentEngineLink?.client.safeModeView() ?? null);
+    agentEngineLink?.client.onSafeMode(() => registry?.touch());
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
     // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
@@ -3615,6 +3622,8 @@ async function boot(): Promise<void> {
     };
     const featurePorts: FeaturePorts = {
         ...processPorts(),
+        // "Leave safe mode" (Tynn #386): the host's; this window only asks.
+        safeMode: { leave: () => (agentEngineLink ? agentEngineLink.client.leaveSafeMode() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })) },
         openInBrowser: openInBrowserFor('user-gesture'),
         // The flow editor's own window (genie#1204): Open, a row's name, Add a flow — the person's click.
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),

@@ -56,6 +56,7 @@ import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { SafeModeBanner } from './components/SafeModeBanner.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 
@@ -232,6 +233,8 @@ export interface ShellProps {
     onDesignLogin?: ((agentId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
+    /** The safe-mode banner's Start for an agent (Tynn #386): the one Restart, with its answer, so the banner says it. */
+    onSafeModeStartAgent?: ((agentId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
     /** Driving another machine: the title bar's REMOTE badge. Absent on the local machine. */
@@ -347,6 +350,7 @@ export function Shell({
     onAccountRetry,
     onDesignLogin,
     onStartAgent,
+    onSafeModeStartAgent,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -534,6 +538,18 @@ export function Shell({
                     <button type="button" data-action="dismiss-dock-notice" aria-label="Dismiss" onClick={() => onDismissDockNotice?.()} className="text-[var(--fg-4)] hover:text-[var(--fg-2)]"><Icon name="x" size="xs" /></button>
                 </div>
             ) : null}
+
+            {/* SAFE MODE (Tynn #386): after an unclean end nothing was started; each thing that ran has its own Start. */}
+            <SafeModeBanner
+                view={snapshot.safeMode}
+                agentName={(id) => snapshot.agents.find((a) => a.id === id)?.name ?? (snapshot.osAgent?.id === id ? snapshot.osAgent.name : id)}
+                onStart={async (kind, id) => {
+                    if (kind === 'agent') return onSafeModeStartAgent ? onSafeModeStartAgent(id) : { ok: false, reason: 'Genie is not connected.' };
+                    const done = (await onFeature(kind === 'process' ? { kind: 'hosting.restartProcess', processId: id } : { kind: 'hosting.startSite', siteId: id })) as ActOutcome | undefined;
+                    return done ?? { ok: true };
+                }}
+                onLeave={async () => ((await onFeature({ kind: 'safeMode.leave' })) as ActOutcome | undefined) ?? { ok: true }}
+            />
 
             <div className="relative flex min-h-0 flex-1">
                 <Sidebar
