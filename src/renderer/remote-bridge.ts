@@ -14,6 +14,7 @@ import { localPageClient, localUploadClient } from './local-content-client.js';
 import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
+import { localArtboardClient } from './local-artboard-client.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -508,6 +509,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
     }) : undefined;
     if (local) {
+        bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
         bridge.chatDrafts = localDraftsClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
         const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
         Object.assign(bridge.files, files.files); bridge.repo = files.repo;

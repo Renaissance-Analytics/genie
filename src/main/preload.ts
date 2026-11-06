@@ -261,11 +261,6 @@ const bridge: PreloadBridge = {
             },
         },
     },
-    // The official panels (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace.
-    artboard: {
-        read: (workspaceId) => ipcRenderer.invoke('genie:artboard-read', workspaceId) as Promise<never>,
-        review: (workspaceId, postId, verdict, comment) => ipcRenderer.invoke('genie:artboard-review', workspaceId, postId, verdict, comment) as Promise<never>,
-    },
     features: {
         snapshot: () => ipcRenderer.invoke(FEATURE_CHANNELS.snapshot) as Promise<FeatureData>,
         subscribe: (onChange) => {

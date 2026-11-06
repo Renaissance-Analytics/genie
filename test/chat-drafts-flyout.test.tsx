@@ -138,7 +138,7 @@ describe('wiring', () => {
 
     it('main keeps the drafts: opens the store after the registry has loaded, prunes deleted agents on every change, answers the window', () => {
         const main = strip('../src/main/main.ts');
-        expect(main).toMatch(/ChatDraftStore\.open\(genieHome\(\)\)/);
+        expect(main).toMatch(/ChatDraftStore\.open\(genieRoot\(\)\)/);
         expect(main.indexOf('ChatDraftStore.open(')).toBeGreaterThan(main.indexOf('await registry.load('));
         expect(main).toMatch(/registry\.subscribe\(\(\) => \{ void drafts\.prune\(/);
         for (const ch of ['load', 'save', 'put-file', 'read-file', 'release']) expect(main).not.toContain(`'genie:chat-drafts-${ch}'`);

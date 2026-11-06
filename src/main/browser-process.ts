@@ -8,7 +8,7 @@ import { runBrowserLink, type BrowserLinkClient } from './browser-process-link.j
 import { linkToRunningHost } from './engine-launch.js';
 import { genieBrowserWindows, rerouteGenieBrowserSession, watchWorkspaceStores, workspaceBrowserSession, type GenieBrowserWindows } from './genie-browser-electron.js';
 import { drivablePages, onPagesChanged } from './page-navigation-electron.js';
-import { genieHome, runtimeDir } from './paths.js';
+import { genieRoot, runtimeDir } from './paths.js';
 import { SessionEngineClient } from './session-engine-client.js';
 
 /**
@@ -22,7 +22,9 @@ import { SessionEngineClient } from './session-engine-client.js';
 
 export const DOOR_DOWN = 'Genie sites can’t load until Genie’s window is open again. Pages already here stay as they are.';
 
-app.setPath('userData', join(genieHome(), 'browser', '.process'));
+// The host's root (P7): started by genie-host with its environment, GENIE_HOME included.
+const home = genieRoot();
+app.setPath('userData', join(home, 'browser', '.process'));
 // A launch flag for the proof (scripts/browser-process-cdp.mjs), as --remote-debugging-port is for the window.
 const debugPort = process.argv.find((a) => a.startsWith('--genie-browser-debug-port='))?.split('=')[1];
 if (debugPort) app.commandLine.appendSwitch('remote-debugging-port', debugPort);
@@ -52,7 +54,7 @@ export async function runBrowserProcess(): Promise<void> {
     const cookies = new BrowserCookieBridge({
         call: (method, args) => linkedClient?.browserCall(method, args) ?? Promise.resolve(null),
         me: () => connection,
-        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieHome(), workspaceId, side: 'browser', ...door, log }).ses,
+        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: home, workspaceId, side: 'browser', ...door, log }).ses,
     });
     watchWorkspaceStores(cookies);
 
@@ -61,7 +63,7 @@ export async function runBrowserProcess(): Promise<void> {
         hosts = facts.hosts;
         workspaceOf = facts.workspaceOf;
         if (windows === null) {
-            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => (locked ? [] : hosts), genieHome: genieHome(), workspaceOf: (host) => workspaceOf[host] ?? SHARED_STORE, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
+            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => (locked ? [] : hosts), genieHome: home, workspaceOf: (host) => workspaceOf[host] ?? SHARED_STORE, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
         } else {
             rerouteGenieBrowserSession({ frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, log });
         }
@@ -85,7 +87,7 @@ export async function runBrowserProcess(): Promise<void> {
             ).catch(() => {});
         },
         connect: async (onLost) => {
-            const found = await linkToRunningHost({ runtimeDir: runtimeDir(genieHome()) });
+            const found = await linkToRunningHost({ runtimeDir: runtimeDir(home) });
             if (found === null) return null;
             const client = new SessionEngineClient({ onDisconnected: () => onLost(), log });
             const connected = await client.connect(found.transport, found.token);

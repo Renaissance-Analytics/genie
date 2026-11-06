@@ -73,6 +73,16 @@ async function inspect(target: Target) {
     }
 }
 
+/**
+ * THE OWNER-ONLY READ-BACK: the ACL is protected, owned by this user, and holds one rule, this user's full control, not inherited. `$actual`, `$sid`,
+ * `$path` and `$inheritance` are set before it. One text, used where an ACL is set (below) and where one is only read (isOwnerOnlyFile).
+ */
+const OWNER_ONLY_READ_BACK = `        $rules=@($actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+        if (-not $actual.AreAccessRulesProtected -or $actual.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $rules.Count -ne 1) { throw 'Unsafe ACL' }
+        $rule=$rules[0]
+        if ($rule.IsInherited -or $rule.IdentityReference.Value -ne $sid.Value -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or $rule.InheritanceFlags -ne $inheritance -or $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) { throw 'Unsafe rule' }
+        if (([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Reparse point' }`;
+
 function windowsAcl(targets: readonly Target[]): string {
     // A fresh protected DACL replaces explicit foreign grants as well as inherited ones.
     // Never /reset an existing credential directory: that would temporarily restore parent grants.
@@ -99,12 +109,29 @@ function windowsAcl(targets: readonly Target[]): string {
             [IO.File]::SetAccessControl($path,$acl)
             $actual=[IO.File]::GetAccessControl($path)
         }
-        $rules=@($actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
-        if (-not $actual.AreAccessRulesProtected -or $actual.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $rules.Count -ne 1) { throw 'Unsafe ACL' }
-        $rule=$rules[0]
-        if ($rule.IsInherited -or $rule.IdentityReference.Value -ne $sid.Value -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or $rule.InheritanceFlags -ne $inheritance -or $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) { throw 'Unsafe rule' }
-        if (([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Reparse point' }
+${OWNER_ONLY_READ_BACK}
     }
+`;
+}
+
+/**
+ * The read-back alone, on one file: nothing is set. It answers in words on its output, so a file that is not owner-only is a no and never a failed script (which
+ * would read as an ACL failure). A link, a directory or a file not there is a no.
+ */
+const OWNER_ONLY = 'OWNER_ONLY';
+function windowsOwnerOnlyCheck(file: string): string {
+    return `
+    try {
+    $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+    $path=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(file, 'utf16le').toString('base64')}'))
+    $attributes=[IO.File]::GetAttributes($path)
+    if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Reparse point' }
+    if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) { throw 'Wrong kind' }
+    $inheritance=[Security.AccessControl.InheritanceFlags]::None
+    $actual=[IO.File]::GetAccessControl($path)
+${OWNER_ONLY_READ_BACK}
+    '${OWNER_ONLY}'
+    } catch { 'NOT_OWNER_ONLY' }
 `;
 }
 
@@ -336,6 +363,22 @@ export async function restrictPrivateFile(file: string): Promise<void> {
     const target = { path: resolve(file), directory: false };
     if (!await inspect(target)) throw new Error(REFUSED);
     await withHelperOrALaunch(() => restrict([target]));
+}
+
+/**
+ * IS THIS FILE ITS OWNER'S ONLY? Read, never changed: on Windows the same read-back a restricted file must pass (a protected ACL, this user the owner and the
+ * one rule), on POSIX no group or other bit. For a file Genie is handed and must not repair, such as a key an operator provides. A file it cannot read the
+ * permissions of is not owner-only: the answer is never assumed.
+ */
+export async function isOwnerOnlyFile(file: string): Promise<boolean> {
+    const path = resolve(file);
+    if (process.platform !== 'win32') {
+        try { const entry = await lstat(path); return entry.isFile() && (entry.mode & 0o077) === 0; } catch { return false; }
+    }
+    try {
+        const { stdout } = await withHelperOrALaunch(() => startWindowsAcl(windowsOwnerOnlyCheck(path)).completed);
+        return stdout.toString().replace(/\r/g, '').trim() === OWNER_ONLY;
+    } catch { return false; }
 }
 
 /** Dedicated host-owned directories, using the same owner-only ACL and read-back as private files. */

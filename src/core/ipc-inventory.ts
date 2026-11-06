@@ -64,8 +64,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-reveal', 'window-port'],
     // The picker stays a window port; its copy step moves to the host in P5.
     ['genie:files-export', 'window-port'],
-    ['genie:artboard-read', 'later:family 7 chunked transfer'],
-    ['genie:artboard-review', 'later:family 7 chunked transfer'],
     ['genie:browser-window-open', 'later:P2b browser process'],
     ['genie:files-popout', 'window-port'],
     ['genie:remote-open-window', 'window-port'],

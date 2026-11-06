@@ -27,6 +27,8 @@ import { isLocalFilesMethod } from '../core/local-files.js';
 import { localFilesArguments } from './local-files-arguments.js';
 import { isLocalDraftMethod } from '../core/local-drafts.js';
 import { localDraftArguments } from './local-drafts-api.js';
+import { isLocalArtboardMethod } from '../core/local-artboard.js';
+import { localArtboardArguments } from './local-artboard-api.js';
 import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
 import type { FilesHubEvent } from './files-watch-hub.js';
 
@@ -585,18 +587,24 @@ export class RemoteHost {
         const materialized = this.#materialize(connection, method, args);
         if (!materialized.ok) return refuse(materialized.reason);
 
-        let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, response: string | null = null;
+        let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, artboard: Awaited<ReturnType<typeof localArtboardArguments>> | null = null, response: string | null = null;
         try {
             if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(); }
             if (isLocalDraftMethod(method)) {
                 drafts = await localDraftArguments(method, materialized.args, connection.uploads);
                 if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin();
             }
-            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? materialized.args);
+            if (isLocalArtboardMethod(method)) {
+                artboard = await localArtboardArguments(method, materialized.args, connection.uploads);
+                if (method === 'artboard.read') response = this.#content(connection).begin();
+            }
+            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args);
             if (files) { await files.close(); files = null; }
             if (drafts) { await drafts.close(); drafts = null; }
+            if (artboard) { await artboard.close(); artboard = null; }
             if (isLocalFilesMethod(method)) return ok(this.#content(connection).result(response!, value, method === 'files.localChildren' ? 'folder-children' : 'workspace-tree', method === 'files.localReadMedia' || method === 'files.readBytes'));
             if (isLocalDraftMethod(method) && response !== null) return ok(await connection.content!.draftResult(response, method, value));
+            if (method === 'artboard.read') return ok(connection.content!.artboardResult(response!, value));
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices and the connections. Only an owner sees them.
@@ -609,6 +617,7 @@ export class RemoteHost {
         } finally {
             if (files) { try { await files.close(); } catch { console.warn('[genie] a consumed Files stage could not be released'); } }
             if (drafts) { try { await drafts.close(); } catch { console.warn('[genie] a consumed draft stage could not be released'); } }
+            if (artboard) { try { await artboard.close(); } catch { console.warn('[genie] a consumed ArtBoard stage could not be released'); } }
         }
     }
 

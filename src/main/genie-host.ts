@@ -12,7 +12,7 @@ import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
-import { genieHome, osaHomeDir, runtimeDir } from './paths.js';
+import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { StallWatchdog } from './stall-watchdog.js';
@@ -80,7 +80,7 @@ import { hostTynnPorts } from './host-tynn-account.js';
 import { ProxyMemory } from './proxy-memory.js';
 import { TynnAccount } from './tynn-account.js';
 import { TynnAccountService } from './tynn-account-service.js';
-import { Keychain } from './keychain.js';
+import { openSecretKeychain } from './file-secrets.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
 import { AgentStoresService } from './agent-stores-host.js';
@@ -128,7 +128,8 @@ import { repoStatus } from './repo-git.js';
  * needs Electron — the Genie browser's process, and so `pages` — says it is not available on this host.
  */
 
-const home = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? process.env.GENIE_HOME : genieHome();
+const home = genieRoot();
+const osaHome = osaHomeDir(home);
 const runtime = runtimeDir(home);
 const build = process.env.GENIE_HOST_BUILD ?? 'dev';
 const IDLE_MS = hostIdleMs(process.env.GENIE_HOST_IDLE_MS);
@@ -155,6 +156,18 @@ async function main(): Promise<void> {
         lifecycleLog(`host refused: ${noFts5}`);
         process.exit(1);
     }
+    /*
+     * WHERE SECRETS GO, chosen FIRST (P10.1a): the OS keychain, or with GENIE_SECRET_BACKEND=file the sealed files under
+     * <root>/secrets (file-secrets.ts). A file backend that is misconfigured stops the host here, in words that say what to
+     * fix, before it binds its endpoint: no window ever connects to a host that is about to exit, and it never runs on with
+     * the other store, or with none.
+     */
+    const secrets = await openSecretKeychain(process.env, home);
+    if (secrets.kind === 'refused') {
+        say(secrets.reason);
+        lifecycleLog(`host refused to start: ${secrets.reason}`);
+        process.exit(1);
+    }
     const userKey = createHash('sha256').update(home).digest('hex').slice(0, 16);
     const endpoint = hostEndpoint(process.platform, runtime, userKey);
 
@@ -169,9 +182,9 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
-    // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No keychain refuses secrets; it never stops the host.
-    const keychain = new Keychain();
-    const keychainOpening = openHostKeychain({ keychain });
+    // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No OS keychain refuses secrets; it never stops the host.
+    const keychain = secrets.keychain;
+    const keychainOpening = openHostKeychain({ keychain, backend: secrets.kind });
     void keychainOpening.then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
      * THE SPAWN LEDGER AND ITS SWEEP, here now (they were main.ts's): what a previous host left running — a crash, a
@@ -632,7 +645,7 @@ async function main(): Promise<void> {
         host,
         record: (id) => hostRegistry.find(id),
         threadOf: (id) => threadsHeard.get(id) ?? null,
-        cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHomeDir(),
+        cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome,
         log: say,
     });
     void tynnOpening.then((account) => {
@@ -653,7 +666,7 @@ async function main(): Promise<void> {
             await runV1FlowImport(store, { database: databasePath, workspaces: hostRegistry.listWorkspaces() }).catch((error: unknown) => say(`v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
             // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
             if (processBookNow) await moveScheduledTasksOutOfFlows(store, processBookNow, (id) => hostRegistry.workspace(id)?.path ?? null).catch((error: unknown) => say(`scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
-            const cwdOf = (r: AgentRecord): string => hostRegistry.workspace(r.workspaceId)?.path ?? osaHomeDir();
+            const cwdOf = (r: AgentRecord): string => hostRegistry.workspace(r.workspaceId)?.path ?? osaHome;
             const engineFlows = startFlowsEngine({
                 store,
                 now: Date.now,
@@ -734,7 +747,7 @@ async function main(): Promise<void> {
     };
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
-    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHomeDir(), log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery });
+    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery });
     mcp = startHostMcp({
         stores: stores.stores,
         settings,
@@ -758,6 +771,7 @@ async function main(): Promise<void> {
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
         flowCallers,
         endpointFile: join(home, 'mcp-endpoint.json'),
+        osaDir: osaHome,
         log: (line) => { say(line); lifecycleLog(line); },
     });
     host.subscribe(() => { lastBusy = Date.now(); });

@@ -57,7 +57,8 @@ class Cdp {
     close() { this.#socket.close(); }
 }
 
-// A home of its own: the window process reads ~/.genie by the OS's home, not GENIE_HOME.
+// A home of its own. Every Genie process reads its root through genieRoot() (#1605): GENIE_HOME when set, else ~/.genie by
+// the OS's home. Both are set here, to the same folder, so either reading lands in it.
 const user = mkdtempSync(join(tmpdir(), 'site-panel-user-'));
 const home = join(user, '.genie');
 const data = mkdtempSync(join(tmpdir(), 'site-panel-data-'));
