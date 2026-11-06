@@ -22,6 +22,8 @@ export const CLEAN_EXIT_FILE = 'clean-exit.json';
 export const SAFE_MODE_FILE = 'safe-mode.json';
 /** The host's last sign of life: when, and which agents had a session. */
 export const ALIVE_FILE = 'alive.json';
+/** The sign of life before the last one: read when the last one is torn or partial, so a cut write never reads as "nothing". */
+export const ALIVE_PREV_FILE = 'alive.prev.json';
 /** Two unclean ends this close are a crash loop. */
 export const CRASH_LOOP_MS = 10 * 60 * 1000;
 /** Until the hang watchdog (cut 3) names one ("it stopped responding"). */
@@ -89,8 +91,9 @@ export function parseCleanExit(raw: string | null): CleanExit | null {
 
 export function parseAlive(raw: string | null): Alive | null {
     const o = objectOf(raw);
-    if (!o || !isNumber(o.at)) return null;
-    return { at: o.at, pid: isNumber(o.pid) ? o.pid : 0, agents: Array.isArray(o.agents) ? o.agents.filter((a): a is string => typeof a === 'string') : [] };
+    // A sign of life without its list is a partial one: not believed (the one before it is read instead).
+    if (!o || !isNumber(o.at) || !Array.isArray(o.agents)) return null;
+    return { at: o.at, pid: isNumber(o.pid) ? o.pid : 0, agents: o.agents.filter((a): a is string => typeof a === 'string') };
 }
 
 /** `absent` = no record (the first boot of this Genie); `unreadable` = there is one, and it is not believed. */

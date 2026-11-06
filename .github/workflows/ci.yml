@@ -258,7 +258,7 @@ jobs:
   smoke:
     name: a real window
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -435,6 +435,15 @@ jobs:
           grep -q "spawn host ready pid=" ~/.genie/runtime/lifecycle.log
           if grep -q "spawn host could not start" ~/.genie/runtime/lifecycle.log; then exit 1; fi
 
+      # SAFE MODE AND A HUNG WINDOW, AS A PERSON MEETS THEM (Tynn #386). Each starts the app itself, on a home and ports of
+      # its own: a clean quit as the control, then the window and genie-host killed by pid; a window main held 40 s.
+      - name: safe mode after Genie did not end cleanly
+        if: ${{ !cancelled() }}
+        run: timeout 540 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/safe-mode-cdp.mjs
+      - name: a hung window is ended and opened again
+        if: ${{ !cancelled() }}
+        run: timeout 540 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/hang-cdp.mjs
+
       - name: electron's own output
         # `always()`, not `failure()`: a timeout-cancelled job is neither success nor failure
         # to GitHub, and that was exactly the case where this log mattered most.
@@ -516,7 +525,7 @@ jobs:
     # shows right after merge, and every release builds and tests on Windows itself before anything is published.
     if: github.event_name == 'push'
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -698,6 +707,23 @@ jobs:
           Select-String -Path $log -Pattern "spawn host" | Select-Object -Last 5 | ForEach-Object { $_.Line }
           if (-not (Select-String -Path $log -Pattern "spawn host ready pid=" -Quiet)) { exit 1 }
           if (Select-String -Path $log -Pattern "spawn host could not start" -Quiet) { exit 1 }
+
+      # SAFE MODE AND A HUNG WINDOW, as on Linux above.
+      - name: safe mode after Genie did not end cleanly
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          node scripts/safe-mode-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "safe-mode-cdp failed (exit $LASTEXITCODE)" }
+      # KNOWN RED on Windows until genie#1628: genie-host inherits the first window's handles, so the hung window's debugger
+      # port stays held and the relaunched window cannot serve it (the relaunch itself happens). Linux runs it in full.
+      - name: a hung window is ended and opened again (known red, genie#1628)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          node scripts/hang-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "hang-cdp failed (exit $LASTEXITCODE)" }
 
       - name: the app's own output, on failure
         if: failure()

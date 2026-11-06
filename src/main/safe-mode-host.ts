@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-    ALIVE_FILE, CLEAN_EXIT_FILE, NOT_SAFE, SAFE_MODE_FILE, UNKNOWN_CAUSE,
+    ALIVE_FILE, ALIVE_PREV_FILE, CLEAN_EXIT_FILE, NOT_SAFE, SAFE_MODE_FILE, UNKNOWN_CAUSE,
     bootDecision, parseAlive, parseCleanExit, parseRecord,
     type SafeModeItem, type SafeModeRecord, type SafeModeView,
 } from '../core/safe-mode.js';
@@ -42,7 +42,7 @@ export class SafeMode {
         const decision = bootDecision({
             cleanExit,
             record: parseRecord(read(SAFE_MODE_FILE)),
-            alive: parseAlive(read(ALIVE_FILE)),
+            alive: parseAlive(read(ALIVE_FILE)) ?? parseAlive(read(ALIVE_PREV_FILE)),
             now: now(),
         });
         // REMOVED AT BOOT: from here on, only this run's own clean end can write it again.
@@ -102,10 +102,17 @@ export class SafeMode {
         this.#emit();
     }
 
-    /** The host's sign of life: when, and which agents have a session. What the next start reads if this run dies. */
+    /**
+     * The host's sign of life: when, and which agents have a session. What the next start reads if this run dies. The one
+     * before it is kept beside it (written first, atomically too), so a kill that cuts this write leaves a good one to read.
+     */
     beat(agents: readonly string[]): void {
-        this.#writeAtomic(ALIVE_FILE, { at: this.#now(), pid: this.#pid, agents: [...agents] });
+        const now = { at: this.#now(), pid: this.#pid, agents: [...agents] };
+        if (this.#lastAlive !== null) this.#writeAtomic(ALIVE_PREV_FILE, this.#lastAlive);
+        this.#writeAtomic(ALIVE_FILE, now);
+        this.#lastAlive = now;
     }
+    #lastAlive: { at: number; pid: number; agents: string[] } | null = null;
 
     /** The LAST step of the host's own end. Synchronous: the process exits right after it. */
     writeCleanExit(reason: string): void {

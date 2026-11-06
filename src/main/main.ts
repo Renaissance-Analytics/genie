@@ -59,6 +59,8 @@ import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
+import { windowLaunchFlags } from '../core/launch-flags.js';
+import { startBeat } from './safe-mode-beat.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
@@ -1511,7 +1513,7 @@ async function boot(): Promise<void> {
                 publishBrowserFacts();
                 // How the host starts its updater helper (P5b): this executable, in a dev run this app's path, and the switches this
                 // window was started with that an Electron needs to start at all here (the sandbox, the display, the password store).
-                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=)/.test(a))] }).catch(() => {});
+                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...windowLaunchFlags(process.argv)] }).catch(() => {});
                 void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
                 cookieBridge?.relinked();
                 client.onBrowserEvent((event) => {
@@ -3483,7 +3485,7 @@ async function boot(): Promise<void> {
     windowSafe?.onChange(() => registry?.touch());
     // No host: what a quit recorded is listed on the banner, and this window beats (it is the run).
     windowSafe?.own()?.wasRunning([...registry.runningAtQuit(), ...registry.interruptedAtQuit()]);
-    if (windowSafe?.own()) setInterval(() => { windowSafe?.beat((registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id)); }, 15_000).unref?.();
+    if (windowSafe?.own()) startBeat({ started: () => (registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id), onChange: (l) => (host instanceof SessionHost ? host.subscribe(() => l()) : () => {}), beat: (ids) => { windowSafe?.beat(ids); } });
     // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
     registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
     agentEngineLink?.client.onCrashState(() => registry?.touch());
