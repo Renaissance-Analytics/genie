@@ -184,11 +184,12 @@ describe('past it, a hook that keeps starting children is ended with all of them
  * its command line, so the machine's table says which are ours.
  */
 describe('past it, a hook that forks hundreds of children is ended with all of them', () => {
-    const MARK = `45.${String(process.pid).padStart(6, '0').slice(-6)}`;
+    // 300 s: longer than every wait below, so only the limit can end them (a 45 s one ended by itself inside the wait).
+    const MARK = `300.${String(process.pid).padStart(6, '0').slice(-6)}`;
     const ours = (): number => {
         try {
             if (process.platform === 'win32') {
-                const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*sleep* ${MARK}*' }).Count`], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+                const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'sleep*' -and $_.CommandLine -and $_.CommandLine -like '* ${MARK}*' }).Count`], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
                 return Number(out.trim() || 0);
             }
             return execFileSync('pgrep', ['-fc', `sleep ${MARK}`], { encoding: 'utf8' }).trim().split(/\s+/).map(Number)[0] ?? 0;
@@ -211,7 +212,7 @@ describe('past it, a hook that forks hundreds of children is ended with all of t
         // CONTROL: the table sees them, past the old cap of 200, before the limit comes.
         await vi.waitFor(() => { expect(ours()).toBeGreaterThan(200); }, { timeout: 24_000, interval: 1_000 });
         expect(await reading).toMatch(/did not answer/);
-        await vi.waitFor(() => { expect(ours()).toBe(0); }, { timeout: 60_000, interval: 1_000 });
+        await vi.waitFor(() => { expect(ours()).toBe(0); }, { timeout: 40_000, interval: 1_000 });
         await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 10_000, interval: 250 });
     }, 150_000);
 });

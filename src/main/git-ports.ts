@@ -43,14 +43,10 @@ function growOurs(ours: Map<number, ProcessInfo>, table: readonly ProcessInfo[])
     return added;
 }
 
-/**
- * Readings taken while ending one read's tree, for what it started meanwhile, and the wall time they may take: a SAFETY
- * STOP on the walk, never a cap on how many are ended. Every process the walk finds is a descendant of our git by pid,
- * start time and name, so a big tree is still ours: a cap on the count would let a hook that forks past it keep running
- * in the repository (#1638's review).
- */
-const GIT_TREE_ROUNDS = 8;
-const GIT_TREE_WALL_MS = 10_000;
+/** A read's tree is a hook and what it started: bounded, so a table that is not what it seems is still not reaped. */
+const GIT_TREE_CAP = 200;
+/** Readings taken while ending one read's tree, for what it started meanwhile. */
+const GIT_TREE_ROUNDS = 6;
 
 /**
  * What the limit ends: git, and what git started under it, a hook's child above all, which keeps the folder open and
@@ -71,11 +67,11 @@ async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree,
     const running = children.filter((child) => child.exitCode === null && child.signalCode === null && child.pid !== undefined);
     if (running.length === 0) return;
     const read = async (): Promise<readonly ProcessInfo[] | null> => (tree.read ? tree.read() : tree.snapshot());
-    // Every one identified is ended: the tree's count limit is lifted (it guards a session's guess, not a verified walk).
-    const end = async (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]): Promise<void> => {
-        if (targets.length === 0) return;
-        if (tree.reap) await tree.reap(targets, now, Number.MAX_SAFE_INTEGER);
-        else tree.killTree(targets, now, Number.MAX_SAFE_INTEGER);
+    /** `true` = ended (or nothing to end); `false` = the tree's rules refused it. */
+    const end = async (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]): Promise<boolean> => {
+        if (targets.length === 0) return true;
+        const result = tree.reap ? await tree.reap(targets, now, GIT_TREE_CAP) : tree.killTree(targets, now, GIT_TREE_CAP);
+        return !result.refused;
     };
     const stop = (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]): void => {
         for (const p of targets) { if (findIn(now, p)) { try { process.kill(p.pid, 'SIGSTOP'); } catch { /* gone */ } } }
@@ -87,8 +83,7 @@ async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree,
         const pids = new Set(running.map((child) => child.pid));
         for (const p of table) if (pids.has(p.pid)) ours.set(p.pid, p);
         growOurs(ours, table);
-        const until = Date.now() + GIT_TREE_WALL_MS;
-        for (let round = 0; round < GIT_TREE_ROUNDS && Date.now() < until; round += 1) {
+        for (let round = 0; round < GIT_TREE_ROUNDS && ours.size <= GIT_TREE_CAP; round += 1) {
             const known = [...ours.values()];
             if (platform === 'win32') await end(known, table);
             else stop(known, table);
@@ -99,8 +94,11 @@ async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree,
         }
         // Whatever of ours is still there, ended together (on Windows, what the last round missed; elsewhere, all of it).
         const left = [...ours.values()].filter((p) => findIn(table!, p));
-        await end(left, table);
-        if (ours.size > 24) console.error(`[git] a read past its limit had started ${ours.size} processes; all of them were ended`);
+        if (!(await end(left, table)) && platform !== 'win32') {
+            // Refused (a tree past the cap is not what it seems): nothing of ours is left STOPPED by this walk.
+            for (const p of left) { try { process.kill(p.pid, 'SIGCONT'); } catch { /* gone */ } }
+            console.error(`[git] what a read started was not ended: ${left.length} processes is past ${GIT_TREE_CAP}`);
+        }
     } finally {
         // Whatever the readings could not find or refused: git itself still ends.
         for (const child of running) child.kill();
