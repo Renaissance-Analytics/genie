@@ -36,6 +36,7 @@ import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
+import { crashReportHost } from './crash-report-host.js';
 import { FilesWindows } from './files-windows.js';
 import { availableParallelism, homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
@@ -668,6 +669,8 @@ let filesHost: FilesHost | null = null;
 let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): boolean | Promise<boolean>; unwatch(viewId: string): void; close(): void } | null = null;
 const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
 let takeOvers: TakeOverHost | null = null;
+/** This workstation's Tynn identity, once known: a crash report is sent with its host proof (Tynn #386 part 4). */
+let crashReportMachine: WorkstationPort | null = null;
 /** The workspace header's throwaway terminals (Tynn story #378): each in its own window, closed with it. */
 let scratchTerminals: ScratchTerminals | null = null;
 let filesWindows: FilesWindows | null = null;
@@ -2059,6 +2062,22 @@ async function boot(): Promise<void> {
         return r;
     });
 
+    // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
+    const crashReports = crashReportHost({
+        view: () => agentEngineLink?.client.safeModeView() ?? null,
+        agents: () => (registry?.listAgents() ?? []).map((a) => ({ id: a.id, name: a.name, provider: a.provider })),
+        workspaceNames: () => [...(registry?.listWorkspaces() ?? []).flatMap((w) => [w.id, basename(w.path)]), ...(registry?.workspaceSlugs().values() ?? [])],
+        genieVersion: app.getVersion(),
+        os: process.platform,
+        arch: process.arch,
+        tynnHost: TYNN_HOST,
+        identity: async () => (crashReportMachine ? crashReportMachine.identity(TYNN_HOST) : null),
+        authHeader: async () => { if (!crashReportMachine) throw new Error('no workstation identity'); return crashReportMachine.authHeader(TYNN_HOST); },
+        fetch: (url, init) => net.fetch(url, init),
+    });
+    ipcMain.handle('genie:crash-report-draft', () => crashReports.draft());
+    ipcMain.handle('genie:crash-report-send', (_event, text: unknown, notes: unknown) =>
+        typeof text === 'string' && typeof notes === 'string' ? crashReports.send(text, notes) : { ok: false, reason: 'A crash report needs its text.' });
     ipcMain.handle('genie:take-over', (_event, raw: unknown) => {
         if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
         const record = registry?.find(raw as AgentId) ?? null;
@@ -2973,7 +2992,7 @@ async function boot(): Promise<void> {
     // sign-in landing during the launch's own check cannot make two workstations.
     const identityCipher = osCipher(safeStorage, process.platform);
     // THE KEY IS THE HOST'S (P3.4): this window asks it to sign. Only a window running its own engine holds one, in the keychain just the same.
-    const machineIdentity: WorkstationPort = agentEngineLink ? agentEngineLink.client.workstation() : new WorkstationService({
+    const machineIdentity: WorkstationPort = crashReportMachine = agentEngineLink ? agentEngineLink.client.workstation() : new WorkstationService({
         store: workstationKeyStore(join(genieRoot(), 'workstation.json'), new Keychain()),
         request: (path, init) => tynnAccount ? tynnAccount.request(path, init) : Promise.reject(new Error('Sign in to Tynn first')),
         host: () => tynnAccount?.host() ?? TYNN_HOST,

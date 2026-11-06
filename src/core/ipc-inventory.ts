@@ -52,6 +52,9 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:provider-login', 'window-port'],
     ['genie:restart-with-handoff', 'protocol:restartWithHandoff'],
     ['genie:take-over', 'window-port'],
+    // The safe-mode banner's crash report (Tynn #386 part 4): built and sent from this window, with the host's proof.
+    ['genie:crash-report-draft', 'window-port'],
+    ['genie:crash-report-send', 'window-port'],
     ['genie:terminal-open', 'protocol:terminals.open'],
     // Opens a window on this machine (Tynn story #378): the window's own, like Take Over's window.
     ['genie:scratch-terminal-open', 'window-port'],
