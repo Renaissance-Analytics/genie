@@ -58,6 +58,9 @@ export const ENGINE_METHODS = [
     // Liveness, and the graceful end (sessions stopped and verified, writes drained, then the process exits).
     'engine.ping',
     'engine.shutdown',
+    // Window main's heartbeat to genie-host's hang watchdog (Tynn #386: hang-watchdog.ts): `[{pid, rss, bye?}]` every
+    // second, call id 0 (a notification, no reply). Heard before any dispatch: never queued behind a slow call.
+    'engine.heartbeat',
     // The spawn host's frames, tunnelled (the host split, P2.1): `[profile, frame]` to genie-host's child of that profile.
     // Sent with call id 0, a notification: no result per keystroke. Its children's frames come back as `spawn.frame`.
     'engine.spawn',

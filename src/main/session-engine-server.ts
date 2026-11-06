@@ -374,6 +374,7 @@ export class SessionEngineServer {
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
+            if (was) this.#options.heartbeat?.dropped(conn.id);
         });
     }
 
@@ -407,6 +408,8 @@ export class SessionEngineServer {
             return;
         }
         if (message.kind === 'call') {
+            // THE HEARTBEAT (Tynn #386): heard here, before any dispatch — cheap, no reply, no flush.
+            if (message.method === 'engine.heartbeat') { this.#options.heartbeat?.beat(conn.id, message.args[0]); return; }
             void this.#call(conn, message.id, message.method, message.args);
             return;
         }

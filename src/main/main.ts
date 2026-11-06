@@ -104,6 +104,8 @@ import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
+import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js';
+import { removeCrashRecord, writeCrashRecord } from './crash-records.js';
 import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
@@ -310,6 +312,22 @@ if (launch.kind === 'exit') {
     console.log(`[genie] ${launch.reason}`);
     app.exit(0);
 }
+/*
+ * THE LAST-KNOWN STATE ON EVERY EXIT PATH THIS PROCESS CAN CATCH (Tynn #386: window-crash-recorder.ts): a small record in
+ * runtime/crash — the reason or code, the time, the last RSS, the running agents' names, never content — on `exit`, an
+ * uncaught exception, an unhandled rejection, a renderer or the GPU gone, and before-quit (taken back by a quit that runs
+ * to its end). A boot launch only: a second instance owns nothing. Synchronous, never throwing.
+ */
+const crashRecorder = new WindowCrashRecorder({
+    pid: process.pid,
+    rss: () => process.memoryUsage.rss(),
+    agents: () => (registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : []),
+    write: (record) => writeCrashRecord(join(runtimeDir(genieRoot()), 'crash'), record),
+    remove: removeCrashRecord,
+});
+if (launch.kind === 'boot') crashRecorder.install(process, app);
+/** Window main's heartbeat to genie-host's hang watchdog (hang-watchdog.ts): started once the engine link is up. */
+let heartbeatNow: { stop(): void; bye(): void } | null = null;
 
 let window: BrowserWindow | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
@@ -1497,6 +1515,12 @@ async function boot(): Promise<void> {
         });
         if (agentEngineLink === null) mainErrors.record('agent-host', new Error('Genie could not start its agent host, so agents run inside the window this time (see logs/genie-host.log).'));
         host = agentEngineLink?.client ?? null;
+        // THE HEARTBEAT (Tynn #386): every second, its pid and RSS, a notification; the client drops it while unlinked.
+        if (agentEngineLink) heartbeatNow = startHeartbeat({
+            send: (beat) => agentEngineLink?.client.heartbeat(beat),
+            pid: process.pid,
+            rss: () => process.memoryUsage.rss(),
+        });
     }
     /*
      * EVERY PROCESS THIS WINDOW STARTS IS STARTED BY GENIE-HOST (the host split, P2.1; plan §11a): #1405's spawn host is
@@ -4037,6 +4061,7 @@ app.on('before-quit', (event) => {
     });
     if (step === 'cancel') { event.preventDefault(); return; }
     if (step === 'close-ui') { event.preventDefault(); closeUi('the quit’s answer'); return; }
+    crashRecorder.beforeQuit();
     autoCheckStop?.();
     autoCheckStop = null;
     scratchSweepStop?.();
@@ -4058,7 +4083,7 @@ app.on('before-quit', (event) => {
     // around the whole of it let the window exit before the host was told to end (ss-repeat5, 2026-11-05).
     void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
         .catch(() => { /* an unwritten row never blocks a quit */ })
-        .finally(() => { app.quit(); });
+        .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */

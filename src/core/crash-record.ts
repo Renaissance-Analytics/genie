@@ -81,30 +81,92 @@ export interface WindowBeatPayload {
     readonly bye?: true;
 }
 
-export function parseBeat(_value: unknown): WindowBeatPayload | null {
-    throw new Error('not built yet (Tynn #386)');
+/** A beat as it arrived, or `null`: a frame that is not one is ignored, never trusted. */
+export function parseBeat(value: unknown): WindowBeatPayload | null {
+    if (value === null || typeof value !== 'object') return null;
+    const v = value as { pid?: unknown; rss?: unknown; bye?: unknown };
+    const pid = v.pid;
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return null;
+    const raw = v.rss;
+    const rss = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : 0;
+    return v.bye === true ? { pid, rss, bye: true } : { pid, rss };
 }
 
-export function toMb(_bytes: number): number {
-    throw new Error('not built yet (Tynn #386)');
+/** Bytes as whole MB (what a lifecycle line and a record say). */
+export function toMb(bytes: number): number {
+    return Number.isFinite(bytes) && bytes > 0 ? Math.round(bytes / (1024 * 1024)) : 0;
 }
 
-/** Main's own stall lines from lifecycle lines (the host's are marked `host` and are not main's). */
-export function mainStallLines(_lines: readonly string[]): string[] {
-    throw new Error('not built yet (Tynn #386)');
+/** The newest stall lines a record carries. */
+const STALL_LINES = 20;
+/** A lifecycle line is cut to this in a record: one enormous line never costs the rest. */
+const LINE_CHARS = 1_000;
+const NAME_CHARS = 100;
+const MEMORY_SAMPLES = 60;
+const AGENTS = 50;
+
+/** Main's own stall lines from lifecycle lines (`<time> stall main …`); the host's are `<time> host stall main …`. */
+export function mainStallLines(lines: readonly string[]): string[] {
+    return lines.filter((line) => /^\S+ stall main /.test(line)).slice(-STALL_LINES);
 }
 
-/** A running agent's note from this run's rows: the current turn's last tool name and its byte size. */
-export function runningAgentNote(_name: string, _rows: readonly TimedEvent[]): RunningAgentNote {
-    throw new Error('not built yet (Tynn #386)');
+const encoder = new TextEncoder();
+const bytesOf = (text: string): number => encoder.encode(text).length;
+const clip = (text: string, n: number): string => (text.length > n ? `${text.slice(0, n)}…` : text);
+
+/**
+ * A running agent's note from THIS RUN's rows: the CURRENT turn's last tool — its machine NAME (never its title, which
+ * can quote a command) and its answer's size in bytes (`outputBytes` when the row keeps a preview, else the output's own
+ * UTF-8 bytes). The current turn begins at the last prompt (a message from the person or a peer); a tool before it is
+ * the previous turn's. Read from the end, bounded: a long run's rows are not walked.
+ */
+export function runningAgentNote(name: string, rows: readonly TimedEvent[]): RunningAgentNote {
+    const none: RunningAgentNote = { name: clip(name, NAME_CHARS), lastTool: null, lastToolBytes: null };
+    for (let i = rows.length - 1, seen = 0; i >= 0 && seen < 2_000; i--, seen++) {
+        const event = rows[i]!.event;
+        if (event.kind === 'message' && event.speaker !== 'agent') return none;
+        if (event.kind === 'tool') {
+            const bytes = typeof event.outputBytes === 'number' ? event.outputBytes : typeof event.output === 'string' ? bytesOf(event.output) : 0;
+            return { name: none.name, lastTool: event.name === null ? null : clip(event.name, NAME_CHARS), lastToolBytes: bytes };
+        }
+    }
+    return none;
 }
 
-/** The record as JSON, under {@link CRASH_MAX_BYTES}. */
-export function fitCrashRecord(_record: CrashRecord): string {
-    throw new Error('not built yet (Tynn #386)');
+/**
+ * THE RECORD AS JSON, UNDER {@link CRASH_MAX_BYTES}. Each list is bounded first (the newest lifecycle and stall lines,
+ * each line cut; the newest samples; the first agents), then, while it is still too big, the OLDEST lifecycle lines go,
+ * then the stall lines, the samples and the agents. What is left at worst is the record's own few fields.
+ */
+export function fitCrashRecord(record: CrashRecord): string {
+    const lines = (list: readonly string[], n: number, chars: number): string[] => list.slice(-n).map((l) => clip(String(l), chars));
+    let lifecycle = 'lifecycle' in record ? lines(record.lifecycle, LIFECYCLE_TAIL_LINES, LINE_CHARS) : [];
+    let stalls = record.kind === 'hang' ? lines(record.stalls, STALL_LINES, LINE_CHARS) : [];
+    let memory = record.kind === 'exit' ? [] : record.memory.slice(-MEMORY_SAMPLES);
+    let agents = record.kind === 'hang' ? record.agents.slice(0, AGENTS).map((a) => ({ name: clip(a.name, NAME_CHARS), lastTool: a.lastTool === null ? null : clip(a.lastTool, NAME_CHARS), lastToolBytes: a.lastToolBytes })) : [];
+    const exitAgents = record.kind === 'exit' ? record.agents.slice(0, AGENTS).map((a) => clip(a, NAME_CHARS)) : [];
+    const build = (): string => {
+        switch (record.kind) {
+            case 'hang': return JSON.stringify({ ...record, lifecycle, stalls, memory, agents });
+            case 'lost': return JSON.stringify({ ...record, lifecycle, memory });
+            case 'exit': return JSON.stringify({ ...record, reason: clip(record.reason, NAME_CHARS * 2), agents: exitAgents });
+        }
+    };
+    let text = build();
+    while (bytesOf(text) >= CRASH_MAX_BYTES) {
+        if (lifecycle.length > 0) lifecycle = lifecycle.slice(Math.max(1, Math.ceil(lifecycle.length / 10)));
+        else if (stalls.length > 0) stalls = [];
+        else if (memory.length > 0) memory = [];
+        else if (agents.length > 0) agents = [];
+        else return JSON.stringify({ kind: record.kind, at: record.at });
+        text = build();
+    }
+    return text;
 }
 
-/** The cause the safe-mode banner shows. */
-export function crashCause(_record: CrashRecord | null): string {
-    throw new Error('not built yet (Tynn #386)');
+/** The cause the safe-mode banner shows, from the newest record of the run that did not end cleanly. */
+export function crashCause(record: CrashRecord | null): string {
+    if (record?.kind === 'hang') return 'it stopped responding';
+    if (record?.kind === 'exit' && typeof record.code === 'number') return `it exited with code ${record.code}`;
+    return 'it ended without a trace';
 }

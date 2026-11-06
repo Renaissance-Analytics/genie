@@ -997,8 +997,12 @@ export class SessionEngineClient {
         }
     }
 
-    /** Window main's heartbeat to genie-host's hang watchdog (Tynn #386): a notification, no reply. Not built yet. */
-    heartbeat(_beat: { pid: number; rss: number; bye?: true }): void {}
+    /** Window main's heartbeat to genie-host's hang watchdog (Tynn #386): a notification (call id 0), no reply. Nothing while not linked. */
+    heartbeat(beat: { pid: number; rss: number; bye?: true }): void {
+        const t = this.#transport;
+        if (t === null || this.#welcome === null) return;
+        t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.heartbeat', args: [beat] }));
+    }
 
     /** Liveness: `true` when the host answered. */
     async ping(): Promise<boolean> {

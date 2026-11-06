@@ -97,10 +97,11 @@ describe('the heartbeat window main sends genie-host', () => {
         const sent: WindowBeat[] = [];
         let tick: (() => void) | null = null;
         const beat = startHeartbeat({ send: (b) => sent.push(b), pid: 4242, rss: () => 512 * MB, every: (fn, ms) => { expect(ms).toBe(1000); tick = fn; return () => { tick = null; }; } });
+        const fire = (): void => { if (tick === null) throw new Error('the timer is not running'); tick(); };
         // The first beat goes at once: the host watches a window from its first beat.
         expect(sent).toEqual([{ pid: 4242, rss: 512 * MB }]);
-        tick!();
-        tick!();
+        fire();
+        fire();
         expect(sent).toHaveLength(3);
         beat.bye();
         expect(sent[3]).toEqual({ pid: 4242, rss: 512 * MB, bye: true });

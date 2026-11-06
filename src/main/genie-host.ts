@@ -16,6 +16,9 @@ import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { StallWatchdog } from './stall-watchdog.js';
+import { HangWatchdog } from './hang-watchdog.js';
+import { readLifecycleTail, writeCrashRecord } from './crash-records.js';
+import { runningAgentNote } from '../core/crash-record.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
@@ -511,6 +514,28 @@ async function main(): Promise<void> {
     // cost seconds on that machine (stall-profile.ts).
     const hostWatchdog = new StallWatchdog({ log: (line) => lifecycleLog(`host ${line}`), routeOf: () => null });
     hostWatchdog.start();
+    /*
+     * THE HANG WATCHDOG (Tynn #386: hang-watchdog.ts). Window main beats here every second; 30 s of silence from a window
+     * still connected is a HANG: a record in runtime/crash (the last lifecycle lines, main's stalls, the RSS samples, the
+     * running agents with their current turn's last tool name and size, no content), then the frozen window's process is
+     * ended (one pid, never a tree: this host and its agents keep running). RSS for both every 60 s in lifecycle.log, and a
+     * window that drops with no goodbye and is gone is recorded as LOST.
+     */
+    let hostForNotes: SessionHost | null = null;
+    const hangWatchdog = new HangWatchdog({
+        write: (record) => { writeCrashRecord(join(runtime, 'crash'), record); },
+        kill: (pid) => killProcessAsync(pid),
+        alive: pidAlive,
+        hostRss: () => process.memoryUsage.rss(),
+        agents: () => {
+            const running = hostForNotes;
+            if (running === null) return [];
+            return running.startedIds().map((id) => runningAgentNote(hostRegistry.find(id)?.name ?? id, running.rowsFor(id)));
+        },
+        lifecycle: () => readLifecycleTail(runtime),
+        log: lifecycleLog,
+    });
+    hangWatchdog.start();
     const engine = new SessionEngineServer({
         token,
         build,
@@ -518,6 +543,7 @@ async function main(): Promise<void> {
         timeCall: (method) => hostWatchdog.ipc(method),
         log: say,
         onShutdown: () => void shutdown('a window asked'),
+        heartbeat: hangWatchdog,
         onClients: (n) => {
             lastBusy = Date.now();
             say(`windows connected: ${n}`);
@@ -637,6 +663,7 @@ async function main(): Promise<void> {
         },
     });
     engine.attach(host);
+    hostForNotes = host;
     tynnRecovery = hostTynnRecovery({
         watchWake: wallClockJumps,
         names: (asked) => agentKeys.recovery(asked),
@@ -825,6 +852,7 @@ async function main(): Promise<void> {
     async function shutdown(why: string): Promise<void> {
         if (shuttingDown) return;
         shuttingDown = true;
+        hangWatchdog.shuttingDown();
         say(`shutting down: ${why}`);
         lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
         browserService.quit();
