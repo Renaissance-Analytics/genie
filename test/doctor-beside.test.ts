@@ -136,7 +136,7 @@ describe('the running Genie respects the hold', () => {
     it('normal Genie wires the hold into its session host, and publishes which agents it runs', () => {
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
         expect(main.match(/heldElsewhere:/g) ?? []).toHaveLength(1);
-        expect(main.match(/markGenieRunning\(genieHome\(\),\s*[a-zA-Z]/g) ?? []).not.toHaveLength(0);
+        expect(main.match(/markGenieRunning\(genieRoot\(\),\s*[a-zA-Z]/g) ?? []).not.toHaveLength(0);
     });
 });
 

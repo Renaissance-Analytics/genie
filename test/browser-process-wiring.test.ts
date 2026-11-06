@@ -56,9 +56,9 @@ describe('linkToRunningHost: adopt or nothing', () => {
 describe('the process', () => {
     const code = () => strip('src/main/browser-process.ts');
 
-    it('its own user data folder under Genie’s home, set before anything is ready: two processes cannot share a profile', () => {
+    it('its own user data folder under Genie’s root (GENIE_HOME, P7), set before anything is ready: two processes cannot share a profile', () => {
         const src = code();
-        expect(src).toMatch(/app\.setPath\('userData', join\(genieHome\(\), 'browser', '\.process'\)\)/);
+        expect(src).toMatch(/const home = genieRoot\(\);\s*app\.setPath\('userData', join\(home, 'browser', '\.process'\)\)/);
         expect(src.indexOf("app.setPath('userData'")).toBeLessThan(src.indexOf('whenReady'));
         expect(src).toMatch(/requestSingleInstanceLock\(\)/);
     });

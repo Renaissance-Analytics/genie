@@ -13,7 +13,6 @@ import { withActionSignal } from './mcp-signal.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
 import type { Caller } from './mcp-tools.js';
 import type { PluginToolRef } from './mcp-tools-plugins.js';
-import { osaHomeDir } from './paths.js';
 
 /**
  * GENIE'S MCP SERVER, IN GENIE-HOST (the host split, P3.1: plan §11d).
@@ -69,6 +68,8 @@ export interface HostMcpPorts {
     readonly forwardedCalls?: Map<string, import('./mcp-tools.js').McpCall>;
     /** Where the endpoint is remembered (`<genieHome>/mcp-endpoint.json`). */
     readonly endpointFile: string;
+    /** The OSA's home, `<root>/osa` (P7: from the host's root, never homedir()'s `.genie`). */
+    readonly osaDir: string;
     readonly log: (line: string) => void;
 }
 
@@ -109,7 +110,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const records = ports.records();
         const vouched = injected.get(id);
         if (vouched) return vouched;
-        const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, osaHomeDir());
+        const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, ports.osaDir);
         return session ?? ports.flowCallers?.callerFor(id) ?? view?.callers[id] ?? null;
     };
     const settings = ports.settings;

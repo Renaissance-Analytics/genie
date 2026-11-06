@@ -59,7 +59,7 @@ async function viaLogin(binary: string | null): Promise<{ ran: boolean; out: str
             offExit();
             resolve({ ran: plainOf(text).includes(MARK), out: words(text) });
         });
-        const logins = new LoginHost({ terminals, openWindow: () => {}, runStatus: async () => 1, onSignedIn: () => {}, binaryFor: () => binary });
+        const logins = new LoginHost({ terminals, openWindow: () => {}, runStatus: async () => 1, onSignedIn: () => {}, binaryFor: () => binary, scratch: () => base });
         const started = logins.start('claude');
         if (!started.ok) { reject(new Error(started.reason)); return; }
         target = started.terminalId;

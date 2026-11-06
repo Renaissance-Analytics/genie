@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { headerActions } from '../src/core/agent-view.js';
@@ -49,13 +50,15 @@ describe('a message to an agent that is not running', () => {
 });
 
 describe('the OSA’s home', () => {
-    it('is ~/.genie/osa, on the workstation — not Chromium’s per-user folder, not a workspace', () => {
-        expect(osaHomeDir('/home/u').replace(/\\/g, '/')).toBe('/home/u/.genie/osa');
+    // P7 (one data root): `<genie root>/osa`, the root being GENIE_HOME (default ~/.genie), never homedir()'s `.genie`.
+    it('is <genie root>/osa, on the workstation — not Chromium’s per-user folder, not a workspace', () => {
+        const root = resolve('/', 'p7-root', 'genie-home');
+        expect(osaHomeDir(root)).toBe(join(root, 'osa'));
     });
 
     it('Genie runs the OSA there and writes its home there at boot, in normal mode', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main).toMatch(/OS_WORKSPACE\) return osaHomeDir\(\)/);
+        expect(main).toMatch(/OS_WORKSPACE\) return osaHomeDir\(genieRoot\(\)\)/);
         expect(main).toMatch(/osaHomeFiles\('normal'/);
         expect(main).not.toMatch(/OS_WORKSPACE\) return app\.getPath\('userData'\)/);
     });

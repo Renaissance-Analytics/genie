@@ -12,7 +12,7 @@ import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
-import { genieHome, osaHomeDir, runtimeDir } from './paths.js';
+import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { StallWatchdog } from './stall-watchdog.js';
@@ -123,7 +123,8 @@ import { repoStatus } from './repo-git.js';
  * connected for `GENIE_HOST_IDLE_MS` (10 minutes).
  */
 
-const home = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? process.env.GENIE_HOME : genieHome();
+const home = genieRoot();
+const osaHome = osaHomeDir(home);
 const runtime = runtimeDir(home);
 const build = process.env.GENIE_HOST_BUILD ?? 'dev';
 const IDLE_MS = Number(process.env.GENIE_HOST_IDLE_MS ?? 10 * 60_000);
@@ -616,7 +617,7 @@ async function main(): Promise<void> {
         host,
         record: (id) => hostRegistry.find(id),
         threadOf: (id) => threadsHeard.get(id) ?? null,
-        cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHomeDir(),
+        cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome,
         log: say,
     });
     void tynnOpening.then((account) => {
@@ -637,7 +638,7 @@ async function main(): Promise<void> {
             await runV1FlowImport(store, { database: databasePath, workspaces: hostRegistry.listWorkspaces() }).catch((error: unknown) => say(`v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
             // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
             if (processBookNow) await moveScheduledTasksOutOfFlows(store, processBookNow, (id) => hostRegistry.workspace(id)?.path ?? null).catch((error: unknown) => say(`scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
-            const cwdOf = (r: AgentRecord): string => hostRegistry.workspace(r.workspaceId)?.path ?? osaHomeDir();
+            const cwdOf = (r: AgentRecord): string => hostRegistry.workspace(r.workspaceId)?.path ?? osaHome;
             const engineFlows = startFlowsEngine({
                 store,
                 now: Date.now,
@@ -718,7 +719,7 @@ async function main(): Promise<void> {
     };
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
-    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHomeDir(), log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery });
+    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery });
     mcp = startHostMcp({
         stores: stores.stores,
         settings,
@@ -741,6 +742,7 @@ async function main(): Promise<void> {
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
         flowCallers,
         endpointFile: join(home, 'mcp-endpoint.json'),
+        osaDir: osaHome,
         log: (line) => { say(line); lifecycleLog(line); },
     });
     host.subscribe(() => { lastBusy = Date.now(); });
