@@ -33,9 +33,9 @@ export function* fixtureEntries(options: Partial<FixtureShape> = {}): Generator<
         }
         let message: Record<string, unknown>;
         if (position % 64 === 0) message = { kind: 'turn', n: Math.floor(position / 64) + 1, by: 'you' };
-        else if (position % 64 === 1) message = { kind: 'run', runId: run, engine: 'codex' };
-        else if (position % 64 === 2) message = { kind: 'message', speaker: 'you', peerName: null, text: 'Synthetic pending prompt', pending: { id: `synthetic-draft-${position}`, text: 'Synthetic pending prompt' } };
-        else if (position % 64 === 3) message = { kind: 'prompt_delivery', id: `synthetic-draft-${position - 1}`, outcome: 'sent' };
+        else if (position % 64 === 1) message = { kind: 'run', resumed: false };
+        else if (position % 64 === 2) message = { kind: 'message', speaker: 'you', peerName: null, text: 'Synthetic pending prompt', pending: { id: `synthetic-draft-${position}`, content: null } };
+        else if (position % 64 === 3) message = { kind: 'prompt_delivery', id: `synthetic-draft-${position - 1}`, status: 'sent' };
         else message = { kind: 'message', speaker: position % 2 ? 'agent' : 'you', peerName: null, text: `Synthetic row ${position}: ` + 's'.repeat(96) };
         yield entry(position, { ...message, [RUN_FIELD]: run });
     }
