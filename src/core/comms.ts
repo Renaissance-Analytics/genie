@@ -18,7 +18,13 @@ export interface Comms {
     readonly links: readonly CommsLink[];
 }
 
-export function commsOf(mail: readonly { readonly from: string; readonly to: string; readonly sentAt: string }[], agentId: string, since: number, now: number): Comms {
+export type CommsMail = readonly { readonly from: string; readonly to: string; readonly sentAt: string }[];
+
+/** Each peer's count and newest message time: everything comms needs from the mail, and nothing that depends on `now`. */
+export type CommsTally = ReadonlyMap<string, { readonly count: number; readonly last: number }>;
+
+/** The scan: one pass over the agent's mail since its session started. The expensive half of `commsOf`. */
+export function commsTally(mail: CommsMail, agentId: string, since: number): CommsTally {
     const byPeer = new Map<string, { count: number; last: number }>();
     for (const m of mail) {
         const peer = m.from === agentId ? m.to : m.to === agentId ? m.from : null;
@@ -28,6 +34,35 @@ export function commsOf(mail: readonly { readonly from: string; readonly to: str
         const link = byPeer.get(peer) ?? { count: 0, last: t };
         byPeer.set(peer, { count: link.count + 1, last: Math.max(link.last, t) });
     }
-    const links = [...byPeer].map(([peer, l]) => ({ peer, count: l.count, ageSeconds: Math.max(0, Math.floor((now - l.last) / 1000)) })).sort((a, b) => a.ageSeconds - b.ageSeconds);
+    return byPeer;
+}
+
+/** The cheap half: ages against `now`, one step per peer. */
+export function commsAt(tally: CommsTally, now: number): Comms {
+    const links = [...tally].map(([peer, l]) => ({ peer, count: l.count, ageSeconds: Math.max(0, Math.floor((now - l.last) / 1000)) })).sort((a, b) => a.ageSeconds - b.ageSeconds);
     return { collaborators: links.length, commsAgeSeconds: links[0]?.ageSeconds ?? null, links };
+}
+
+export function commsOf(mail: CommsMail, agentId: string, since: number, now: number): Comms {
+    return commsAt(commsTally(mail, agentId, since), now);
+}
+
+/**
+ * THE DASHBOARD'S COMMS, READ PER PROBE (beta.59: 1-2 s window-main stalls in `commsOf`). `mailOf` is the agent's mail
+ * (the inbox's `involving`, bounded); `tally` is the scan, injectable so a test can count it.
+ */
+export class CommsCache {
+    readonly #mailOf: (agentId: string) => CommsMail | null;
+    readonly #tally: typeof commsTally;
+
+    constructor(mailOf: (agentId: string) => CommsMail | null, tally: typeof commsTally = commsTally) {
+        this.#mailOf = mailOf;
+        this.#tally = tally;
+    }
+
+    read(agentId: string, since: number, now: number): Comms | null {
+        const mail = this.#mailOf(agentId);
+        if (mail === null) return null;
+        return commsAt(this.#tally(mail, agentId, since), now);
+    }
 }
