@@ -58,7 +58,7 @@ describe('the spawn host says the shell it started', () => {
         const channel: SpawnChannel = { send: (f) => frames.push(JSON.parse(JSON.stringify(f)) as SpawnFrame), onFrame: (l) => { toHost.add(l); }, onClose: () => {} };
         serveSpawnHost(channel, { exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }) as never, stream: (() => ({ stop() {} })) as never, pty: fakeEngine() });
         for (const l of toHost) l({ kind: 'call', id: 0, method: 'pty.open', args: ['term_a', { cwd: '/w' }, { kind: 'terminal', workspaceId: 'ws', shell: '' }] });
-        expect(frames).toContainEqual({ kind: 'event', channel: 'pty.opened', payload: { id: 'term_a', pid: 5001, shell: '/bin/bash' } });
+        expect(frames).toContainEqual({ kind: 'event', channel: 'pty.opened', payload: { id: 'term_a', pid: 5001, shell: '/bin/bash', epoch: expect.any(String), endOffset: 0 } });
         for (const l of toHost) l({ kind: 'call', id: 3, method: 'pty.list', args: [] });
         const listed = frames.find((f) => f.kind === 'result' && f.id === 3) as Extract<SpawnFrame, { kind: 'result'; ok: true }>;
         expect(listed.value).toEqual([expect.objectContaining({ id: 'term_a', pid: 5001, shell: '/bin/bash' })]);

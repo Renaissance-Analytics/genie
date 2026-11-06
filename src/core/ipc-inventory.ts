@@ -51,7 +51,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:design-login', 'window-port'],
     ['genie:provider-login', 'window-port'],
     ['genie:restart-with-handoff', 'protocol:restartWithHandoff'],
-    ['genie:take-over', 'protocol:takeOver'],
+    ['genie:take-over', 'window-port'],
     ['genie:terminal-open', 'protocol:terminals.open'],
     // Opens a window on this machine (Tynn story #378): the window's own, like Take Over's window.
     ['genie:scratch-terminal-open', 'window-port'],

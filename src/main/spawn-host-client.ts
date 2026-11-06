@@ -4,6 +4,8 @@ import { parseSpawnFrame, type ListedPty, type SpawnFrame, type SpawnMethod } fr
 import { execInProcess, streamInProcess, type LineStream, type RunOptions, type RunResult } from './spawn-exec.js';
 import type { PtyOpened, PtyPort, PtySpawnOptions } from './terminal-host.js';
 import { setExecRoute } from './toolchain-runner.js';
+import { terminalPosition, terminalDataPosition } from '../core/terminal-stream.js';
+import type { TerminalPosition, TerminalDataPosition } from '../core/terminal-stream.js';
 
 /**
  * MAIN'S SIDE OF THE SPAWN HOST (genie#1397). The owner's beta.54 lifecycle.log: main held 600 s in 216 blocks (up to
@@ -78,9 +80,9 @@ export class SpawnHostClient {
     #sentEnv: string | null = null;
     readonly #pending = new Map<number, Pending>();
     readonly #streams = new Map<string, { onLine: (line: string) => void; onEnd: (reason: string) => void }>();
-    readonly #ptys = new Map<string, { pid: number | null }>();
-    readonly #data = new Set<(id: string, data: string) => void>();
-    readonly #exit = new Set<(id: string, code: number) => void>();
+    readonly #ptys = new Map<string, { pid: number | null; position?: TerminalPosition | null }>();
+    readonly #data = new Set<(id: string, data: string, position?: TerminalDataPosition) => void>();
+    readonly #exit = new Set<(id: string, code: number, position?: TerminalPosition) => void>();
     readonly #pid = new Set<(id: string, pid: number, shell?: string) => void>();
     readonly #cwd = new Set<(id: string, cwd: string) => void>();
     /** Over a link: whether it is up now (calls and ptys fail, said, while it is not). */
@@ -129,6 +131,11 @@ export class SpawnHostClient {
             throw error;
         }
         const live = new Set(listed.map((p) => p.id));
+        for (const pty of listed) {
+            const entry = this.#ptys.get(pty.id), position = terminalPosition(pty);
+            // A reconnect cannot label a stale retained tail with a newer position: it needs a full resync.
+            if (entry && (!position || entry.position?.epoch !== position.epoch || entry.position.endOffset !== position.endOffset)) entry.position = null;
+        }
         for (const id of [...this.#ptys.keys()]) {
             if (live.has(id)) continue;
             this.#ptys.delete(id);
@@ -188,7 +195,7 @@ export class SpawnHostClient {
 
     /** A live pty found by `linkUp`, taken back: its output, exit and writes are routed as for one opened here. */
     adoptPty(pty: ListedPty): void {
-        this.#ptys.set(pty.id, { pid: pty.pid > 0 ? pty.pid : null });
+        this.#ptys.set(pty.id, { pid: pty.pid > 0 ? pty.pid : null, position: terminalPosition(pty) });
     }
 
     /** True once the child gave up starting and everything runs in-process. */
@@ -218,8 +225,8 @@ export class SpawnHostClient {
     ptyPort(fallback?: PtyPort): PtyPort {
         const fallbackOwned = new Set<string>();
         if (fallback) {
-            fallback.onData((id, data) => { if (fallbackOwned.has(id)) for (const l of this.#data) l(id, data); });
-            fallback.onExit((id, code) => { if (fallbackOwned.delete(id)) for (const l of this.#exit) l(id, code); });
+            fallback.onData((id, data, position) => { if (fallbackOwned.has(id)) for (const l of this.#data) { if (position) l(id, data, position); else l(id, data); } });
+            fallback.onExit((id, code, position) => { if (fallbackOwned.delete(id)) for (const l of this.#exit) { if (position) l(id, code, position); else l(id, code); } });
         }
         return {
             open: (spawn: PtySpawnOptions): PtyOpened => {
@@ -284,6 +291,7 @@ export class SpawnHostClient {
             },
             // The supervisor keeps its own log of what a process printed (OutputTail); nothing is held twice here.
             scrollback: (id) => (fallbackOwned.has(id) ? fallback!.scrollback(id) : undefined),
+            position: (id) => fallbackOwned.has(id) ? fallback!.position?.(id) ?? null : this.#ptys.get(id)?.position ?? null,
             isLive: (id) => (fallbackOwned.has(id) ? fallback!.isLive?.(id) ?? true : this.#ptys.has(id) || this.#held.has(id)),
             onData: (l) => { this.#data.add(l); return () => this.#data.delete(l); },
             onExit: (l) => { this.#exit.add(l); return () => this.#exit.delete(l); },
@@ -399,20 +407,29 @@ export class SpawnHostClient {
                 const pid = typeof payload['pid'] === 'number' ? payload['pid'] : 0;
                 if (!entry || !(pid > 0)) return;
                 entry.pid = pid;
+                entry.position = terminalPosition(payload);
                 const shell = typeof payload['shell'] === 'string' && payload['shell'] !== '' ? payload['shell'] : undefined;
                 for (const l of this.#pid) l(id, pid, shell);
                 return;
             }
-            case 'pty.data':
-                if (this.#ptys.has(id)) for (const l of this.#data) l(id, String(payload['data'] ?? ''));
+            case 'pty.data': {
+                const entry = this.#ptys.get(id);
+                if (!entry) return;
+                const data = String(payload['data'] ?? ''), position = terminalDataPosition(payload, data), held = entry.position;
+                entry.position = position && ((held === undefined && position.offset === 0) || (held?.epoch === position.epoch && held.endOffset === position.offset))
+                    ? { epoch: position.epoch, endOffset: position.endOffset } : null;
+                for (const l of this.#data) { if (position) l(id, data, position); else l(id, data); }
                 return;
+            }
             case 'pty.cwd':
                 if (this.#ptys.has(id)) for (const l of this.#cwd) l(id, String(payload['cwd'] ?? ''));
                 return;
-            case 'pty.exit':
+            case 'pty.exit': {
                 if (!this.#ptys.delete(id)) return;
-                for (const l of this.#exit) l(id, typeof payload['code'] === 'number' ? payload['code'] : -1);
+                const position = terminalPosition(payload), code = typeof payload['code'] === 'number' ? payload['code'] : -1;
+                for (const l of this.#exit) { if (position) l(id, code, position); else l(id, code); }
                 return;
+            }
             case 'stream.line':
                 this.#streams.get(id)?.onLine(String(payload['line'] ?? ''));
                 return;

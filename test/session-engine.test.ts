@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
 import { EventEmitter } from 'node:events';
+import { ENGINE_PROTOCOL } from '../src/core/engine-protocol.js';
 import { lineTransport, memoryPair, UNTRUSTED_LINE_LIMIT, type LineTransport } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
@@ -93,7 +94,7 @@ describe('the handshake', () => {
 
     it('welcomes the right token with its protocol, build and pid', async () => {
         const { client } = await window();
-        expect(client.welcome).toMatchObject({ protocol: 1, build: 'test', pid: process.pid });
+        expect(client.welcome).toMatchObject({ protocol: ENGINE_PROTOCOL, build: 'test', pid: process.pid });
         expect(server.clients).toBe(1);
     });
 });
