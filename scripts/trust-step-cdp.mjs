@@ -234,7 +234,13 @@ try {
     cdp = await Cdp.connect();
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-route]'))`, 60_000), '13. relaunched');
     await open(cdp, otherId);
-    check(await waitFor(cdp, `Boolean(${stepFor(otherId)})`), '14. CONTROL: after the relaunch that one still asks, so a missing step below means something');
+    const stillAsks = await waitFor(cdp, `Boolean(${stepFor(otherId)})`);
+    if (!stillAsks) {
+        // What the page and main say, on the way to a failure: the first thing wanted when this row goes red.
+        const seen = await cdp.evaluate(`window.genie.features.snapshot().then((data) => JSON.stringify({ hash: window.location.hash, trust: (data?.trust ?? []).map((s) => s.workspaceId ?? s.id ?? '?'), surface: (document.querySelector('[data-surface]')?.getAttribute('data-surface') ?? 'none'), text: (document.body?.innerText ?? '').slice(0, 200) }))`);
+        console.log(`  at the failure: ${String(seen).slice(0, 600)}`);
+    }
+    check(stillAsks, '14. CONTROL: after the relaunch that one still asks, so a missing step below means something');
     await open(cdp, acmeId);
     check(await waitFor(cdp, `document.querySelector('[data-surface="workspace"]')?.getAttribute('data-workspace') === '${word(acmeId)}'`), '15. the trusted workspace opens');
     // Long enough for a step that was coming to have come: the control above came in this run.
