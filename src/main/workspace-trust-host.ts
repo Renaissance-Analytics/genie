@@ -25,6 +25,8 @@ export interface WorkspaceTrustPorts extends TrustListPorts {
     approveSites(workspaceId: string): Promise<void>;
     /** The verdict differs from the last one read, or this is the first. */
     verdictMoved?(workspaceId: string): void;
+    /** A pause between two reads of a carried workspace's list (default setTimeout). */
+    wait?(ms: number): Promise<void>;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
