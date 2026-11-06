@@ -33,7 +33,7 @@ export class SafeMode {
         this.#view = view;
     }
 
-    static open(runtimeDir: string, options: { readonly now?: () => number; readonly pid?: number; readonly log?: (line: string) => void } = {}): SafeMode {
+    static open(runtimeDir: string, options: { readonly now?: () => number; readonly pid?: number; readonly log?: (line: string) => void; readonly cause?: () => string } = {}): SafeMode {
         const now = options.now ?? Date.now;
         const log = options.log ?? (() => {});
         mkdirSync(runtimeDir, { recursive: true });

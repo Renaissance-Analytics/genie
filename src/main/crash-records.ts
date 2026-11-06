@@ -86,6 +86,11 @@ export function latestCrashRecord(dir: string): CrashRecord | null {
     return null;
 }
 
+/** The cause of the run that did not end cleanly, from its records (Tynn #386). Not built yet. */
+export function previousRunCause(_dir: string, _startedAt: number | null): string {
+    throw new Error('not built yet (Tynn #386)');
+}
+
 /** How much of the end of a log file is read for its last lines: 200 lines are far less. */
 const TAIL_BYTES = 256 * 1024;
 
