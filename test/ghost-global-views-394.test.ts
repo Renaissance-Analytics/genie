@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import { composeServices } from '../src/main/compose.js';
-import { featureSnapshot, type FeaturePorts } from '../src/main/feature-ipc.js';
+import { featureSnapshot, handleFeatureAction, type FeaturePorts } from '../src/main/feature-ipc.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 const pty: PtyPort = { open: () => { throw new Error('no process starts in this visibility fixture'); }, write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} };
@@ -34,6 +34,21 @@ async function fixture() {
 }
 
 describe('story394 / ruling6064: global resource views filter ghosts and restore them on redock', () => {
+    it('a thread and search already served to a window stop exposing hidden messages, and can be requested again after redock', async () => {
+        const f = await fixture();
+        try {
+            const key = [f.ghost.id, 'human'].sort().join('|');
+            const served = await handleFeatureAction(f.services, { kind: 'inbox.thread', key, limit: 50 });
+            const searched = await handleFeatureAction(f.services, { kind: 'inbox.search', key, query: 'Dormant' });
+            expect(served.inbox!.thread!.messages).toHaveLength(1);
+            expect(searched.inbox!.search!.hits).toHaveLength(1);
+            const state = { toolStatuses: null, knowledgeQuery: '', inboxThread: served.inbox!.thread ?? null, inboxSearch: searched.inbox!.search ?? null };
+            f.hide();
+            expect(JSON.stringify((await featureSnapshot(f.services, state)).inbox)).not.toContain('Dormant history');
+            f.redock();
+            expect((await handleFeatureAction(f.services, { kind: 'inbox.thread', key, limit: 50 })).inbox!.thread!.messages).toHaveLength(1);
+        } finally { await f.close(); }
+    });
     it('Flows are hidden from the feature view and MCP store view, then return unchanged', async () => {
         const f = await fixture();
         try {

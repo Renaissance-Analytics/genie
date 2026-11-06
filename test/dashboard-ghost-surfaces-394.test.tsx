@@ -19,6 +19,13 @@ const shell = (route: string) => <Shell route={route} snapshot={snapshot} servab
     onSelectRow={() => {}} onSend={() => {}} onCloseChat={() => {}} answeringApproval={null} onAnswerApproval={() => {}} onAnswerDeckItem={() => {}} />;
 
 describe('story394: the sidebar is the only ghost-workspace surface', () => {
+    it('hides an agent page already cached when its workspace hibernates, including a stopped agent with no new events', () => {
+        const detail = { agent: { id: 'dormant', name: 'Dormant cached agent', workspaceId: 'ghost', provider: 'codex', fidelity: 'declared', cwd: '/ghost' }, session: null, rows: [], turns: 0, cost: null, refusal: null };
+        const props = { ...shell('genie://agent/dormant').props, agentDetail: detail as never, agentResolved: true };
+        const html = renderToStaticMarkup(<Shell {...props} />);
+        expect(html).not.toContain('data-agent-in-workspace');
+        expect(html).not.toContain('Dormant cached agent');
+    });
     it.each(['genie://dashboard', 'genie://deck', 'genie://flows', 'genie://knowledge', 'genie://settings'])('%s only renders a ghost in the explicitly expanded sidebar', (route) => {
         localStorage.setItem('genie.rail.showHibernated', '1');
         const container = document.createElement('div'); container.innerHTML = renderToStaticMarkup(shell(route));
