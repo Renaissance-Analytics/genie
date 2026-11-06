@@ -23,7 +23,7 @@ import { SessionEngineClient } from './session-engine-client.js';
 export const DOOR_DOWN = 'Genie sites can’t load until Genie’s window is open again. Pages already here stay as they are.';
 
 // The host's root (P7): started by genie-host with its environment, GENIE_HOME included.
-const home = genieRoot();
+const home = genieRoot(process.env);
 app.setPath('userData', join(home, 'browser', '.process'));
 // A launch flag for the proof (scripts/browser-process-cdp.mjs), as --remote-debugging-port is for the window.
 const debugPort = process.argv.find((a) => a.startsWith('--genie-browser-debug-port='))?.split('=')[1];
