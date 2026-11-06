@@ -140,10 +140,14 @@ async function composeRig(safe: boolean) {
     // The run before this one left a flow armed on a schedule, and a run of it interrupted.
     const before = await FlowStore.open(dir);
     const armed = await before.create({ workspaceId: 'ws-example', name: 'nightly', document: scheduleDoc, by: { kind: 'user' }, armed: true });
-    await before.markInFlight(armed.id, { at: new Date().toISOString(), trigger: 'manual', nodes: { t: 'ran' } });
+    // RESUMABLE (flow-store.ts `resumable`): the trigger ran and left its output, the log step was running — a store that
+    // opens on anything else records it stopped and there would be nothing to resume.
+    await before.markInFlight(armed.id, { at: new Date().toISOString(), trigger: 'manual', nodes: { t: 'ran', l: 'running' }, outputs: { t: {} }, entry: 't' });
     const pty = scriptedPty();
     const held: string[] = [];
     let leftListener: (() => void) | null = null;
+    // As WindowSafeMode reads it: on until the person leaves it.
+    let on = safe;
     const services: ComposedServices = await composeServices({
         userData: dir,
         pty: pty.port,
@@ -152,7 +156,7 @@ async function composeRig(safe: boolean) {
         frontDoorPort: 0,
         roster: () => [],
         workspaces: () => [{ id: 'ws-example', path: ws }],
-        safeMode: () => safe,
+        safeMode: () => on,
         heldSite: (siteId) => { held.push(siteId); },
         safeModeLeft: (listener) => { leftListener = listener; },
     });
@@ -160,7 +164,7 @@ async function composeRig(safe: boolean) {
     const scheduler = services.flowScheduler as unknown as FlowScheduler;
     await settle();
     await scheduler.settled();
-    return { services, scheduler, pty, held, armedId: armed.id, leave: () => leftListener?.() };
+    return { services, scheduler, pty, held, armedId: armed.id, leave: () => { on = false; leftListener?.(); } };
 }
 const devServers = (opened: ReadonlyArray<{ command?: string | undefined }>) => opened.filter((o) => (o.command ?? '').includes('npm run dev'));
 
@@ -185,6 +189,8 @@ describe('compose’s own flows and sites (no host)', () => {
         const r = await composeRig(false);
         expect(r.scheduler.nextDue()).toMatchObject({ flowId: r.armedId });
         expect(r.services.flows.get(r.armedId)?.inFlight).toBeUndefined();
+        // It really RESUMED (not recorded stopped at open): the run is marked resumed.
+        expect(r.services.flows.get(r.armedId)?.runs.at(-1)).toMatchObject({ resumed: true });
         expect(devServers(r.pty.opened)).toHaveLength(1);
         expect(r.held).toEqual([]);
     });
