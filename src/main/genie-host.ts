@@ -17,7 +17,7 @@ import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRu
 import { SessionEngineServer } from './session-engine-server.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
-import { readLifecycleTail, writeCrashRecord } from './crash-records.js';
+import { previousRunCause, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
@@ -192,7 +192,8 @@ async function main(): Promise<void> {
      * and NOTHING starts by itself — every automatic start below asks it: the mail wake and IssueWatch's push, the
      * flows, the scheduled tasks, the kept processes, the sites, the engines; and the window's boot restore, over the link.
      */
-    const safeMode = SafeMode.open(runtime, { log: (line) => { say(line); lifecycleLog(line); } });
+    // Its cause (cut 3): the newest crash record since the previous host started — its host.json is still here until this one writes its own.
+    const safeMode = SafeMode.open(runtime, { log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
     const safeNow = () => safeMode.active();
     // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No OS keychain refuses secrets; it never stops the host.
     const keychain = secrets.keychain;

@@ -1,6 +1,6 @@
 import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
-import { CRASH_KEEP, LIFECYCLE_TAIL_LINES, fitCrashRecord, type CrashRecord } from '../core/crash-record.js';
+import { CRASH_KEEP, LIFECYCLE_TAIL_LINES, crashCause, fitCrashRecord, type CrashRecord } from '../core/crash-record.js';
 
 /**
  * THE CRASH RECORDS ON DISK (Tynn story #386): `<genieRoot()>/runtime/crash/<ISO time>.json`, written by genie-host for
@@ -86,9 +86,24 @@ export function latestCrashRecord(dir: string): CrashRecord | null {
     return null;
 }
 
-/** The cause of the run that did not end cleanly, from its records (Tynn #386). Not built yet. */
-export function previousRunCause(_dir: string, _startedAt: number | null): string {
-    throw new Error('not built yet (Tynn #386)');
+/**
+ * The cause of the run that did not end cleanly (safe mode's banner): the NEWEST record written since that run's host
+ * started (`startedAt` from its host.json, still on disk when the next host opens safe mode). An older run's records
+ * are not its own; with no start known, nothing is claimed.
+ */
+export function previousRunCause(dir: string, startedAt: number | null): string {
+    if (startedAt === null) return crashCause(null);
+    const names = recordNames(dir);
+    for (let i = names.length - 1; i >= 0; i--) {
+        try {
+            const value = JSON.parse(readFileSync(join(dir, names[i]!), 'utf8')) as { kind?: unknown; at?: unknown };
+            const at = typeof value.at === 'string' ? Date.parse(value.at) : Number.NaN;
+            if (!Number.isFinite(at)) continue;
+            if (at < startedAt) break;
+            if (value.kind === 'hang' || value.kind === 'lost' || value.kind === 'exit') return crashCause(value as CrashRecord);
+        } catch { /* a torn file: the one before it */ }
+    }
+    return crashCause(null);
 }
 
 /** How much of the end of a log file is read for its last lines: 200 lines are far less. */
