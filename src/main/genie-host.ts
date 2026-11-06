@@ -30,6 +30,7 @@ import { composeHosting, type HostingStack } from './hosting-compose.js';
 import { HostingService, WindowElevation } from './hosting-host.js';
 import { AppInboxHost } from './app-inbox-host.js';
 import { shutDownHosted } from './host-shutdown.js';
+import { SafeMode } from './safe-mode-host.js';
 import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
@@ -185,6 +186,14 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
+    /*
+     * SAFE MODE (Tynn #386; safe-mode-host.ts), opened here: only the host that holds the endpoint reads and removes the
+     * clean-exit marker (a second host exited above, touching nothing). With no marker the last run did not end cleanly,
+     * and NOTHING starts by itself — every automatic start below asks it: the mail wake and IssueWatch's push, the
+     * flows, the scheduled tasks, the kept processes, the sites, the engines; and the window's boot restore, over the link.
+     */
+    const safeMode = SafeMode.open(runtime, { log: (line) => { say(line); lifecycleLog(line); } });
+    const safeNow = () => safeMode.active();
     // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No OS keychain refuses secrets; it never stops the host.
     const keychain = secrets.keychain;
     const keychainOpening = openHostKeychain({ keychain, backend: secrets.kind });
@@ -233,6 +242,8 @@ async function main(): Promise<void> {
     const drafts = await ChatDraftStore.open(home);
     // THE REGISTRY'S FILES (P3.2): this host writes them (windows through it) and reads them for its own tools and approvals.
     const registryStore = new Store(home);
+    // What a quit or an upgrade recorded is KEPT in safe mode (never taken), and listed on the banner with its own Start.
+    if (safeMode.active()) void Promise.all([registryStore.readRunningAtQuit(), registryStore.readInterruptedAtQuit()]).then(([running, interrupted]) => safeMode.wasRunning([...running, ...interrupted]), () => {});
     const hostRegistry = new HostRegistry(registryStore);
     await hostRegistry.refresh();
     let engineRef: SessionEngineServer | null = null;
@@ -315,6 +326,9 @@ async function main(): Promise<void> {
             appEnv: (source) => appInboxDoor.envFor(source),
             elevate: (steps) => hostingElevation.run(steps),
             workspaces: () => hostRegistry.listWorkspaces(),
+            // Safe mode: no site and no stopped engine starts by itself; the held sites go on the banner.
+            safeMode: safeNow,
+            heldSite: (siteId, name) => safeMode.hold('site', { id: siteId, name }),
             onWorkspacesChange: (listener) => { workspacesListeners.add(listener); return () => { workspacesListeners.delete(listener); }; },
         });
     } catch (error) {
@@ -544,6 +558,8 @@ async function main(): Promise<void> {
         log: say,
         onShutdown: () => void shutdown('a window asked'),
         heartbeat: hangWatchdog,
+        // Every window shows the banner, and may leave it (safe-mode-host.ts).
+        safeMode,
         onClients: (n) => {
             lastBusy = Date.now();
             say(`windows connected: ${n}`);
@@ -686,6 +702,9 @@ async function main(): Promise<void> {
     let processBookNow: ProcessBook | null = null;
     /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
     const clocks: Array<{ stop(): void }> = [];
+    /** The clocks to plan again when the person leaves safe mode — arming what may fire later, and starting nothing now. */
+    const planners: Array<{ plan(): void }> = [];
+    safeMode.onChange((view) => { if (!view.active) for (const p of planners) p.plan(); });
     const openFlows = (databasePath: string): Promise<void> => {
         flowsOpening ??= (async () => {
             const store = await FlowStore.open(home);
@@ -721,12 +740,14 @@ async function main(): Promise<void> {
                 envFor: (id) => engine.serviceEnvFor(id),
                 addKnowledge: async (entry) => ({ id: own.knowledge.add(entry as never).id }),
                 attention: own.attention,
+                safeMode: safeNow,
             });
             // Genie's tools as flow steps: the host's MCP server's own (its native ones in place, the window's forwarded).
             const regs = mcp?.registrations() ?? [];
             if (regs.length > 0) engineFlows.setToolCaller(createFlowToolCaller({ registrations: regs, callers: flowCallers }));
             flowsService.attach({ store, scheduler: engineFlows.scheduler });
             clocks.push(engineFlows);
+            planners.push(engineFlows.scheduler);
             // A hibernate or a wake changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') engineFlows.scheduler.plan(); });
             lifecycleLog(`flows open: ${store.list().length} flow(s)`);
@@ -744,6 +765,8 @@ async function main(): Promise<void> {
                 // Each kept process's OWN app credential, minted here (P5a.2), window or no window.
                 appEnv: (p: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => appInboxDoor.envFor(p),
                 asleep: (workspaceId: string) => hostRegistry.workspace(workspaceId)?.asleep === true,
+                // Safe mode: the restore starts no kept process, and no scheduled task is armed.
+                safeMode: safeNow,
             };
             const processBook = await ProcessBook.open(home, {
                 ...deps,
@@ -763,18 +786,20 @@ async function main(): Promise<void> {
             });
             scheduler.plan();
             clocks.push(scheduler);
+            planners.push(scheduler);
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             processBookNow = processBook;
             const restored = processBook.restore();
+            if (safeMode.active()) for (const p of processBook.kept()) if (restored.heldBack.includes(p.id)) safeMode.hold('process', { id: p.id, name: p.name });
             lifecycleLog(`process book open: ${restored.started.length} restored, ${restored.heldBack.length} held back`);
         })();
         return bookOpening;
     };
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
-    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery });
+    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     mcp = startHostMcp({
         stores: stores.stores,
         settings,
@@ -802,6 +827,10 @@ async function main(): Promise<void> {
         log: (line) => { say(line); lifecycleLog(line); },
     });
     host.subscribe(() => { lastBusy = Date.now(); });
+    // THE HOST'S SIGN OF LIFE (safe mode): when, and which agents have a session — what the next start reads if this run
+    // dies. Small and atomic; unref'd, so it never holds a host that is otherwise done.
+    safeMode.beat(host.startedIds());
+    setInterval(() => { safeMode.beat(host.startedIds()); }, 15_000).unref?.();
     /*
      * EVERY PROCESS THE WINDOW STARTS, STARTED HERE (the host split, P2.1; plan §11a): #1405's spawn host as THIS
      * process's children — `processes` (exec, streams, supervised ptys) and `terminals` (interactive shells) — so a site,
@@ -877,6 +906,8 @@ async function main(): Promise<void> {
             rmSync(recordFile, { force: true });
             rmSync(tokenFile, { force: true });
         }
+        // THE CLEAN-EXIT MARKER, LAST (Tynn #386): everything above ended; its absence at the next boot is safe mode.
+        safeMode.writeCleanExit(why);
         process.exit(0);
     }
     // The updater's own clock (AUTO_CHECK): stopped with the host's other clocks, first, at "Shut down everything".

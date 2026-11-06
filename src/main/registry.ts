@@ -62,6 +62,7 @@ export class Registry {
     #recordListeners = new Set<(agentId: AgentId) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
+    #safeMode: (() => import('../core/safe-mode.js').SafeModeView | null) | null = null;
     #deckSource: () => readonly DeckItem[] = () => [];
     #runningAtQuit: AgentId[] = [];
     #interruptedAtQuit: AgentId[] = [];
@@ -172,6 +173,11 @@ export class Registry {
     }
 
     /** The Deck's signal strip, MEASURED by the composition root; honest zeros until then. */
+    /** genie-host's safe mode (Tynn #386), read into every snapshot: the banner on every window. */
+    setSafeMode(provider: () => import('../core/safe-mode.js').SafeModeView | null): void {
+        this.#safeMode = provider;
+    }
+
     setSignals(provider: () => SignalState): void {
         this.#signals = provider;
     }
@@ -303,6 +309,8 @@ export class Registry {
              */
             signals: this.#signals?.() ?? { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
             workstation: this.#workstation,
+            // Only once main has said where it comes from: a snapshot with no host to ask carries no claim about it.
+            ...(this.#safeMode ? { safeMode: this.#safeMode() } : {}),
         };
     }
 

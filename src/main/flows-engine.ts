@@ -26,6 +26,8 @@ export interface FlowsEngineDeps {
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
     readonly addKnowledge: (entry: { title: string; body: string; [k: string]: unknown }) => Promise<{ id: string }>;
     readonly attention: Parameters<typeof questionWaiter>[0];
+    /** SAFE MODE (Tynn #386; genie-host's): no schedule, file or interrupted run starts a flow while it is on. */
+    readonly safeMode?: () => boolean;
 }
 
 export interface FlowsEngine {
@@ -45,6 +47,7 @@ export function startFlowsEngine(deps: FlowsEngineDeps): FlowsEngine {
     const scheduler = new FlowScheduler({
         store: deps.store,
         now: deps.now,
+        ...(deps.safeMode ? { safeMode: deps.safeMode } : {}),
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         run: createFlowRunner({
             now: deps.now,

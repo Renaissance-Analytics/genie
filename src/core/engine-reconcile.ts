@@ -55,6 +55,8 @@ export interface ReconcilePorts extends EnginePorts {
     readonly sleep: (ms: number) => Promise<void>;
     /** For an engine found already RUNNING: put back what lives only in its memory. A failure is the engine's outcome. */
     readonly restore?: (instance: ServiceInstance) => Promise<void>;
+    /** SAFE MODE (Tynn #386): while on, a stopped engine is not started (held); a running container is left alone. */
+    readonly safeMode?: () => boolean;
 }
 
 /** An engine taken over from Genie 1 that no workspace holds a slice of: it gives nobody any env. */
@@ -66,6 +68,8 @@ export type EngineOutcome =
     | { readonly id: string; readonly outcome: 'running' }
     | { readonly id: string; readonly outcome: 'started' }
     | { readonly id: string; readonly outcome: 'person-stopped' }
+    /** Safe mode (Tynn #386): stopped, and not started. */
+    | { readonly id: string; readonly outcome: 'held'; readonly reason: string }
     /** Only hibernated workspaces use it: left stopped until one of them wakes (parity audit #12). */
     | { readonly id: string; readonly outcome: 'asleep' }
     | { readonly id: string; readonly outcome: 'unused'; readonly reason: string }
@@ -130,6 +134,8 @@ export async function reconcileEngines(ports: ReconcilePorts, bound: ReadinessBo
                 }
                 return { id: i.id, outcome: 'running' };
             }
+            // SAFE MODE (Tynn #386): a stopped engine is not started; one found running was left alone above. safe mode holds
+            if (ports.safeMode?.() === true) return { id: i.id, outcome: 'held', reason: `${label(i)}: not started, Genie is in safe mode` };
             if (state === 'absent') return { id: i.id, outcome: 'absent', reason: `${label(i)}: its container is not in Docker any more; remove the engine and add it again (its data volume is kept unless you delete it)` };
             try {
                 await ports.start(i.id);

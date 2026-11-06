@@ -99,6 +99,9 @@ export const ENGINE_METHODS = [
     // the helper's launch. Its state is sent as `updates.dump` before `engine.ready` and as `updates.event` on change, to
     // local windows only.
     'engine.updates',
+    // The host's safe mode (Tynn #386: safe-mode-host.ts): `['leave']`. Its view is sent as `safeMode.event` before
+    // `engine.ready` and on every change, to EVERY window: the banner is on all of them.
+    'engine.safeMode',
     // The updater helper's own (P5b: updater-helper.ts), on a link that said hello as the updater: `register`, `reply`,
     // `progress`. The host's requests reach it as `updater.event`. Nothing else is open to that link.
     'engine.updater',
