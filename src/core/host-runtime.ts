@@ -14,7 +14,3 @@ export const NO_PAGES_HERE = 'pages is not available on this host: it runs on pl
 export function runsOnElectron(versions: Readonly<Record<string, string | undefined>> = process.versions): boolean {
     return versions['electron'] !== undefined;
 }
-
-// BREAK PROBE (reverted next commit): the no-electron guard must see these.
-export const p10bProbeElectron = () => import('electron');
-export const p10bProbePty = () => import('node-pty');
