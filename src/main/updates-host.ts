@@ -85,6 +85,8 @@ export interface UpdatesServiceOptions {
     readonly clearFailed?: () => void;
     /** The helper could not be handed the install (it went): record why and start Genie again. */
     readonly handOverFailed?: (reason: string, launch: HelperLaunch) => void;
+    /** Why this host has no updater (P10.1d: plain Node, its image updated by its deployment). Absent = it has one. */
+    readonly unavailable?: string;
 }
 
 /** Why the last install did not happen, for the next window (`<home>/runtime/update-failed.json`). */

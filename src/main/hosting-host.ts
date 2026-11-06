@@ -107,11 +107,11 @@ export interface HostingApi {
  * — connecting is not an approval, so nothing runs until the person approves there.
  */
 export class WindowElevation {
-    readonly #ports: { connected(): boolean; ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>; now?: () => number };
+    readonly #ports: { connected(): boolean; ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>; now?: () => number; /** false: this host can never elevate (hostCapabilities, P10.1d). Absent = it can. */ elevation?: boolean };
     readonly #listeners = new Set<() => void>();
     #waiting: { labels: string[]; at: number } | null = null;
 
-    constructor(ports: { connected(): boolean; ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>; now?: () => number }) {
+    constructor(ports: { connected(): boolean; ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>; now?: () => number; /** false: this host can never elevate (hostCapabilities, P10.1d). Absent = it can. */ elevation?: boolean }) {
         this.#ports = ports;
     }
 

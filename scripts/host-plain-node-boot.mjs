@@ -5,6 +5,7 @@
 //   1. host.json is written, naming this process, the engine protocol and the build it was given;
 //   2. a hello with the WRONG token is refused (the control: the gauge can say no), and one with the token is welcomed;
 //   3. what needs Electron says so: the Genie browser answers "not available on this host" and starts nothing (P10.1d),
+//      the updater answers "Updates aren't available on this host" and launches no helper,
 //      and Hosting says why the front door is off — there is no Caddy at <resources>/runtime/caddy;
 //   4. GENIE_HOST_IDLE_MS=0 is never idle-exit: with nothing held and no window, the host is still there later (P10.1c);
 //   5. SIGTERM is a clean shutdown: exit code 0, and the host's record removed.
@@ -115,7 +116,14 @@ const opened = await win.until((f) => f.kind === 'result' && f.id === 1, 'an ans
 if (opened.ok !== false || !/not available on this host/.test(String(opened.reason))) fail('browser', `engine.browser open answered ${JSON.stringify(opened)}; expected a refusal saying it is not available on this host`);
 ok('browser', `refused: ${opened.reason}`);
 
-// 3b. Hosting says why there is no front door
+// 3b. the updater: not on this host, and no `--updater` helper launched (a launched one would log "updater: starting")
+win.send({ kind: 'call', id: 2, method: 'engine.updates', args: ['check', []] });
+const checked = await win.until((f) => f.kind === 'result' && f.id === 2, 'an answer to engine.updates check').catch((e) => fail('updates', e.message));
+if (checked.ok !== false || !/Updates aren't available on this host/.test(String(checked.reason))) fail('updates', `engine.updates check answered ${JSON.stringify(checked)}; expected "Updates aren't available on this host"`);
+if (/updater: starting/.test(output)) fail('updates', 'a --updater helper was launched');
+ok('updates', `refused: ${checked.reason}`);
+
+// 3c. Hosting says why there is no front door
 const hosting = await win.until((f) => f.kind === 'event' && f.channel === 'hosting.dump', 'the hosting dump').catch((e) => fail('caddy', e.message));
 const door = hosting.payload?.externalFrontDoor;
 if (!door || door.running !== false || !String(door.reason).includes(join(resources, 'runtime', 'caddy'))) fail('caddy', `Hosting's front door says ${JSON.stringify(door)}; expected off, naming ${join(resources, 'runtime', 'caddy')}`);

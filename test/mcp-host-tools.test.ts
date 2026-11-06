@@ -1,6 +1,7 @@
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import { describe, expect, it } from 'vitest';
 import { HOST_NATIVE_TOOLS, hostRegistrations, windowClosedRefusal, type ForwardedToolCall } from '../src/main/mcp-host-tools.js';
+import { NO_PAGES_HERE, notAvailableHere } from '../src/core/host-runtime.js';
 import type { Caller, Registration } from '../src/main/mcp-tools.js';
 import type { AgentId } from '../src/core/identity.js';
 
@@ -98,33 +99,62 @@ describe('openFileForUser with no window', () => {
 });
 
 /**
- * A WINDOW TOOL THIS HOST CAN NEVER RUN (P10.1d): genie-host on plain Node has no Electron, so no Genie browser for `pages`
- * to read. The agent is told that, in the host's words — not "open Genie", which on such a host cannot help — and the call
- * is never forwarded, window or not. The other window tools are unchanged.
+ * WINDOW TOOLS ON A HOST THAT CAN HAVE NO WINDOW (P10.1d). genie-host on plain Node has no Electron: no Genie window to
+ * forward a tool to, no Genie browser for `pages`. hostCapabilities() decides it, and every tool that needs one answers
+ * "not available on this host" in the one wording — never "open Genie", which on such a host cannot help. Nothing is
+ * forwarded, run or kept for later. The host's own tools are unchanged.
  */
-describe('a window tool that is not available on this host', () => {
-    const WHY = 'pages is not available on this host: it runs on plain Node, with no Electron for the Genie browser. Nothing was done.';
-    const rigHere = (connected: boolean) => {
+describe('window tools on a host with no window and no browser', () => {
+    // Every tool genie-host forwards to a window: the window's tools (sites, services, checkIssues, workspaceTabs,
+    // createAgent, openFileForUser), pages, and a plugin's tool.
+    const WINDOW_TOOLS = ['sites', 'services', 'checkIssues', 'workspaceTabs', 'createAgent', 'openFileForUser', 'ai.genie.spreadsheet.createWorkbook'];
+    const rigHere = (connected: boolean, capabilities?: { window: boolean; browser: boolean }) => {
         const ran: string[] = [];
         const forwarded: ForwardedToolCall[] = [];
-        const regs = hostRegistrations(['pages', 'sites'].map((n) => local(n, ran)), {
+        const kept: unknown[] = [];
+        const regs = hostRegistrations(['agentinbox', 'pages', ...WINDOW_TOOLS].map((n) => local(n, ran)), {
             resolveCaller: (id) => (id === 'session-1' ? CALLER : null),
             window: { connected: () => connected, call: async (c) => { forwarded.push(c); return { text: `window ran ${c.name}`, isError: false }; } },
-            openFileLater: () => {},
-            unavailableHere: new Map([['pages', WHY]]),
+            openFileLater: (c) => { kept.push(c); },
+            ...(capabilities ? { capabilities } : {}),
         });
-        return { byName: (n: string) => regs.find((r) => r.definition.name === n)!, ran, forwarded };
+        return { byName: (n: string) => regs.find((r) => r.definition.name === n)!, ran, forwarded, kept };
     };
+    const NONE = { window: false, browser: false };
 
-    it.each([[false], [true]])('window connected %s: pages answers why, and nothing is forwarded or run', async (connected) => {
-        const r = rigHere(connected);
-        expect(await r.byName('pages').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: WHY, isError: true });
+    it.each([[false], [true]])('connected %s: pages says the Genie browser is not available here', async (connected) => {
+        const r = rigHere(connected, NONE);
+        expect(await r.byName('pages').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: NO_PAGES_HERE, isError: true });
         expect(r.forwarded).toEqual([]);
         expect(r.ran).toEqual([]);
     });
 
-    it('CONTROL: another window tool on the same host is forwarded with a window, and told the window is closed without one', async () => {
-        expect(await rigHere(true).byName('sites').handler({} as JsonObject, ctx())).toEqual({ text: 'window ran sites', isError: false });
-        expect(await rigHere(false).byName('sites').handler({} as JsonObject, ctx())).toEqual({ text: windowClosedRefusal('sites'), isError: true });
+    it.each(WINDOW_TOOLS)('%s says it is not available on this host, and nothing is forwarded, run or kept', async (name) => {
+        for (const connected of [false, true]) {
+            const r = rigHere(connected, NONE);
+            const result = await r.byName(name).handler({} as JsonObject, ctx());
+            expect(result).toEqual({ text: notAvailableHere(name, 'a Genie window'), isError: true });
+            expect(result.text).not.toMatch(/open Genie|next opened/i);
+            expect(r.forwarded).toEqual([]);
+            expect(r.kept).toEqual([]);
+            expect(r.ran).toEqual([]);
+        }
+    });
+
+    it('the host\'s own tools still run there (CONTROL)', async () => {
+        const r = rigHere(false, NONE);
+        expect(await r.byName('agentinbox').handler({}, ctx())).toEqual({ text: 'agentinbox ran here', isError: false });
+    });
+
+    it.each([['given', { window: true, browser: true }], ['absent', undefined]] as const)('CONTROL: capabilities %s on an Electron host — today\'s wording and forwarding, unchanged', async (_how, capabilities) => {
+        const closed = rigHere(false, capabilities);
+        expect(await closed.byName('sites').handler({} as JsonObject, ctx())).toEqual({ text: windowClosedRefusal('sites'), isError: true });
+        expect(await closed.byName('pages').handler({} as JsonObject, ctx())).toEqual({ text: windowClosedRefusal('pages'), isError: true });
+        const opened = await closed.byName('openFileForUser').handler({ path: 'a' } as JsonObject, ctx());
+        expect(opened).toEqual({ text: "Genie's window is closed; the file opens when Genie is next opened.", isError: false });
+        expect(closed.kept).toHaveLength(1);
+        const open = rigHere(true, capabilities);
+        expect(await open.byName('pages').handler({} as JsonObject, ctx())).toEqual({ text: 'window ran pages', isError: false });
+        expect(await open.byName('sites').handler({} as JsonObject, ctx())).toEqual({ text: 'window ran sites', isError: false });
     });
 });

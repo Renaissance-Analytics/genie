@@ -40,6 +40,8 @@ export interface HostToolsOptions {
     readonly forwardedCalls?: Map<string, McpCall>;
     /** Window tools this host can never run, each with what the agent is told (P10.1d: `pages` on plain Node). */
     readonly unavailableHere?: ReadonlyMap<string, string>;
+    /** What this host can have (core/host-runtime.ts hostCapabilities). Absent = a window and a browser, as in the app. */
+    readonly capabilities?: { readonly window: boolean; readonly browser: boolean };
 }
 
 /** What a window tool answers when there is no window. The agent reads it; nothing was done. */
