@@ -11,6 +11,3 @@ const KEPT = /^--(no-sandbox$|ozone-platform=|password-store=|remote-debugging-p
 export function windowLaunchFlags(argv: readonly string[]): string[] {
     return argv.filter((a) => KEPT.test(a));
 }
-
-// BREAK PROBE (the no-freeze guard must go red on this; removed in the next commit)
-export const BREAK_PROBE_E2E = process.env['GENIE_E2E'];

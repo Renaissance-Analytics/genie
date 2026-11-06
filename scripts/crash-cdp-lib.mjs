@@ -201,6 +201,8 @@ export async function ticksOf(cdp, agentId) {
     const pids = [...new Set(ticks.values())];
     return { running: detail.running === true, max: ticks.size === 0 ? 0 : Math.max(...ticks.keys()), pids, last: ticks.size === 0 ? null : ticks.get(Math.max(...ticks.keys())) };
 }
+/** Why an agent is or is not running, as the host says: its session, a start's refusal, the provider's last stderr. */
+export const whyOf = (cdp, agentId) => cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ session: d?.session ? { running: d.session.running, turnState: d.session.turnState, failure: d.session.failure ?? null } : null, refusal: d?.refusal ?? null, log: (d?.log ?? []).slice(-4) }))`, 15_000).catch((e) => `(unread: ${e?.message ?? e})`);
 export const running = (cdp, agentId) => cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => d?.session?.running === true)`, 15_000);
 /** Two codex agents, each started and prompted, streaming ticks (mid-turn). */
 export async function twoStreamingAgents(cdp, tag) {
@@ -249,8 +251,8 @@ export function finish(name, h, cleanups) {
         if (failures.length > 0) {
             console.log(`\n${name} FAILED — ${failures.length} check(s):`);
             for (const f of failures) console.log(`  - ${f}`);
-            for (const file of [h.hostLog]) {
-                const lines = readOr(file).split(/\r?\n/).filter((l) => /safe mode|hang|crash|lost|relaunch|ready|serving|windows connected/i.test(l)).slice(-30);
+            for (const file of [h.hostLog, h.lifecycle]) {
+                const lines = readOr(file).split(/\r?\n/).filter((l) => /safe mode|hang|crash|lost|relaunch|restor|resum|agent|refus|fail|could not|ready|serving|windows connected/i.test(l)).slice(-45);
                 console.log(`  ${file} (filtered):\n    ${lines.map((l) => l.slice(0, 220)).join('\n    ')}`);
             }
         } else console.log(`\n${name} OK`);

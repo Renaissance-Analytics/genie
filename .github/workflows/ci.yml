@@ -435,8 +435,10 @@ jobs:
       # SAFE MODE AND A HUNG WINDOW, AS A PERSON MEETS THEM (Tynn #386). Each starts the app itself, on a home and ports of
       # its own: a clean quit as the control, then the window and genie-host killed by pid; a window main held 40 s.
       - name: safe mode after Genie did not end cleanly
+        if: ${{ !cancelled() }}
         run: timeout 540 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/safe-mode-cdp.mjs
       - name: a hung window is ended and opened again
+        if: ${{ !cancelled() }}
         run: timeout 540 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/hang-cdp.mjs
 
       - name: electron's own output
@@ -699,11 +701,13 @@ jobs:
 
       # SAFE MODE AND A HUNG WINDOW, as on Linux above.
       - name: safe mode after Genie did not end cleanly
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           node scripts/safe-mode-cdp.mjs
           if ($LASTEXITCODE -ne 0) { throw "safe-mode-cdp failed (exit $LASTEXITCODE)" }
       - name: a hung window is ended and opened again
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           node scripts/hang-cdp.mjs

@@ -25,7 +25,7 @@
  */
 import {
     alive, attach, check, cleanQuit, failures, finish, gone, hostLogSince, hostPid, killHard, launch, makeHome,
-    readOr, refuseOffTestMachines, running, sleep, step, stubPids, tickerOn, ticksOf, twoStreamingAgents, until,
+    readOr, refuseOffTestMachines, running, sleep, step, stubPids, tickerOn, ticksOf, twoStreamingAgents, until, whyOf,
 } from './crash-cdp-lib.mjs';
 
 refuseOffTestMachines('safe-mode-cdp');
@@ -71,7 +71,7 @@ try {
     const hostB = await until(() => { const p = hostPid(h); return p !== null && p !== hostA ? p : null; }, 30_000);
     check(hostB !== null, 'B1. on a new genie-host', `${hostA} -> ${hostB}`);
     const restarted = await until(async () => (await Promise.all(agents.map((a) => running(session.cdp, a.id)))).every(Boolean), 60_000);
-    check(restarted === true, 'B2. CONTROL: after a clean quit both agents start again by themselves');
+    check(restarted === true, 'B2. CONTROL: after a clean quit both agents start again by themselves', restarted === true ? '' : (await Promise.all(agents.map((a) => whyOf(session.cdp, a.id)))).join(' | '));
     check(await bannerShown() === false, 'B3. CONTROL: and there is no safe-mode banner', 'positive control for the rows below: the gauge reads an unclean end only');
     check(!DID_NOT_END.test(hostLogSince(h, logAtB)), 'B4. CONTROL: and genie-host does not say the last run ended uncleanly');
     for (const a of agents) {
@@ -83,9 +83,10 @@ try {
     step('C1', 'ending the window and genie-host uncleanly, by pid');
     const windowPid = session.windowPid;
     const hostC = hostPid(h);
-    const providersBefore = new Set(stubPids());
+    const stubsBefore = new Set(stubPids());
     const ticksBefore = new Map();
     for (const a of agents) ticksBefore.set(a.id, await ticksOf(session.cdp, a.id));
+    const providersBefore = new Set([...ticksBefore.values()].flatMap((x) => x.pids));
     await session.inspector.closed(5_000);
     killHard(windowPid);
     killHard(hostC);
@@ -106,13 +107,14 @@ try {
     for (const a of agents) {
         check(await running(session.cdp, a.id) === false, `D4. ${a.name} is NOT running (the host's own view of its session)`);
         const before = ticksBefore.get(a.id);
-        const now = await ticksOf(session.cdp, a.id);
-        await sleep(3_000);
+        // Its history first (the ledger pages in after a relaunch), then nothing new over 5 s.
+        const now = await until(async () => { const x = await ticksOf(session.cdp, a.id); return x.max >= before.max ? x : null; }, 20_000) ?? await ticksOf(session.cdp, a.id);
+        await sleep(5_000);
         const later = await ticksOf(session.cdp, a.id);
-        check(later.max === now.max, `D5. no provider streams for ${a.name}`, `ticks ${before.max} before the crash, ${now.max} → ${later.max} over 3 s`);
+        check(now.max >= before.max && later.max === now.max, `D5. no provider streams for ${a.name}`, `tick ${before.max} before the crash; ${now.max} → ${later.max} over 5 s after`);
     }
     const providersNow = stubPids();
-    const fresh = providersNow.filter((p) => !providersBefore.has(p));
+    const fresh = providersNow.filter((p) => !stubsBefore.has(p));
     check(fresh.length === 0, 'D6. no provider process was started', fresh.length === 0 ? `${providersNow.length} stub process(es), none new` : `new: ${fresh.join(', ')}`);
     const leftOver = await until(() => { const left = [...providersBefore].filter(alive); return left.length === 0 ? 'none' : null; }, 30_000);
     check(leftOver === 'none', 'D7. the providers the killed run left are ended (Tynn #796)', leftOver ?? [...providersBefore].filter(alive).join(', '));
@@ -125,7 +127,8 @@ try {
     const [first, second] = agents;
     step('E1', `Start on ${first.name}`);
     await session.cdp.evaluate(`document.querySelector('[data-safe-mode] [data-action="safe-mode-start"][data-kind="agent"][data-id=${JSON.stringify(first.id)}]').click(); true`, 10_000);
-    check(await until(() => running(session.cdp, first.id), 45_000) === true, `E1. ${first.name} runs again (the host says so)`);
+    const startedAgain = await until(() => running(session.cdp, first.id), 45_000);
+    check(startedAgain === true, `E1. ${first.name} runs again (the host says so)`, startedAgain === true ? '' : await whyOf(session.cdp, first.id));
     check(await until(() => session.cdp.evaluate(`document.querySelector('[data-safe-mode-outcome=${JSON.stringify(`agent:${first.id}`)}]')?.textContent === 'Started'`, 10_000), 30_000) === true, 'E2. the banner says Started for it');
     await session.cdp.evaluate(`window.genie.prompt(${JSON.stringify(first.id)}, 'Stream ticks until stopped.')`, 15_000).catch(() => null);
     const streaming = await until(async () => { const x = await ticksOf(session.cdp, first.id); return x.last !== null && !providersBefore.has(x.last) && alive(x.last) ? x : null; }, 45_000);
@@ -137,7 +140,7 @@ try {
     check(await until(async () => (await bannerShown()) === false, 30_000) === true, 'F1. the banner goes');
     await sleep(10_000);
     check(await running(session.cdp, second.id) === false, `F2. nothing else starts by itself: ${second.name} stays stopped`);
-    const extra = stubPids().filter((p) => !providersBefore.has(p) && p !== streaming?.last);
+    const extra = stubPids().filter((p) => !stubsBefore.has(p) && p !== streaming?.last);
     check(extra.length === 0, 'F3. and no other provider process appeared', extra.join(', ') || 'none');
 } catch (error) {
     check(false, 'the run did not finish', String(error?.message ?? error).slice(0, 300));

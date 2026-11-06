@@ -3,6 +3,7 @@ import type { UpdateChannel } from '../src/core/update-channel.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { windowLaunchFlags } from '../src/core/launch-flags.js';
 import { entryFor } from '../src/core/entry-mode.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
@@ -419,7 +420,9 @@ describe('the helper process', () => {
         // Measured on CI (run 42079934150): the app runs with --no-sandbox there; a helper started without it never linked,
         // and the window's automatic and forced checks never settled.
         const main = strip('src/main/main.ts');
-        expect(main).toMatch(/publishLaunch\(\{ file: process\.execPath, args: \[\.\.\.\(app\.isPackaged \? \[\] : \[app\.getAppPath\(\)\]\), '--updater', \.\.\.process\.argv\.filter\(\(a\) => \/\^--\(no-sandbox\|ozone-platform=\|password-store=\)\/\.test\(a\)\)\] \}\)/);
+        expect(main).toMatch(/publishLaunch\(\{ file: process\.execPath, args: \[\.\.\.\(app\.isPackaged \? \[\] : \[app\.getAppPath\(\)\]\), '--updater', \.\.\.windowLaunchFlags\(process\.argv\)\] \}\)/);
+        // The switches themselves (core/launch-flags.ts): the sandbox, the display and the password store are still among them.
+        expect(windowLaunchFlags(['/genie', '--no-sandbox', '--ozone-platform=wayland', '--password-store=basic', '--other'])).toEqual(['--no-sandbox', '--ozone-platform=wayland', '--password-store=basic']);
     });
 
     it('APPIMAGE: the variable and the AppImage’s environment reach the helper from the host’s', () => {
