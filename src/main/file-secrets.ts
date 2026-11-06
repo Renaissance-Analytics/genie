@@ -36,7 +36,7 @@ const CIPHER = 'aes-256-gcm';
 const UNREADABLE = 'could not be decrypted';
 
 /** Seal a value: the layout above, a fresh IV each time. */
-export function sealSecret(key: Buffer, plain: Buffer): Buffer {
+export function sealSecret(key: Buffer, plain: Buffer, _aad?: Buffer): Buffer {
     const iv = randomBytes(SECRET_IV_BYTES);
     const cipher = createCipheriv(CIPHER, key, iv, { authTagLength: SECRET_TAG_BYTES });
     const body = Buffer.concat([cipher.update(plain), cipher.final()]);
@@ -44,7 +44,7 @@ export function sealSecret(key: Buffer, plain: Buffer): Buffer {
 }
 
 /** Open a sealed value, or throw in words: too short, another version, or a tag that does not match (a changed file, the wrong key). */
-export function openSealedSecret(key: Buffer, blob: Buffer): Buffer {
+export function openSealedSecret(key: Buffer, blob: Buffer, _aad?: Buffer): Buffer {
     if (blob.length < HEADER_BYTES) throw new Error(`The secret ${UNREADABLE}: its file is ${blob.length} bytes, shorter than the ${HEADER_BYTES}-byte header.`);
     if (blob[0] !== SECRET_FORMAT_VERSION) throw new Error(`The secret ${UNREADABLE}: its file is format version ${blob[0]}, and this Genie reads version ${SECRET_FORMAT_VERSION}.`);
     try {
@@ -83,6 +83,8 @@ export interface FileSecretsOptions {
     readonly ownerOnly?: (file: string) => Promise<boolean>;
     /** POSIX: the key file's mode. A test seam; absent = the open file's own. */
     readonly statMode?: (file: string) => Promise<number>;
+    /** Windows: the folder made owner-only. A test seam; not used yet. */
+    readonly restrictDir?: (dir: string) => Promise<void>;
 }
 
 /** The key, checked before a byte of it is read: there, a file, owner-only, 32 bytes. Anything else is a refusal that says what to fix. */
