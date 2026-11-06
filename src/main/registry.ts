@@ -192,6 +192,11 @@ export class Registry {
         await this.#store.writeRunningAtQuit(this.#runningAtQuit);
     }
 
+    /** The agents a shutdown cut off mid-turn, as recorded — read, not taken (safe mode lists them, Tynn #386). */
+    interruptedAtQuit(): readonly AgentId[] {
+        return this.#interruptedAtQuit;
+    }
+
     /** The agents a shutdown cut off mid-turn (written at quit or upgrade, before the sessions end). */
     async markInterruptedAtQuit(ids: readonly AgentId[]): Promise<void> {
         this.#interruptedAtQuit = ids.filter((id) => this.#agents.some((a) => a.id === id));
