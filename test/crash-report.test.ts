@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { SafeModeView } from '../src/core/safe-mode.js';
 
@@ -32,7 +33,7 @@ const SECRETS = { workspaceNames: ['Moonbeam Ledger', 'moonbeam'], agentNames: [
 describe('the report Genie builds', () => {
     it('says what the spec lists — version, os/arch, uptime, kind, agents by count and provider, ledger buckets, stalls, memory', () => {
         const text = fn<(f: unknown) => string>('crashReportText')(facts);
-        for (const want of ['2.0.0-beta.60', 'linux', 'x64', '3h 2m', 'hang', '2 agents', 'claude ×2', 'codex ×1', '4 stalls', '31 s', '2300 MB']) expect(text).toContain(want);
+        for (const want of ['2.0.0-beta.60', 'linux', 'x64', '3h 2m', 'hang', '3 agents', 'claude ×2', 'codex ×1', '4 stalls', '31 s', '2300 MB']) expect(text).toContain(want);
         // Ledger sizes in buckets, never exact.
         expect(text).toMatch(/<1 MB/);
         expect(text).toMatch(/>100 MB/);
@@ -52,31 +53,49 @@ describe('the report Genie builds', () => {
     });
 });
 
-describe('redaction, per class (the client’s pass; Tynn redacts again)', () => {
-    const redact = (t: string) => fn<(t: string, c: unknown) => string>('redactCrashText')(t, SECRETS);
-    it.each([
-        ['a Linux home path', '/home/wish/projects/x', '[home]'],
-        ['a macOS home path', '/Users/wish/projects/x', '[home]'],
-        ['a Windows home path', 'C:\\Users\\wish\\Documents\\x', '[home]'],
-        ['an email', 'wish@impact.do', '[email]'],
-        ['a GitHub token', 'ghp_abcdefghijklmnopqrstuvwxyz0123456789', '[secret]'],
-        ['an API key', 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345', '[secret]'],
-        ['a JWT', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl', '[secret]'],
-        ['a .gen site', 'https://shop.gen/admin', '[private-host]'],
-        ['a private address', 'http://192.168.1.20:8080/x', '[private-host]'],
-        ['a tailnet host', 'alphar.tail1234.ts.net', '[private-host]'],
-        ['a URL', 'https://example.com/some/page', '[url]'],
-        ['a workspace name', 'the Moonbeam Ledger crashed', '[workspace]'],
-        ['an agent name', 'atlas was running', '[agent]'],
-    ])('%s', (_, leak, placeholder) => {
-        const out = redact(`before ${leak} after`);
-        expect(out).not.toContain(leak.split(' ').find((w) => w.length > 4) ?? leak);
-        expect(out).toContain(placeholder);
-        expect(out.startsWith('before ')).toBe(true);
+describe('redaction: the SAME rules as Tynn (test/fixtures/crash-redaction.json, tynn.ai has the same file)', () => {
+    const rules = JSON.parse(readFileSync('test/fixtures/crash-redaction.json', 'utf8')) as { workspaceNames: string[]; rows: Array<{ name: string; input: string; expected: string }> };
+    const ctx = { workspaceNames: rules.workspaceNames, agentNames: [] };
+    it.each(rules.rows.map((r) => [r.name, r] as const))('%s', (_, row) => {
+        const redact = fn<(t: string, c: unknown) => string>('redactCrashText');
+        const once = redact(row.input, ctx);
+        expect(once).toBe(row.expected);
+        // Genie redacts, then Tynn does: a second pass changes nothing.
+        expect(redact(once, ctx)).toBe(once);
     });
 
-    it('control: ordinary words and app-relative paths are left alone', () => {
-        expect(redact('drawLane (dist/renderer/WorkspaceDashboard.js) 4 stalls')).toBe('drawLane (dist/renderer/WorkspaceDashboard.js) 4 stalls');
+    it('Genie also knows its agents’ names: [agent] (Tynn does not; the name never leaves)', () => {
+        expect(fn<(t: string, c: unknown) => string>('redactCrashText')('atlas was running', SECRETS)).toBe('[agent] was running');
+    });
+});
+
+describe('a crash record full of private names gives a report with none of them', () => {
+    // cut 3's CrashRecord (src/core/crash-record.ts on next/hang-watchdog): what the PUBLIC report may take, and what not.
+    const record = {
+        kind: 'hang', at: '2026-11-06T05:12:00.000Z', windowPid: 4242, lastBeatAt: '2026-11-06T05:11:30.000Z',
+        lifecycle: ['agent maipa started in AlphaR', 'route genie://AlphaR/maipa/dashboard', 'opened C:/_Projects/_clients/Chip/notes.md'],
+        stalls: [{ at: '2026-11-06T05:11:00.000Z', ms: 31_000, route: 'genie://AlphaR/maipa/dashboard', stack: 'drawLane (dist/renderer/WorkspaceDashboard.js)' }, { at: 'x', ms: 2_000, route: 'genie://AlphaR/kai/chat', stack: 'drawLane (dist/renderer/WorkspaceDashboard.js)' }],
+        memory: [{ at: 'a', windowMb: 410, hostMb: 300 }, { at: 'b', windowMb: 2_300, hostMb: 320 }],
+        agents: [{ name: 'maipa', lastTool: 'Read /home/wish/AlphaR/secret.md', lastToolBytes: 5_000_000 }, { name: 'kai', lastTool: null, lastToolBytes: null }],
+        header: { schema: 1, version: '2.0.0-beta.60', build: 'abc', os: 'linux', osRelease: '6.12', arch: 'x64', uptimeS: 7_320 },
+    };
+    it('kind, header, stall stats per signature, bucketed memory and tool sizes, the agent COUNT — and no names, routes or lifecycle', () => {
+        const fromRecord = fn<(r: unknown, base: unknown) => unknown>('factsFromRecord');
+        const facts = fromRecord(record, { view, providers: ['claude', 'codex'] });
+        const text = fn<(t: string, c: unknown) => string>('redactCrashText')(fn<(f: unknown) => string>('crashReportText')(facts), { workspaceNames: ['AlphaR'], agentNames: ['maipa', 'kai'] });
+        for (const want of ['hang', '2.0.0-beta.60', 'linux', 'x64', '2h 2m', '2 agents', 'drawLane (dist/renderer/WorkspaceDashboard.js)', '2 stalls', '31 s']) expect(text).toContain(want);
+        expect(text).toMatch(/1-10 MB/); // the last tool's size, bucketed
+        expect(text).toMatch(/2-4 GB|1-2 GB|>2 GB/); // memory, bucketed
+        for (const leak of ['maipa', 'AlphaR', 'genie://', 'kai', 'Chip', '/home/', 'secret.md', 'Read ']) expect(text).not.toContain(leak);
+    });
+    it('an exit: its reason and code, and its error only redacted', () => {
+        const fromRecord = fn<(r: unknown, base: unknown) => unknown>('factsFromRecord');
+        const facts = fromRecord({ kind: 'exit', at: 'x', pid: 1, reason: 'uncaught exception', code: 1, rssMb: 900, agents: ['maipa'], error: 'ENOENT: /home/wish/AlphaR/x.json' }, { view, providers: ['claude'] });
+        const text = fn<(t: string, c: unknown) => string>('redactCrashText')(fn<(f: unknown) => string>('crashReportText')(facts), { workspaceNames: ['AlphaR'], agentNames: ['maipa'] });
+        expect(text).toContain('uncaught exception');
+        expect(text).toContain('code 1');
+        expect(text).toContain('ENOENT: [path]');
+        for (const leak of ['maipa', 'AlphaR', '/home/']) expect(text).not.toContain(leak);
     });
 });
 
@@ -89,7 +108,7 @@ describe('what is sent is what the person saw', () => {
         const check = fn<(t: string, c: unknown) => { ok: boolean; text: string; reason?: string }>('checkBeforeSend');
         const r = check('it broke in /home/wish/secret and mailed wish@impact.do', SECRETS);
         expect(r.ok).toBe(false);
-        expect(r.text).toBe('it broke in [home]/secret and mailed [email]');
+        expect(r.text).toBe('it broke in [path] and mailed [email]');
         expect(r.reason).toMatch(/removed/i);
     });
 });
