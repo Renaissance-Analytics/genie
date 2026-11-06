@@ -125,22 +125,22 @@ function nativeStub() {
     return { calls, invoke: async (method: string, args: unknown[]) => { const name = method.replace(/^terminals\.local/, '').toLowerCase(); calls.push({ method: name, args }); return nativeValues[name]; } };
 }
 it.each(methods)('the authenticated local door carries native %s result on the actual wire', async method => {
-    const native = nativeStub(), f = await resourceDoor(cleanups, { localTerminals: native }), raw = await f.raw();
+    const native = nativeStub(), f = await resourceDoor(cleanups, {}, { localTerminals: native }), raw = await f.raw();
     const value = resultValue(await raw.call(alias(method), nativeArgs[method]!));
     expect(value).toEqual(nativeValues[method]); expect(native.calls).toEqual([{ method, args: nativeArgs[method] }]);
 });
 it.each(methods)('a paired remote owner cannot call local %s or trigger any native work', async method => {
-    const native = nativeStub(), f = await resourceDoor(cleanups, { localTerminals: native }), raw = await f.raw('tailnet');
+    const native = nativeStub(), f = await resourceDoor(cleanups, {}, { localTerminals: native }), raw = await f.raw('tailnet');
     const frame = await raw.call(alias(method), nativeArgs[method]!);
     expect(frame).toMatchObject({ kind: 'result', ok: false, reason: expect.stringMatching(/local|own .*window/i) }); expect(native.calls).toEqual([]);
 });
 it('remote terminal methods still use their existing route rather than the local native port', async () => {
-    const native = nativeStub(), f = await resourceDoor(cleanups, { localTerminals: native }), raw = await f.raw('tailnet');
+    const native = nativeStub(), f = await resourceDoor(cleanups, {}, { localTerminals: native }), raw = await f.raw('tailnet');
     resultValue(await raw.call('terminals.list', ['work'])); expect(native.calls).toEqual([]);
     expect(f.invoke).toHaveBeenCalledWith('terminals.list', ['work']);
 });
 it('the local renderer bridge dispatches open through its native-local alias', async () => {
-    const native = nativeStub(), f = await resourceDoor(cleanups, { localTerminals: native }), c = await f.client();
+    const native = nativeStub(), f = await resourceDoor(cleanups, {}, { localTerminals: native }), c = await f.client();
     expect(await c.bridge.terminals.open('work', { cols: 80, rows: 24, command: 'native' })).toEqual(nativeValues.open);
     expect(f.calls.some(call => call.method === 'terminals.localOpen')).toBe(true);
     expect(f.calls.some(call => call.method === 'terminals.open')).toBe(false);
