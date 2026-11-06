@@ -63,7 +63,13 @@ async function fixture(extra: { hostConfigSync?: () => { configSync(request: Wor
         workspaces: () => [{ id: 'workspace', path: workspace }], tynn: () => { if (state.accountLate) { state.accountLate = false; return null; } return account; },
         tynnSecrets: { probe: async () => (state.encryption ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(state.encryption) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(state.encryption)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
         tynnCipher: { isAvailable: () => state.encryption, encrypt: (s: string) => Buffer.from([...Buffer.from(s)].map((b) => b ^ 0x5a)), decrypt: (b: Buffer) => Buffer.from([...b].map((v) => v ^ 0x5a)).toString() } };
-    const boot = async () => { await services?.shutdown(); services = await composeServices(input); return services as Activated; };
+    // The boot's first trust pass is not awaited by compose: the files are seeded only once it has read the workspace, so
+    // what it records is the seed's settled state or nothing — never a read taken while the seed was being written.
+    const boot = async () => {
+        await services?.shutdown(); const composed = await composeServices(input); services = composed;
+        for (let i = 0; i < 200 && composed.workspaceTrust.view('workspace') === null; i += 1) await new Promise((r) => setTimeout(r, 10));
+        return composed as Activated;
+    };
     const s = await boot();
     const agent = (provider: 'claude' | 'codex' = 'codex') => agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider, name: `agent-${rows.length}-${provider}` });
     const prepare = (a: AgentRecord, signal = new AbortController().signal) => {
