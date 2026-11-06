@@ -20,6 +20,7 @@
  *
  * Exit: 0 every check passed; 1 a check failed; 2 cannot run here.
  */
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -44,6 +45,17 @@ const done = finish('HANG', h, [
 ]);
 setTimeout(() => { check(false, 'the run finished within its deadline (480 s)'); void done(1); }, Number(process.env.HANG_CDP_DEADLINE_MS ?? 480_000)).unref();
 
+/** Every Electron of this checkout, with its command line (a read of the process table). */
+function genieCommandLines() {
+    try {
+        if (process.platform === 'win32') {
+            return execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+                "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'electron*' -and $_.CommandLine -notlike '*--type=*' } | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }"],
+                { encoding: 'utf8', timeout: 60_000, windowsHide: true }).split(/\r?\n/).filter(Boolean).map((l) => l.slice(0, 300));
+        }
+        return execFileSync('ps', ['-eo', 'pid,args'], { encoding: 'utf8', timeout: 15_000 }).split('\n').filter((l) => /electron/.test(l) && !/--type=/.test(l)).map((l) => l.trim().slice(0, 300));
+    } catch (error) { return [`(unread: ${error?.message ?? error})`]; }
+}
 /** The crash records genie-host wrote, by kind. */
 function records() {
     let names = [];
@@ -56,6 +68,8 @@ const notice = () => session.cdp.evaluate(`(() => { const n = document.querySele
 async function hang(n, agents) {
     const hostBefore = hostPid(h);
     const windowBefore = session.windowPid;
+    // What this window was started with: the launch it publishes, and so the relaunch, copies its own switches from it.
+    console.log(`  window argv: ${JSON.stringify(await session.inspector.evaluate('process.argv', 10_000).catch((e) => String(e?.message ?? e))).slice(0, 400)}`);
     const kept = new Map();
     for (const a of agents) kept.set(a.id, await ticksOf(session.cdp, a.id));
     const recordsBefore = records().filter((r) => r.kind === 'hang').length;
@@ -66,7 +80,11 @@ async function hang(n, agents) {
     check(await gone(windowBefore, 30_000), `H${n}b. the hung window process was ended`, String(windowBefore));
     session = null;
     step(`H${n}c`, 'waiting for the window genie-host opens again');
-    session = await attach({ port: PORT, inspect: INSPECT, label: `after-hang-${n}` });
+    session = await attach({ port: PORT, inspect: INSPECT, label: `after-hang-${n}` }).catch((error) => {
+        // The window genie-host started, as the OS sees it: its command line says what it was given.
+        console.log(`  Genie processes now:\n    ${genieCommandLines().join('\n    ')}`);
+        throw error;
+    });
     check(session.windowPid !== windowBefore, `H${n}c. a new window opened`, `${windowBefore} -> ${session.windowPid}`);
     check(hostPid(h) === hostBefore && alive(hostBefore), `H${n}d. the same genie-host ran on`, `${hostBefore} -> ${hostPid(h)}`);
     for (const a of agents) {
