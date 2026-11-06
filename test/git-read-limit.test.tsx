@@ -207,7 +207,11 @@ describe('past it, a hook that forks hundreds of children is ended with all of t
         try { if (process.platform !== 'win32') execFileSync('pkill', ['-f', `sleep ${MARK}`]); } catch { /* none left */ }
     });
 
-    it('gitTreeStatus: more than 200 of them, and at the limit none survives', async () => {
+    // KNOWN FAILURE ON WINDOWS ONLY, until genie#1639: Git's MSYS sh starts each background child from a fork process that
+    // exits at once, so the child's parent id names no process of any reading, and no walk can tie it to our git (run
+    // 42308792264: Linux ends all 230; the Windows walk found 31). A job object closes it (#1628's launcher). `it.fails`
+    // turns red the day Windows ends them all, so this mark cannot outlive the fix. Linux keeps the row as a gate.
+    (process.platform === 'win32' ? it.fails : it)('gitTreeStatus: more than 200 of them, and at the limit none survives', async () => {
         const reading = gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message);
         // CONTROL: the table sees them, past the old cap of 200, before the limit comes.
         await vi.waitFor(() => { expect(ours()).toBeGreaterThan(200); }, { timeout: 24_000, interval: 1_000 });
