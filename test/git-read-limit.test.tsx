@@ -135,6 +135,48 @@ describe('past it, what the read started is ended', () => {
     }, 70_000);
 });
 
+/*
+ * NOTHING THE READ STARTED ESCAPES THE LIMIT, EVEN WHAT IT STARTS WHILE IT IS BEING ENDED (the line's run after #1637, job
+ * 128179635631: git gone, and its hook's sh chain — "starts-a-child.sh 1", git's second call of the hook — still running in
+ * the repository). One reading of the table, then the kill, left a window: whatever git or a hook started between the two
+ * was in no reading, and outlived the read. Here the hook starts a new child every 300 ms for as long as it runs, so that
+ * window is always there; each child writes its own pid. After the limit, every child ends, and no new one comes.
+ */
+describe('past it, a hook that keeps starting children is ended with all of them', () => {
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
+    let marks: string;
+    const started = (): number[] => (existsSync(marks) ? readdirSync(marks).map(Number).filter((n) => Number.isInteger(n) && n > 0) : []);
+
+    beforeEach(() => {
+        marks = join(root, 'marks');
+        mkdirSync(marks);
+        const slashes = (p: string) => p.replace(/\\/g, '/');
+        // Each child: its own real pid as a file name, its folder the repository's; it ends itself in time, so a red run
+        // leaves nothing behind for long.
+        const script = join(root, 'child.cjs');
+        writeFileSync(script, 'require("fs").writeFileSync(require("path").join(process.argv[2], String(process.pid)), ""); setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 45000);\n');
+        const hook = join(root, 'keeps-starting.sh');
+        writeFileSync(hook, `#!/bin/sh\nwhile true; do "${slashes(process.execPath)}" "${slashes(script)}" "${slashes(marks)}" & sleep 0.3; done\n`);
+        chmodSync(hook, 0o755);
+        git('config', 'core.fsmonitor', slashes(hook));
+        GIT_READ_LIMIT.ms = 4000;
+    });
+    afterEach(() => { for (const pid of started()) if (alive(pid)) { try { process.kill(pid); } catch { /* gone */ } } });
+
+    it('gitTreeStatus: at the limit every child the hook started is ended, and none is started after', async () => {
+        const reading = gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message);
+        await vi.waitFor(() => { expect(started().length).toBeGreaterThan(2); }, { timeout: 10_000, interval: 50 });
+        expect(await reading).toMatch(/did not answer/);
+        // Every child ended (the limit's kill runs after the answer)...
+        await vi.waitFor(() => { expect(started().filter(alive)).toEqual([]); }, { timeout: 40_000, interval: 250 });
+        // ...and the loop that started them is gone too: no child is started from here on.
+        const count = started().length;
+        await new Promise((r) => setTimeout(r, 2_000));
+        expect(started().length, 'a child started after the limit ended the read').toBe(count);
+        await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 10_000, interval: 250 });
+    }, 90_000);
+});
+
 describe('past it', () => {
     beforeEach(() => {
         const hook = join(root, 'never.sh');
