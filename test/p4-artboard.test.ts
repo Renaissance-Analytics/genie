@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BoardPost } from '../src/core/artboard.js';
 import { LOCAL_UPLOAD_TTL_MS } from '../src/core/local-content.js';
 import { capabilityOf, REMOTE_METHODS, type RemoteMethod, type WireMessage } from '../src/core/remote-protocol.js';
-import { artboardRead, artboardReview } from '../src/main/official-panels-host.js';
+import { artboardRead, artboardReadFiles, artboardReview } from '../src/main/official-panels-host.js';
 import { pageBridge, type PreloadBridge } from '../src/renderer/bridge.js';
 import { resourceDoor, resultValue } from './support/local-resource-door.js';
 
@@ -30,7 +30,7 @@ async function fixture(options: Record<string, unknown> = {}) {
     const root = await mkdtemp(join(tmpdir(), 'genie-p4-artboard-')), board = join(root, '.artboard'); await mkdir(board);
     const sent: Array<{ agentId: string; text: string }> = [];
     const deps = { workspacePath: (id: string) => id === 'work' ? root : null, now: () => '2026-11-05T02:00:00Z', send: async (agentId: string, text: string) => { sent.push({ agentId, text }); } };
-    const ports = { read: vi.fn((id: unknown) => artboardRead(deps, id)), review: vi.fn((...args: unknown[]) => artboardReview(deps, args[0], args[1], args[2], args[3])) };
+    const ports = { read: vi.fn((id: unknown) => artboardReadFiles(deps, id)), review: vi.fn((...args: unknown[]) => artboardReview(deps, args[0], args[1], args[2], args[3])) };
     try {
         const f = await resourceDoor(cleanups, options, { artboard: ports });
         cleanups.push(() => rm(root, { recursive: true, force: true }));

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ResolvedBoard } from '../core/artboard.js';
+import type { ArtboardFilesBoard } from './artboard-files.js';
 import { ARTBOARD_CALL_BYTES, type LocalArtboardMethod } from '../core/local-artboard.js';
 import { BLOB_READ_BYTES } from '../core/local-blobs.js';
 import type { ReviewResult } from './artboard-host.js';
@@ -7,7 +7,7 @@ import type { LocalUploads } from './local-uploads.js';
 
 /** The existing native panel functions keep workspace, verdict, persistence and delivery decisions. */
 export interface LocalArtboardPort {
-    read(workspaceId: unknown): Promise<ResolvedBoard>;
+    read(workspaceId: unknown): Promise<ArtboardFilesBoard>;
     review(workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown): Promise<ReviewResult>;
 }
 export function invokeLocalArtboard(port: LocalArtboardPort | undefined, method: LocalArtboardMethod, args: unknown[]): Promise<unknown> {

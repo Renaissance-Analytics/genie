@@ -1,5 +1,5 @@
 interface PhaseEvent {
-    phase: 'native-build' | 'resolve-board' | 'projection'; mode: 'async' | 'sync';
+    phase: 'native-build' | 'resolve-board' | 'metadata-build' | 'artifact-open' | 'projection'; mode: 'async' | 'sync';
     startedMs: number; endedMs: number; elapsedMs: number; processCpuMs: number; syncMs: number | null;
 }
 interface PhaseTrace { events: PhaseEvent[]; dropped: number }

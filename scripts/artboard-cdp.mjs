@@ -155,7 +155,7 @@ try {
         demand(stateBefore.phase === 'ready' && stateAfter.phase === 'ready' && stateBefore.revision === stateAfter.revision, 'the app keeps its same ready page connection');
         demand(wire.maxBytes <= 1048576 && wire.forbidden === 0 && wire.invalidPages === 0 && wire.oversizedEvents === 0 && native.oversizedCalls === 0, 'ArtBoard frame/content/metadata limits');
         if (!BASELINE) {
-            demand(native.artboardPhases?.dropped === 0 && ['native-build', 'resolve-board', 'projection'].every(phase => native.artboardPhases.events.some(event => event.phase === phase)), 'ArtBoard build/projection timing positive controls');
+            demand(native.artboardPhases?.dropped === 0 && ['metadata-build', 'artifact-open', 'projection'].every(phase => native.artboardPhases.events.some(event => event.phase === phase)) && !native.artboardPhases.events.some(event => event.phase === 'native-build' || event.phase === 'resolve-board'), 'ArtBoard metadata/file-source timing positive controls');
             demand(native.methods['artboard.read'] === 1 && native.methods['blob.open'] > 0 && wire.pages >= 2 && wire.items === 100 && native.connections === 1, 'ArtBoard metadata pages and blobs use the app connection');
             demand(native.maxGapMs < 250 && value.heartbeat.maxGapMs < 250 && rowClock.maxGapMs < 250 && native.rssPeak - native.rssBefore < 100 * 1024 * 1024, 'ArtBoard transfer blocked a clock or retained excessive main memory');
         }
