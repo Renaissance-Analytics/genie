@@ -78,7 +78,7 @@ import { hostTynnPorts } from './host-tynn-account.js';
 import { ProxyMemory } from './proxy-memory.js';
 import { TynnAccount } from './tynn-account.js';
 import { TynnAccountService } from './tynn-account-service.js';
-import { Keychain } from './keychain.js';
+import { openSecretKeychain } from './file-secrets.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
 import { AgentStoresService } from './agent-stores-host.js';
@@ -142,6 +142,18 @@ process.on('uncaughtException', (error) => say(`uncaught: ${error instanceof Err
 process.on('unhandledRejection', (error) => say(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
 
 async function main(): Promise<void> {
+    /*
+     * WHERE SECRETS GO, chosen FIRST (P10.1a): the OS keychain, or with GENIE_SECRET_BACKEND=file the sealed files under
+     * <root>/secrets (file-secrets.ts). A file backend that is misconfigured stops the host here, in words that say what to
+     * fix, before it binds its endpoint: no window ever connects to a host that is about to exit, and it never runs on with
+     * the other store, or with none.
+     */
+    const secrets = await openSecretKeychain(process.env, home);
+    if (secrets.kind === 'refused') {
+        say(secrets.reason);
+        lifecycleLog(`host refused to start: ${secrets.reason}`);
+        process.exit(1);
+    }
     const userKey = createHash('sha256').update(home).digest('hex').slice(0, 16);
     const endpoint = hostEndpoint(process.platform, runtime, userKey);
 
@@ -156,9 +168,9 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
-    // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No keychain refuses secrets; it never stops the host.
-    const keychain = new Keychain();
-    const keychainOpening = openHostKeychain({ keychain });
+    // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No OS keychain refuses secrets; it never stops the host.
+    const keychain = secrets.keychain;
+    const keychainOpening = openHostKeychain({ keychain, backend: secrets.kind });
     void keychainOpening.then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
      * THE SPAWN LEDGER AND ITS SWEEP, here now (they were main.ts's): what a previous host left running — a crash, a
