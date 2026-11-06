@@ -23,6 +23,17 @@ function fixture() {
     return { root, reads, writes, sites, envelope, manifest };
 }
 describe('story394: an asleep envelope supplies no site data', () => {
+    it('a direct workspace name or path lookup cannot reopen a hibernated folder', async () => {
+        const f = fixture(); f.manifest('before');
+        await f.envelope.sync([{ id: 'ghost', path: f.root, asleep: true }]);
+        f.reads.length = 0;
+        expect(await f.envelope.workspaceName('ghost')).toBeNull();
+        expect(f.envelope.workspacePath('ghost')).toBeNull();
+        expect(f.reads).toEqual([]);
+        await f.envelope.sync([{ id: 'ghost', path: f.root, asleep: false }]);
+        expect(await f.envelope.workspaceName('ghost')).toBe('Ghost');
+        expect(f.envelope.workspacePath('ghost')).toBe(f.root);
+    });
     it('does not read or write the folder and does not list its site on boot', async () => {
         const f = fixture(); f.manifest('before');
         await f.envelope.sync([{ id: 'ghost', path: f.root, asleep: true }]);
