@@ -12,7 +12,7 @@ import { carriedLabel, type CarryOver } from './carry-over.js';
 import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult, startTimeUnknown } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
-import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
+import { RATE_LIMIT_META, headroomFromMeta, rateLimitWarning, type Headroom } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
 import { randomUUID } from 'node:crypto';
@@ -240,6 +240,16 @@ export const OVERLOAD_RETRY_MS: readonly number[] = [30_000, 60_000, 120_000, 24
 export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last turn did not finish. Continue where you left off.';
 
 /**
+ * CLAUDE'S CANCEL STATE UNCERTAIN (prism-acp 0.37.0): its cancel receipt was missing (30 s) or did not account for the
+ * prompts in flight, so prism-acp ended them all cancelled (raw `cancel accounting mismatch`), stopped the CLI and said
+ * this fixed reason through `onProtocolError`; that driver's `prompt()` throws `ClaudeCancelStateError` with this code
+ * from then on. Matched here by value so core/ stays free of prism-acp at runtime; test/prism-acp-version.test.ts holds
+ * them to the installed package's own error.
+ */
+export const CANCEL_STATE_UNCERTAIN = 'cancel state uncertain; driver stopped';
+export const CANCEL_STATE_UNCERTAIN_CODE = 'claude_cancel_state_uncertain';
+
+/**
  * COOLING (the owner, 2026-11-01): "a state they enter right after finishing a turn (coming out of the work state).
  * Instead of immediately marking them as idle, they are "Cooling" down for 15 seconds then become Idle. This way I can
  * sort By status and agents that are in between turns aren't making the whole list jump around."
@@ -310,6 +320,11 @@ export interface AgentSessionOptions {
      * change to what decides it applies to the next request with nothing restarted. Absent = `ask`.
      */
     permissionDecision?: (request: PermissionRequestLike) => 'allow' | 'deny' | 'ask';
+    /**
+     * Whether this run may be handed work now, asked at each hand-over. False = it waits, as it does on a limit, and a run
+     * that ends leaves it owed, so the next one gets it. Absent = always.
+     */
+    mayTakeWork?: () => boolean;
     /**
      * The provider has identified its own conversation, once.
      *
@@ -398,13 +413,29 @@ export class AgentSession {
      * owner, 2026-10-14).
      */
     #inTurn = false;
-    /** Who sent each prompt still waiting for its turn (`by`, as `prompt` takes it), oldest first. */
-    #queued: (string | null)[] = [];
+    /**
+     * Each prompt still waiting for its turn, oldest first: who sent it (`by`, as `prompt` takes it), and what it was, so
+     * one Claude DROPS at a Stop (prism-acp 0.37.0, `#dropped`) can be sent again or kept as a draft.
+     */
+    #queued: Array<{ by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
+    /**
+     * THE DRIVER STOPPED ITSELF and will take no prompt again (prism-acp 0.37.0: Claude's cancel state uncertain,
+     * `CANCEL_STATE_UNCERTAIN`). Not Broken — nothing about the agent is wrong — but this run is over: the person's next
+     * message starts a new driver on the same conversation (`SessionHost.needsNewDriver`, main/start-on-demand.ts).
+     */
+    #needsNewDriver = false;
     /**
      * Who asked to stop the running turn (`cancel`'s `by`), until that turn ends. The cancelled turn's end is then
      * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
      */
     #stopAskedBy: string | null = null;
+    /**
+     * STOP MEANS STOP UNTIL THE PERSON ACTS (genie#1565): the person stopped the last turn they saw running, and has not
+     * sent anything since. While set no inbox notice is handed over (`deliverable`); at the stop itself only what the person
+     * queued was kept to send, which, if anything, ends the pause at once (`#keepOnlyYours`). The person's own message (`deliver`/`prompt` by `you`) or `resumeAfterStop` clears it. A turn the
+     * provider ended, or one cancelled with nobody here asking, never sets it.
+     */
+    #stoppedByYou = false;
     /** Turns ENDED in this run only. `#turns` carries on from the recorded history (#223); a wait for an answer must not. */
     #endedThisRun = 0;
     /** The provider's own words for why a turn did not finish. `null` when none did. */
@@ -505,6 +536,9 @@ export class AgentSession {
     /** The carry-over waiting for the next prompt, and the one sent with the turn now running (Tynn story #380). */
     #carryOver: CarryOver | null = null;
     #carryInFlight: CarryOver | null = null;
+    /** Per-agent provider reading; a turn end arms delivery with the next accepted input. */
+    #latestHeadroom: Headroom | null = null;
+    #rateWarningPending = false;
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -574,6 +608,16 @@ export class AgentSession {
         this.#changed();
     }
 
+    /**
+     * QUIET: a restart now would cut nothing. Promptable, not on a limit, and past the Cooling wait, because
+     * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
+     * For a restart Genie chooses by itself; the person's own Restart does not ask.
+     */
+    get quiet(): boolean {
+        // What waits in `#afterTurn` here is held for the next run, and a run that ends leaves it owed.
+        return this.promptable && !this.#held && this.#coolingCancel === null;
+    }
+
     get turnState(): TurnState {
         return this.#turnState;
     }
@@ -638,7 +682,7 @@ export class AgentSession {
      * and cannot take a turn until its `ready`.
      */
     get promptable(): boolean {
-        return this.running && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+        return this.running && !this.#needsNewDriver && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
     }
 
     /**
@@ -649,7 +693,26 @@ export class AgentSession {
      * like user input"). Held is excluded: a notice is Genie's to tell again, so it waits out the limit untold, not queued.
      */
     get deliverable(): boolean {
-        return this.running && !this.#starting && !this.#held && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+        return this.running && !this.#needsNewDriver && !this.#starting && !this.#held && !this.#stoppedByYou && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+    }
+
+    /** This run's driver stopped itself and takes no prompt again: a new one is started for the next work (`#needsNewDriver`). */
+    get needsNewDriver(): boolean {
+        return this.#needsNewDriver;
+    }
+
+    /** The person stopped the last turn and has not acted since: notices wait and held input was left as drafts (genie#1565). */
+    get stoppedByYou(): boolean {
+        return this.#stoppedByYou;
+    }
+
+    /**
+     * The person acted (sent, or sent a draft): what the stop paused goes on as usual. Not announced here: it is called
+     * just before the person's own message goes, and an announcement now would let a waiting notice open its turn AHEAD
+     * of that message. The caller's hand-over announces it.
+     */
+    resumeAfterStop(): void {
+        this.#stoppedByYou = false;
     }
 
     /** `null` until the provider reports one. It is what a later resume is keyed on. */
@@ -830,10 +893,13 @@ export class AgentSession {
      */
     deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.running) throw new Error('session is not running');
+        if (by === 'you') this.resumeAfterStop();
         if (this.#afterTurn.length === 0 && !this.#starting) {
             try {
                 return this.prompt(text, by, sent, context);
             } catch (error) {
+                // A driver that has stopped itself takes nothing again: said, and a new one is needed (`#needsNewDriver`).
+                if (cancelStateUncertain(error)) this.#driverStoppedItself();
                 // Only a refusal DURING a turn can wait for its end. An idle driver failure must reach the caller.
                 if (!this.#inTurn) throw error;
             }
@@ -853,7 +919,7 @@ export class AgentSession {
 
     /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
-        if (this.#afterTurn.length === 0 || !this.running || this.#starting || this.#approval !== null || this.#inTurn || this.#held) return;
+        if (this.#afterTurn.length === 0 || !this.running || this.#needsNewDriver || this.#starting || this.#approval !== null || this.#inTurn || this.#held || this.#options.mayTakeWork?.() === false) return;
         while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
             const next = this.#afterTurn[0]!;
             try {
@@ -910,6 +976,56 @@ export class AgentSession {
         for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
     }
 
+    /**
+     * AFTER THE PERSON'S STOP (genie#1565): what the person queued stays queued; the rest is settled as
+     * `#leaveQueuedAsDrafts` settles it — a Genie notice discarded (its sender tells it again), anything else a draft.
+     */
+    #keepOnlyYours(): void {
+        const waiting = this.#afterTurn;
+        this.#afterTurn = waiting.filter((p) => p.by === 'you');
+        for (const p of waiting) {
+            if (p.by !== 'you') void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
+        }
+    }
+
+    /**
+     * A PROMPT THE STOP DROPPED (prism-acp 0.37.0's `cancel_queued`, genie#1565): settled by the rules a prompt HELD at
+     * the Stop follows (`#keepOnlyYours`), so Claude and Codex agents stop alike —
+     * - a Genie notice (`context.retold`) is not sent again: its sender tells it again (the turn it went into was stopped,
+     *   so the inbox counts it untold) once the pause lifts;
+     * - the person's own message goes, as its own turn — them acting (genie#1143) — and so does anyone's after a stop
+     *   the person did not ask for;
+     * - someone else's message after the person's Stop, or anything this run can no longer send (its driver stopped
+     *   itself), is kept as a DRAFT the person can send and a Restart owes (`deliverOwed`).
+     * Sent on the next microtask: prism-acp ends every dropped prompt in one go, and one sent in between would read the
+     * next one's end as its own.
+     */
+    #dropped(p: { by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }): void {
+        if (p.context.retold === true) return;
+        const id = randomUUID();
+        if (this.#needsNewDriver || !this.running || (this.#stoppedByYou && p.by !== 'you')) {
+            const row = promptRow(p.text, p.by, p.sent, p.context);
+            if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: p.sent?.content ?? null } });
+            void this.#emitRow({ kind: 'prompt_delivery', id, status: 'undelivered' });
+            return;
+        }
+        if (p.by === 'you') this.#stoppedByYou = false;
+        this.#afterTurn.push({ id, text: p.text, by: p.by, sent: p.sent, context: p.context });
+        queueMicrotask(() => {
+            if (!this.#inTurn) this.#flushAfterTurn();
+            this.#changed();
+        });
+    }
+
+    /** The driver stopped itself (`CANCEL_STATE_UNCERTAIN`): said once; this run takes nothing more (`#needsNewDriver`). */
+    #driverStoppedItself(): void {
+        if (this.#needsNewDriver) return;
+        this.#needsNewDriver = true;
+        this.#stopCooling();
+        void this.#emitRow({ kind: 'notice', level: 'warning', message: 'The Stop could not be confirmed, so this run was ended to be sure nothing kept going. Your next message starts the agent again on the same conversation.' });
+        this.#changed();
+    }
+
     start(): void {
         if (this.#driver) return; // Reattach, never a second copy of the same agent.
 
@@ -932,6 +1048,12 @@ export class AgentSession {
                      */
                     if (detail?.recoverable === true) {
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: problem });
+                        return;
+                    }
+                    // CLAUDE'S CANCEL STATE UNCERTAIN (prism-acp 0.37.0): the driver ended its CLI to be sure the Stop
+                    // stopped everything. Not a failure of the agent: the next message from the person starts a new one.
+                    if (problem === CANCEL_STATE_UNCERTAIN) {
+                        this.#driverStoppedItself();
                         return;
                     }
                     this.#turnState = 'failed';
@@ -994,14 +1116,29 @@ export class AgentSession {
                     this.#echo = null;
                     this.#echoSeen = '';
 
+                    /*
+                     * A PROMPT THE STOP DROPPED (prism-acp 0.37.0, genie#1565): Claude's interrupt sends `cancel_queued`,
+                     * so a prompt it took mid-turn never runs; each ends on its own, cancelled, AFTER the stopped turn (raw
+                     * `dropped by cancel`, or `cancel accounting mismatch` when the receipt could not be trusted). It was
+                     * never a turn: no marker, no `stopped` row, no count. Ended while Genie holds no turn open with a
+                     * prompt still waiting for one, cancelled — a prompt that did start ran as a turn and opened it.
+                     */
+                    if (!this.#inTurn && outcome.stopReason === 'cancelled' && !outcome.isError && this.#queued.length > 0) {
+                        this.#dropped(this.#queued.shift()!);
+                        this.#changed();
+                        return;
+                    }
+
                     // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
                     // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
                     // turn, and it opens nothing, as before.
-                    if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
+                    if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
 
                     this.#turns += 1;
                     this.#endedThisRun += 1;
                     this.#inTurn = false;
+                    // Arm before queued mail is flushed. This never sends input or starts a turn by itself.
+                    this.#rateWarningPending = rateLimitWarning(this.#latestHeadroom, this.#now()) !== null;
 
                     // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
                     // idle would present a crashed turn as a completed one, which is the
@@ -1087,6 +1224,9 @@ export class AgentSession {
                     // here did.
                     const stopper = this.#stopAskedBy;
                     this.#stopAskedBy = null;
+                    // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once.
+                    const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you';
+                    if (stoppedByYou) this.#stoppedByYou = true;
                     if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
                     // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
                     // never the agent's last handoff, which a session answering in chat never files.
@@ -1102,15 +1242,23 @@ export class AgentSession {
                     // one (its first activity, credited to the oldest queued sender) or ends one silently (above). After a
                     // crashed turn nothing is assumed to run: the queue is dropped and the failure stands.
                     if (crashed) this.#queued = [];
-                    // EXCEPT after a stop: there is no running turn to fold into, and Claude runs the queued prompt as its
-                    // own turn after the interrupt (measured, test/stop-cancels-turn.test.ts), so that turn opens now.
-                    else if (outcome.stopReason === 'cancelled' && this.#queued.length > 0) {
-                        void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
-                        this.#inTurn = true;
-                        this.#turnState = 'working';
-                    }
+                    // After a stop nothing is assumed either: since prism-acp 0.37.0 Claude DROPS what it took mid-turn,
+                    // and each such prompt ends on its own after this one (`#dropped`). It used to run it after the
+                    // interrupt, and its turn was opened here.
                     // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
                     if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
+                    // EXCEPT after the person's own Stop (genie#1565; the owner's Codex agent, beta.58: "Stopped by you",
+                    // then at once a new turn for an inbox notice held mid-turn). Only what the PERSON queued goes on
+                    // (genie#1143: cancelling a turn preserves their queue; Claude runs theirs after the interrupt too),
+                    // and its going is them acting. Genie's notice is dropped for its book to tell once they act;
+                    // anyone else's message is left as a draft for them to send.
+                    else if (stoppedByYou) {
+                        this.#keepOnlyYours();
+                        if (this.#afterTurn.length > 0) {
+                            this.#stoppedByYou = false;
+                            if (!this.#inTurn) this.#flushAfterTurn();
+                        }
+                    }
                     else if (!this.#inTurn) this.#flushAfterTurn();
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
@@ -1266,9 +1414,39 @@ export class AgentSession {
      */
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.#driver) throw new Error('session is not started');
-        if (this.#held || this.#starting) return this.#queuePrompt(text, by, sent, context);
+        if (by === 'you') this.resumeAfterStop();
+        if (this.#held || this.#starting || this.#options.mayTakeWork?.() === false) return this.#queuePrompt(text, by, sent, context);
         this.#send(text, by, sent, true, context);
         return null;
+    }
+
+    /** A word from Genie held for the next turn this session opens (`holdForNextWork`); `null` = none. */
+    #heldForNextWork: string | null = null;
+    #heldSent: (() => void) | null = null;
+
+    /** It goes ahead of the next prompt that opens a turn, and starts none of its own. Replaces one already held. */
+    holdForNextWork(text: string, sent: (() => void) | null = null): void {
+        this.#heldForNextWork = text;
+        this.#heldSent = sent;
+    }
+
+    /** Work is held (`mayTakeWork`, a limit, a start). */
+    get workWaiting(): boolean {
+        return this.#afterTurn.length > 0;
+    }
+
+    /** `mayTakeWork` says yes again: what it held goes now, or when the turn ends. */
+    releaseWork(): void {
+        this.#flushAfterTurn();
+        this.#changed();
+    }
+
+    /** True = it was still held, and now it is not. */
+    withdrawHeld(): boolean {
+        const was = this.#heldForNextWork !== null;
+        this.#heldForNextWork = null;
+        this.#heldSent = null;
+        return was;
     }
 
     /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
@@ -1280,13 +1458,26 @@ export class AgentSession {
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
         // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
         const carry = this.#carryOver;
-        const above = carry ? `${carry.text}\n\n---\n\n` : '';
-        const wire = carry ? (sent ? [{ type: 'text' as const, text: above }, ...sent.content] : `${above}${text}`) : (sent ? sent.content : text);
-        this.#driver.prompt(wire);
+        // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
+        const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
+        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}`;
+        // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
+        // What Genie held for the next work goes between the carry-over and the person's words.
+        const held = this.#inTurn ? null : this.#heldForNextWork;
+        const handed = held === null ? text : `${held}\n\n${text}`;
+        const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
+        this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
+        this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
+        if (held !== null) {
+            const sentNow = this.#heldSent;
+            this.#heldForNextWork = null;
+            this.#heldSent = null;
+            sentNow?.();
+        }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
-        if (this.#inTurn) this.#queued.push(by);
+        if (this.#inTurn) this.#queued.push({ by, text, sent, context });
         else {
             // Whatever the queue still holds was folded into an earlier turn (no turn of its own came): not ahead of this.
             this.#queued = [];
@@ -1296,11 +1487,14 @@ export class AgentSession {
         }
         // What the turn carried, marked where it happened: the exact text sent, opened from the chat — never your message.
         if (carry) void this.#emitRow({ kind: 'notice', level: 'info', message: carriedLabel(carry), carried: { from: carry.from, turns: carry.turns, text: carry.text } });
+        if (rateWarning) void this.#emitRow({ kind: 'notice', level: 'warning', message: rateWarning });
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
+        // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
+        if (held !== null) void this.#emitRow(promptRow(held, 'genie', null, {}));
         if (record) void this.#emitRow(promptRow(text, by, sent, context));
-        // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over above it included.
-        this.#echo = `${above}${text}`;
+        // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
+        this.#echo = `${above}${handed}`;
         this.#echoSeen = '';
         this.#turnState = 'working';
         // A new turn during Cooling goes straight to Working, and its timer goes with it.
@@ -1784,10 +1978,8 @@ export class AgentSession {
         }
         if (typeof meta === 'object' && meta !== null && RATE_LIMIT_META in meta) {
             const raw = (meta as Record<string, unknown>)[RATE_LIMIT_META];
-            if (this.#options.onHeadroom) {
-                const room = headroomFromMeta(raw);
-                if (room) this.#options.onHeadroom(room);
-            }
+            const room = headroomFromMeta(raw);
+            if (room) { this.#latestHeadroom = room; this.#options.onHeadroom?.(room); }
             const readings = limitReadingsFromMeta(raw);
             if (readings.length > 0) {
                 const notice = update['notice'];
@@ -1884,7 +2076,7 @@ export class AgentSession {
             this.#turnState = 'working';
         } else if (this.#turnState === 'idle' && activity) {
             // A prompt queued while the last turn ran is credited to this one (it ran as its own turn); none = nobody's.
-            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
+            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
             this.#inTurn = true;
             this.#turnState = 'working';
             this.#changed();
@@ -2079,4 +2271,9 @@ function answerFor(request: PermissionRequestLike, decision: 'allow' | 'deny'): 
     };
     const chosen = (decision === 'allow' ? idOf('allow_once') : null) ?? idOf('reject_once');
     return chosen ? { outcome: 'selected', optionId: chosen } : { outcome: 'cancelled' };
+}
+
+/** prism-acp 0.37.0's `ClaudeDriver.prompt()` after an uncertain cancel: `ClaudeCancelStateError`, known by its code. */
+function cancelStateUncertain(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === CANCEL_STATE_UNCERTAIN_CODE;
 }

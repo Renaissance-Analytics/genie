@@ -11,6 +11,8 @@ export interface ReadableMessage {
     readonly from: string;
     readonly to: string;
     readonly readAt: string | null;
+    /** Set on a reply Genie wrote for its recipient (a paused agent's, genie#1515): not the sender's own words. */
+    readonly automaticReply?: unknown;
 }
 
 /** The mail as it is now: oldest first, and each participant's committed cursor. */
@@ -43,9 +45,12 @@ export function receiptsOf<M extends ReadableMessage>(mail: MailView<M>, from: s
         .map((message) => ({ message, readAt: message.readAt }));
 }
 
-/** Whether `from` has ever sent `to` a message. What makes a reply allowed. */
+/**
+ * Whether `from` has ever sent `to` a message of its own. What makes a reply allowed. An automatic reply Genie wrote for
+ * a paused recipient (genie#1515) is generated status, not consent to open a conversation.
+ */
 export function hasWrittenIn(mail: MailView<ReadableMessage>, from: string, to: string): boolean {
-    return mail.messages.some((m) => m.from === from && m.to === to);
+    return mail.messages.some((m) => m.from === from && m.to === to && m.automaticReply === undefined);
 }
 
 /**

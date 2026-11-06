@@ -159,13 +159,21 @@ describe('AgentSession.cancel — the turn ends, the session stays', () => {
         expect(d.calls.cancels).toBe(1);
     });
 
-    it('a prompt queued behind the stopped turn still gets ITS turn (measured: Claude runs it after the interrupt), after the stopped row', () => {
+    /*
+     * prism-acp 0.37.0 sends `cancel_queued: true`: Claude DROPS a prompt it took mid-turn at the interrupt (it used to
+     * run it after) and ends it on its own, raw `dropped by cancel` (genie#1565). The person's own message still goes,
+     * as its own turn, because Genie sends it again (genie#1143); test/claude-cancel-queued.test.ts holds the rest.
+     */
+    it('a prompt queued behind the stopped turn still gets ITS turn (Claude drops it at the interrupt; Genie sends it again), after the stopped row', async () => {
         const { s, d, rows } = session();
         s.start();
         s.prompt('first', 'you');
         s.prompt('second, sent mid-turn', 'you');
         expect(s.cancel()).toEqual({ ok: true });
         d.endTurn(CANCELLED);
+        d.endTurn({ stopReason: 'cancelled', isError: false, raw: 'dropped by cancel' });
+        await Promise.resolve();
+        expect(d.calls.prompts).toBe(3);
         expect(s.turnState).toBe('working');
         const order = rows.filter((r) => r.kind === 'turn' || r.kind === 'stopped').map((r) => (r.kind === 'turn' ? `turn ${r.n}` : r.kind === 'stopped' ? `stopped ${r.n}` : ''));
         expect(order).toEqual(['turn 1', 'stopped 1', 'turn 2']);

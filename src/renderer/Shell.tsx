@@ -788,6 +788,8 @@ export function Shell({
                         <ErrorBoundary surface="Workspace" resetKeys={[parsed.workspaceId]}>
                         <Workspace
                             key={parsed.workspaceId}
+                            trustStep={features.trust?.find((row) => row.workspaceId === parsed.workspaceId) ?? null}
+                            onTrust={() => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: parsed.workspaceId, workspacePath: workspaceFor(parsed.workspaceId)!.path }))}
                             // Settings → Hosting opens the same modals as the row's indicators.
                             onOpenRuntime={(kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}

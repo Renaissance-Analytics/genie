@@ -51,6 +51,7 @@ import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
+import { TrustVerdicts } from './trust-verdict.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
@@ -94,7 +95,7 @@ import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { featureOrigin, HostPicks } from './host-picks.js';
-import { startForWork, type StartForWork } from './start-on-demand.js';
+import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
@@ -1238,6 +1239,12 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
 }
 
 let services: WindowServices | null = null;
+/** Settles when the services are composed: an agent's launch asks them about its workspace first. */
+let servicesComposed: (value: WindowServices) => void = () => {};
+const composedServices = new Promise<WindowServices>((resolve) => { servicesComposed = resolve; });
+/** The same, for what must answer at once. Until then nothing is trusted. */
+let composedNow: WindowServices | null = null;
+let trustVerdicts: TrustVerdicts | null = null;
 // Genie's own MCP server (§6.9) and what its boot probe said (§6.4 "native transport verified at boot").
 let mcp: GenieMcpServer | null = null;
 let mcpVerified: Verification | null = null;
@@ -1485,6 +1492,8 @@ async function boot(): Promise<void> {
         },
         // A provider switch's carry-over went (Tynn story #380): the next prompt does not carry it again.
         onCarryOverSent: (agentId: AgentId) => { void theRegistry.clearCarryOver(agentId); },
+        // Genie's own words went into the agent's thread (genie#1519): its record says so, for the next launch.
+        markGenieWords: (agentId: AgentId) => { void theRegistry.markGenieWords(agentId); },
     };
     /*
      * THE AGENT ENGINE IN ITS OWN PROCESS (the host split, phase 1; the owner, 2026-10-31: "the actions agents take should
@@ -1640,6 +1649,9 @@ async function boot(): Promise<void> {
                     ? `doctor mode is running an agent in this workspace (pid ${hold.pid}); stop it there, or close doctor mode, then start ${record.name}`
                     : null;
             },
+            // THE EMERGENCY ENGINE'S TRUST (genie#1519): this window's own hosting's verdicts — a known exception until P6.
+            untrustedFilesFor: async (record) => (await composedServices).untrustedFilesFor(record),
+            untrustedNow: (record) => composedNow?.untrustedNow(record) ?? true,
             ...engineCallbacks,
         });
     }
@@ -1893,6 +1905,14 @@ async function boot(): Promise<void> {
             cap: agentCapFrom(services?.settings.snapshotFor(r.workspaceId) ?? {}),
         }),
     }, record);
+    // THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): the same rule, and a new driver through the one
+    // Restart when the run's own stopped itself. `agentOps` is read when a message comes, never while main is wiring up.
+    const startForYours = (record: AgentRecord): Promise<StartForWork> => startForYourMessage({
+        startForWork: startOnDemand,
+        needsNewDriver: (id) => host?.needsNewDriver(id) ?? false,
+        restart: (id) => restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch()),
+        notice: (id, message) => host?.notice(id, message) ?? false,
+    }, record);
 
     ipcMain.handle('genie:open-agent', (_event, raw: unknown) => {
         // The renderer is not trusted to hand over a well-formed id. `asAgentId` returning
@@ -1933,9 +1953,11 @@ async function boot(): Promise<void> {
         const attachments = attachmentsFromRenderer(files);
         if (!record || !host || typeof text !== 'string' || attachments === null || (text.length === 0 && attachments.length === 0)) return { ok: false };
         // THE FIRST MESSAGE STARTS IT (q_04ce323c): a stopped or never-started agent is started here, and the message
-        // waits in its session's queue for the start (the chat shows it waiting, then sent). A refused start is said.
-        const started = await startOnDemand(record);
+        // waits in its session's queue for the start (the chat shows it waiting, then sent). A refused start is said. A
+        // run whose driver stopped itself (Claude's uncertain Stop, prism-acp 0.37.0) is started again on its conversation.
+        const started = await startForYours(record);
         if (!started.ok) return { ok: false, reason: started.reason };
+        if (!host) return { ok: false };
         // The composer: the turn is started by YOU, and the ledger says so.
         const sent = await host.promptWith(record.id, text, attachments, 'you');
         return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
@@ -2069,6 +2091,30 @@ async function boot(): Promise<void> {
     });
     loginHost = logins;
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
+    /*
+     * A WORKSPACE'S VERDICT CHANGES WHILE ITS AGENT RUNS (genie#1519, trust-verdict.ts). THE HOST OWNS TRUST: genie-host's
+     * TrustVerdicts act on its own sessions. Only this window's EMERGENCY engine (no host could start) is compared here —
+     * a known exception until P6.
+     */
+    const own = host instanceof SessionHost ? host : null;
+    if (own) {
+        trustVerdicts = new TrustVerdicts({
+            agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => a.id),
+            untrustedNow: (id) => { const record = registry?.find(id); return record ? (composedNow?.untrustedNow(record) ?? true) : false; },
+            launchedUntrusted: (id) => own.launchedUntrusted(id),
+            quiet: (id) => own.quiet(id),
+            inTurn: (id) => own.inTurn(id),
+            workWaiting: (id) => own.workWaiting(id),
+            releaseWork: (id) => { own.releaseWork(id); },
+            runOf: (id) => own.runOf(id),
+            hold: (id, text) => own.holdForNextWork(id, text),
+            withdraw: (id) => own.withdrawHeld(id),
+            notice: (id, text) => { own.notice(id, text); },
+            // Quitting ends it anyway, and the next launch reads the verdict.
+            restart: (id) => (quit.quitting ? Promise.resolve({ ok: true as const }) : restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch())),
+        });
+        own.subscribe((id) => trustVerdicts?.check(id));
+    }
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
         for (const id of host?.pausedAgents(provider) ?? []) {
@@ -2632,6 +2678,11 @@ async function boot(): Promise<void> {
         ? (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })
         : composeServices;
     const composed: WindowServices = await composeWith({
+        // A workspace's trust verdict moved (genie#1519): the trust step is pushed, and — on the emergency path, where this
+        // window runs the agents — its agents are compared with it. With a host, genie-host's TrustVerdicts do that.
+        onTrustVerdict: (workspaceId) => { trustVerdicts?.changed(workspaceId); requestFeaturePush(); },
+        // AgentInbox's automatic reply to a paused recipient reads the live sessions (genie#1515): the emergency stores only.
+        inboxSession: (id) => host?.probe(id) ?? null,
         userData: genieRoot(),
         // No host: this window's own flows, sites and engines start nothing by themselves in safe mode (Tynn #386).
         safeMode: windowSafeNow,
@@ -2803,6 +2854,7 @@ async function boot(): Promise<void> {
             cwdFor,
             // A remote window's message starts the agent as the composer's does (q_04ce323c).
             startForWork: (record) => startOnDemand(record),
+            startForYourMessage: (record) => startForYours(record),
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),
@@ -2918,6 +2970,9 @@ async function boot(): Promise<void> {
         }),
     });
     services = composed;
+    // What an emergency agent's launch was waiting for: its workspace's verdict (genie#1519). Until now nothing is trusted.
+    composedNow = composed;
+    servicesComposed(composed);
     // Local calls and event subscriptions use late-bound services. Until now the door answers "Genie is still starting".
     remoteHub.add(localDoor);
     // ONE snapshot build at a time, the latest state always delivered last (core/latest-push.ts, genie#1393): every change

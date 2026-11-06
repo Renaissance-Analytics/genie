@@ -1,6 +1,7 @@
 import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import type { AgentRecord } from '../core/identity.js';
+import type { InboxSessionProbe } from '../core/inbox.js';
 import { AttentionStore } from './attention-store.js';
 import { InboxStore } from './inbox-store.js';
 import { KnowledgeStore } from './knowledge-store.js';
@@ -11,8 +12,13 @@ import { runV1InboxImport } from './v1-inbox.js';
  * compose only on the emergency path when no host could start. Genie 1's memories and AgentInbox history are taken
  * once, by whoever opens them — each store records that it did.
  */
-export async function openAgentStores(userData: string, now: () => string): Promise<{ inbox: InboxStore; attention: AttentionStore; knowledge: KnowledgeStore }> {
-    const inbox = await InboxStore.open(userData, now);
+export async function openAgentStores(
+    userData: string,
+    now: () => string,
+    /** The live pause state AgentInbox's automatic reply reads (genie#1515); it starts no session. Absent = never paused. */
+    sessionOf?: InboxSessionProbe,
+): Promise<{ inbox: InboxStore; attention: AttentionStore; knowledge: KnowledgeStore }> {
+    const inbox = await InboxStore.open(userData, now, sessionOf);
     const attention = await AttentionStore.open(userData, inbox, now);
     const knowledge = KnowledgeStore.open(userData, now);
     return { inbox, attention, knowledge };

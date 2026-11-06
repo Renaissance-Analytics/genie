@@ -186,7 +186,8 @@ export class FilesHost {
             if (refusal) return { ok: false, path: rel, error: refusal };
             const text = await readFile(full, 'utf8');
             if (!this.#ports.gitStatus) return { ok: true, path: rel, text, sha: shaOf(text) };
-            return { ok: true, path: rel, text, sha: shaOf(text), git: await this.#ports.gitStatus(ws.path, rel) };
+            // The file opens whatever git does: its state is only a decoration here, and the tree says if git is not answering.
+            return { ok: true, path: rel, text, sha: shaOf(text), git: await this.#ports.gitStatus(ws.path, rel).catch(() => null) };
         } catch (error) {
             return { ok: false, path: rel, error: error instanceof Error ? error.message : String(error) };
         }
@@ -205,7 +206,7 @@ export class FilesHost {
         if (!ws || !this.#ports.gitShowHead) return null;
         const rel = confine(ws.path, path);
         if (rel === null || rel === '') return null;
-        return this.#ports.gitShowHead(ws.path, rel);
+        return this.#ports.gitShowHead(ws.path, rel).catch(() => null);
     }
 
     /** Write only against what was read (§4.3): a changed file is a CONFLICT answered with the disk's text, never an overwrite. */
