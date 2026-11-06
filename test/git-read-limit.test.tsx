@@ -204,7 +204,13 @@ describe('past it, a hook that forks hundreds of children is ended with all of t
         GIT_READ_LIMIT.ms = 25_000;
     });
     afterEach(() => {
-        try { if (process.platform !== 'win32') execFileSync('pkill', ['-f', `sleep ${MARK}`]); } catch { /* none left */ }
+        // This run's own sleeps only, by the mark in their command lines: whatever the limit did not end (on Windows, until
+        // genie#1639) is not left holding the folder or loading the machine for the files after this one.
+        try {
+            if (process.platform === 'win32') {
+                execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'sleep*' -and $_.CommandLine -and $_.CommandLine -like '* ${MARK}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { timeout: 120_000, windowsHide: true, stdio: 'ignore' });
+            } else execFileSync('pkill', ['-f', `sleep ${MARK}`]);
+        } catch { /* none left */ }
     });
 
     // KNOWN FAILURE ON WINDOWS ONLY, until genie#1639: Git's MSYS sh starts each background child from a fork process that
