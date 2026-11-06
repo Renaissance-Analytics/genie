@@ -133,14 +133,14 @@ export interface CrashStateView {
     readonly notice: HangNotice | null;
 }
 
-/** The notice's words. Not built yet. */
-export function hangNoticeWords(_notice: HangNotice, _clock: (at: number) => string): string {
-    throw new Error('not built yet (Tynn #386)');
+/** The notice's words: "Genie’s window stopped responding at 10:00 AM and was reopened. Your agents kept running." */
+export function hangNoticeWords(notice: HangNotice, clock: (at: number) => string): string {
+    return `Genie’s window stopped responding at ${clock(notice.at)} and was reopened. Your agents kept running.`;
 }
 
-/** The notice as the crash report's view (no safe mode: the host never stopped). Not built yet. */
-export function hangNoticeView(_notice: HangNotice): SafeModeView {
-    throw new Error('not built yet (Tynn #386)');
+/** The notice as the crash report's view: a hang, at its time, with what was running. Not safe mode — the host never stopped. */
+export function hangNoticeView(notice: HangNotice): SafeModeView {
+    return { active: true, at: notice.at, cause: 'hang', crashLoop: false, agents: notice.agents.map((a) => a.id), processes: [], sites: [] };
 }
 
 /** What window main says each second: its pid and its own RSS in bytes; `bye` = its quit ran to its end. */

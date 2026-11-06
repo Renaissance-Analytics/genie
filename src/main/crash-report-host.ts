@@ -1,6 +1,6 @@
-import { checkBeforeSend, crashReportText, crashSignatures, redactCrashText, type CrashFacts, type RedactionContext } from '../core/crash-report.js';
+import { checkBeforeSend, crashReportText, crashSignatures, factsFromRecord, redactCrashText, type CrashFacts, type RedactionContext } from '../core/crash-report.js';
 import type { SafeModeView } from '../core/safe-mode.js';
-import type { HangNotice } from '../core/crash-record.js';
+import { hangNoticeView, type HangNotice } from '../core/crash-record.js';
 
 /**
  * THE CRASH REPORT'S TWO STEPS IN THE WINDOW'S MAIN PROCESS (Tynn #386 part 4): the DRAFT the safe-mode banner shows —
@@ -14,9 +14,9 @@ import type { HangNotice } from '../core/crash-record.js';
  */
 export interface CrashReportDeps {
     readonly view: () => SafeModeView | null;
-    /** The latest crash record the host sent (Tynn #386 cut 3). Not read yet. */
+    /** The latest crash record the host sent (Tynn #386 cut 3): the draft is built from it when there is one. */
     readonly record?: () => unknown;
-    /** The reopened-window notice, when there is one. Not read yet. */
+    /** The reopened-window notice: with no safe mode, the report is of that hang. */
     readonly notice?: () => HangNotice | null;
     /** Every registered agent: their names are redacted, their providers counted. */
     readonly agents: () => readonly { readonly id: string; readonly name: string; readonly provider: string }[];
@@ -40,10 +40,16 @@ const stackOrNone = (s: string[]): string[] => (s.length > 0 ? s : ['(no stack r
 export function crashReportHost(deps: CrashReportDeps) {
     const ctx = (): RedactionContext => ({ workspaceNames: deps.workspaceNames(), agentNames: deps.agents().map((a) => a.name) });
     const facts = (): CrashFacts | null => {
-        const view = deps.view();
-        if (!view?.active) return null;
+        // Safe mode's banner first; else the reopened-window notice (a hang the host survived); else nothing to report.
+        const safe = deps.view();
+        const notice = deps.notice?.() ?? null;
+        const view = safe?.active ? safe : notice ? hangNoticeView(notice) : null;
+        if (view === null) return null;
         const byId = new Map(deps.agents().map((a) => [a.id, a.provider]));
-        return { view, genieVersion: deps.genieVersion, os: deps.os, arch: deps.arch, providers: view.agents.map((id) => byId.get(id) ?? 'unknown') };
+        const base = { view, genieVersion: deps.genieVersion, os: deps.os, arch: deps.arch, providers: view.agents.map((id) => byId.get(id) ?? 'unknown') };
+        // The host's latest record, when it sent one: its header, its stalls by signature, its exit (allowed fields only).
+        const record = deps.record?.() ?? null;
+        return record === null ? base : factsFromRecord(record, base);
     };
     return {
         /** The text the person is shown: built, then redacted. */

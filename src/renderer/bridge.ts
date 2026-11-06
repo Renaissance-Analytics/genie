@@ -99,6 +99,8 @@ export interface GenieSnapshot {
     workstation: { name: string; healthy: boolean } | null;
     /** genie-host's safe mode (Tynn #386): the banner on every window. Absent/`null` = not known (no host, an older one). */
     safeMode?: import('../core/safe-mode.js').SafeModeView | null;
+    /** genie-host ended a hung window and started this one (Tynn #386): the notice, not safe mode. Absent/`null` = none. */
+    hangNotice?: import('../core/crash-record.js').HangNotice | null;
 }
 
 /**

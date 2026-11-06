@@ -1,4 +1,4 @@
-import { HANG_MS, LOST_GRACE_MS, RSS_EVERY_MS, UNKNOWN_HEADER, mainStalls, parseBeat, toMb, type CrashHeader, type CrashRecord, type RssSample, type RunningAgentNote } from '../core/crash-record.js';
+import { HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS, UNKNOWN_HEADER, mainStalls, parseBeat, toMb, type CrashHeader, type CrashRecord, type RssSample, type RunningAgentNote } from '../core/crash-record.js';
 
 /**
  * GENIE-HOST'S HANG WATCHDOG (Tynn story #386; spec `.ai/plans/genie-crash-safe-mode-reporting-spec.md` §1).
@@ -73,6 +73,8 @@ export class HangWatchdog {
     #lastRssAt: number;
     #newestRss: { at: number; rss: number } | null = null;
     #shuttingDown = false;
+    /** When each recent hang was: the relaunch cap's window. */
+    #hangTimes: number[] = [];
 
     constructor(options: HangWatchdogOptions) {
         this.#o = options;
@@ -176,6 +178,10 @@ export class HangWatchdog {
 
     #hang(w: Watched, now: number): void {
         w.ended = true;
+        // THE CAP: a 4th hang within 10 minutes is recorded and NOT reopened — no relaunch loop.
+        this.#hangTimes = [...this.#hangTimes.filter((t) => now - t < RELAUNCH_WINDOW_MS), now];
+        const hangs = this.#hangTimes.length;
+        const relaunch = this.#o.relaunch !== undefined && hangs <= RELAUNCH_MAX;
         const lifecycle = this.#safe(() => this.#o.lifecycle(), []);
         const record: CrashRecord = {
             ...this.#safe(() => this.#o.header(), UNKNOWN_HEADER),
@@ -187,14 +193,18 @@ export class HangWatchdog {
             stalls: this.#safe(() => mainStalls(lifecycle), []),
             memory: [...this.#samples],
             agents: this.#safe(() => this.#o.agents(), []),
-            relaunched: false,
-            hangsRecent: 0,
+            relaunched: relaunch,
+            hangsRecent: hangs,
         };
         this.#safe(() => this.#o.write(record), undefined);
-        this.#o.log(`hang window pid=${w.pid} silent_ms=${now - w.lastBeatAt}: recorded, and the window is ended (this host and its agents keep running)`);
-        try {
-            void Promise.resolve(this.#o.kill(w.pid)).catch(() => {});
-        } catch { /* the record is written; the person can still end it */ }
+        this.#o.log(`hang window pid=${w.pid} silent_ms=${now - w.lastBeatAt} hangs_10min=${hangs}: recorded, and the window is ended (this host and its agents keep running)${relaunch ? '; a new window is started' : this.#o.relaunch ? `; NOT reopened: ${hangs} hangs within 10 minutes` : ''}`);
+        this.#safe(() => this.#o.onHang?.({ at: now, hangs, relaunched: relaunch }), undefined);
+        // The new window only after the frozen one is ended: its single-instance lock is free by then. Ended or not, the
+        // person is never left with Genie silently gone (the tray lives in the window's process).
+        const reopen = (): void => { if (relaunch) this.#safe(() => this.#o.relaunch?.(), undefined); };
+        let ending: Promise<unknown>;
+        try { ending = Promise.resolve(this.#o.kill(w.pid)); } catch { ending = Promise.resolve(false); }
+        void ending.then(reopen, reopen);
     }
 
     #lost(w: Watched, now: number): void {

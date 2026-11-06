@@ -63,6 +63,7 @@ export class Registry {
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
     #safeMode: (() => import('../core/safe-mode.js').SafeModeView | null) | null = null;
+    #hangNotice: (() => import('../core/crash-record.js').HangNotice | null) | null = null;
     #deckSource: () => readonly DeckItem[] = () => [];
     #runningAtQuit: AgentId[] = [];
     #interruptedAtQuit: AgentId[] = [];
@@ -176,6 +177,11 @@ export class Registry {
     /** genie-host's safe mode (Tynn #386), read into every snapshot: the banner on every window. */
     setSafeMode(provider: () => import('../core/safe-mode.js').SafeModeView | null): void {
         this.#safeMode = provider;
+    }
+
+    /** genie-host's reopened-window notice (Tynn #386): a hung window was ended and this one started; read into every snapshot. */
+    setHangNotice(provider: () => import('../core/crash-record.js').HangNotice | null): void {
+        this.#hangNotice = provider;
     }
 
     setSignals(provider: () => SignalState): void {
@@ -311,6 +317,7 @@ export class Registry {
             workstation: this.#workstation,
             // Only once main has said where it comes from: a snapshot with no host to ask carries no claim about it.
             ...(this.#safeMode ? { safeMode: this.#safeMode() } : {}),
+            ...(this.#hangNotice ? { hangNotice: this.#hangNotice() } : {}),
         };
     }
 

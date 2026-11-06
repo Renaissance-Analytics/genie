@@ -58,6 +58,7 @@ import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { SafeModeBanner } from './components/SafeModeBanner.js';
+import { HangNoticeBar } from './components/HangNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 
@@ -556,6 +557,14 @@ export function Shell({
                     return done ?? { ok: true };
                 }}
                 onLeave={async () => ((await onFeature({ kind: 'safeMode.leave' })) as ActOutcome | undefined) ?? { ok: true }}
+                crashReport={crashReport}
+            />
+
+            {/* THE REOPENED WINDOW (Tynn #386): a hung window was ended and this one started — the agents kept running. */}
+            <HangNoticeBar
+                notice={snapshot.hangNotice}
+                onStopAll={async () => ((await onFeature({ kind: 'hangNotice.stopAll' })) as ActOutcome | undefined) ?? { ok: true }}
+                onDismiss={async () => ((await onFeature({ kind: 'hangNotice.dismiss' })) as ActOutcome | undefined) ?? { ok: true }}
                 crashReport={crashReport}
             />
 

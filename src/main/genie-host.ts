@@ -17,7 +17,8 @@ import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRu
 import { SessionEngineServer } from './session-engine-server.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
-import { crashHeader, previousRunCause, readLifecycleTail, writeCrashRecord } from './crash-records.js';
+import { CrashStateHost } from './crash-state-host.js';
+import { crashHeader, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
@@ -195,6 +196,9 @@ async function main(): Promise<void> {
     // Its cause (cut 3): the newest crash record since the previous host started — its host.json is still here until this one writes its own.
     const safeMode = SafeMode.open(runtime, { log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
     const safeNow = () => safeMode.active();
+    // THE CRASH STATE (Tynn #386): the previous run's newest record (its host.json is still the old one here) and, after a
+    // hang, the reopened window's notice; local windows are told both (crash-state-host.ts).
+    const crashState = new CrashStateHost(previousRunRecord(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null));
     // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No OS keychain refuses secrets; it never stops the host.
     const keychain = secrets.keychain;
     const keychainOpening = openHostKeychain({ keychain, backend: secrets.kind });
@@ -552,7 +556,7 @@ async function main(): Promise<void> {
      */
     let hostForNotes: SessionHost | null = null;
     const hangWatchdog = new HangWatchdog({
-        write: (record) => { writeCrashRecord(join(runtime, 'crash'), record); },
+        write: (record) => { writeCrashRecord(join(runtime, 'crash'), record); crashState.recorded(record); },
         kill: (pid) => killProcessAsync(pid),
         alive: pidAlive,
         hostRss: () => process.memoryUsage.rss(),
@@ -564,6 +568,11 @@ async function main(): Promise<void> {
         lifecycle: () => readLifecycleTail(runtime),
         log: lifecycleLog,
         header: () => crashHeader(build.split('+')[0] ?? build, build),
+        // AFTER A HANG, A NEW WINDOW (#1623 review): the installed Genie from the window's published launch, as a failed
+        // install's relaunch does — the tray lives in the window's process, so Genie is never silently gone. Capped in the
+        // watchdog: a 4th hang within 10 minutes is recorded, not reopened. A host with no window (genie-cloud) starts none.
+        ...(capabilities.window ? { relaunch: () => { spawnGenieWindow(relaunchSpec(updatesService.launchSpec(), process.env), process.env); } } : {}),
+        onHang: (hang) => { crashState.hung({ at: hang.at, hangs: hang.hangs, agents: (hostForNotes?.startedIds() ?? []).map((id) => ({ id, name: hostRegistry.find(id)?.name ?? id })) }); },
     });
     hangWatchdog.start();
     const engine = new SessionEngineServer({
@@ -574,6 +583,7 @@ async function main(): Promise<void> {
         log: say,
         onShutdown: () => void shutdown('a window asked'),
         heartbeat: hangWatchdog,
+        crash: crashState,
         // Every window shows the banner, and may leave it (safe-mode-host.ts).
         safeMode,
         onClients: (n) => {

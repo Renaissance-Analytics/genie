@@ -2091,6 +2091,9 @@ async function boot(): Promise<void> {
     // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
     const crashReports = crashReportHost({
         view: () => agentEngineLink?.client.safeModeView() ?? null,
+        // The host's latest crash record and the reopened-window notice (Tynn #386): the draft is built from them.
+        record: () => agentEngineLink?.client.crashStateView()?.record ?? null,
+        notice: () => agentEngineLink?.client.crashStateView()?.notice ?? null,
         agents: () => (registry?.listAgents() ?? []).map((a) => ({ id: a.id, name: a.name, provider: a.provider })),
         workspaceNames: () => [...(registry?.listWorkspaces() ?? []).flatMap((w) => [w.id, basename(w.path)]), ...(registry?.workspaceSlugs().values() ?? [])],
         genieVersion: app.getVersion(),
@@ -3402,6 +3405,9 @@ async function boot(): Promise<void> {
     // Safe mode reaches every window's snapshot (its banner), and follows the host's changes (a Leave from any window).
     registry.setSafeMode(() => agentEngineLink?.client.safeModeView() ?? null);
     agentEngineLink?.client.onSafeMode(() => registry?.touch());
+    // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
+    registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
+    agentEngineLink?.client.onCrashState(() => registry?.touch());
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
     // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
@@ -3671,6 +3677,14 @@ async function boot(): Promise<void> {
         openInBrowser: openInBrowserFor('user-gesture'),
         // "Leave safe mode" (Tynn #386): the host's; this window only asks.
         safeMode: { leave: () => (agentEngineLink ? agentEngineLink.client.leaveSafeMode() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })) },
+        // The reopened-window notice's two actions: forget it; or stop every agent — one click, the person's, never automatic.
+        hangNotice: {
+            dismiss: () => (agentEngineLink ? agentEngineLink.client.dismissHangNotice() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })),
+            stopAll: async () => {
+                if (!agentEngineLink) return { ok: false as const, reason: 'Genie’s host is not connected' };
+                try { await agentEngineLink.client.stopAll(); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; }
+            },
+        },
         // The flow editor's own window (genie#1204): Open, a row's name, Add a flow — the person's click.
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.

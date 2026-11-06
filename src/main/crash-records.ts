@@ -100,7 +100,12 @@ export function latestCrashRecord(dir: string): CrashRecord | null {
  * are not its own; with no start known, nothing is claimed.
  */
 export function previousRunCause(dir: string, startedAt: number | null): string {
-    if (startedAt === null) return crashCause(null);
+    return crashCause(previousRunRecord(dir, startedAt));
+}
+
+/** The newest record written since `startedAt` (the previous host's start), or `null`: what the next window's crash report reads. */
+export function previousRunRecord(dir: string, startedAt: number | null): CrashRecord | null {
+    if (startedAt === null) return null;
     const names = recordNames(dir);
     for (let i = names.length - 1; i >= 0; i--) {
         try {
@@ -108,10 +113,10 @@ export function previousRunCause(dir: string, startedAt: number | null): string 
             const at = typeof value.at === 'string' ? Date.parse(value.at) : Number.NaN;
             if (!Number.isFinite(at)) continue;
             if (at < startedAt) break;
-            if (value.kind === 'hang' || value.kind === 'lost' || value.kind === 'exit') return crashCause(value as CrashRecord);
+            if (value.kind === 'hang' || value.kind === 'lost' || value.kind === 'exit') return value as CrashRecord;
         } catch { /* a torn file: the one before it */ }
     }
-    return crashCause(null);
+    return null;
 }
 
 /** How much of the end of a log file is read for its last lines: 200 lines are far less. */

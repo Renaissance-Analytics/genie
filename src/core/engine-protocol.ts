@@ -102,6 +102,9 @@ export const ENGINE_METHODS = [
     // The host's safe mode (Tynn #386: safe-mode-host.ts): `['leave']`. Its view is sent as `safeMode.event` before
     // `engine.ready` and on every change, to EVERY window: the banner is on all of them.
     'engine.safeMode',
+    // The latest crash record and the reopened-window notice (Tynn #386: crash-state-host.ts), LOCAL windows only: sent as
+    // `crash.event` before `engine.ready` and on every change; `['dismiss']` forgets the notice.
+    'engine.crash',
     // The updater helper's own (P5b: updater-helper.ts), on a link that said hello as the updater: `register`, `reply`,
     // `progress`. The host's requests reach it as `updater.event`. Nothing else is open to that link.
     'engine.updater',

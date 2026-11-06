@@ -361,6 +361,10 @@ export class SessionEngineClient {
             case 'safeMode.event':
                 this.#setSafeMode(payload as SafeModeView);
                 return;
+            // The latest crash record and the reopened-window notice (Tynn #386), on this window's local link only.
+            case 'crash.event':
+                this.#setCrashState(payload as CrashStateView);
+                return;
             case 'updates.dump':
             case 'updates.event':
                 this.updates().rebase(payload as UpdateState);
@@ -1041,12 +1045,31 @@ export class SessionEngineClient {
         t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.heartbeat', args: [beat] }));
     }
 
-    /** The latest crash record and the reopened-window notice, as the host last said (local windows). Not built yet. */
-    crashStateView(): CrashStateView | null { return null; }
+    /** The latest crash record and the reopened-window notice, as the host last said (local windows); `null` = told nothing. */
+    crashStateView(): CrashStateView | null { return this.#crashState; }
 
-    onCrashState(_listener: (view: CrashStateView) => void): () => void { return () => {}; }
+    onCrashState(listener: (view: CrashStateView) => void): () => void {
+        this.#crashListeners.add(listener);
+        return () => { this.#crashListeners.delete(listener); };
+    }
 
-    async dismissHangNotice(): Promise<{ ok: true } | { ok: false; reason: string }> { return { ok: false, reason: 'not built yet' }; }
+    /** The person dismissed the reopened-window notice: the host forgets it, for every window. */
+    async dismissHangNotice(): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.crash', ['dismiss']);
+        if (!reply.ok) return reply;
+        this.#setCrashState(reply.value as CrashStateView);
+        return { ok: true };
+    }
+
+    #crashState: CrashStateView | null = null;
+    readonly #crashListeners = new Set<(view: CrashStateView) => void>();
+
+    #setCrashState(view: CrashStateView): void {
+        const was = this.#crashState;
+        this.#crashState = view;
+        if (was !== null && JSON.stringify(was) === JSON.stringify(view)) return;
+        for (const l of [...this.#crashListeners]) l(view);
+    }
 
     /** Liveness: `true` when the host answered. */
     async ping(): Promise<boolean> {
