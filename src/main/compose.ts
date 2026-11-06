@@ -78,6 +78,14 @@ import type { GenRouterServer } from './gen-router-server.js';
  */
 
 export interface ComposeInput extends HostingOptions {
+    /**
+     * SAFE MODE (Tynn #386), on the emergency no-host path: this window's own flows, sites and engines start nothing by
+     * themselves while it is on (window-safe-mode.ts reads it from the runtime files). `heldSite` names a site it held;
+     * `safeModeLeft` is told when the person leaves it, so the own flow clock plans again.
+     */
+    readonly safeMode?: () => boolean;
+    readonly heldSite?: (siteId: string, name: string) => void;
+    readonly safeModeLeft?: (listener: () => void) => void;
     /** This Genie's build, said in the remote `welcome` (P10.1e). Absent = 'dev'. */
     readonly build?: string;
     /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
