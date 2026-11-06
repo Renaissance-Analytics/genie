@@ -31,6 +31,9 @@ export interface WorkspaceTrustPorts extends TrustListPorts {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const NOTHING: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [], approvals: [] };
+/** A carried workspace's list is re-read up to this many times for two reads in a row that agree, this far apart. */
+const SETTLE_READS = 5;
+const SETTLE_WAIT_MS = 50;
 const OUR_SERVERS: ReadonlySet<string> = new Set(['genie', 'tynn', 'genie-agentinbox-channel']);
 /** Settings that change how Claude Code looks and nothing else, checked against its published schema. An allow-list, as with git config: anything else goes on the list, a key nobody has heard of included. */
 const SETTINGS_FOR_LOOKS_ONLY: ReadonlySet<string> = new Set(['$schema', 'theme', 'spinnerTipsEnabled', 'terminalProgressBarEnabled', 'showTurnDuration', 'prefersReducedMotion', 'viewMode', 'editorMode', 'syntaxHighlightingDisabled', 'verbose']);
@@ -168,17 +171,45 @@ export class WorkspaceTrust {
         this.#ports = ports;
     }
 
-    /** Read the workspace's files again and answer. Carried over at the upgrade with no list recorded yet: this list is recorded now, once, so a later change asks. */
+    /**
+     * Read the workspace's files again and answer. Carried over at the upgrade with no list recorded yet: this list is
+     * recorded now, once, so a later change asks — and only a SETTLED list (two reads in a row the same): a read taken while
+     * the files were being written would record half a list, and the whole one would then read "changed". One that never
+     * settles records nothing and is not trusted: the person is asked (genie#1519; the line's flake, run 42277250815).
+     */
     async refresh(workspaceId: string): Promise<TrustView | null> {
         const workspace = this.#ports.workspaces().find((w) => w.id === workspaceId);
         if (!workspace) { this.#views.delete(workspaceId); return null; }
-        const list = await readTrustList(workspace.path, this.#ports);
-        const hash = trustHash(list);
+        let list = await readTrustList(workspace.path, this.#ports);
+        let hash = trustHash(list);
         const record = this.#ports.record();
-        if (record.carried.includes(workspaceId) && record.workspaces[workspaceId] === undefined && hash !== trustHash(NOTHING)) await this.#ports.recordWorkspace(workspaceId, hash);
+        if (record.carried.includes(workspaceId) && record.workspaces[workspaceId] === undefined && hash !== trustHash(NOTHING)) {
+            const settled = await this.#settled(workspace.path, hash);
+            if (settled === null) {
+                const unsettled: TrustView = { trusted: false, changed: false, list };
+                this.#keep(workspaceId, workspace.path, unsettled);
+                return unsettled;
+            }
+            ({ list, hash } = settled);
+            if (hash !== trustHash(NOTHING)) await this.#ports.recordWorkspace(workspaceId, hash);
+        }
         const view = { ...trustVerdict(this.#ports.record(), workspaceId, hash), list };
         this.#keep(workspaceId, workspace.path, view);
         return view;
+    }
+
+    /** The list read again until two reads in a row agree: at once, then up to four more, {@link SETTLE_WAIT_MS} apart. `null` = it never settled. */
+    async #settled(path: string, firstHash: string): Promise<{ list: TrustList; hash: string } | null> {
+        const wait = this.#ports.wait ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
+        let before = firstHash;
+        for (let i = 0; i < SETTLE_READS; i += 1) {
+            if (i > 0) await wait(SETTLE_WAIT_MS);
+            const list = await readTrustList(path, this.#ports);
+            const hash = trustHash(list);
+            if (hash === before) return { list, hash };
+            before = hash;
+        }
+        return null;
     }
 
     /** The person says yes to what the workspace says now. Recorded first: a save that fails leaves it untrusted, and says why. */
