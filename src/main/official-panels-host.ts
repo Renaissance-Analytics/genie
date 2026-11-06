@@ -4,6 +4,7 @@ import { listRepos } from '../core/repo-registry.js';
 import { readArtBoard, reviewArtBoardPost, type ReviewResult } from './artboard-host.js';
 import { repoCommit, repoCreateBranch, repoDiff, repoPull, repoPush, repoStage, repoStatus, repoUnstage, type RepoResult } from './repo-git.js';
 import type { ResolvedBoard } from '../core/artboard.js';
+import { readArtboardFiles, type ArtboardFilesBoard } from './artboard-files.js';
 
 /**
  * THE OFFICIAL PANELS' HOST CALLS (beta.33 item 14): what the Repository and ArtBoard panels ask of the host, by WORKSPACE —
@@ -61,6 +62,12 @@ export async function artboardRead(deps: PanelsHostDeps, workspaceId: unknown): 
     const root = typeof workspaceId === 'string' ? deps.workspacePath(workspaceId) : null;
     if (!root) return { posts: [], error: unknownWorkspace };
     return readArtBoard(root);
+}
+
+/** Local list: artifact bytes are resolved by connection-owned blob sources only when opened. */
+export async function artboardReadFiles(deps: PanelsHostDeps, workspaceId: unknown): Promise<ArtboardFilesBoard> {
+    const root = typeof workspaceId === 'string' ? deps.workspacePath(workspaceId) : null;
+    return root ? readArtboardFiles(root) : { posts: [], error: unknownWorkspace };
 }
 
 export async function artboardReview(deps: PanelsHostDeps, workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown): Promise<ReviewResult> {

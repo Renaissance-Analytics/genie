@@ -32,7 +32,7 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
@@ -111,6 +111,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     // The same admitted local client, with the same read/rejection and recovery semantics as the other moved families.
     const ownerRead = <T>(call: (owner: LocalOwnerBridge) => Promise<T>): Promise<T> => read(() => call(client!.localOwner!));
     return {
+        artboard: { read: id => read(b => b.artboard!.read(id)), review: (id, post, verdict, comment) => read(b => b.artboard!.review(id, post, verdict, comment)) },
         chatDrafts: {
             load: () => read(b => b.chatDrafts!.load()), save: (id, draft) => read(b => b.chatDrafts!.save(id, draft)),
             putFile: bytes => read(b => b.chatDrafts!.putFile(bytes)), readFile: ref => read(b => b.chatDrafts!.readFile(ref)),

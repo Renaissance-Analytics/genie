@@ -3,15 +3,19 @@ import type { BlobKind, BlobOpener, BlobSource } from '../core/local-blobs.js';
 import { LOCAL_UPLOAD_TTL_MS, type MetadataItem, type PageKind, type PageOpener, type PageSource } from '../core/local-content.js';
 import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesPageKind, type FilesProjection } from '../core/local-files.js';
 import { validateDraftRanges, type DraftContentEnvelope, type DraftMetadata, type LocalDraftMethod } from '../core/local-drafts.js';
+import type { ArtboardArtifact, ArtboardFilesBoard } from './artboard-files.js';
+import type { ArtboardBlob, ArtboardContentEnvelope, ArtboardMetadata } from '../core/local-artboard.js';
 import { LocalBlobs } from './local-blobs.js';
 import { LocalPageBudget, LocalPages } from './local-pages.js';
+import { beginArtboardBuildTiming } from './artboard-build-timing.js';
 
-interface Scope { ref: string; expires: number; timer: ReturnType<typeof setTimeout>; releaseBudget: () => void; refs: Set<string>; sources: Set<BlobSource>; heldSources: Set<StreamResource>; closing: Promise<void> }
+interface Scope { ref: string; expires: number; timer: ReturnType<typeof setTimeout>; releaseBudget: () => void; refs: Set<string>; sources: Set<BlobSource>; heldSources: Set<StreamResource>; opening: Map<AbortController, Promise<void>>; closing: Promise<void> }
 interface StreamResource { scope: Scope; type: 'source'; source: BlobSource; closing: Promise<void> | null }
-type Resource = StreamResource | ({ scope: Scope } & ({ type: 'blob'; kind: BlobKind; bytes: Buffer | null; sha256: string } | { type: 'page'; kind: FilesPageKind; value: readonly unknown[] | Record<string, unknown>; object: boolean; projected: boolean; cache?: Map<number, MetadataItem> } | { type: 'draft-page'; items: readonly DraftMetadata[] }));
+interface ArtboardFileResource { scope: Scope; type: 'artboard-file'; artifact: ArtboardArtifact }
+type Resource = StreamResource | ArtboardFileResource | ({ scope: Scope } & ({ type: 'blob'; kind: BlobKind; bytes: Buffer | null; sha256: string } | { type: 'page'; kind: FilesPageKind; value: readonly unknown[] | Record<string, unknown>; object: boolean; projected: boolean; cache?: Map<number, MetadataItem> } | { type: 'draft-page'; items: readonly DraftMetadata[] } | { type: 'artboard-page'; items: readonly ArtboardMetadata[] }));
 const sourceValue = (value: unknown): value is BlobSource => !!value && typeof value === 'object' && typeof (value as BlobSource).read === 'function' && typeof (value as BlobSource).close === 'function';
 
-/** One connection's workspace/draft snapshots. Shared budget and expiry, including forgotten finally/release. */
+/** One connection's workspace/draft/ArtBoard snapshots. Shared budget and expiry, including forgotten finally/release. */
 export class LocalFilesContent {
     readonly blobs: LocalBlobs;
     readonly pages: LocalPages;
@@ -29,7 +33,7 @@ export class LocalFilesContent {
         this.#assertOpen(); this.#expire();
         const ref = randomUUID(), releaseBudget = this.#budget.hold(ref);
         const timer = setTimeout(() => this.release(ref), LOCAL_UPLOAD_TTL_MS); timer.unref?.();
-        this.#scopes.set(ref, { ref, releaseBudget, timer, expires: this.#now() + LOCAL_UPLOAD_TTL_MS, refs: new Set(), sources: new Set(), heldSources: new Set(), closing: Promise.resolve() });
+        this.#scopes.set(ref, { ref, releaseBudget, timer, expires: this.#now() + LOCAL_UPLOAD_TTL_MS, refs: new Set(), sources: new Set(), heldSources: new Set(), opening: new Map(), closing: Promise.resolve() });
         return ref;
     }
     capture(value: unknown, kind: FilesPageKind, bytes = false): unknown {
@@ -72,12 +76,36 @@ export class LocalFilesContent {
         const list = this.#resource(scope, { scope, type: 'draft-page', items });
         return { draftsContent: { ref, blob, list, count: items.length } } satisfies DraftContentEnvelope;
     }
+    artboardResult(ref: string, value: unknown): unknown {
+        const finish = beginArtboardBuildTiming('projection', 'sync');
+        try { return this.#artboardResult(ref, value); } finally { finish(); }
+    }
+    #artboardResult(ref: string, value: unknown): unknown {
+        const scope = this.#scope(ref), board = value as ArtboardFilesBoard;
+        if (!board || !Array.isArray(board.posts)) throw new Error('invalid native ArtBoard response');
+        if (!board.posts.length) { this.release(ref); return value; }
+        const blob = (bytes: Buffer, type: string): ArtboardBlob => {
+            const sha256 = createHash('sha256').update(bytes).digest('hex'), ref = this.#resource(scope, { scope, type: 'blob', kind: 'artboard-post', bytes, sha256 });
+            return { ref, size: bytes.length, sha256, type };
+        };
+        const items: ArtboardMetadata[] = board.posts.map((post, index) => {
+            const file = post.artifact;
+            if (!file || typeof file.open !== 'function' || typeof file.type !== 'string' || (file.error !== undefined && typeof file.error !== 'string') || (file.size === null ? !file.error : !Number.isSafeInteger(file.size) || file.size < 0)) throw new Error('invalid ArtBoard file metadata');
+            const artifact: ArtboardBlob = { ref: this.#resource(scope, { scope, type: 'artboard-file', artifact: file }), size: file.size, sha256: null, type: file.type, ...(file.error === undefined ? {} : { error: file.error }) };
+            return { id: String(index), postId: post.id, title: post.title, kind: post.kind, createdAt: post.createdAt, askVerdict: post.askVerdict, artifact,
+                ...(post.note === undefined ? {} : { note: post.note }),
+                ...(post.review ? { review: { verdict: post.review.verdict, at: post.review.at, ...(post.review.comment === undefined ? {} : { comment: blob(Buffer.from(JSON.stringify(post.review.comment)), 'application/json') }) } } : {}) };
+        });
+        const list = this.#resource(scope, { scope, type: 'artboard-page', items });
+        return { artboardContent: { ref, list, count: items.length, ...(board.error === undefined ? {} : { error: board.error }) } } satisfies ArtboardContentEnvelope;
+    }
     release(ref: unknown): { released: boolean } {
         const scope = typeof ref === 'string' ? this.#scopes.get(ref) : undefined;
         if (!scope) return { released: false };
         this.#scopes.delete(scope.ref); clearTimeout(scope.timer);
         this.pages.releaseResource(scope.ref); this.blobs.releaseSources(scope.sources);
-        scope.closing = Promise.all([...scope.heldSources].map(resource => this.#closeStream(resource).catch(() => { console.warn('[genie] a draft response source could not be released'); }))).then(() => {});
+        for (const controller of scope.opening.keys()) controller.abort();
+        scope.closing = Promise.all([...scope.opening.values(), ...[...scope.heldSources].map(resource => this.#closeStream(resource).catch(() => { console.warn('[genie] a content response source could not be released'); }))]).then(() => {});
         scope.heldSources.clear();
         for (const id of scope.refs) { const resource = this.#refs.get(id); if (resource?.type === 'blob') resource.bytes = null; this.#refs.delete(id); }
         scope.refs.clear(); scope.sources.clear(); scope.releaseBudget();
@@ -127,8 +155,9 @@ export class LocalFilesContent {
         // Avoid retaining duplicate lazy refs from a speculative inline projection: the page reuses these projections.
         return { t: 'object', kind, count: keys.length, ref: this.#resource(scope, { scope, type: 'page', kind, value: Object.fromEntries(entries), object: true, projected: true }) };
     }
-    #blob(kind: BlobKind, ref: string): BlobSource {
+    #blob(kind: BlobKind, ref: string): BlobSource | Promise<BlobSource> {
         const resource = this.#refs.get(ref);
+        if (resource?.type === 'artboard-file' && kind === 'artboard-post') return this.#openArtboardFile(resource);
         if (resource?.type === 'source' && kind === 'draft-file') {
             const scope = this.#scope(resource.scope.ref); if (resource.closing) throw new Error('this draft source is already closed'); let closed = false;
             const source: BlobSource = {
@@ -148,8 +177,31 @@ export class LocalFilesContent {
         scope.sources.add(source); return source;
     }
     #closeStream(resource: StreamResource): Promise<void> { return resource.closing ??= Promise.resolve().then(() => resource.source.close()); }
+    #openArtboardFile(resource: ArtboardFileResource): Promise<BlobSource> {
+        const scope = this.#scope(resource.scope.ref), controller = new AbortController();
+        const pending = (async () => {
+            const source = await resource.artifact.open({ signal: controller.signal });
+            try {
+                this.#scope(scope.ref); controller.signal.throwIfAborted();
+                if (source.size !== resource.artifact.size) throw new Error('The ArtBoard artifact size changed since it was listed.');
+                const held: StreamResource = { scope, type: 'source', source, closing: null }; scope.heldSources.add(held); let closed = false;
+                const proxy: BlobSource = {
+                    size: source.size, sha256: source.sha256,
+                    read: async (offset, length) => { this.#scope(scope.ref); if (closed || held.closing) throw new Error('The ArtBoard source is closed.'); return source.read(offset, length); },
+                    close: async () => { if (closed) return; closed = true; scope.sources.delete(proxy); await this.#closeStream(held); scope.heldSources.delete(held); },
+                };
+                scope.sources.add(proxy); return proxy;
+            } catch (error) { try { await source.close(); } catch { console.warn('[genie] a late ArtBoard source could not be released'); } throw error; }
+        })();
+        scope.opening.set(controller, pending.then(() => {}, () => {}));
+        return pending.finally(() => scope.opening.delete(controller));
+    }
     #page(kind: PageKind, ref: string): PageSource {
         const resource = this.#refs.get(ref);
+        if (resource?.type === 'artboard-page' && kind === 'artboard-posts') {
+            const scope = this.#scope(resource.scope.ref); let index = 0, closed = false;
+            return { next: async () => { this.#scope(scope.ref); if (closed) throw new Error('this ArtBoard metadata source is closed'); return resource.items[index++] ?? null; }, close: async () => { closed = true; } };
+        }
         if (resource?.type === 'draft-page' && kind === 'chat-drafts') {
             const scope = this.#scope(resource.scope.ref); let index = 0, closed = false;
             return {

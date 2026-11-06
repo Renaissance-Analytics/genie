@@ -230,7 +230,7 @@ import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
 import { launchSubprocessIn, runPluginTool } from './plugin-runner.js';
 import { runOfficialTool } from './official-tools.js';
-import { artboardRead, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
+import { artboardReadFiles, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
@@ -2157,8 +2157,6 @@ async function boot(): Promise<void> {
         send: async (agentId, text) => { if (services) await services.inbox.send({ from: HUMAN, to: agentId as AgentId, text }); },
         now: () => new Date().toISOString(),
     });
-    ipcMain.handle('genie:artboard-read', (_event, workspaceId: unknown) => artboardRead(panelsHost(), workspaceId));
-    ipcMain.handle('genie:artboard-review', (_event, workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown) => artboardReview(panelsHost(), workspaceId, postId, verdict, comment));
     // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
     // WHICH BROWSER is decided by the window that asked (core/browser-connection.ts): this machine's sites, or — for a window
     // driving a Tynn workstation — that workstation's, over that window's own relay channel. Never by what it says.
@@ -2754,6 +2752,7 @@ async function boot(): Promise<void> {
             },
             // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
             localFiles: { files: () => filesHost, editor: editorBytesDeps, repo: (op, id, rel, a, b) => repoCall(panelsHost(), op, id, rel, a, b) },
+            artboard: { read: id => artboardReadFiles(panelsHost(), id), review: (id, post, verdict, comment) => artboardReview(panelsHost(), id, post, verdict, comment) },
             chatDrafts: engineDraftsPort(drafts, (method, args) => agentEngineLink?.client.call(method, args) ?? Promise.resolve({ ok: false, reason: 'The draft host is not connected.' })),
             files: {
                 children: async (workspaceId, dir) => (await filesHost?.children(workspaceId, dir)) ?? null,

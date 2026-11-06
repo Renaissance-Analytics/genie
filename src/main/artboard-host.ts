@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BOARD_DIR, BOARD_INDEX, applyVerdict, parseBoard, resolveBoard, verdictMessage, wantsVerdict, type ResolvedBoard, type Review } from '../core/artboard.js';
+import { beginArtboardBuildTiming } from './artboard-build-timing.js';
 
 /**
  * THE ARTBOARD, HOST SIDE (beta.33 item 14, Tynn #784; Genie 1 main/artboard/wire.ts + host.ts). The panel asks for the
@@ -17,6 +18,11 @@ async function boardPosts(root: string) {
 }
 
 export async function readArtBoard(root: string): Promise<ResolvedBoard> {
+    const finish = beginArtboardBuildTiming('native-build', 'async');
+    try { return await readResolvedArtBoard(root); } finally { finish(); }
+}
+
+async function readResolvedArtBoard(root: string): Promise<ResolvedBoard> {
     const posts = await boardPosts(root);
     // resolveBoard is synchronous over its reads; the artifacts are read first (bare names only — parseBoard refuses any other).
     const texts = new Map<string, string | null>();
@@ -26,7 +32,8 @@ export async function readArtBoard(root: string): Promise<ResolvedBoard> {
         if (p.kind === 'html') texts.set(p.file, await readFile(full, 'utf8').catch(() => null));
         else if (MIME_OK.test(p.file)) images.set(p.file, await readFile(full).then((b) => b.toString('base64'), () => null));
     }
-    return resolveBoard(posts, { readText: (f) => texts.get(f) ?? null, readBase64: (f) => images.get(f) ?? null });
+    const finish = beginArtboardBuildTiming('resolve-board', 'sync');
+    try { return resolveBoard(posts, { readText: (f) => texts.get(f) ?? null, readBase64: (f) => images.get(f) ?? null }); } finally { finish(); }
 }
 
 export interface ReviewDeps {
