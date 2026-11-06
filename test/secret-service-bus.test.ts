@@ -150,7 +150,7 @@ describe('the unlock, against a fake bus', () => {
     it('EXTERNAL auth with the uid in hex; Unlock([default]); a "/" prompt is done at once (no AddMatch, no Prompt)', async () => {
         const unlock = need<Unlock>('unlockDefaultCollection');
         const b = await fakeBus({ unlock: (s, r) => reply(s, r, 'aoo', aoO([DEFAULT], '/')) });
-        expect(await unlock({ socketPath: b.path, uid: 1000 })).toEqual({ outcome: 'unlocked', detail: null });
+        expect(await unlock({ socketPath: b.path, uid: 1000 })).toEqual({ outcome: 'unlocked', detail: null, via: 'unlock' });
         expect(b.authLine()).toBe(`\0AUTH EXTERNAL ${Buffer.from('1000').toString('hex')}`);
         expect(b.seen.map((c) => c.member)).toEqual(['Hello', 'Unlock']);
         expect(b.seen[1]!.path).toBe('/org/freedesktop/secrets');
@@ -160,7 +160,7 @@ describe('the unlock, against a fake bus', () => {
     it('a prompt: AddMatch for THAT prompt’s Completed only, Prompt(\'\'), then Completed(dismissed=false) = unlocked', async () => {
         const unlock = need<Unlock>('unlockDefaultCollection');
         const b = await fakeBus({ unlock: (s, r) => reply(s, r, 'aoo', aoO([], PROMPT)), onPrompt: (sock, p) => setTimeout(() => sock.write(signal(900, p, 'org.freedesktop.Secret.Prompt', 'Completed', 'bv', bv(false))), 20) });
-        expect(await unlock({ socketPath: b.path, uid: 1000 })).toEqual({ outcome: 'unlocked', detail: null });
+        expect(await unlock({ socketPath: b.path, uid: 1000 })).toEqual({ outcome: 'unlocked', detail: null, via: 'prompt' });
         expect(b.seen.map((c) => c.member)).toEqual(['Hello', 'Unlock', 'AddMatch', 'Prompt']);
         const rule = b.seen[2]!.body.toString('utf8');
         expect(rule).toContain(`path='${PROMPT}'`);
@@ -177,7 +177,7 @@ describe('the unlock, against a fake bus', () => {
                 setTimeout(() => sock.write(signal(901, p, 'org.freedesktop.Secret.Prompt', 'Completed', 'bv', bv(true))), 20);
             },
         });
-        expect(await unlock({ socketPath: b.path, uid: 1000 })).toEqual({ outcome: 'dismissed', detail: null });
+        expect(await unlock({ socketPath: b.path, uid: 1000 })).toEqual({ outcome: 'dismissed', detail: null, via: 'prompt' });
     });
 
     it('Cancel while the person decides: cancelled, and the socket is closed', async () => {

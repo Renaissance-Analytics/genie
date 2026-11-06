@@ -75,6 +75,9 @@ async function partB(): Promise<void> {
     if (prompted && !typed) await closePrompter();
     const r = await Promise.race([unlock, sleep(30_000).then(() => ({ outcome: 'timeout', detail: null }))]);
     say('b-genie-outcome', r.outcome);
+    // How it unlocked: `unlock` = Unlock answered with no prompt object (no dialog was needed — a collection with an empty
+    // password, or already open); `prompt` = through Prompt.Completed (the desktop's dialog ran). Says what Part B proved.
+    say('b-genie-via', 'via' in r && r.via ? r.via : 'none');
     if (r.detail) say('b-genie-detail', JSON.stringify(r.detail));
     say('b-ms', Date.now() - started);
     say('b-locked-after', String(await locked()));

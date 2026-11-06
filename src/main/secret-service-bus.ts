@@ -368,7 +368,7 @@ const BUS = { destination: 'org.freedesktop.DBus', path: '/org/freedesktop/DBus'
  * Ask the Secret Service to unlock the default collection, the desktop's own dialog included, and answer how it ended.
  * Never throws: a failure is `failed`, with the reason in `detail`.
  */
-export async function unlockDefaultCollection(options: UnlockOptions): Promise<{ outcome: UnlockOutcome; detail: string | null }> {
+export async function unlockDefaultCollection(options: UnlockOptions): Promise<{ outcome: UnlockOutcome; detail: string | null; via?: 'unlock' | 'prompt' }> {
     const step = options.stepTimeoutMs ?? 5_000;
     if (options.signal?.aborted) return { outcome: 'cancelled', detail: null };
     let conn: BusConnection | null = null;
@@ -382,7 +382,8 @@ export async function unlockDefaultCollection(options: UnlockOptions): Promise<{
         const unlockReply = await conn.call(SECRET_SERVICE, first.path, first.iface, first.member, 'ao', (w) => w.array(4, () => w.o(DEFAULT_COLLECTION)), step);
         const [unlocked, prompt] = readBody(unlockReply, ['ao', 'o']) as [string[], string];
         const next = afterUnlockReply({ unlocked, prompt });
-        if ('done' in next) return { outcome: unlockOutcome({ kind: 'done' }), detail: null };
+        // No prompt object: the Secret Service unlocked it (or it was) with no dialog — e.g. a collection with no password.
+        if ('done' in next) return { outcome: unlockOutcome({ kind: 'done' }), detail: null, via: 'unlock' };
         // Only THIS prompt's Completed: the match rule names its path.
         const rule = `type='signal',interface='${next.wait.iface}',member='${next.wait.member}',path='${next.wait.path}'`;
         await conn.call(BUS.destination, BUS.path, BUS.iface, 'AddMatch', 's', (w) => w.s(rule), step);
@@ -393,7 +394,7 @@ export async function unlockDefaultCollection(options: UnlockOptions): Promise<{
         const signal = await Promise.race([completed.promise, cancelled]);
         if (signal === 'cancelled') { completed.cancel(); return { outcome: 'cancelled', detail: null }; }
         const [dismissed] = readBody(signal, ['b', 'v']) as [boolean, BusValue];
-        return { outcome: unlockOutcome({ kind: 'completed', dismissed }), detail: null };
+        return { outcome: unlockOutcome({ kind: 'completed', dismissed }), detail: null, via: 'prompt' };
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return { outcome: unlockOutcome({ kind: 'error', message }), detail: message };
