@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Baton, PairingPins } from '../src/core/remote.js';
-import { inMemoryPair, parseMessage, type ClientTransport, type PreAuth, type WireMessage } from '../src/core/remote-protocol.js';
+import { REMOTE_PROTOCOL, inMemoryPair, parseMessage, type ClientTransport, type PreAuth, type WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
@@ -92,6 +92,7 @@ beforeEach(async () => {
         baton: new Baton(),
         pins,
         devices,
+        build: '2.0.0-beta.57+0123456789ab',
         transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } },
     });
     connect = () => { const pair = inMemoryPair(); for (const cb of connections) cb(pair.server); return client(pair.client); };
@@ -102,6 +103,39 @@ afterEach(async () => {
     // The store's writes are serialized and awaitable; a dir deleted under a pending rename is ENOENT, not a test result.
     await devices.flushed();
     await rm(dir, { recursive: true, force: true });
+});
+
+/**
+ * THE VERSION HANDSHAKE (P10.1e). A desktop window reaching a host over the relay — genie-cloud's, P10 — reads what it is
+ * talking to in `welcome`: the remote wire's `protocol` and the host's `build`. Additive only: every field an old client
+ * reads is there as before, so an old client is unaffected.
+ */
+describe('the welcome says the protocol and the build', () => {
+    const OLD_FIELDS = ['connectionId', 'host', 'isOwner', 'kind', 'workspaceId'];
+
+    it('a PIN pairing: the old fields as before, with protocol and build beside them', async () => {
+        const { code } = host.issuePin();
+        const welcome = await connect().hello({ kind: 'pin', code, label: 'glenn’s phone' });
+        expect(welcome).toEqual({ kind: 'welcome', connectionId: expect.any(String), host: 'alphar', isOwner: true, workspaceId: null, token: 'tok0', protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab' });
+        expect(REMOTE_PROTOCOL).toBe(1);
+    });
+
+    it('a token hello and a relay guest say them too, and nothing else is added', async () => {
+        const { code } = host.issuePin();
+        await connect().hello({ kind: 'pin', code, label: 'glenn’s phone' });
+        const again = await connect().hello({ kind: 'token', token: 'tok0' });
+        expect(Object.keys(again).sort()).toEqual([...OLD_FIELDS, 'build', 'protocol'].sort());
+        expect(again).toMatchObject({ protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab' });
+        const guest = await connectRelay({ label: 'wren', isOwner: false, workspaceId: 'tynn', readonly: false }).hello({ kind: 'relay' }, 'wren');
+        expect(guest).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn', protocol: REMOTE_PROTOCOL, build: '2.0.0-beta.57+0123456789ab' });
+    });
+
+    it('an OLD client reads the new welcome as it always has: the parser takes it, and its fields are unchanged', () => {
+        const parsed = parseMessage(JSON.stringify({ kind: 'welcome', connectionId: 'c1', host: 'alphar', isOwner: true, workspaceId: null, protocol: REMOTE_PROTOCOL, build: 'b' }));
+        expect(parsed).toMatchObject({ ok: true, message: { kind: 'welcome', connectionId: 'c1', host: 'alphar', isOwner: true, workspaceId: null } });
+        // CONTROL: a welcome from an OLD host, with neither, still parses.
+        expect(parseMessage(JSON.stringify({ kind: 'welcome', connectionId: 'c1', host: 'alphar', isOwner: true, workspaceId: null }))).toMatchObject({ ok: true });
+    });
 });
 
 describe('authentication', () => {

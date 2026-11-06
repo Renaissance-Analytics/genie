@@ -63,7 +63,7 @@ probe "terminal-open-waits-for-pid" src/main/terminal-host.ts \
     test/terminal-open-ready.test.ts "answers once the pid is known"
 
 probe "spawn-host-says-the-shell" src/main/spawn-host-server.ts \
-    "event('pty.opened', { id: ptyId, pid: opened.pid, shell: opened.shell });" "event('pty.opened', { id: ptyId, pid: opened.pid });" \
+    "event('pty.opened', { id: ptyId, pid: opened.pid, shell: opened.shell, ...counter.snapshot() });" "event('pty.opened', { id: ptyId, pid: opened.pid, ...counter.snapshot() });" \
     test/terminal-open-ready.test.ts "pty.opened carries the resolved shell"
 
 probe "relay-logs-ready" src/main/spawn-relay.ts \

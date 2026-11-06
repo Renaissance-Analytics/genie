@@ -39,6 +39,8 @@ import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
 import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
+import type { SafeModeView } from '../core/safe-mode.js';
+import type { CrashStateView } from '../core/crash-record.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -75,7 +77,7 @@ function agentKeyName(name: string): `tynn/agent/${string}` {
 
 /** What the session host is built with, from this server: its owner's half of the options. */
 export type { HostAgentKeys };
-export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
+export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
     /** This machine as a workstation (P3.4): the host holds its key. */
@@ -132,6 +134,13 @@ export interface EngineServerOptions {
     };
     /** Genie 1's database path from the window: the host takes its memories and mail once. */
     readonly v1Import?: (databasePath: string) => Promise<void>;
+    /**
+     * genie-host's hang watchdog (Tynn #386: hang-watchdog.ts): each window's `engine.heartbeat` by its connection, and
+     * the connection dropping. Absent = a beat is ignored.
+     */
+    readonly heartbeat?: { beat(connId: string, beat: unknown): void; dropped(connId: string): void };
+    /** The latest crash record and the reopened-window notice (crash-state-host.ts): told to LOCAL windows before ready and on change; `engine.crash` dismisses. */
+    readonly crash?: { view(): CrashStateView; dismiss(): CrashStateView; onChange(listener: (view: CrashStateView) => void): () => void };
     /** The host's process supervisor (P3.3b: supervisor-host.ts). Absent = `engine.supervisor` is refused. */
     readonly supervisor?: SupervisorService;
     /** The host's hosting: the front door, the engines, the sites (P5a: hosting-host.ts). Absent = `engine.hosting` is refused. */
@@ -150,6 +159,8 @@ export interface EngineServerOptions {
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
     readonly updates?: UpdatesService;
+    /** The host's safe mode (Tynn #386: safe-mode-host.ts): told to EVERY window before ready and on change; `engine.safeMode` leaves it. */
+    readonly safeMode?: { view(): SafeModeView; leave(): SafeModeView; onChange(listener: (view: SafeModeView) => void): () => void };
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     /** IssueWatch in the host (P5c: issue-watch-host.ts). Absent = `engine.issueWatch` is refused. Local windows only. */
@@ -260,6 +271,10 @@ export class SessionEngineServer {
             const owner = event.kind === 'list' ? undefined : event.owner;
             for (const conn of this.#connections) if (conn.authed && (owner === undefined || owner === String(conn.id))) this.#event(conn, 'terminals.event', event);
         });
+        // Safe mode (Tynn #386) travels to EVERY window: each one shows its banner.
+        options.safeMode?.onChange((view) => { for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'safeMode.event', view); });
+        // The crash state (Tynn #386) travels on LOCAL window links only: a record is this machine's.
+        options.crash?.onChange((view) => { for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'crash.event', view); });
         // The updater's state (P5b) travels on LOCAL window links only, as the hosting's does (P4 rules).
         options.updates?.onEvent((state) => {
             for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'updates.event', state);
@@ -287,6 +302,7 @@ export class SessionEngineServer {
             },
             onThreadId: (agentId, threadId) => this.callback({ name: 'threadId', agentId, threadId }),
             onCarryOverSent: (agentId) => this.callback({ name: 'carryOverSent', agentId }),
+            markGenieWords: (agentId) => this.callback({ name: 'genieWords', agentId }),
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
             onAction: (agentId, kind) => this.callback({ name: 'action', agentId, kind }),
@@ -369,6 +385,7 @@ export class SessionEngineServer {
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
+            if (was) this.#options.heartbeat?.dropped(conn.id);
         });
     }
 
@@ -402,6 +419,8 @@ export class SessionEngineServer {
             return;
         }
         if (message.kind === 'call') {
+            // THE HEARTBEAT (Tynn #386): heard here, before any dispatch — cheap, no reply, no flush.
+            if (message.method === 'engine.heartbeat') { this.#options.heartbeat?.beat(conn.id, message.args[0]); return; }
             void this.#call(conn, message.id, message.method, message.args);
             return;
         }
@@ -439,6 +458,9 @@ export class SessionEngineServer {
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
+        // Safe mode BEFORE ready: the window's own boot restore holds on it (relaunch-restore.ts).
+        if (this.#options.safeMode) this.#event(conn, 'safeMode.event', this.#options.safeMode.view());
+        if (this.#options.crash && conn.local) this.#event(conn, 'crash.event', this.#options.crash.view());
         conn.transport.send(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: { running: host ? host.startedIds() : [] } }));
         const queued = this.#queue.splice(0, this.#queue.length);
         for (const callback of queued) this.#event(conn, 'engine.callback', callback);
@@ -464,6 +486,12 @@ export class SessionEngineServer {
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
         // The updater helper's link calls its own method and nothing else (P5b).
         if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
+        // The crash state is the host's own, ready before any agent engine is: answered here.
+        if (method === 'engine.crash') {
+            if (!this.#options.crash || !conn.local) throw new Error('This window is not told about crashes here.');
+            if (args[0] !== 'dismiss') throw new Error('engine.crash takes dismiss');
+            return this.#options.crash.dismiss();
+        }
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
         const id = (i = 0): AgentId => {
@@ -520,6 +548,8 @@ export class SessionEngineServer {
                 const o = (args[1] ?? {}) as { limit?: unknown; maxBytes?: unknown };
                 return host.historyRows(id(), { limit: typeof o.limit === 'number' ? o.limit : 0, maxBytes: typeof o.maxBytes === 'number' ? o.maxBytes : 0 });
             }
+            case 'engine.toolOutput':
+                return host.toolOutput(id(), typeof args[1] === 'string' ? args[1] : '');
             case 'engine.settled':
                 await host.settled();
                 return true;
@@ -616,6 +646,11 @@ export class SessionEngineServer {
                 if (!this.#options.appInbox) throw new Error('This host runs no app door.');
                 if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');
                 return this.#options.appInbox.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.safeMode':
+                if (!this.#options.safeMode) throw new Error('This host keeps no safe mode.');
+                if (str(0) !== 'leave') throw new Error(`safe mode has no ${str(0)}`);
+                // Leaving starts nothing here: the host's listener re-arms its clocks, and that is all.
+                return this.#options.safeMode.leave();
             case 'engine.updates':
                 if (!this.#options.updates) throw new Error('This host runs no updater.');
                 if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');
@@ -809,6 +844,7 @@ export class SessionEngineServer {
             deliverable: host.deliverable(id),
             inTurn: host.inTurn(id),
             queued: [...host.queuedPromptIds(id)],
+            needsNewDriver: host.needsNewDriver(id),
         };
     }
 

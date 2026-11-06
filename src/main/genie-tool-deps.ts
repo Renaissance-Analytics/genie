@@ -75,6 +75,16 @@ export interface GenieToolParts {
     readonly pages?: { open(): readonly DrivablePage[] };
 }
 
+/**
+ * THE AGENTS GENIE'S TOOLS KNOW (Tynn story #385): every agent the registry holds — the OS agent (genie@system) included.
+ * A tool finds its CALLER here (agentinbox: `roster().find(r => r.id === caller.agentId)`). The window built it from the
+ * snapshot's workspaces, which never include Genie's own workspace, so the OS agent could not find itself and every peer
+ * read unreachable from it. genie-host's roster is its registry's whole list too (host-mcp.ts `records`).
+ */
+export function toolRoster(registry: { listAgents(): readonly AgentRecord[] }): readonly AgentRecord[] {
+    return registry.listAgents();
+}
+
 export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
     const values = () => p.settings.snapshot();
     return {

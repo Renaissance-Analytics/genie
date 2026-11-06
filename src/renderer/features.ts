@@ -213,6 +213,8 @@ export interface IntegrationsSection {
     readonly agentFiles?: readonly AgentFilesReport[];
     /** Linux with no keyring: the card (main/linux-keyring.ts), null when the keyring is fine or off Linux. */
     readonly keyring?: KeyringView | null;
+    /** What an unlock set going, said on screen — the Genie browser restarting (Tynn story #388); null/absent = nothing. */
+    readonly keyringNotice?: string | null;
 }
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */
@@ -301,6 +303,8 @@ export interface FeatureData {
      * in a pushed snapshot: the flow it saved (and whether the save disarmed it), or the problems, each on its node.
      */
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null; saved?: FlowSaved | null; toolKinds?: readonly import('@particle-academy/fancy-flow/engine').NodeKindDefinition[] } | null;
+    /** Workspaces waiting for the person's yes. Absent = none. */
+    readonly trust?: readonly TrustStepView[];
     readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus; /** What the hosting was started without (genie-host's launch inputs), each with its reason. */ problems?: readonly string[] } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
@@ -333,6 +337,19 @@ export function newestSnapshot(current: FeatureData, next: FeatureData): Feature
 /** What a feature action came to, for a control that shows its progress (renderer/site-actions.ts). */
 export type ActOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
+/** A workspace not trusted yet: what would run, for the person to say yes to. */
+export interface TrustStepView {
+    readonly workspaceId: string;
+    readonly changed: boolean;
+    readonly list: {
+        readonly sites: readonly { readonly key: string; readonly fingerprint: string; readonly runs: string; readonly folder: string; readonly npmScript: string | null }[];
+        readonly hooks: readonly { readonly file: string; readonly event: string; readonly command: string }[];
+        readonly servers: readonly { readonly file: string; readonly name: string; readonly command: string }[];
+        readonly gitKeys: readonly { readonly key: string; readonly value: string }[];
+        readonly approvals: readonly string[];
+    };
+}
+
 /** First paint: nothing has been asked yet. */
 export const EMPTY_FEATURES: FeatureData = {
     knowledge: { hits: null, query: '', adding: null, lastAdd: null },
@@ -356,6 +373,11 @@ export type FeatureAction =
     /** One repo's IssueWatch switch in Tynn (watch it; include a fork's upstream) — one field at a time. */
     | { kind: 'issueWatch.setRepo'; workspaceId: string; owner: string; repo: string; enabled?: boolean; includeUpstream?: boolean }
     | { kind: 'whatsNew.show' }
+    /** "Leave safe mode" (Tynn #386): genie-host's leave. Starts nothing; automatic behaviour is back on. */
+    | { kind: 'safeMode.leave' }
+    // The reopened-window notice (Tynn #386): forget it, or stop every agent (the person's choice, after a second hang).
+    | { kind: 'hangNotice.dismiss' }
+    | { kind: 'hangNotice.stopAll' }
     | { kind: 'whatsNew.close'; version: string }
     | { kind: 'knowledge.search'; query: string }
     | { kind: 'knowledge.openAdd'; workspaceId?: string }
@@ -530,6 +552,7 @@ export type FeatureAction =
     | { kind: 'integrations.tynnCode'; code: string }
     /** The keyring card's one button: install, start, restart Genie or check again, whichever comes next. */
     | { kind: 'keyring.fix' }
+    | { kind: 'keyring.cancel' }
     | { kind: 'integrations.tynnSignOut' }
     /** GitHub (beta.33 item 25; Genie 1's): sign in with the device flow, cancel it, read GitHub again, open one of its pages, sign out. */
     | { kind: 'integrations.githubSignIn' }
@@ -538,6 +561,8 @@ export type FeatureAction =
     | { kind: 'integrations.githubOpen'; target: { page: 'install' } | { page: 'device' } | { page: 'authorizations' } | { page: 'installation'; installationId: number } }
     | { kind: 'integrations.githubSignOut' }
     | { kind: 'workspace.syncAgentFiles'; workspaceId: string; workspacePath: string }
+    /** The person's yes to what a workspace would run. */
+    | { kind: 'workspace.trust'; workspaceId: string; workspacePath: string }
     /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
     | { kind: 'plugins.setEnabled'; id: string; enabled: boolean };
 

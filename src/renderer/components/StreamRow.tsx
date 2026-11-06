@@ -1,7 +1,8 @@
 import { Button, Icon } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
-import { memo } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { LedgerRow, Tone } from '../../core/stream-view.js';
+import type { ToolOutputReply } from '../../core/tool-row-bound.js';
 import { chatLinkTarget, type ChatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
 import { ChatProse } from './ChatProse.js';
 
@@ -50,6 +51,11 @@ export interface StreamRowProps {
     onToggle?: ((id: string) => void) | undefined;
     onSelect: (id: string) => void;
     /**
+     * A tool row's WHOLE output, asked of the host when a person opens the row (Tynn story #386): the window holds only
+     * the row's preview. Absent = the preview is all this window can show.
+     */
+    loadFull?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
+    /**
      * A prose row's markup (genie#1263): what its pills may open, and the opener for a person's click on one. Absent =
      * every pill is its words.
      */
@@ -63,14 +69,16 @@ export interface StreamMarkup {
 
 /** MEMOISED (genie#1340): a push redraws only the rows whose props changed. Rows keep their object while unchanged
  * (core/stream-view.ts LedgerRowCache) and the Stream's callbacks are stable, so an unchanged row is skipped. */
-export const StreamRow = memo(function StreamRow({ row, selected, live = false, streaming = false, cursor = false, expanded = false, onToggle, onSelect, markup }: StreamRowProps) {
+export const StreamRow = memo(function StreamRow({ row, selected, live = false, streaming = false, cursor = false, expanded = false, onToggle, onSelect, markup, loadFull }: StreamRowProps) {
     countRender('StreamRow');
+    const answer = row.toolOutput;
+    const fetched = useWholeOutput(expanded ? answer : undefined, loadFull);
     const time = timeOf(row.at);
 
     // Only an inspectable row (an edit: opens the inspector) and a thought with text (opens in place; a second click
     // closes it) are controls. An empty cell is not a control, and a row that highlights on hover and then does
     // nothing on click teaches people that clicking is pointless here.
-    const control: 'inspect' | 'expand' | null = row.inspectable ? 'inspect' : row.expandable && row.full !== undefined ? 'expand' : null;
+    const control: 'inspect' | 'expand' | null = row.inspectable ? 'inspect' : row.expandable && (row.full !== undefined || answer !== undefined) ? 'expand' : null;
     const rowClass = [
         'flex items-start gap-3 px-5 py-1 text-[13px] leading-5',
         cursor ? 'ring-1 ring-inset ring-[var(--border-2)]' : '',
@@ -189,6 +197,16 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
             </Button>
         );
     }
+    if (control === 'expand' && expanded && answer !== undefined) {
+        return (
+            <div data-tool-open={row.id}>
+                <Button type="button" variant="ghost" size="xs" labelClassName="contents" {...shared} data-expandable="true" aria-expanded={expanded} onClick={() => onToggle?.(row.id)} className={`${rowClass} w-full justify-start rounded-none text-left font-normal hover:bg-[var(--bg-2)]`}>
+                    {cells}
+                </Button>
+                <ToolOutputPanel answer={answer} fetched={fetched} />
+            </div>
+        );
+    }
     if (control === 'expand') {
         return (
             <Button type="button" variant="ghost" size="xs" labelClassName="contents" {...shared} data-expandable="true" aria-expanded={expanded} onClick={() => onToggle?.(row.id)} className={`${rowClass} w-full justify-start rounded-none text-left font-normal`}>
@@ -198,3 +216,66 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
     }
     return <div {...shared} className={rowClass}>{cells}</div>;
 });
+
+type Fetched = { state: 'loading' } | { state: 'done'; text: string; bytes: number; cut: boolean } | { state: 'failed'; reason: string; retry: () => void } | null;
+
+/**
+ * The whole of an opened tool row's output, asked of the host once per opening while the row names a kept whole; a
+ * failure keeps its reason and a Retry. `answer` is `undefined` while the row is closed: nothing is asked.
+ */
+function useWholeOutput(answer: LedgerRow['toolOutput'], loadFull: StreamRowProps['loadFull']): Fetched {
+    const [fetched, setFetched] = useState<Fetched>(null);
+    const [attempt, setAttempt] = useState(0);
+    const done = useRef<string | null>(null);
+    const callId = answer !== undefined && answer.whole !== null ? answer.toolCallId : null;
+    useEffect(() => {
+        if (callId === null || loadFull === undefined || done.current === callId) return;
+        let live = true;
+        setFetched({ state: 'loading' });
+        loadFull(callId).then(
+            (reply) => {
+                if (!live) return;
+                if (reply.ok) { done.current = callId; setFetched({ state: 'done', text: reply.text, bytes: reply.bytes, cut: reply.cut }); }
+                else setFetched({ state: 'failed', reason: reply.reason, retry: () => setAttempt((a) => a + 1) });
+            },
+            (error: unknown) => {
+                if (live) setFetched({ state: 'failed', reason: error instanceof Error ? error.message : String(error), retry: () => setAttempt((a) => a + 1) });
+            },
+        );
+        return () => { live = false; };
+    }, [callId, loadFull, attempt]);
+    return callId === null ? null : fetched;
+}
+
+/** Under an opened tool row: its answer — the preview at once, the whole once it arrives — and what is missing, said. */
+function ToolOutputPanel({ answer, fetched }: { answer: NonNullable<LedgerRow['toolOutput']>; fetched: Fetched }) {
+    const text = fetched?.state === 'done' ? fetched.text : answer.text;
+    return (
+        <div data-tool-panel="" className="px-5 pb-2 pl-[4.5rem]">
+            <pre data-tool-output="" className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-2)] p-2 font-mono text-[11px] leading-4 text-[var(--fg-2)]">{text}</pre>
+            {fetched?.state === 'loading' ? (
+                <span data-tool-output-loading="" className="mt-1 block font-mono text-[11px] text-[var(--fg-4)]">Loading the whole output…</span>
+            ) : null}
+            {fetched?.state === 'failed' ? (
+                <span data-tool-output-failed="" className="mt-1 flex items-center gap-2 font-mono text-[11px] text-[var(--danger)]">
+                    {`The whole output could not be read: ${fetched.reason}`}
+                    <Button type="button" size="xs" data-action="tool-output-retry" onClick={fetched.retry}>Retry</Button>
+                </span>
+            ) : null}
+            {fetched?.state === 'done' && fetched.cut ? (
+                <span data-tool-output-cut="" className="mt-1 block font-mono text-[11px] text-[var(--fg-4)]">{`The first ${sizeLabel(utf8Length(fetched.text))} of ${sizeLabel(fetched.bytes)}.`}</span>
+            ) : null}
+            {answer.cut && answer.whole === null ? (
+                <span data-tool-output-not-kept="" className="mt-1 block font-mono text-[11px] text-[var(--fg-4)]">The first 16 KB; the rest of this output was not kept.</span>
+            ) : null}
+        </div>
+    );
+}
+
+function utf8Length(text: string): number {
+    return new TextEncoder().encode(text).length;
+}
+
+function sizeLabel(bytes: number): string {
+    return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}

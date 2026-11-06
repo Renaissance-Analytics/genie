@@ -1,6 +1,7 @@
 import { fanOut } from '../core/fan-out.js';
 import type { ListedPty, PtyTag } from './spawn-host-protocol.js';
 import { limitRefusal } from '../core/shell-limits.js';
+import type { TerminalPosition, TerminalDataPosition, TerminalStreamSnapshot } from '../core/terminal-stream.js';
 
 /**
  * TERMINALS — for shells, builds, services and hosted sites. **No agent has one.**
@@ -85,10 +86,12 @@ export interface PtyPort {
     resize(id: string, cols: number, rows: number): boolean;
     kill(id: string): boolean;
     scrollback(id: string): string | undefined;
+    /** Producer-authoritative position, when this port has one. An old/in-process producer stays unknown. */
+    position?(id: string): TerminalPosition | null;
     /** Subscribe to output. Returns an unsubscribe. */
-    onData(listener: (id: string, data: string) => void): () => void;
+    onData(listener: (id: string, data: string, position?: TerminalDataPosition) => void): () => void;
     /** Subscribe to a pty ending on its own. Returns an unsubscribe. */
-    onExit(listener: (id: string, exitCode: number) => void): () => void;
+    onExit(listener: (id: string, exitCode: number, position?: TerminalPosition) => void): () => void;
     /** Subscribe to the shell's working directory, as the engine learns it (OSC-7). Optional: an engine without it tracks nothing. */
     onCwd?(listener: (id: string, cwd: string) => void): () => void;
     /**
@@ -181,8 +184,8 @@ export class TerminalHost {
     limitFor(workspaceId: string): number | null {
         return this.#limits ? this.#limits.terminals(workspaceId) : null;
     }
-    readonly #dataListeners = new Set<(id: string, data: string) => void>();
-    readonly #exitListeners = new Set<(id: string, exitCode: number) => void>();
+    readonly #dataListeners = new Set<(id: string, data: string, position?: TerminalDataPosition) => void>();
+    readonly #exitListeners = new Set<(id: string, exitCode: number, position?: TerminalPosition) => void>();
     #cwdClock = 0;
     /** Each live terminal's latest output (its tail), kept here: the engine forgets a process's scrollback when it ends. */
     readonly #tails = new Map<string, string>();
@@ -197,11 +200,11 @@ export class TerminalHost {
         this.#pty = pty;
         this.#limits = limits;
 
-        this.#pty.onData((id, data) => {
+        this.#pty.onData((id, data, position) => {
             const tail = (this.#tails.get(id) ?? '') + data;
             this.#tails.set(id, tail.length > TAIL_MAX ? tail.slice(-TAIL_MAX) : tail);
             // Each listener on its own (core/fan-out.ts): one that throws never reaches the engine's flush (a lost exit).
-            fanOut(this.#dataListeners, [id, data], 'terminal data');
+            fanOut(this.#dataListeners, position ? [id, data, position] : [id, data], 'terminal data');
         });
 
         // A pty made elsewhere (the spawn host under genie-host) says its pid and shell after `open` answered: kept here.
@@ -216,7 +219,7 @@ export class TerminalHost {
             this.#terminals = this.#terminals.map((t) => (t.id === id ? { ...t, cwd, cwdAt: ++this.#cwdClock } : t));
         });
 
-        this.#pty.onExit((id, exitCode) => {
+        this.#pty.onExit((id, exitCode, position) => {
             /*
              * FORGET IT FIRST, then tell anybody watching.
              *
@@ -229,7 +232,7 @@ export class TerminalHost {
             // A disposable terminal leaves nothing behind: no output, no ended record (Tynn story #378).
             if (this.#disposable.delete(id)) {
                 this.#tails.delete(id);
-                fanOut(this.#exitListeners, [id, exitCode], 'terminal exit');
+                fanOut(this.#exitListeners, position ? [id, exitCode, position] : [id, exitCode], 'terminal exit');
                 return;
             }
             // Its output and exit code stay readable (an agent's command that finished before it could look).
@@ -240,7 +243,7 @@ export class TerminalHost {
             }
             this.#tails.delete(id);
             this.#terminals = this.#terminals.filter((t) => t.id !== id);
-            fanOut(this.#exitListeners, [id, exitCode], 'terminal exit');
+            fanOut(this.#exitListeners, position ? [id, exitCode, position] : [id, exitCode], 'terminal exit');
         });
     }
 
@@ -366,6 +369,12 @@ export class TerminalHost {
         return { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#pty.scrollback(id) ?? this.#tails.get(id) ?? '' };
     }
 
+    /** Stream-only snapshot: the native attach result keeps its established shape. */
+    streamSnapshot(id: string): TerminalStreamSnapshot | null {
+        const attached = this.attach(id);
+        return attached ? { id, tail: attached.scrollback, ...(this.#pty.position?.(id) ?? { epoch: null, endOffset: null }) } : null;
+    }
+
     /**
      * A live terminal a previous window opened, found under genie-host (the host split, P2.1): taken back with what it
      * printed, so the panel reopens on it. A pty that is not a terminal (a supervised process) is the supervisor's.
@@ -422,13 +431,13 @@ export class TerminalHost {
     }
 
     /** Subscribe to output from any terminal. Returns an unsubscribe. */
-    onData(listener: (id: string, data: string) => void): () => void {
+    onData(listener: (id: string, data: string, position?: TerminalDataPosition) => void): () => void {
         this.#dataListeners.add(listener);
         return () => this.#dataListeners.delete(listener);
     }
 
     /** Subscribe to any terminal ending. Returns an unsubscribe. */
-    onExit(listener: (id: string, exitCode: number) => void): () => void {
+    onExit(listener: (id: string, exitCode: number, position?: TerminalPosition) => void): () => void {
         this.#exitListeners.add(listener);
         return () => this.#exitListeners.delete(listener);
     }

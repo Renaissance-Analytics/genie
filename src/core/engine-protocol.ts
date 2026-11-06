@@ -19,7 +19,7 @@ import { parseFrame, type Frame } from './remote-protocol.js';
  */
 
 /** Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced. */
-export const ENGINE_PROTOCOL = 1;
+export const ENGINE_PROTOCOL = 2;
 
 export const ENGINE_METHODS = [
     // Commands (window → host): each answers with the session host's own answer.
@@ -48,6 +48,8 @@ export const ENGINE_METHODS = [
     'engine.stopAll',
     // An agent's recorded rows, bounded, for a provider switch's carry-over (Tynn story #380): read by the host from its own store.
     'engine.historyRows',
+    // A tool row's whole output, read by the host from its own store when a person opens the row (Tynn story #386).
+    'engine.toolOutput',
     // Subscriptions: an agent's ledger is sent only while the window watches it (cheap, incremental — patches only).
     'engine.watchLedger',
     'engine.unwatchLedger',
@@ -56,6 +58,9 @@ export const ENGINE_METHODS = [
     // Liveness, and the graceful end (sessions stopped and verified, writes drained, then the process exits).
     'engine.ping',
     'engine.shutdown',
+    // Window main's heartbeat to genie-host's hang watchdog (Tynn #386: hang-watchdog.ts): `[{pid, rss, bye?}]` every
+    // second, call id 0 (a notification, no reply). Heard before any dispatch: never queued behind a slow call.
+    'engine.heartbeat',
     // The spawn host's frames, tunnelled (the host split, P2.1): `[profile, frame]` to genie-host's child of that profile.
     // Sent with call id 0, a notification: no result per keystroke. Its children's frames come back as `spawn.frame`.
     'engine.spawn',
@@ -94,6 +99,12 @@ export const ENGINE_METHODS = [
     // the helper's launch. Its state is sent as `updates.dump` before `engine.ready` and as `updates.event` on change, to
     // local windows only.
     'engine.updates',
+    // The host's safe mode (Tynn #386: safe-mode-host.ts): `['leave']`. Its view is sent as `safeMode.event` before
+    // `engine.ready` and on every change, to EVERY window: the banner is on all of them.
+    'engine.safeMode',
+    // The latest crash record and the reopened-window notice (Tynn #386: crash-state-host.ts), LOCAL windows only: sent as
+    // `crash.event` before `engine.ready` and on every change; `['dismiss']` forgets the notice.
+    'engine.crash',
     // The updater helper's own (P5b: updater-helper.ts), on a link that said hello as the updater: `register`, `reply`,
     // `progress`. The host's requests reach it as `updater.event`. Nothing else is open to that link.
     'engine.updater',
@@ -180,6 +191,8 @@ export interface EngineAgentView {
     readonly deliverable: number | null;
     readonly inTurn: boolean;
     readonly queued: readonly string[];
+    /** The run's driver stopped itself and must be replaced before it takes work (SessionHost.needsNewDriver, prism-acp 0.37.0). */
+    readonly needsNewDriver?: boolean;
 }
 
 /** `engine.agent`: one agent changed. `rows` = this run's rows; `ledger` only while the window watches it. */
@@ -210,6 +223,8 @@ export interface EngineGlobalView {
 export type EngineCallback =
     | { readonly name: 'threadId'; readonly agentId: string; readonly threadId: string }
     | { readonly name: 'carryOverSent'; readonly agentId: string }
+    // Genie's own words are in the agent's thread now (genie#1519): its record says so, as the window's registry writes it.
+    | { readonly name: 'genieWords'; readonly agentId: string }
     | { readonly name: 'plan'; readonly agentId: string; readonly steps: readonly { content: string; status: string }[] }
     | { readonly name: 'turnNumbered'; readonly agentId: string; readonly n: number }
     | { readonly name: 'action'; readonly agentId: string; readonly kind: string }
@@ -222,7 +237,7 @@ export type EngineCallback =
     | { readonly name: 'toolSignal'; readonly signal: unknown };
 
 /** Callbacks that change the window's stores: queued while no window is connected. The rest are moment-only. */
-export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'carryOverSent', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
+export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'carryOverSent', 'genieWords', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
 
 /** An attachment on the wire: its bytes as base64 (JSON has no bytes). */
 export interface WireAttachment {

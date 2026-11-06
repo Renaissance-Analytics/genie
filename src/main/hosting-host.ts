@@ -1,11 +1,14 @@
 import type { DeckItem } from '../core/deck.js';
 import type { EngineStatusView, ReconcileReport } from '../core/engine-reconcile.js';
 import { WAITING_FOR_A_WINDOW, elevationWaitingDeckItem } from '../core/elevation-waiting.js';
+import { notAvailableHere } from '../core/host-runtime.js';
 import type { GenRoute } from '../core/gen-router.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { EnvelopeSites, SiteActor } from './envelope-sites-host.js';
 import type { FrontDoorStatus } from './hosting-compose.js';
 import type { HostsSyncResult } from './hosts-file.js';
+import { trustedPathIn, type TrustApi, type TrustEntry } from './hosting-trust.js';
+import type { TrustView } from './workspace-trust-host.js';
 import type { ServiceRegistry } from './service-registry.js';
 import type { CreateSiteInput, PhpCgiResolution, SiteManager } from './site-manager.js';
 
@@ -96,6 +99,11 @@ export interface HostingApi {
     configuredHosts(): string[];
     /** Genie's own Deck items about the front door: the one Trust ask (and, from genie-host, an elevation waiting for a window). */
     trustDeckItems(): DeckItem[];
+    /**
+     * THE WORKSPACES' TRUST (genie#1519): owned where the hosting is — genie-host, or the window on the emergency path. A
+     * window's replica reads the verdicts from the dump and FAILS CLOSED before its first dump and after its link drops.
+     */
+    readonly trust: TrustApi;
     /** Stops what this hosting runs of its own (syncs, watches, the in-app door); supervised processes are the supervisor's. */
     shutdown(): Promise<void>;
 }
@@ -105,17 +113,29 @@ export interface HostingApi {
  * trust store) is asked of a CONNECTED window, which runs it exactly as a window always has. With no window connected
  * nothing is elevated: the request is held, answered "waiting for a window", and the next window is told (a Deck item)
  * — connecting is not an approval, so nothing runs until the person approves there.
+ *
+ * A host that can never elevate (plain Node, P10.1d: no Genie window can connect) asks nothing and holds nothing: it says
+ * the elevation is not available on this host, in the one wording.
  */
+export interface WindowElevationPorts {
+    connected(): boolean;
+    ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>;
+    now?: () => number;
+    /** false: this host can never elevate (hostCapabilities). Absent = it can. */
+    elevation?: boolean;
+}
+
 export class WindowElevation {
-    readonly #ports: { connected(): boolean; ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>; now?: () => number };
+    readonly #ports: WindowElevationPorts;
     readonly #listeners = new Set<() => void>();
     #waiting: { labels: string[]; at: number } | null = null;
 
-    constructor(ports: { connected(): boolean; ask(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome>; now?: () => number }) {
+    constructor(ports: WindowElevationPorts) {
         this.#ports = ports;
     }
 
     async run(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> {
+        if (this.#ports.elevation === false) return { ok: false, failed: null, error: notAvailableHere(`elevation to ${[...new Set(steps.map((s) => s.label))].join(' and ')}`, 'a Genie window to ask in') };
         if (!this.#ports.connected()) return this.#hold(steps, 'no Genie window is open to ask');
         let outcome: ElevationOutcome;
         try {
@@ -173,6 +193,8 @@ export interface HostingDump {
     readonly dependents: Readonly<Record<string, readonly string[] | null>>;
     readonly reconcile: ReconcileReport | null;
     readonly problems: readonly string[];
+    /** Every workspace's trust verdict as the host last read it (genie#1519). Local window links only, as the whole dump. */
+    readonly trust?: readonly TrustEntry[];
 }
 
 export type HostingEvent =
@@ -217,6 +239,9 @@ export class HostingService {
         this.#elevation?.onChange(changed);
         options.onChange?.(changed);
         stack.engines.onStarted((id) => this.#emit({ kind: 'engineStarted', id }));
+        // A verdict that moved goes out AT ONCE, uncoalesced (genie#1519): the host recorded it first, and a revocation must
+        // reach the window before anything else it runs.
+        stack.trust.onVerdict(() => this.#sendNow());
         void stack.engineReconcile.then((report) => { this.#reconcile = report; this.#changed(); });
     }
 
@@ -246,6 +271,7 @@ export class HostingService {
             dependents: Object.fromEntries(engines.map((e) => [e.id, attempt<readonly string[] | null>(() => s.engineDependents(e.id), null)])),
             reconcile: this.#reconcile,
             problems: s.hostingProblems(),
+            trust: s.trust.entries(),
         };
     }
 
@@ -294,6 +320,9 @@ export class HostingService {
             case 'retryFrontDoor': return s.retryFrontDoor();
             case 'trustCertificate': return s.trustCertificate();
             case 'deferTrustCertificate': return s.deferTrustCertificate();
+            // The person's yes to a workspace (genie#1519). `engine.hosting` is a local window's only (session-engine-server.ts).
+            case 'trust.trust': return s.trust.trust(str(a[0]));
+            case 'trust.refresh': return s.trust.refresh(str(a[0]));
             default: throw new Error(`a window cannot call hosting.${method}`);
         }
     }
@@ -336,7 +365,10 @@ export class HostingReplica implements HostingApi {
     readonly #startedListeners = new Set<(id: string) => void>();
     readonly #frontDoorListeners = new Set<() => void>();
     #dump: HostingDump | null = null;
-    #keys = { sites: '', engines: '', frontDoor: '' };
+    /** The link is up and its dump is in: until then, and after it drops, no verdict is believed (fail closed, genie#1519). */
+    #linked = false;
+    #keys = { sites: '', engines: '', frontDoor: '', trust: '' };
+    readonly #verdictListeners = new Set<(workspaceId: string) => void>();
     #reconciled: ((report: ReconcileReport) => void) | null = null;
     readonly engineReconcile: Promise<ReconcileReport>;
 
@@ -350,12 +382,15 @@ export class HostingReplica implements HostingApi {
     }
 
     rebase(dump: HostingDump): void {
+        const trustBefore = this.#trustEntries();
         this.#dump = dump;
+        this.#linked = true;
         const keys = {
             sites: JSON.stringify([dump.sites, dump.specs, dump.declared]),
             engines: JSON.stringify([dump.engines, dump.workspaces, dump.dependents]),
             // The port and the CA are part of it (P5a.2): a host that comes back on a new port, or with a new CA, is a change.
             frontDoor: JSON.stringify([dump.frontDoorPort, dump.browserTrust, dump.externalFrontDoor, dump.routes, dump.configuredHosts, dump.deckItems, dump.problems ?? []]),
+            trust: JSON.stringify(dump.trust ?? []),
         };
         const was = this.#keys;
         this.#keys = keys;
@@ -363,7 +398,49 @@ export class HostingReplica implements HostingApi {
         if (keys.sites !== was.sites) this.#fire(this.#siteListeners);
         if (keys.engines !== was.engines) this.#fire(this.#engineListeners);
         if (keys.frontDoor !== was.frontDoor) this.#fire(this.#frontDoorListeners);
+        this.#verdictsMoved(trustBefore);
     }
+
+    #trustEntries(): readonly TrustEntry[] {
+        return this.#linked ? (this.#dump?.trust ?? []) : [];
+    }
+
+    /** The link to the host dropped: the verdicts it last sent are not believed, so every workspace reads untrusted until the next dump. */
+    linkDown(): void {
+        const trustBefore = this.#trustEntries();
+        this.#linked = false;
+        this.#verdictsMoved(trustBefore);
+    }
+
+    #verdictsMoved(before: readonly TrustEntry[]): void {
+        const now = this.#trustEntries();
+        const ids = new Set([...before, ...now].map((e) => e.workspaceId));
+        for (const id of ids) {
+            if (before.find((e) => e.workspaceId === id)?.trusted === now.find((e) => e.workspaceId === id)?.trusted) continue;
+            for (const l of [...this.#verdictListeners]) { try { l(id); } catch { /* one listener never costs another */ } }
+        }
+    }
+
+    readonly trust: TrustApi = {
+        isTrustedPath: (path: string) => trustedPathIn(this.#trustEntries(), path),
+        view: (workspaceId: string): TrustView | null => {
+            const entry = this.#trustEntries().find((e) => e.workspaceId === workspaceId);
+            return entry ? { trusted: entry.trusted, changed: entry.changed, list: entry.list } : null;
+        },
+        entries: () => [...this.#trustEntries()],
+        refresh: (workspaceId: string) => this.#ask<TrustView | null>('trust.refresh', workspaceId),
+        trust: (workspaceId: string) => this.#ask<TrustView | null>('trust.trust', workspaceId),
+        mayWriteInto: async (folder: string) => {
+            const dump = this.#dump;
+            // Fail closed: no dump yet, or the link is down, and nothing is known to be trusted.
+            if (dump === null || !this.#linked) return false;
+            const entry = (dump.trust ?? []).find((e) => e.path === folder);
+            if (entry) return entry.trusted;
+            // A registered workspace not read yet is not trusted; a folder that is no workspace is not this rule's.
+            return !Object.values(dump.workspaces).some((w) => w.path === folder);
+        },
+        onVerdict: (listener: (workspaceId: string) => void) => { this.#verdictListeners.add(listener); return () => { this.#verdictListeners.delete(listener); }; },
+    };
 
     apply(event: HostingEvent): void {
         if (event.kind === 'dump') { this.rebase(event.dump); return; }

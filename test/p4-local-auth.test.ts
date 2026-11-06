@@ -80,6 +80,8 @@ describe('P4 local authentication', () => {
     it('a door-proved connection is owner of the whole host and receives no token', async () => {
         expect(await connect(localProof).hello({ kind: 'local' })).toEqual({
             kind: 'welcome', connectionId: expect.any(String), host: 'local-contract-host', isOwner: true, workspaceId: null,
+            // P10.1e's version handshake, additive; a host given no build says 'dev'.
+            protocol: protocol.REMOTE_PROTOCOL, build: 'dev',
         });
         expect(devices.list()).toEqual([]);
     });

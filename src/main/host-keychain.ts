@@ -53,7 +53,8 @@ export async function openHostKeychain(options: HostKeychainOptions = {}): Promi
         ...(options.exists ? { exists: options.exists } : {}),
         ...(options.pathEnv !== undefined ? { pathEnv: options.pathEnv } : {}),
     });
-    const keyring = await LinuxKeyring.open({ ...base, facts: async () => { await ask(); return base.facts(); } });
+    // A LOCKED keyring at start: Genie asks it to unlock, its own dialog (Tynn story #388) — the person need not know how.
+    const keyring = await LinuxKeyring.open({ ...base, facts: async () => { await ask(); return base.facts(); } }, { unlockAtStart: true });
     // A keyring that goes away while Genie runs, or comes back: the card follows with no restart. A failure to re-read leaves the card as it was.
     keychain.onAnswerChange(() => { void keyring.recheck().catch(() => {}); });
     return { keychain, keyring, state: () => keyring.state() };

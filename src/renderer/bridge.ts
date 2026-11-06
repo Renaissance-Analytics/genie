@@ -46,6 +46,7 @@ import type { RepoCommit } from '../core/commits.js';
 import type { EnvelopePlan } from '../core/envelope-plan.js';
 import type { Published, RemoteChoice } from '../core/agi-remote.js';
 import type { RepoListing } from '../core/github.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
 
 /**
@@ -96,6 +97,10 @@ export interface GenieSnapshot {
     signals: SignalState;
     /** `null` until the workstation has been read — never a default `healthy: false`. */
     workstation: { name: string; healthy: boolean } | null;
+    /** genie-host's safe mode (Tynn #386): the banner on every window. Absent/`null` = not known (no host, an older one). */
+    safeMode?: import('../core/safe-mode.js').SafeModeView | null;
+    /** genie-host ended a hung window and started this one (Tynn #386): the notice, not safe mode. Absent/`null` = none. */
+    hangNotice?: import('../core/crash-record.js').HangNotice | null;
 }
 
 /**
@@ -284,6 +289,12 @@ export interface GenieBridge {
      */
     takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
 
+    /** The safe-mode banner's crash report (Tynn #386 part 4): never sent until the person presses Send. Absent = remote. */
+    crashReport?: {
+        draft(): Promise<{ text: string }>;
+        send(text: string, notes: string): Promise<import('./components/SafeModeBanner.js').CrashReportAnswer>;
+    };
+
     /**
      * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
      * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
@@ -349,7 +360,7 @@ export interface GenieBridge {
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
         locateRepo(workspaceId: string, slug: string, path: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
         /** The commits in the workspace's repos since a moment, newest first — git's own account (an observed agent's index). */
-        commitsSince(workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: readonly RepoCommit[] } | { ok: false; reason: string }>;
+        commitsSince(workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: readonly RepoCommit[] } | { ok: false; reason: string; gitDidNotAnswer?: boolean }>;
         /** "Remove stale lock" on a red repo chip: unlinks `index.lock` only when it is stale; refuses with the reason otherwise. */
         removeRepoLock(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** This workspace's effective values for the workspace-scoped settings and which keys it overrides (§6.1). */
@@ -377,6 +388,11 @@ export interface GenieBridge {
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+        /**
+         * A tool row's WHOLE output (Tynn story #386): the window holds a 16 KB preview; the host keeps the rest beside the
+         * ledger and answers it, bounded, when a person opens the row. A call with none kept is a refusal with a reason.
+         */
+        toolOutput(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
         /** Mode is wording for the agent (§6.2), not a permission boundary. */
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */

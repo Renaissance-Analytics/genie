@@ -97,7 +97,7 @@ describe('the chosen model reaches the provider', () => {
         expect(codex('gpt-5')).toMatchObject({ model: 'gpt-5' });
         expect(codex(null)).not.toHaveProperty('model');
         // ...and the real driver is built from them (a SOURCE check: realDriverFor constructs it).
-        expect(readFileSync('src/main/session-host.ts', 'utf8')).toMatch(/new CodexDriver\(\{ \.\.\.codexOptionsFor\(record, cwd, resumeSessionId, /);
+        expect(readFileSync('src/main/session-host.ts', 'utf8')).toMatch(/new CodexDriver\(\{ \.\.\.codexOptionsFor\(codexRecordFor\(record, extras\?\.untrusted \?\? null\), cwd, resumeSessionId, /);
     });
 });
 

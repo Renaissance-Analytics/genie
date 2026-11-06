@@ -15,8 +15,8 @@ describe('the Windows real-window step', () => {
     const runs = ci.map((line, i) => ({ line, i })).filter(({ line }) => /^\s+node scripts\/[a-z-]+\.mjs\s*$/.test(line));
     const windows = runs.filter(({ i }) => ci.slice(0, i).reverse().find((l) => /^\s+shell:/.test(l))?.includes('pwsh'));
 
-    it('runs the three smokes (COUNTED, so a removed smoke is not a quiet pass)', () => {
-        expect(windows.map(({ line }) => line.trim())).toEqual(['node scripts/agents-hold-no-pty-cdp.mjs', 'node scripts/smoke-cdp.mjs', 'node scripts/layout-sweep.mjs']);
+    it('runs the smokes (COUNTED, so a removed smoke is not a quiet pass)', () => {
+        expect(windows.map(({ line }) => line.trim())).toEqual(['node scripts/agents-hold-no-pty-cdp.mjs', 'node scripts/smoke-cdp.mjs', 'node scripts/layout-sweep.mjs', 'node scripts/trust-step-cdp.mjs', 'node scripts/safe-mode-cdp.mjs', 'node scripts/hang-cdp.mjs']);
     });
 
     it('each is followed by a check that ends the step on its failure', () => {

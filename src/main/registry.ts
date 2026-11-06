@@ -62,6 +62,8 @@ export class Registry {
     #recordListeners = new Set<(agentId: AgentId) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
+    #safeMode: (() => import('../core/safe-mode.js').SafeModeView | null) | null = null;
+    #hangNotice: (() => import('../core/crash-record.js').HangNotice | null) | null = null;
     #deckSource: () => readonly DeckItem[] = () => [];
     #runningAtQuit: AgentId[] = [];
     #interruptedAtQuit: AgentId[] = [];
@@ -172,6 +174,16 @@ export class Registry {
     }
 
     /** The Deck's signal strip, MEASURED by the composition root; honest zeros until then. */
+    /** genie-host's safe mode (Tynn #386), read into every snapshot: the banner on every window. */
+    setSafeMode(provider: () => import('../core/safe-mode.js').SafeModeView | null): void {
+        this.#safeMode = provider;
+    }
+
+    /** genie-host's reopened-window notice (Tynn #386): a hung window was ended and this one started; read into every snapshot. */
+    setHangNotice(provider: () => import('../core/crash-record.js').HangNotice | null): void {
+        this.#hangNotice = provider;
+    }
+
     setSignals(provider: () => SignalState): void {
         this.#signals = provider;
     }
@@ -184,6 +196,11 @@ export class Registry {
     async markRunningAtQuit(ids: readonly AgentId[]): Promise<void> {
         this.#runningAtQuit = ids.filter((id) => this.#agents.some((a) => a.id === id));
         await this.#store.writeRunningAtQuit(this.#runningAtQuit);
+    }
+
+    /** The agents a shutdown cut off mid-turn, as recorded — read, not taken (safe mode lists them, Tynn #386). */
+    interruptedAtQuit(): readonly AgentId[] {
+        return this.#interruptedAtQuit;
     }
 
     /** The agents a shutdown cut off mid-turn (written at quit or upgrade, before the sessions end). */
@@ -303,6 +320,9 @@ export class Registry {
              */
             signals: this.#signals?.() ?? { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
             workstation: this.#workstation,
+            // Only once main has said where it comes from: a snapshot with no host to ask carries no claim about it.
+            ...(this.#safeMode ? { safeMode: this.#safeMode() } : {}),
+            ...(this.#hangNotice ? { hangNotice: this.#hangNotice() } : {}),
         };
     }
 
@@ -524,7 +544,8 @@ export class Registry {
     async clearThread(agentId: AgentId): Promise<AgentRecord | null> {
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return null;
-        const cleared: AgentRecord = { ...existing, threadId: null };
+        const { genieWordsInThread: _words, ...rest } = existing;
+        const cleared: AgentRecord = { ...rest, threadId: null };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? cleared : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(cleared.id);
@@ -580,6 +601,11 @@ export class Registry {
     }
 
     /** What a Claude agent may do: all tools, ask before shell commands, or edits only (shell refused). Read when its session starts. */
+    /** Genie's own words are in this agent's thread now. */
+    async markGenieWords(agentId: AgentId): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, genieWordsInThread: true }));
+    }
+
     async setPermissions(agentId: AgentId, permissions: AgentPermissions): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, permissions }));
     }

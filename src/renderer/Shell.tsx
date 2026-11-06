@@ -50,12 +50,15 @@ import { answeringFor, refusalFor, type ApprovalAnswering, type ApprovalRefusal 
 import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { planStepInsert, type ChatInsert } from '../core/plan-pill.js';
 import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { SafeModeBanner } from './components/SafeModeBanner.js';
+import { HangNoticeBar } from './components/HangNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 
@@ -192,6 +195,8 @@ export interface ShellProps {
     sitePanels?: GenieBridge['sitePanels'] | undefined;
     /** The commits in a workspace's repos since a moment (an observed agent's Activity tab); absent = no section. */
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
+    /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
+    loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
     tynnBoard?: TynnBoardHost | undefined;
     /** NOT DRAWN since 2026-10-19: a workspace's file panel shows inline or pops out. Removed with the pin model. */
@@ -215,6 +220,8 @@ export interface ShellProps {
     /** The native window buttons over the title bar (their space and colours); absent in a browser or on a phone. */
     windowChrome?: GenieBridge['windowChrome'];
     onTakeOver?: ((agentId: string) => void) | undefined;
+    /** The safe-mode banner's "Send a crash report" (Tynn #386 part 4). Absent = this window cannot send one. */
+    crashReport?: import('./components/SafeModeBanner.js').CrashReportPort | undefined;
     /** The workspace header's Terminal button (Tynn story #378): a throwaway terminal in a window. Absent = no button. */
     onOpenScratchTerminal?: ((workspaceId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     /** A broken row's `Restart` (graceful) from the Dashboard — the same operation the Agent view's header offers. */
@@ -232,6 +239,8 @@ export interface ShellProps {
     onDesignLogin?: ((agentId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
+    /** The safe-mode banner's Start for an agent (Tynn #386): the one Restart, with its answer, so the banner says it. */
+    onSafeModeStartAgent?: ((agentId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
     /** Driving another machine: the title bar's REMOTE badge. Absent on the local machine. */
@@ -327,6 +336,7 @@ export function Shell({
     activity,
     filesPopped = [],
     readCommits,
+    loadToolOutput,
     tynnBoard,
     onPopOutFiles,
     onBringBackFiles,
@@ -338,6 +348,7 @@ export function Shell({
     updates = NO_UPDATES,
     windowChrome,
     onTakeOver,
+    crashReport,
     onOpenScratchTerminal,
     onRestartAgent,
     onStopAgent,
@@ -347,6 +358,7 @@ export function Shell({
     onAccountRetry,
     onDesignLogin,
     onStartAgent,
+    onSafeModeStartAgent,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -535,6 +547,27 @@ export function Shell({
                 </div>
             ) : null}
 
+            {/* SAFE MODE (Tynn #386): after an unclean end nothing was started; each thing that ran has its own Start. */}
+            <SafeModeBanner
+                view={snapshot.safeMode}
+                agentName={(id) => snapshot.agents.find((a) => a.id === id)?.name ?? (snapshot.osAgent?.id === id ? snapshot.osAgent.name : id)}
+                onStart={async (kind, id) => {
+                    if (kind === 'agent') return onSafeModeStartAgent ? onSafeModeStartAgent(id) : { ok: false, reason: 'Genie is not connected.' };
+                    const done = (await onFeature(kind === 'process' ? { kind: 'hosting.restartProcess', processId: id } : { kind: 'hosting.startSite', siteId: id })) as ActOutcome | undefined;
+                    return done ?? { ok: true };
+                }}
+                onLeave={async () => ((await onFeature({ kind: 'safeMode.leave' })) as ActOutcome | undefined) ?? { ok: true }}
+                crashReport={crashReport}
+            />
+
+            {/* THE REOPENED WINDOW (Tynn #386): a hung window was ended and this one started — the agents kept running. */}
+            <HangNoticeBar
+                notice={snapshot.hangNotice}
+                onStopAll={async () => ((await onFeature({ kind: 'hangNotice.stopAll' })) as ActOutcome | undefined) ?? { ok: true }}
+                onDismiss={async () => ((await onFeature({ kind: 'hangNotice.dismiss' })) as ActOutcome | undefined) ?? { ok: true }}
+                crashReport={crashReport}
+            />
+
             <div className="relative flex min-h-0 flex-1">
                 <Sidebar
                     route={route}
@@ -707,6 +740,7 @@ export function Shell({
                                 tab={parsed.tab}
                                 lanes={parseLanes(parsed.lane)}
                                 readCommits={readCommits}
+                                loadToolOutput={loadToolOutput}
                                 at={parsed.at}
                                 layout={parsed.layout}
                                 selectedId={selectedRowId}
@@ -754,6 +788,8 @@ export function Shell({
                         <ErrorBoundary surface="Workspace" resetKeys={[parsed.workspaceId]}>
                         <Workspace
                             key={parsed.workspaceId}
+                            trustStep={features.trust?.find((row) => row.workspaceId === parsed.workspaceId) ?? null}
+                            onTrust={() => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: parsed.workspaceId, workspacePath: workspaceFor(parsed.workspaceId)!.path }))}
                             // Settings → Hosting opens the same modals as the row's indicators.
                             onOpenRuntime={(kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}

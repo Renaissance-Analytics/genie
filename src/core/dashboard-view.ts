@@ -132,9 +132,39 @@ const STATE_ORDER: Record<AgentState, number> = {
  * treated the same as Working in terms of how the dashboard list is sorted"). Counted with Working too, rather than as a
  * chip of its own: a `1 cooling` chip would appear and vanish every turn, the flicker this state exists to remove, and
  * the count then always agrees with the Working group the row sits in.
+ *
+ * Background work is Working here too (the owner, genie#1528: "an agent that is working in the background is not an idle
+ * agent, just an idle chat"). This is the board's rank only: `row.state` stays `idle`, as its chat is.
  */
-export function rankOf(state: AgentState): Exclude<AgentState, 'cooling'> {
-    return state === 'cooling' ? 'working' : state;
+export function rankOf(row: Pick<AgentRow, 'state' | 'fidelity' | 'background'>): Exclude<AgentState, 'cooling'> {
+    if (workingInBackground(row)) return 'working';
+    return row.state === 'cooling' ? 'working' : row.state;
+}
+
+/** What the background rule reads. The state is a string for the tab strip's roster, and a row with no fidelity is not declared. */
+interface BackgroundFacts<S extends string = string> {
+    readonly state: S;
+    readonly fidelity?: Fidelity | undefined;
+    readonly background?: number | null | undefined;
+}
+
+/**
+ * ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): background shells and tasks are still running. Only a declared
+ * agent: an observed one is seen as bytes, and a remote one as presence. A waiting or broken row stays what it is.
+ *
+ * THE ONE RULE: the word (`statusOf`), the groups, counts and order (`rankOf`), the dots and the rail's pulse (`shownState`)
+ * all come from here.
+ */
+function workingInBackground(row: BackgroundFacts): boolean {
+    return (row.state === 'idle' || row.state === 'cooling') && row.fidelity === 'declared' && (row.background ?? 0) > 0;
+}
+
+/**
+ * THE STATE A ROW'S DOT SHOWS: its own, except background work, which is Working. Unlike `rankOf`, Cooling keeps its own
+ * colour. Display only: anything deciding behaviour reads the session, and `row.state` is unchanged.
+ */
+export function shownState<S extends string>(row: BackgroundFacts<S>): S | 'working' {
+    return workingInBackground(row) ? 'working' : row.state;
 }
 
 export interface StatusCell {
@@ -169,6 +199,8 @@ export function statusOf(row: AgentRow): StatusCell {
     // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): only once its turn is over — a refused tool does not end the turn, and an
     // agent still working reads Working. The Agent view, the chat and the tray offer `Log in to Claude Design`.
     if (row.designLogin && (row.state === 'idle' || row.state === 'cooling')) return { word: 'Login needed', detail: 'Claude Design', tone: 'warn' };
+    // The stronger fact than Cooling or Idle: its work is still running.
+    if (workingInBackground(row)) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
     switch (row.state) {
         case 'waiting':
             return { word: 'Waiting on you', detail: row.ask, tone: 'warn' };
@@ -177,12 +209,8 @@ export function statusOf(row: AgentRow): StatusCell {
         case 'working':
             return { word: row.fidelity === 'observed' ? 'Active' : 'Working', detail: row.duration, tone: 'ok' };
         case 'cooling':
-            // Background work still running is the stronger fact (below): it reads Working, as it does once Idle.
-            if ((row.background ?? 0) > 0) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
             return { word: 'Cooling', detail: null, tone: 'cool' };
         default:
-            // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): background shells and tasks still running read Working.
-            if (row.fidelity !== 'observed' && (row.background ?? 0) > 0) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
             return { word: row.fidelity === 'observed' ? 'Quiet' : 'Idle', detail: row.duration, tone: 'muted' };
     }
 }
@@ -330,9 +358,9 @@ export function groupByWorkspace(
         const mine = rows
             .filter((r) => r.workspaceId === workspaceId)
             .slice()
-            .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state]);
+            .sort((a, b) => STATE_ORDER[rankOf(a)] - STATE_ORDER[rankOf(b)]);
 
-        const count = (s: AgentState): number => mine.filter((r) => rankOf(r.state) === s).length;
+        const count = (s: AgentState): number => mine.filter((r) => rankOf(r) === s).length;
         const parts: string[] = [];
         if (mine.length > 0) parts.push(`${mine.length} ${mine.length === 1 ? 'agent' : 'agents'}`);
         if (count('waiting') > 0) parts.push(`${count('waiting')} waiting`);
@@ -360,7 +388,7 @@ export function summaryChips(rows: readonly AgentRow[]): readonly SummaryChip[] 
     const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
 
     return order.flatMap((state) => {
-        const n = rows.filter((r) => rankOf(r.state) === state).length;
+        const n = rows.filter((r) => rankOf(r) === state).length;
         return n > 0 ? [{ label: `${n} ${label[state]}`, state }] : [];
     });
 }
@@ -382,7 +410,7 @@ export function groupByStatus(rows: readonly AgentRow[]): readonly StatusGroup[]
     const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
     return order.flatMap((state) => {
         // In the order given: a row going Working -> Cooling keeps its place in the Working group.
-        const mine = rows.filter((r) => rankOf(r.state) === state);
+        const mine = rows.filter((r) => rankOf(r) === state);
         return mine.length > 0 ? [{ state, label: label[state], rows: mine }] : [];
     });
 }

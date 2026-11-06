@@ -1,0 +1,243 @@
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agentRecord, mintAgentId } from '../src/core/identity.js';
+import type { ProcessTree } from '../src/core/process-tree.js';
+import { SessionHost, type DriverFor } from '../src/main/session-host.js';
+import { TRUST_PASS_MS } from '../src/main/trust-watch.js';
+import type { ComposedServices, composeServices } from '../src/main/compose.js';
+import { envFileSites } from '../src/main/dotenv-sync.js';
+import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
+import { gitMayRun } from '../src/main/git-read-policy.js';
+import { gitTreeStatus } from '../src/main/git-ports.js';
+import type { SiteInfo } from '../src/main/site-manager.js';
+import type { PtyPort } from '../src/main/terminal-host.js';
+import { composeTracker } from './support/compose-tracker.js';
+
+/** The workspace verdict through the real composition: the real record, the real git. Invented names; every "nothing ran" has a control where it ran. */
+const pty: PtyPort = {
+    open: () => ({ id: 't', pid: 1, shell: 'sh', scrollback: '' }),
+    write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {},
+};
+const composed = composeTracker();
+let dir: string;
+let repo: string;
+let mark: string;
+let services: ComposedServices;
+let workspaces: Array<{ id: string; path: string }> = [];
+const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+
+async function launch(): Promise<void> {
+    services = await composed.compose({
+        userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, workspaces: () => workspaces,
+    } as Parameters<typeof composeServices>[0]);
+}
+
+beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'trust-wiring-'));
+    repo = join(dir, 'acme');
+    mark = join(dir, 'mark.txt');
+    mkdirSync(repo);
+    git('init', '-q');
+    writeFileSync(join(repo, 'a.txt'), 'one\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'first');
+    const tool = join(dir, 'tool.sh');
+    writeFileSync(tool, `#!/bin/sh\necho ran > '${mark.replace(/\\/g, '/')}'\nexit 0\n`);
+    chmodSync(tool, 0o755);
+    git('config', 'core.fsmonitor', tool.replace(/\\/g, '/'));
+    workspaces = [];
+});
+afterEach(async () => {
+    await composed.shutdownAll();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+});
+
+describe('a workspace added after the upgrade, with a git key that could run something', () => {
+    beforeEach(async () => {
+        await launch();
+        await services.shutdown();
+        workspaces = [{ id: 'acme', path: repo }];
+        await launch();
+    });
+
+    it('is untrusted, names the key, and no git runs in it', async () => {
+        const view = await services.workspaceTrust.refresh('acme');
+        expect(view).toMatchObject({ trusted: false });
+        expect(view?.list.gitKeys.map((e) => e.key)).toEqual(['core.fsmonitor']);
+        expect(await gitTreeStatus(repo)).toEqual({});
+        expect(existsSync(mark)).toBe(false);
+    });
+
+    it('CONTROL: the person trusts it, and git runs as git does, on this launch and the next', async () => {
+        await services.workspaceTrust.trust('acme');
+        await gitTreeStatus(repo);
+        expect(existsSync(mark)).toBe(true);
+        rmSync(mark, { force: true });
+        await services.shutdown();
+        await launch();
+        await services.workspaceTrust.refresh('acme');
+        await gitTreeStatus(repo);
+        expect(existsSync(mark)).toBe(true);
+    });
+
+    it('the key changes after that: it asks again, and git stops', async () => {
+        await services.workspaceTrust.trust('acme');
+        git('config', 'core.fsmonitor', `${join(dir, 'tool.sh').replace(/\\/g, '/')} --other`);
+        expect(await services.workspaceTrust.refresh('acme')).toMatchObject({ trusted: false, changed: true });
+        expect(await gitMayRun(repo)).toBe(false);
+    });
+});
+
+describe('a workspace already here at the upgrade', () => {
+    it('stays trusted: git runs in it, as it did', async () => {
+        workspaces = [{ id: 'acme', path: repo }];
+        await launch();
+        expect(await services.workspaceTrust.refresh('acme')).toMatchObject({ trusted: true });
+        await gitTreeStatus(repo);
+        expect(existsSync(mark)).toBe(true);
+    });
+});
+
+describe('after Genie closes', () => {
+    it('the check is gone with it', async () => {
+        workspaces = [];
+        await launch();
+        await services.shutdown();
+        expect(await gitMayRun(repo)).toBe(true);
+    });
+});
+
+describe('the env files', () => {
+    it('leave out a site waiting for its first start: nothing is written, and git is not asked, for a site that has not been let run', () => {
+        const site = (over: Partial<SiteInfo>) => ({ id: 's', firstStart: undefined, ...over }) as SiteInfo;
+        const waiting = site({ id: 'waiting', firstStart: { runs: 'x', folder: '.', changed: false } });
+        const running = site({ id: 'running' });
+        expect(envFileSites([waiting, running]).map((s) => s.id)).toEqual(['running']);
+        // And it is what the hosting gives the env files, which the row above cannot see: genie-host's (hosting-compose.ts,
+        // the host owns it), and the emergency window's, which composes the same stack.
+        expect(readFileSync('src/main/hosting-compose.ts', 'utf8')).toMatch(/sites: \(\) => envFileSites\(sites\.list\(\)\)/);
+    });
+});
+
+describe('a real pull moves the verdict, and the gate holds', () => {
+    const run = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const SETTINGS = (hook: string) => JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: hook }] }] } });
+    let origin: string;
+    let clone: string;
+
+    beforeEach(async () => {
+        origin = join(dir, 'origin');
+        mkdirSync(join(origin, '.claude'), { recursive: true });
+        run(origin, 'init', '-q');
+        writeFileSync(join(origin, '.claude', 'settings.json'), SETTINGS('before'));
+        run(origin, 'add', '.');
+        run(origin, 'commit', '-q', '-m', 'first');
+        clone = join(dir, 'clone');
+        execFileSync('git', ['clone', '-q', origin, clone], { windowsHide: true, stdio: 'ignore' });
+        workspaces = [{ id: 'pulled', path: clone }];
+        await launch();
+        await services.workspaceTrust.trust('pulled');
+    });
+
+    it('noticed by itself: untrusted without anyone asking, and no work reaches the run launched before it', async () => {
+        const prompts: string[] = [];
+        const noTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+        const driverFor: DriverFor = () => () => ({ start: () => {}, prompt: (content: unknown) => { prompts.push(String(content)); }, kill: () => {}, cancel: () => {}, cliSessionId: null, ready: Promise.resolve() }) as never;
+        const host = new SessionHost({ userData: join(dir, 'agents'), driverFor, processTree: noTree, stopGraceMs: 0, untrustedFilesFor: (record) => services.untrustedFilesFor(record), untrustedNow: (record) => services.untrustedNow(record) });
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'pulled', provider: 'claude', name: 'atlas' });
+        expect(host.start(record, clone)).toEqual({ ok: true });
+        await vi.waitFor(() => { expect(host.launchedUntrusted(record.id)).toBe(false); expect(host.quiet(record.id)).toBe(true); }, { timeout: 20_000 });
+
+        // CONTROL: before the pull the same route hands work to the run.
+        host.prompt(record.id, 'before', 'you');
+        expect(prompts).toEqual(['before']);
+
+        writeFileSync(join(origin, '.claude', 'settings.json'), SETTINGS('added by the pull'));
+        run(origin, 'add', '.');
+        run(origin, 'commit', '-q', '-m', 'a new hook');
+        run(clone, 'pull', '-q');
+
+        // Elsewhere, long of a watcher and far short of the slow pass. Windows has the slow pass alone (trust-watch.ts).
+        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false, changed: true }); }, { timeout: process.platform === 'win32' ? TRUST_PASS_MS * 2 : 15_000, interval: 100 });
+        expect(services.untrustedNow(record)).toBe(true);
+        host.prompt(record.id, 'after', 'you');
+        await new Promise((r) => setTimeout(r, 200));
+        expect(prompts).toEqual(['before']);
+        expect(host.workWaiting(record.id)).toBe(true);
+        host.stopAll();
+        await host.settled();
+    }, 60_000);
+
+    it('CONTROL: a pull that touches nothing the verdict reads leaves it trusted', async () => {
+        writeFileSync(join(origin, 'code.ts'), 'export {};\n');
+        run(origin, 'add', '.');
+        run(origin, 'commit', '-q', '-m', 'code');
+        run(clone, 'pull', '-q');
+        await new Promise((r) => setTimeout(r, 1500));
+        expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: true });
+    }, 30_000);
+
+    it('the watchers lost: the slow pass notices', async () => {
+        await services.shutdown();
+        await composed.compose({ userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, workspaces: () => workspaces, trustWatchEveryMs: 200, trustWatchFolders: false } as Parameters<typeof composeServices>[0]).then((next) => { services = next; });
+        await services.workspaceTrust.refresh('pulled');
+        expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: true });
+        writeFileSync(join(clone, '.claude', 'settings.json'), SETTINGS('edited by hand'));
+        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false }); }, { timeout: 15_000, interval: 100 });
+    }, 40_000);
+});
+
+describe('the trust step, through the real composition', () => {
+    const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
+    const stepOf = async () => (await featureSnapshot(services, state())).trust?.find((row) => row.workspaceId === 'acme');
+    beforeEach(async () => {
+        // Added after the upgrade: a first launch with it would carry it over as trusted.
+        await launch();
+        await services.shutdown();
+        workspaces = [{ id: 'acme', path: repo }];
+        // With an endpoint, so Genie has files to write once it may.
+        services = await composed.compose({
+            userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, workspaces: () => workspaces,
+            mcpEndpoint: () => ({ url: 'http://127.0.0.1:43127/mcp', token: 'abc' }), mcpTools: () => [{ name: 'imDone', description: 'x' }],
+        } as Parameters<typeof composeServices>[0]);
+        await services.workspaceTrust.refresh('acme');
+    });
+
+    it('not trusted: the snapshot has the step and what would run', async () => {
+        const row = await stepOf();
+        expect(row).toMatchObject({ workspaceId: 'acme', changed: false });
+        expect(row?.list.gitKeys.map((e) => e.key)).toEqual(['core.fsmonitor']);
+    });
+
+    it("the person's yes: trusted, the step gone, and git and Genie's files are allowed from then", async () => {
+        await handleFeatureAction(services, { kind: 'workspace.trust', workspaceId: 'acme', workspacePath: repo }, state());
+        expect(services.workspaceTrust.view('acme')).toMatchObject({ trusted: true });
+        expect(await stepOf()).toBeUndefined();
+        expect(services.untrustedNow({ workspaceId: 'acme' })).toBe(false);
+        expect(existsSync(join(repo, '.mcp.json'))).toBe(true);
+    });
+
+    it('CONTROL: without it, none of that happened', async () => {
+        expect(services.workspaceTrust.view('acme')).toMatchObject({ trusted: false });
+        expect(services.untrustedNow({ workspaceId: 'acme' })).toBe(true);
+        expect(existsSync(join(repo, '.mcp.json'))).toBe(false);
+    });
+
+    it('a yes that cannot be saved: refused, and it stays untrusted when next read too', async () => {
+        const record = join(dir, 'home', 'runtime', 'workspace-trust.json');
+        rmSync(record, { force: true });
+        mkdirSync(record, { recursive: true });
+        writeFileSync(join(record, 'in-the-way'), 'x');
+        await expect(handleFeatureAction(services, { kind: 'workspace.trust', workspaceId: 'acme', workspacePath: repo }, state())).rejects.toThrow();
+        expect(services.workspaceTrust.view('acme')).toMatchObject({ trusted: false });
+        expect(await services.workspaceTrust.refresh('acme')).toMatchObject({ trusted: false });
+        expect((await stepOf())?.workspaceId).toBe('acme');
+    });
+
+    it('a workspace that is not there: refused, in words', async () => {
+        await expect(handleFeatureAction(services, { kind: 'workspace.trust', workspaceId: 'gone', workspacePath: repo }, state())).rejects.toThrow(/gone/);
+    });
+});
