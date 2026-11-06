@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fancyTermPort, type HostBackend } from '../src/main/fancy-term-port.js';
+import { TerminalHost } from '../src/main/terminal-host.js';
 
 /**
  * THE ADAPTER between Genie's narrow `PtyPort` and `fancy-term-host`'s `PtyBackend`.
@@ -44,6 +45,55 @@ function fakeBackend() {
         emitExit: (id: string, exitCode: number) => listeners['exit']?.forEach((l) => l(id, { exitCode })),
     };
 }
+
+function streamProducer() {
+    const fixture = fakeBackend();
+    fixture.backend.getScrollback = () => undefined;
+    const port = fancyTermPort(fixture.backend, { defaultShell: () => ({ command: '/synthetic/shell', args: [] }), platform: 'linux', lookup: { platform: 'linux', env: { PATH: '/synthetic' }, isFile: () => true } });
+    return { ...fixture, port };
+}
+describe('P4 native-local emergency producer positions', () => {
+    it('a quiet terminal has a real producer epoch and zero offset before first output, through TerminalHost', async () => {
+        const f = streamProducer(), host = new TerminalHost(f.port);
+        const opened = await host.openReady({ workspaceId: 'work', cwd: '/synthetic', personal: true });
+        expect(host.streamSnapshot(opened.id)).toEqual({ id: opened.id, tail: '', epoch: expect.any(String), endOffset: 0 });
+        expect(f.port.position?.('not-created')).toBeNull(); host.closeAll();
+    });
+    it('counts actual UTF16 output once across multiple listeners and while no pane listens', () => {
+        const f = streamProducer(), opened = f.port.open({ cwd: '/synthetic' }), a: unknown[][] = [], b: unknown[][] = [];
+        const offA = f.port.onData((...args) => a.push(args)), offB = f.port.onData((...args) => b.push(args));
+        const first = 'A' + String.fromCharCode(0xd800), second = String.fromCharCode(0xdc00) + '\u001b';
+        f.emitData(opened.id, first); f.emitData(opened.id, second);
+        expect(a).toEqual(b); expect(a.map(event => event[2])).toEqual([{ epoch: expect.any(String), offset: 0, endOffset: first.length }, { epoch: expect.any(String), offset: first.length, endOffset: first.length + second.length }]);
+        const epoch = f.port.position?.(opened.id)?.epoch;
+        offA(); offB(); f.emitData(opened.id, 'unwatched');
+        expect(f.port.position?.(opened.id)).toEqual({ epoch, endOffset: first.length + second.length + 'unwatched'.length });
+        expect(a).toHaveLength(2); expect(b).toHaveLength(2);
+    });
+    it('mints the producer before reentrant backend-create output, without resetting the first bytes', () => {
+        const f = streamProducer(), create = f.backend.create.bind(f.backend);
+        f.backend.create = options => { const opened = create(options); f.emitData(opened.id, 'during-create'); return opened; };
+        const opened = f.port.open({ cwd: '/synthetic' });
+        expect(f.port.position?.(opened.id)).toEqual({ epoch: expect.any(String), endOffset: 'during-create'.length });
+    });
+    it('exit carries the producer final offset after the final flush and releases its counter', () => {
+        const f = streamProducer(), opened = f.port.open({ cwd: '/synthetic' }), events: unknown[][] = [];
+        f.port.onData((...args) => events.push(['data', ...args])); f.port.onExit((...args) => events.push(['exit', ...args]));
+        f.emitData(opened.id, 'last🧪'); f.emitExit(opened.id, 7);
+        expect(events).toEqual([['data', opened.id, 'last🧪', { epoch: expect.any(String), offset: 0, endOffset: 'last🧪'.length }], ['exit', opened.id, 7, { epoch: expect.any(String), endOffset: 'last🧪'.length }]]);
+        expect(f.port.position?.(opened.id)).toBeNull();
+    });
+    it('an adopted/unknown producer stays unknown rather than inferring zero or a scrollback length', () => {
+        const f = streamProducer(); f.emitData('older-producer', 'unknown-history');
+        expect(f.port.position?.('older-producer')).toBeNull();
+    });
+    it('a failed backend create releases the minted counter', () => {
+        const f = streamProducer(); let id = '';
+        f.backend.create = options => { id = options.id; throw new Error('synthetic backend failure'); };
+        expect(() => f.port.open({ cwd: '/synthetic' })).toThrow('synthetic backend failure');
+        expect(f.port.position?.(id)).toBeNull();
+    });
+});
 
 describe('opening', () => {
     it('mints an id the engine can key on, and returns what the engine reported', () => {
