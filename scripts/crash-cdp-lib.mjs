@@ -256,6 +256,10 @@ export function finish(name, h, cleanups) {
                 console.log(`  ${file} (filtered):\n    ${lines.map((l) => l.slice(0, 220)).join('\n    ')}`);
             }
         } else console.log(`\n${name} OK`);
+        // THE HOST'S OWN TIMING, pass or fail (omarchy-test, 2026-11-06: genie-host's loop came 8–12 s late during each hold):
+        // its late ticks with the CPU it spent across them, its stall lines, and the memory readings.
+        const timing = readOr(h.lifecycle).split(/\r?\n/).filter((l) => /clock jumped|host stall|stall main|rss window=/.test(l)).slice(-40);
+        console.log(`  host timing (${timing.length} line(s)):${timing.length ? `\n    ${timing.map((l) => l.slice(0, 220)).join('\n    ')}` : ' none'}`);
         try { rmSync(h.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); } catch { /* a held file on Windows */ }
         process.exit(code ?? (failures.length > 0 ? 1 : 0));
     };

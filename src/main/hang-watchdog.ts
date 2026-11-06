@@ -18,9 +18,12 @@ import { HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS,
  *    {@link LOST_GRACE_MS}: its process gone, and this host not ending itself (its own end writes the clean-exit marker),
  *    it is a `lost` record with its last beat and RSS. A window still alive only lost its link; it reconnects.
  *
- * A GAP IN THIS HOST'S OWN CLOCK (the machine asleep — the window slept too — or this host's loop held) re-arms every
- * wait instead of reading it as the window's silence: the tick runs every second, so a tick that comes over 5 s late
- * says the host was not running either.
+ * A GAP IN THIS HOST'S OWN CLOCK (the machine asleep — the window slept too — or this host's loop held) PAUSES every
+ * wait: the tick runs every second, so a tick that comes over 5 s late says the host was not running either, and that
+ * stalled time comes off each window's silence. It used to restart the wait, and on a loaded machine (omarchy-test,
+ * 2026-11-06: the host's loop 8–12 s late twice in every 40 s hold) a real hang was never reached. A window silent for
+ * 30 s of the host's awake time is a hang; a sleep is one stalled span, so a window that beats after it is not. Each late
+ * tick is logged with the CPU this host spent across it and its memory: busy (its own work) or not run at all.
  */
 
 /** A tick this late says the host itself did not run (sleep, or its own loop held): nobody's silence is counted across it. */
@@ -39,6 +42,8 @@ export interface HangWatchdogOptions {
     readonly hostRss: () => number;
     /** The running agents, each with its current turn's last tool name and size (core/crash-record.ts `runningAgentNote`). */
     readonly agents: () => RunningAgentNote[];
+    /** This host's CPU time so far, in ms (`process.cpuUsage`): what a late tick is logged with. Absent = not said. */
+    readonly cpuMs?: () => number;
     /** The last lifecycle lines (crash-records.ts `readLifecycleTail`). */
     readonly lifecycle: () => string[];
     readonly log: (line: string) => void;
@@ -70,6 +75,7 @@ export class HangWatchdog {
     readonly #samples: RssSample[] = [];
     #stop: (() => void) | null = null;
     #lastTick: number;
+    #lastCpu: number | null = null;
     #lastRssAt: number;
     #newestRss: { at: number; rss: number } | null = null;
     #shuttingDown = false;
@@ -139,12 +145,18 @@ export class HangWatchdog {
             const now = this.#now();
             const gap = now - this.#lastTick;
             this.#lastTick = now;
+            const cpu = this.#safe(() => this.#o.cpuMs?.() ?? null, null);
+            const cpuSpent = cpu !== null && this.#lastCpu !== null ? Math.round(cpu - this.#lastCpu) : null;
+            this.#lastCpu = cpu;
             if (gap > CLOCK_GAP_MS) {
+                // Only the stalled span comes off (the tick's own second is the window's): its wait pauses, never restarts.
+                const stalled = gap - 1_000;
                 for (const w of this.#windows.values()) {
-                    w.lastBeatAt = now;
-                    if (w.droppedAt !== null) w.droppedAt = now;
+                    w.lastBeatAt = Math.min(now, w.lastBeatAt + stalled);
+                    if (w.droppedAt !== null) w.droppedAt = Math.min(now, w.droppedAt + stalled);
                 }
-                this.#o.log(`hang watchdog: this host's clock jumped ms=${gap} (asleep, or its loop held); every window's wait starts again`);
+                const rss = toMb(this.#safe(() => this.#o.hostRss(), 0));
+                this.#o.log(`hang watchdog: this host's clock jumped ms=${gap} cpu_ms=${cpuSpent ?? '-'} host_rss_mb=${rss} (asleep, or its loop held); the window waits pause for it`);
             }
             if (now - this.#lastRssAt >= (this.#o.rssEveryMs ?? RSS_EVERY_MS)) {
                 this.#lastRssAt = now;
