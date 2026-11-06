@@ -1537,12 +1537,12 @@ async function boot(): Promise<void> {
                 logsDir: join(genieRoot(), 'logs'),
                 // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
                 build: hostBuildNow,
-                hostScript: hostRuntime.hostScript,
+                hostScript: join(here, 'host.js'), // BREAK PROBE
                 execPath: hostRuntime.execPath,
                 genieHome: genieRoot(),
                 // What only Electron knows, for the host's hosting (hosting-inputs.ts): Genie 1's folder (its database, CA and
                 // toolchain), the app data folder, and the resources folder with the bundled Caddy.
-                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath, GENIE_INSTALL_EXEC: process.execPath },
+                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath }, // BREAK PROBE
                 log: lifecycleLog,
             },
             records: () => registry?.listAgents() ?? [],
