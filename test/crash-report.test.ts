@@ -74,7 +74,7 @@ describe('a crash record full of private names gives a report with none of them'
     const record = {
         kind: 'hang', at: '2026-11-06T05:12:00.000Z', windowPid: 4242, lastBeatAt: '2026-11-06T05:11:30.000Z',
         lifecycle: ['agent maipa started in AlphaR', 'route genie://AlphaR/maipa/dashboard', 'opened C:/_Projects/_clients/Chip/notes.md'],
-        stalls: [{ at: '2026-11-06T05:11:00.000Z', ms: 31_000, route: 'genie://AlphaR/maipa/dashboard', stack: 'drawLane (dist/renderer/WorkspaceDashboard.js)' }, { at: 'x', ms: 2_000, route: 'genie://AlphaR/kai/chat', stack: 'drawLane (dist/renderer/WorkspaceDashboard.js)' }],
+        stalls: [{ at: '2026-11-06T05:11:00.000Z', ms: 31_000, route: 'genie://AlphaR/maipa/dashboard', stack: 'drawLane WorkspaceDashboard.js:88 < paint main.js:5023 < ?' }, { at: 'x', ms: 2_000, route: 'genie://AlphaR/kai/chat', stack: 'drawLane WorkspaceDashboard.js:88 < paint main.js:5023 < ?' }],
         memory: [{ at: 'a', windowMb: 410, hostMb: 300 }, { at: 'b', windowMb: 2_300, hostMb: 320 }],
         agents: [{ name: 'maipa', lastTool: 'Read /home/wish/AlphaR/secret.md', lastToolBytes: 5_000_000 }, { name: 'kai', lastTool: null, lastToolBytes: null }],
         // CrashRecord = CrashHeader & (hang | lost | exit): the header's fields sit on the record itself (d388f1a8).
@@ -84,7 +84,7 @@ describe('a crash record full of private names gives a report with none of them'
         const fromRecord = fn<(r: unknown, base: unknown) => unknown>('factsFromRecord');
         const facts = fromRecord(record, { view, providers: ['claude', 'codex'] });
         const text = fn<(t: string, c: unknown) => string>('redactCrashText')(fn<(f: unknown) => string>('crashReportText')(facts), { workspaceNames: ['AlphaR'], agentNames: ['maipa', 'kai'] });
-        for (const want of ['hang', '2.0.0-beta.60', 'linux 6.12', 'x64', '2h 2m', '2 agents', 'drawLane (dist/renderer/WorkspaceDashboard.js)', '2 stalls', '31 s']) expect(text).toContain(want);
+        for (const want of ['hang', '2.0.0-beta.60', 'linux 6.12', 'x64', '2h 2m', '2 agents', 'drawLane WorkspaceDashboard.js:88 < paint main.js:5023 < ?', '2 stalls', '31 s']) expect(text).toContain(want);
         expect(text).toMatch(/1-10 MB/); // the last tool's size, bucketed
         expect(text).toMatch(/2-4 GB|1-2 GB|>2 GB/); // memory, bucketed
         for (const leak of ['maipa', 'AlphaR', 'genie://', 'kai', 'Chip', '/home/', 'secret.md', 'Read ']) expect(text).not.toContain(leak);
