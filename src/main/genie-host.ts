@@ -549,7 +549,7 @@ async function main(): Promise<void> {
         },
         lifecycle: () => readLifecycleTail(runtime),
         log: lifecycleLog,
-        header: () => crashHeader(build.split('+')[0] ?? build, build),
+        header: () => crashHeader(build, build),
     });
     hangWatchdog.start();
     const engine = new SessionEngineServer({

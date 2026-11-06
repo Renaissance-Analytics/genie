@@ -326,7 +326,7 @@ const crashRecorder = new WindowCrashRecorder({
     write: (record) => writeCrashRecord(join(runtimeDir(genieRoot()), 'crash'), record),
     remove: removeCrashRecord,
     // The host's build as this window last heard it (its welcome); this Genie's version until it has linked.
-    header: () => crashHeader(app.getVersion(), agentEngineLink?.client.welcome?.build ?? app.getVersion()),
+    header: () => crashHeader(app.getVersion(), app.getVersion()),
 });
 if (launch.kind === 'boot') crashRecorder.install(process, app);
 /** Window main's heartbeat to genie-host's hang watchdog (hang-watchdog.ts): started once the engine link is up. */
