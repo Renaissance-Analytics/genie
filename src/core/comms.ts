@@ -50,10 +50,15 @@ export function commsOf(mail: CommsMail, agentId: string, since: number, now: nu
 /**
  * THE DASHBOARD'S COMMS, READ PER PROBE (beta.59: 1-2 s window-main stalls in `commsOf`). `mailOf` is the agent's mail
  * (the inbox's `involving`, bounded); `tally` is the scan, injectable so a test can count it.
+ *
+ * SCANNED ONCE PER CHANGE: the tally is kept per agent and reused while `mailOf` returns the SAME array and `since`
+ * is the same. `involving` keeps an agent's array until that agent's mail changes (core/inbox-read.ts), so mail for
+ * another agent, or another agent reading its mail, scans nothing here. Ages are worked out against `now` per read.
  */
 export class CommsCache {
     readonly #mailOf: (agentId: string) => CommsMail | null;
     readonly #tally: typeof commsTally;
+    readonly #kept = new Map<string, { readonly mail: CommsMail; readonly since: number; readonly tally: CommsTally }>();
 
     constructor(mailOf: (agentId: string) => CommsMail | null, tally: typeof commsTally = commsTally) {
         this.#mailOf = mailOf;
@@ -63,6 +68,12 @@ export class CommsCache {
     read(agentId: string, since: number, now: number): Comms | null {
         const mail = this.#mailOf(agentId);
         if (mail === null) return null;
-        return commsAt(this.#tally(mail, agentId, since), now);
+        const kept = this.#kept.get(agentId);
+        if (kept && kept.mail === mail && kept.since === since) return commsAt(kept.tally, now);
+        const tally = this.#tally(mail, agentId, since);
+        // Bounded like the involving cache: one entry per agent, cleared if it ever grows past any real roster.
+        if (!kept && this.#kept.size > 2000) this.#kept.clear();
+        this.#kept.set(agentId, { mail, since, tally });
+        return commsAt(tally, now);
     }
 }

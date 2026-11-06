@@ -52,6 +52,10 @@ export function hasWrittenIn(mail: MailView<ReadableMessage>, from: string, to: 
  * Mail to or from `participant`, oldest first, the newest `limit`, READ ONCE PER CHANGE (genie#1200): the estate snapshot
  * asks for every agent's mail many times a second while agents work. Every change to the mail either grows the array
  * (a send) or replaces it (a read, a delete, an import), so the array and its length say "unchanged".
+ *
+ * A participant's result is KEPT (the same array) until ITS mail changes: a send between others is checked by its new
+ * messages only, and a replaced array whose filter gives the very same messages keeps the old result. The result's
+ * identity is what readers memoize on (core/comms.ts CommsCache: the Dashboard's comms, beta.59).
  */
 export class InvolvingCache<M extends ReadableMessage> {
     readonly #hits = new Map<string, { messages: readonly M[]; length: number; result: M[] }>();
@@ -60,9 +64,25 @@ export class InvolvingCache<M extends ReadableMessage> {
         const key = `${participant}|${limit}`;
         const hit = this.#hits.get(key);
         if (hit && hit.messages === messages && hit.length === messages.length) return hit.result;
-        const result = messages.filter((m) => m.from === participant || m.to === participant).slice(-Math.max(limit, 1));
+        const max = Math.max(limit, 1);
+        const mine = (m: M) => m.from === participant || m.to === participant;
+        let result: M[];
+        if (hit && hit.messages === messages && messages.length > hit.length) {
+            // Grown: only the appended messages can be new to this participant.
+            const fresh = messages.slice(hit.length).filter(mine);
+            result = fresh.length === 0 ? hit.result : [...hit.result, ...fresh].slice(-max);
+        } else {
+            const next = messages.filter(mine).slice(-max);
+            result = hit && sameMessages(hit.result, next) ? hit.result : next;
+        }
         if (this.#hits.size > 2000) this.#hits.clear();
         this.#hits.set(key, { messages, length: messages.length, result });
         return result;
     }
+}
+
+function sameMessages<M>(a: readonly M[], b: readonly M[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+    return true;
 }

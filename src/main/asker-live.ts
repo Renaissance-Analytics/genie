@@ -9,14 +9,15 @@ import type { AgentId } from '../core/identity.js';
 export interface AskerLiveDeps {
     /** Not heard yet: nothing is judged (`undefined`), never "gone" or "ended". */
     readonly known: () => boolean;
-    readonly engine: () => { probe(agentId: AgentId): { readonly running: boolean; readonly startedAt: number | null } | null } | null;
+    /** The engine's LIVENESS, never its probe: a probe carries the Dashboard's comms cell, a scan of the agent's mail. */
+    readonly engine: () => { liveness(agentId: AgentId): { readonly running: boolean; readonly startedAt: number | null } | null } | null;
     readonly takeOvers: () => { probe(agentId: AgentId): { readonly startedAt: number } | null } | null;
 }
 
 export function askerLiveFrom(deps: AskerLiveDeps): (id: string) => AskerState | null | undefined {
     return (id) => {
         if (!deps.known()) return undefined;
-        const session = deps.engine()?.probe(id as AgentId) ?? null;
+        const session = deps.engine()?.liveness(id as AgentId) ?? null;
         if (session?.running) return { running: true, startedAt: session.startedAt };
         const takeOver = deps.takeOvers()?.probe(id as AgentId) ?? null;
         if (takeOver) return { running: true, startedAt: takeOver.startedAt };

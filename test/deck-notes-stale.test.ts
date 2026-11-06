@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { askerLiveFrom } from '../src/main/asker-live.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -170,15 +171,32 @@ describe('liveness not known yet', () => {
     });
 });
 
+describe('askerLiveFrom: the session host AND the Take Over host, by liveness', () => {
+    const live = (running: boolean, startedAt: number) => ({ running, startedAt });
+    const deps = (sessions: Record<string, { running: boolean; startedAt: number }>, terminals: Record<string, { startedAt: number }>, known = true) => askerLiveFrom({
+        known: () => known,
+        engine: () => ({ liveness: (id) => sessions[id] ?? null }),
+        takeOvers: () => ({ probe: (id) => terminals[id] ?? null }),
+    });
+    it('unknown until the first roster load: undefined, judged as nothing', () => {
+        expect(deps({ kai: live(true, 1) }, {}, false)('kai')).toBeUndefined();
+    });
+    it('a running session; else a Take Over terminal (a terminal agent is not "gone"); else the ended session; else nothing', () => {
+        const asker = deps({ kai: live(true, 10), wren: live(false, 20), ivy: live(false, 30) }, { ivy: { startedAt: 40 }, ash: { startedAt: 50 } });
+        expect(asker('kai')).toEqual({ running: true, startedAt: 10 });
+        expect(asker('wren')).toEqual({ running: false, startedAt: 20 });
+        expect(asker('ivy')).toEqual({ running: true, startedAt: 40 });
+        expect(asker('ash')).toEqual({ running: true, startedAt: 50 });
+        expect(asker('ghost')).toBeNull();
+    });
+});
+
 describe('main wires it', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
     it('the Deck judges staleness by the session host AND the Take Over host (a terminal agent is not "gone")', () => {
-        expect(main.match(/askerLive:\s*\(id\)\s*=>/g) ?? []).toHaveLength(1);
-        const body = main.slice(main.indexOf('askerLive:'), main.indexOf('askerLive:') + 900);
-        expect(body).toMatch(/host\?\.probe\(id as AgentId\)/);
-        expect(body).toMatch(/takeOvers\?\.probe\(id as AgentId\)/);
-        // Unknown until the first roster load: undefined, judged as nothing.
-        expect(body).toMatch(/if \(!askerLivenessKnown\) return undefined;/);
+        // Wired once, from the agent engine and the Take Over host, known only after the first roster load.
+        expect(main.match(/askerLive:\s*askerLiveFrom\(\{\s*known:\s*\(\)\s*=>\s*askerLivenessKnown,\s*engine:\s*\(\)\s*=>\s*host,\s*takeOvers:\s*\(\)\s*=>\s*takeOvers\s*\}\)/g) ?? []).toHaveLength(1);
+        expect(main.match(/askerLive:/g) ?? []).toHaveLength(1);
         expect(main.match(/askerLivenessKnown = host !== null;/g) ?? []).toHaveLength(1);
         expect(main.indexOf('askerLivenessKnown = host !== null;')).toBeGreaterThan(main.indexOf('await registry.load('));
     });
