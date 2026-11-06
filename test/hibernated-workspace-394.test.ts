@@ -89,8 +89,8 @@ describe('story 394: a hibernated workspace supplies no data', () => {
         const invoke = async (name: string, args: Record<string, string>) => tools.find((t) => t.definition.name === name)!.handler(args, { server: 'genie', tool: name, headers: {} });
         const list = await invoke('workspaces', {});
         expect(list.isError).toBe(false);
-        expect(list.text).toContain(awake.id);
-        expect(list.text).not.toContain(ghost.id);
+        expect(list.text).toContain(awake.name);
+        expect(list.text).not.toContain(ghost.name);
         expect(list.text).not.toContain('"ghost"');
         expect((await invoke('loadWorkspace', { workspace: 'ghost' })).isError).toBe(true);
         expect((await invoke('loadAgent', { workspace: 'ghost', agent: ghost.name })).isError).toBe(true);
@@ -126,5 +126,25 @@ describe('story 394: redocking requires each agent to reorient on its next turn'
         expect(reopened.find(ghost.id)).toHaveProperty('redockAt', stamp);
         await reopened.setAsleep('ghost', false);
         expect(reopened.find(ghost.id)).toHaveProperty('redockAt', stamp);
+    });
+    it('an acknowledgement for an older redock cannot clear a newer marker', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            vi.setSystemTime(new Date('2026-11-06T20:00:00.000Z'));
+            await registry.setAsleep('ghost', false);
+            const first = (registry.find(ghost.id) as unknown as { redockAt?: string }).redockAt;
+            await registry.setAsleep('ghost', true);
+            vi.setSystemTime(new Date('2026-11-06T21:00:00.000Z'));
+            await registry.setAsleep('ghost', false);
+            const second = (registry.find(ghost.id) as unknown as { redockAt?: string }).redockAt;
+            expect(second).toEqual(expect.any(String)); expect(second).not.toBe(first);
+            const clear = (registry as unknown as { clearRedock?: (id: string, at: string) => Promise<void> }).clearRedock;
+            expect(typeof clear).toBe('function');
+            await clear!.call(registry, ghost.id, first!);
+            expect(registry.find(ghost.id)).toHaveProperty('redockAt', second);
+            await clear!.call(registry, ghost.id, second!);
+            expect(registry.find(ghost.id)).not.toHaveProperty('redockAt');
+            expect(registry.find(awake.id)).not.toHaveProperty('redockAt');
+        } finally { vi.useRealTimers(); }
     });
 });

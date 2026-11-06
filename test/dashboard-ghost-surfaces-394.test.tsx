@@ -44,9 +44,16 @@ describe('story394: the sidebar is the only ghost-workspace surface', () => {
         expect(wake).toHaveBeenCalledWith('ghost');
         expect(navigate).not.toHaveBeenCalled();
     });
-    it('the phone’s workspace picker only receives active workspaces, not the separate sidebar metadata', () => {
-        const html = renderToStaticMarkup(<MobileShell host="test" locked={false} refusal={null} items={[]} answering={null} onAnswer={() => {}} onDisconnect={() => {}} workspaces={snapshot.workspaces} onSelectWorkspace={() => {}} />);
+    it('the phone’s workspace picker rejects ghost records, including an older host’s asleep rows', () => {
+        const html = renderToStaticMarkup(<MobileShell host="test" locked={false} refusal={null} items={[]} answering={null} onAnswer={() => {}} onDisconnect={() => {}} workspaces={[...snapshot.workspaces!, ghost]} onSelectWorkspace={() => {}} />);
         expect(html).toContain('Active project');
         expect(html).not.toContain('Hibernated project');
+    });
+    it('an estate with only ghosts is not first-run onboarding', () => {
+        const empty = { ...snapshot, workspaces: [] };
+        const props = { ...shell('genie://dashboard').props, snapshot: empty };
+        const html = renderToStaticMarkup(<Shell {...props} />);
+        expect(html).not.toContain('Nothing is being worked on yet');
+        expect(html).toContain('data-dashboard-no-active-workspaces');
     });
 });

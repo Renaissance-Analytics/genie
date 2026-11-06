@@ -24,7 +24,7 @@ function setup(options: { failFirst?: boolean; redockAt?: string; provider?: 'cl
         return { start: () => {}, prompt: (content: unknown) => {
             if (failures > 0) { failures--; throw new Error('provider refused'); }
             prompts.push(typeof content === 'string' ? content : JSON.stringify(content));
-        }, kill: () => {}, get running() { return true; }, cliSessionId: null };
+        }, cancel: () => events.onTurnEnd?.({ stopReason: 'cancelled' } as never), kill: () => {}, get running() { return true; }, cliSessionId: null };
     }) as SessionDriverFactory;
     const host = new SessionHost({ userData: dir, driverFor, processTree: { snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) }, onRedockSent: (...args: unknown[]) => cleared.push(args) } as never);
     hosts.push(host);
@@ -34,6 +34,13 @@ function setup(options: { failFirst?: boolean; redockAt?: string; provider?: 'cl
 }
 
 describe('story 394: Sleeping is an announced display state, never a work gate', () => {
+    it('displays a person-stopped turn as Stopped even while its provider process is alive', () => {
+        const { host, record } = setup();
+        host.prompt(record.id, 'A turn to stop', 'you');
+        expect(host.cancel(record.id, 'you')).toEqual({ ok: true });
+        expect(host.probe(record.id)?.running).toBe(true);
+        expect(agentRowFor(record, host.probe(record.id), Date.now).state).toBe('stopped');
+    });
     it('goes Cooling → Idle → Sleeping, pushes the boundary, and accepts mail immediately', () => {
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); vi.setSystemTime(1_800_000_000_000);
         const { host, record, end, prompts } = setup();

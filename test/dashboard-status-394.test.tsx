@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentRow } from '../src/core/dashboard-view.js';
+import { shownState, type AgentRow } from '../src/core/dashboard-view.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import { parseRoute } from '../src/core/route.js';
 import { agentRowFor, type LiveSession } from '../src/core/roster.js';
@@ -92,7 +92,9 @@ describe('story 394: display-only Sleeping and Stopped', () => {
     });
     it('keeps background work Working and a new turn wakes Sleeping immediately', () => {
         expect(agentRowFor(record, live({ idleSince: 1 }), () => 400_000).state).toBe('sleeping');
-        expect(agentRowFor(record, live({ idleSince: 1, background: 1 }), () => 400_000).state).toBe('working');
+        const background = agentRowFor(record, live({ idleSince: 1, background: 1 }), () => 400_000);
+        expect(background.state).toBe('idle'); // The chat is still idle; only its displayed state is Working.
+        expect(shownState(background)).toBe('working');
         expect(agentRowFor(record, live({ idleSince: null, turnState: 'working' }), () => 400_000).state).toBe('working');
     });
     it('calls stopped processes and stopped turns Stopped, while preserving Broken failures', () => {
