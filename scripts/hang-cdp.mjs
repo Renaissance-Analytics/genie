@@ -56,6 +56,19 @@ function genieCommandLines() {
         return execFileSync('ps', ['-eo', 'pid,args'], { encoding: 'utf8', timeout: 15_000 }).split('\n').filter((l) => /electron/.test(l) && !/--type=/.test(l)).map((l) => l.trim().slice(0, 300));
     } catch (error) { return [`(unread: ${error?.message ?? error})`]; }
 }
+/** Who listens on, or holds, a port (netstat), and every Electron process with its parent and type. */
+function portHolders(port) {
+    try {
+        if (process.platform === 'win32') {
+            const net = execFileSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', timeout: 30_000, windowsHide: true }).split(/\r?\n/).filter((l) => l.includes(`:${port} `)).map((l) => l.trim());
+            const all = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+                "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'electron*' } | ForEach-Object { \"$($_.ProcessId) parent=$($_.ParentProcessId) $((($_.CommandLine -split ' ') | Where-Object { $_ -like '--type=*' }) -join ' ')\" }"],
+                { encoding: 'utf8', timeout: 60_000, windowsHide: true }).split(/\r?\n/).filter(Boolean);
+            return [...(net.length ? net : ['(nobody on the port)']), ...all];
+        }
+        return execFileSync('ss', ['-ltnp'], { encoding: 'utf8', timeout: 15_000 }).split('\n').filter((l) => l.includes(`:${port} `));
+    } catch (error) { return [`(unread: ${error?.message ?? error})`]; }
+}
 /** The crash records genie-host wrote, by kind. */
 function records() {
     let names = [];
@@ -83,6 +96,7 @@ async function hang(n, agents) {
     session = await attach({ port: PORT, inspect: INSPECT, label: `after-hang-${n}` }).catch((error) => {
         // The window genie-host started, as the OS sees it: its command line says what it was given.
         console.log(`  Genie processes now:\n    ${genieCommandLines().join('\n    ')}`);
+        console.log(`  the debugger port ${PORT}:\n    ${portHolders(PORT).join('\n    ')}`);
         throw error;
     });
     check(session.windowPid !== windowBefore, `H${n}c. a new window opened`, `${windowBefore} -> ${session.windowPid}`);

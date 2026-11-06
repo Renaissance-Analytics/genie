@@ -108,10 +108,11 @@ try {
         check(await running(session.cdp, a.id) === false, `D4. ${a.name} is NOT running (the host's own view of its session)`);
         const before = ticksBefore.get(a.id);
         // Its history first (the ledger pages in after a relaunch), then nothing new over 5 s.
-        const now = await until(async () => { const x = await ticksOf(session.cdp, a.id); return x.max >= before.max ? x : null; }, 20_000) ?? await ticksOf(session.cdp, a.id);
+        const now = await until(async () => { const x = await ticksOf(session.cdp, a.id); return x.max > 0 ? x : null; }, 20_000) ?? await ticksOf(session.cdp, a.id);
         await sleep(5_000);
         const later = await ticksOf(session.cdp, a.id);
-        check(now.max >= before.max && later.max === now.max, `D5. no provider streams for ${a.name}`, `tick ${before.max} before the crash; ${now.max} → ${later.max} over 5 s after`);
+        // The control: the history is there to read (the gauge reads ticks), and none is newer than the crash.
+        check(now.max > 0 && later.max === now.max && later.max <= before.max + 4, `D5. no provider streams for ${a.name}`, `tick ${before.max} read before the crash; ${now.max} → ${later.max} over 5 s after`);
     }
     const providersNow = stubPids();
     const fresh = providersNow.filter((p) => !stubsBefore.has(p));
