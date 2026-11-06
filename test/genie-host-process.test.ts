@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseHostRecord, type HostRecord } from '../src/core/engine-protocol.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
+import { notAvailableHere } from '../src/core/host-runtime.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import { connectSocket, pidAlive } from '../src/main/engine-launch.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
@@ -204,7 +205,10 @@ describe('genie-host as its own process', () => {
         // `services`: still the window's (manageTerminals is the host's own since P3.3e).
         const refused = await call('services', { action: 'list' });
         expect(refused.isError).toBe(true);
-        expect(refused.text).toMatch(/Genie's window, which is closed/);
+        // This host runs on plain Node under the test (tsx, no Electron), so hostCapabilities() gives it no window: the window
+        // tool says it is not available on this host (P10.1d). An Electron host's "window, which is closed" wording is pinned
+        // in mcp-host-tools.test.ts.
+        expect(refused.text).toBe(notAvailableHere('services', 'a Genie window'));
         expect(Date.now() - t0).toBeLessThan(5_000);
 
         // The next window: the question waits, the mail is there, the endpoint is the one agents were configured with.
