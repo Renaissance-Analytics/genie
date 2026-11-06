@@ -128,8 +128,50 @@ const word = (id) => {
 };
 const open = (cdp, id) => cdp.evaluate(`window.location.hash = '#genie://workspace/${word(id)}'; true`);
 const stepFor = (id) => `document.querySelector('[data-trust-step="${word(id)}"]')`;
-const add = (cdp, path) => cdp.call('function (path) { return window.genie.workspaces.confirmAdd(path).then((r) => JSON.stringify(r)); }', path);
-const idOf = async (cdp, path) => cdp.call('function (path) { return window.genie.snapshot().then((s) => s.workspaces.find((w) => w.path === path)?.id ?? null); }', path);
+/*
+ * Adding a folder is the window's call over its local door (the host split: genie-host keeps the workspaces). A call of
+ * this run's own replaces the app's connection for its length, so the app's own Retry brings that back afterwards.
+ */
+const addAll = (cdp, paths) => cdp.evaluate(`(async () => {
+    const door = window.genieLocalProtocol;
+    if (!door) return JSON.stringify({ refused: 'no local door in this window' });
+    const handle = 'trust_step_' + Date.now();
+    const frames = [];
+    door.onFrame((action, h, text) => { if (h !== handle || action !== 'frame') return; try { frames.push(JSON.parse(text)); } catch { /* not a frame of ours */ } });
+    const wait = async (match) => {
+        const end = Date.now() + 15000;
+        while (Date.now() < end) { const found = frames.find(match); if (found) return found; await new Promise((r) => setTimeout(r, 25)); }
+        throw new Error('the local door did not answer');
+    };
+    door.send('open', handle, '');
+    door.send('frame', handle, JSON.stringify({ kind: 'hello', auth: { kind: 'local' }, label: 'trust step' }));
+    const hello = await wait((f) => f.kind === 'welcome' || f.kind === 'refused');
+    if (hello.kind !== 'welcome') return JSON.stringify([hello]);
+    const out = [];
+    let id = 1;
+    for (const path of ${JSON.stringify(paths)}) {
+        const n = id++;
+        door.send('frame', handle, JSON.stringify({ kind: 'call', id: n, method: 'workspaces.confirmAdd', args: [path] }));
+        out.push(await wait((f) => f.kind === 'result' && f.id === n));
+    }
+    door.send('close', handle, '');
+    return JSON.stringify(out);
+})()`);
+/** The app's own connection, back through its own Retry (it was replaced by this run's call). */
+const reconnect = async (cdp) => {
+    const retry = `Array.from(document.querySelectorAll('[role="alert"] button')).find((b) => b.textContent.trim() === 'Retry')`;
+    if (await waitFor(cdp, `Boolean(${retry})`, 15_000)) await cdp.evaluate(`${retry}.click(); true`);
+    return waitFor(cdp, `Boolean(document.querySelector('[data-route]')) && !(${retry})`, 30_000);
+};
+/** The id the window's registry gives a folder: it reaches the window from the host, so it is waited for (10 s). */
+const idOf = async (cdp, path) => {
+    for (const end = Date.now() + 10_000; ;) {
+        const id = await idOnce(cdp, path);
+        if (id !== null || Date.now() > end) return id;
+        await new Promise((r) => setTimeout(r, 200));
+    }
+};
+const idOnce = async (cdp, path) => cdp.call('function (path) { return window.genie.snapshot().then((s) => s.workspaces.find((w) => w.path === path)?.id ?? null); }', path);
 
 console.log('\nTHE TRUST STEP — what a person sees, in the real app\n');
 const record = join(home, '.genie', 'runtime', 'workspace-trust.json');
@@ -143,8 +185,8 @@ try {
     await cdp.evaluate('document.readyState');
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-route]'))`, 60_000), '0. the app is up, on a home of its own');
 
-    console.log(`  add: ${String(await add(cdp, acme)).slice(0, 160)}`);
-    console.log(`  add: ${String(await add(cdp, other)).slice(0, 160)}`);
+    console.log(`  add: ${String(await addAll(cdp, [acme, other])).slice(0, 320)}`);
+    check(await reconnect(cdp), '0b. the app has its own connection back');
     const acmeId = await idOf(cdp, acme);
     const otherId = await idOf(cdp, other);
     check(typeof acmeId === 'string' && typeof otherId === 'string', '1. two workspaces added', `${acmeId}, ${otherId}`);
