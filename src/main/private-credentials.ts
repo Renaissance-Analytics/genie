@@ -338,6 +338,9 @@ export async function restrictPrivateFile(file: string): Promise<void> {
     await withHelperOrALaunch(() => restrict([target]));
 }
 
+/** Not built yet: the tests come first. */
+export async function isOwnerOnlyFile(_file: string): Promise<boolean> { throw new Error('not built yet'); }
+
 /** Dedicated host-owned directories, using the same owner-only ACL and read-back as private files. */
 export async function restrictPrivateDirectories(directories: readonly string[]): Promise<void> {
     const targets = directories.map(directory => ({ path: resolve(directory), directory: true }));

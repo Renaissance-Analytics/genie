@@ -18,6 +18,8 @@ export interface HostKeychainOptions {
     readonly exists?: RealKeyringDeps['exists'];
     readonly pathEnv?: string;
     readonly onChange?: () => void;
+    /** Which store the keychain is: the OS's (the default), or the file backend (file-secrets.ts). */
+    readonly backend?: 'os' | 'file';
 }
 
 export interface HostKeychain {
