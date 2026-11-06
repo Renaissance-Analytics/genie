@@ -119,6 +119,7 @@ import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { LoginHost } from './login-host.js';
+import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { DESIGN_LOGIN, tellDesignLoginRan } from '../core/design-login.js';
@@ -186,7 +187,7 @@ import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { QUIT_DELAY_MS, UpdateHost } from './updater.js';
 import { channelFrom } from '../core/update-channel.js';
-import { genieHome, installDir, osaHomeDir, runtimeDir } from './paths.js';
+import { genieRoot, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
@@ -655,6 +656,8 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
 let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let loginHost: LoginHost | null = null;
+/** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
+let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
 /**
  * THE FILE WATCHER'S VIEWS (the host split, P2.2; plan §11b): genie-host's hub over the engine link, or — only when no host
@@ -853,7 +856,7 @@ function v1DatabaseFile(): string {
  * there too and logged, because a silent partial import is a missing workspace nobody can explain.
  */
 async function importFromV1(theRegistry: Registry): Promise<void> {
-    const marker = join(genieHome(), 'v1-import.json');
+    const marker = join(genieRoot(), 'v1-import.json');
     // Once — but beta.7's import did not carry v1's hibernation, so a marker without `hibernationApplied` gets
     // ONE amendment pass that puts v1-hibernated workspaces to sleep; after that the marker says so and nothing
     // here runs again (a person who wakes a workspace in Genie 2 must not find it asleep at the next boot).
@@ -906,7 +909,7 @@ async function reapV1Runtime(includeShells: boolean): Promise<void> {
     const ended = await Promise.all(victims.map(async (v) => ((await killProcessAsync(v.pid)) ? v : null)));
     const killed = ended.filter((v) => v !== null);
     const report = { at: new Date().toISOString(), found: victims.length, killed: killed.length, victims: victims.map((v) => ({ pid: v.pid, executable: v.executable, why: v.why })) };
-    await writeFileText(join(genieHome(), 'v1-reap.json'), JSON.stringify(report, null, 2), 'utf8');
+    await writeFileText(join(genieRoot(), 'v1-reap.json'), JSON.stringify(report, null, 2), 'utf8');
     console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
 }
 
@@ -1072,7 +1075,7 @@ let relayHostNow: RelayHostHandle | null = null;
 let relayStatusNow: RelayHostStatus = { state: 'off' };
 /** A window's connection to a Tynn workstation (Tynn #837), by the channel it was given; main alone holds it. */
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
-const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieHome()))(`keychain ${line}`); } catch { /* the console has it */ } };
+const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieRoot()))(`keychain ${line}`); } catch { /* the console has it */ } };
 const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents; workstationId: string }>();
 /** The sockets to other machines the host holds for each window (genie:device-open). */
 const deviceChannels = new Map<string, Electron.WebContents>();
@@ -1118,7 +1121,7 @@ const loginItemPort: LoginItemPort = {
 /** Where an agent runs: its workspace's path. The OS agent runs in the user's data directory. */
 function cwdFor(record: AgentRecord): string {
     // The OSA belongs to the workstation: it runs in its own home, written at boot from its baked-in instructions.
-    if (record.workspaceId === OS_WORKSPACE) return osaHomeDir();
+    if (record.workspaceId === OS_WORKSPACE) return osaHomeDir(genieRoot());
     const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId);
     return workspace?.path ?? app.getPath('userData');
 }
@@ -1217,7 +1220,7 @@ let mcpToolList: readonly { name: string; description: string }[] = [];
 const sessionCallers = new CallerBook();
 /** An agent session calling Genie's MCP, by its caller key: the agent and its workspace, now. */
 function sessionCaller(key: string): Caller | null {
-    return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir()) : null;
+    return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir(genieRoot())) : null;
 }
 const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
@@ -1259,7 +1262,7 @@ const packageManager = (): Promise<PackageManager | null> => (detectedPackageMan
 /** Installs and updates take minutes (winget, a polkit prompt waiting on the person); the probe's 20 s would cut them off. */
 const longRunner: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) });
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
-const toolchainDataDir = (): string => join(genieHome(), 'genie2-toolchain');
+const toolchainDataDir = (): string => join(genieRoot(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
 const phpVersionsBase = (): Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs' | 'ca'> => ({ platform: process.platform as PhpVersionsPorts['platform'], root: phpVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs(), ca: phpCa });
 /**
@@ -1288,7 +1291,7 @@ async function boot(): Promise<void> {
     // The store this launch actually got, written down for the next (a probe can come back empty — genie#588).
     // Only a store that gave a key is remembered; the remembered store failing to give one is forgotten (a selected store
     // is not a working one: password-store-memo.ts).
-    if (process.platform === 'linux') rememberPasswordStore(genieHome(), safeStorage.getSelectedStorageBackend(), safeStorage.isEncryptionAvailable());
+    if (process.platform === 'linux') rememberPasswordStore(genieRoot(), safeStorage.getSelectedStorageBackend(), safeStorage.isEncryptionAvailable());
     // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
     // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
     restoreToolchainEnv({ platform: process.platform as Platform, env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
@@ -1304,10 +1307,10 @@ async function boot(): Promise<void> {
         console.error('[genie] could not give managed PHP a CA bundle', error);
     }
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
-    const store = new Store(genieHome());
+    const store = new Store(genieRoot());
     // Doctor mode reads this: that normal Genie is running, and which agents it has started (none yet) — doctor starts
     // an agent beside it only in an awake workspace where none of those is running (core/genie-running.ts).
-    markGenieRunning(genieHome(), []);
+    markGenieRunning(genieRoot(), []);
     // A local binding as well as the module-level one, so the callback below closes over a
     // Registry rather than a `Registry | null` that TypeScript cannot narrow inside a closure.
     const theRegistry = new Registry(store);
@@ -1356,7 +1359,7 @@ async function boot(): Promise<void> {
      * Task-Manager kill, an installer — is ended here, BEFORE anything is started or restored, from that record only
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
-    const lifecycleLog = openLifecycleLog(runtimeDir(genieHome()));
+    const lifecycleLog = openLifecycleLog(runtimeDir(genieRoot()));
     rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
@@ -1475,13 +1478,13 @@ async function boot(): Promise<void> {
             },
             callbacks: engineCallbacks,
             launch: {
-                runtimeDir: runtimeDir(genieHome()),
-                logsDir: join(genieHome(), 'logs'),
+                runtimeDir: runtimeDir(genieRoot()),
+                logsDir: join(genieRoot(), 'logs'),
                 // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
                 build: hostBuild(app.getVersion(), join(here, 'host.js')),
                 hostScript: join(here, 'host.js'),
                 execPath: process.execPath,
-                genieHome: genieHome(),
+                genieHome: genieRoot(),
                 // What only Electron knows, for the host's hosting (hosting-inputs.ts): Genie 1's folder (its database, CA and
                 // toolchain), the app data folder, and the resources folder with the bundled Caddy.
                 env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath },
@@ -1535,14 +1538,14 @@ async function boot(): Promise<void> {
          * Task-Manager kill, an installer — is ended here, BEFORE anything is started or restored, from that record only
          * (pid, start time and name must all match). In `genie-host` the host does this itself, at its own start.
          */
-        const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
+        const spawnLedger = SpawnLedger.open(join(runtimeDir(genieRoot()), 'children.json'), randomUUID());
         spawnLedger.sweep(systemProcessTree, lifecycleLog);
         // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
         // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
         // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
         // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
         // never what a running process was started from.
-        const supervisor = await prepareGenieSupervisor(runtimeDir(genieHome())).catch((error: unknown) => {
+        const supervisor = await prepareGenieSupervisor(runtimeDir(genieRoot())).catch((error: unknown) => {
             const why = error instanceof Error ? error.message : String(error);
             lifecycleLog(`containment unready reason=${why}`);
             console.error(`[genie] agents cannot start contained: ${why}`);
@@ -1550,7 +1553,7 @@ async function boot(): Promise<void> {
             return null;
         });
         if (supervisor !== null) {
-            void removeStaleSupervisorBuilds(runtimeDir(genieHome()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
+            void removeStaleSupervisorBuilds(runtimeDir(genieRoot()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
                 (sweep) => {
                     for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
                     for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
@@ -1561,7 +1564,7 @@ async function boot(): Promise<void> {
             );
         }
         host = new SessionHost({
-            userData: genieHome(),
+            userData: genieRoot(),
             // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
             currentRecord: (id) => registry?.find(id) ?? null,
             lifecycle: {
@@ -1586,7 +1589,7 @@ async function boot(): Promise<void> {
             },
             // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
             heldElsewhere: (record) => {
-                const hold = doctorHoldNow(genieHome());
+                const hold = doctorHoldNow(genieRoot());
                 return hold !== null && hold.workspaceId === record.workspaceId
                     ? `doctor mode is running an agent in this workspace (pid ${hold.pid}); stop it there, or close doctor mode, then start ${record.name}`
                     : null;
@@ -1612,7 +1615,7 @@ async function boot(): Promise<void> {
      * deleted agent's draft and files go on the change that removes it. Answered before any window exists.
      */
     // genie-host's when it runs (P3.2): one writer for the drafts file; this window's own only on the emergency path.
-    const drafts = agentEngineLink ? agentEngineLink.client.stores().drafts : await ChatDraftStore.open(genieHome());
+    const drafts = agentEngineLink ? agentEngineLink.client.stores().drafts : await ChatDraftStore.open(genieRoot());
     const draftAgents = (): string[] => theRegistry.listAgents().map((a) => a.id);
     const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
     await drafts.prune(draftAgents()).catch(pruneFailed);
@@ -1621,16 +1624,16 @@ async function boot(): Promise<void> {
     askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
     await writeOsaHome({
-        dir: osaHomeDir(),
+        dir: osaHomeDir(genieRoot()),
         // On an Omarchy host, Omarchy's own agent skills come with it (main/omarchy-skills.ts); elsewhere, nothing about Omarchy.
-        files: osaHomeFiles('normal', { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieHome(), userData: app.getPath('userData'), omarchy: await omarchyFacts() }),
+        files: osaHomeFiles('normal', { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieRoot(), userData: app.getPath('userData'), omarchy: await omarchyFacts() }),
         fs: {
             read: async (p) => { try { return await readFileText(p, 'utf8'); } catch { return null; } },
             write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileText(p, text, 'utf8'); },
         },
     }).catch((error: unknown) => { console.error(`[genie] the OSA's home could not be written: ${(error as Error).message}`); });
     // The boot that imports Genie 1 is the one whose pty host just died — the only boot its orphaned shells are reaped.
-    const importBoot = !existsSync(join(genieHome(), 'v1-import.json'));
+    const importBoot = !existsSync(join(genieRoot(), 'v1-import.json'));
     await importFromV1(theRegistry);
     await reapV1Runtime(importBoot);
     registry.setProbe((id) => host?.probe(id) ?? null);
@@ -1655,7 +1658,7 @@ async function boot(): Promise<void> {
         terminals = own;
     }
     // SCROLLBACK IS NOT SAVED (the owner, 2026-11-02): what an older Genie left is deleted, and nothing writes it again.
-    await removeSavedScrollback(genieHome(), lifecycleLog);
+    await removeSavedScrollback(genieRoot(), lifecycleLog);
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
     filesHost = new FilesHost({
         // Each opened file carries its git state (the persona's `· committed`).
@@ -1995,7 +1998,12 @@ async function boot(): Promise<void> {
     settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
     // `Log in to <provider>` (the owner, 2026-10-18): the provider's own login in a scratch folder, in a window of its own.
     // Signed in (its status command exits 0), every agent that login signed out is restarted on its thread and told.
+    // GENIE'S SCRATCH (P7): this process's folder under `<root>/cache/tmp`, made on first use with no process-table read;
+    // the folders of Genies that are gone are swept deferred, and the sweep is stopped on quit.
+    const scratch = scratchArea(genieRoot());
+    scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
     const logins = new LoginHost({
+        scratch: () => scratch.directory(),
         terminals: terminalsForTakeOver,
         // A login starts from the tray or the agent view's Log in button only — the person's click (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
@@ -2364,7 +2372,7 @@ async function boot(): Promise<void> {
     // THE ENVELOPE WIZARD'S DISK (envelope-fs.ts): the same functions test/envelope-build.test.ts drives. Its git goes through
     // workspaceOps.fs above (gitAddSubmodule, gitCommit), so a submodule from a GitHub remote clones with the sign-in, as the clone does.
     // Fork rows (Add workspace parity item 12) fork with the GitHub sign-in, only while it is signed in.
-    const envelopePorts: EnvelopePorts = { ...nodeEnvelopePorts(), github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null) };
+    const envelopePorts: EnvelopePorts = { ...nodeEnvelopePorts({ stagingBase: () => scratch.directory() }), github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null) };
     // Import from Git's browser (item 8): what the sign-in reaches; signed out says so.
     const githubRepos = (): Promise<RepoListing> => (githubAccount ? githubAccount.repoListing() : Promise.resolve({ status: 'signed-out' }));
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
@@ -2490,7 +2498,7 @@ async function boot(): Promise<void> {
         // via `tailscale cert`, renewed in place each time the listener starts — Genie 1's main/mobile/tls.ts. Any failure
         // (MagicDNS or HTTPS certificates off on the tailnet) is http inside WireGuard, as Genie 1 fell back.
         cert: async (dnsName) => {
-            const dir = join(runtimeDir(genieHome()), 'mobile-tls');
+            const dir = join(runtimeDir(genieRoot()), 'mobile-tls');
             const certFile = join(dir, 'cert.pem');
             const keyFile = join(dir, 'key.pem');
             try {
@@ -2510,7 +2518,7 @@ async function boot(): Promise<void> {
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
-    const caddyCopy = bundledCaddy === null ? null : await userCaddyCopy(bundledCaddy, join(runtimeDir(genieHome()), 'caddy-bin'));
+    const caddyCopy = bundledCaddy === null ? null : await userCaddyCopy(bundledCaddy, join(runtimeDir(genieRoot()), 'caddy-bin'));
     if (caddyCopy?.error) console.error(`[caddy] ${caddyCopy.error}`);
     /*
      * APPS AND SCRIPTS REPORT TO AGENTS (genie#1345; the owner, FTQ q_eb705239): a loopback door a Genie-hosted site, a
@@ -2522,9 +2530,9 @@ async function boot(): Promise<void> {
     // no window. This window starts no door and opens no keys (one writer of app-inbox.json); it drives the host's through the
     // replica — a script key's secret reaches it once, in the answer to its own create. Its own door only on the emergency path.
     const linkedAppInbox = agentEngineLink ? agentEngineLink.client.appInbox() : null;
-    const ownAppInboxKeys = linkedAppInbox ? null : await AppInboxKeys.open(genieHome());
+    const ownAppInboxKeys = linkedAppInbox ? null : await AppInboxKeys.open(genieRoot());
     const appInboxKeys: Pick<AppInboxReplica, 'createScriptKey' | 'scriptKeys' | 'revokeScriptKey' | 'rotate' | 'revokeSource' | 'allowSource' | 'sources' | 'revokedSources'> = linkedAppInbox ?? ownAppInboxKeys!;
-    const appInboxEndpointFile = join(genieHome(), 'app-inbox-endpoint.json');
+    const appInboxEndpointFile = join(genieRoot(), 'app-inbox-endpoint.json');
     let appInboxServer: AppInboxServer | null = null;
     const appInboxService = ownAppInboxKeys ? new AppInboxService({
         keys: ownAppInboxKeys,
@@ -2559,7 +2567,7 @@ async function boot(): Promise<void> {
         ? (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })
         : composeServices;
     const composed: WindowServices = await composeWith({
-        userData: genieHome(),
+        userData: genieRoot(),
         pty: ptyPort,
         // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
         // main's own engine takes them only if the spawn host cannot start.
@@ -2629,11 +2637,11 @@ async function boot(): Promise<void> {
         secretsLog: (line) => keychainLog(line),
         legacySecrets: () => gatherSources([
             { file: 'tynn.json', covers: 'tynn/pairing', sources: async () => {
-                await settleStaleLegacyPairing({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), log: (line) => keychainLog(line) }).catch(() => {});
-                return [tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) })];
+                await settleStaleLegacyPairing({ file: join(genieRoot(), 'credentials', 'tynn.json'), legacyFile: join(genieRoot(), 'tynn.json'), log: (line) => keychainLog(line) }).catch(() => {});
+                return [tynnPairingSource({ file: join(genieRoot(), 'credentials', 'tynn.json'), legacyFile: join(genieRoot(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) })];
             } },
-            { file: 'github.json', covers: 'github/', sources: () => githubSealedSources({ file: join(genieHome(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }) },
-            { file: 'workstation.json', covers: 'workstation/', sources: () => workstationSealedSources({ file: join(genieHome(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }) },
+            { file: 'github.json', covers: 'github/', sources: () => githubSealedSources({ file: join(genieRoot(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }) },
+            { file: 'workstation.json', covers: 'workstation/', sources: () => workstationSealedSources({ file: join(genieRoot(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }) },
         ]),
         onSecretsMoved: () => {
             void githubAccount?.reload().catch(() => {});
@@ -2884,7 +2892,7 @@ async function boot(): Promise<void> {
                 storage: () => ({ backend: safeStorage.getSelectedStorageBackend(), available: safeStorage.isEncryptionAvailable() }),
                 relaunch: () => {
                     // Which sign-in to reopen after the restart — never a code or a token.
-                    if (tynnAccount && !tynnAccount.status().signedIn) markResumeSignIn(genieHome(), 'tynn');
+                    if (tynnAccount && !tynnAccount.status().signedIn) markResumeSignIn(genieRoot(), 'tynn');
                     app.relaunch();
                     requestQuit();
                 },
@@ -2906,8 +2914,8 @@ async function boot(): Promise<void> {
     // start) opens one here, and it keeps its pairing in the keychain just the same.
     tynnAccount = agentEngineLink ? agentEngineLink.client.tynn({ openExternal: (url) => shell.openExternal(url) }) : await TynnAccount.open({
         host: () => TYNN_HOST,
-        file: join(genieHome(), 'credentials', 'tynn.json'),
-        legacyFile: join(genieHome(), 'tynn.json'),
+        file: join(genieRoot(), 'credentials', 'tynn.json'),
+        legacyFile: join(genieRoot(), 'tynn.json'),
         secrets: new Keychain(),
         // Tynn unreachable at launch is asked again on a bounded backoff (main/tynn-account.ts TYNN_RETRY_MS), not never.
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
@@ -2940,7 +2948,7 @@ async function boot(): Promise<void> {
     afterTynnUrl = pushFeatures;
     // A SIGN-IN THAT WAITED FOR THE KEYRING (linux-keyring.ts): the card's Restart Genie left a note (which sign-in, never
     // a code); with the keyring working now, Tynn's sign-in opens again by itself, so the person is not left to find it.
-    if (takeResumeSignIn(genieHome()) === 'tynn' && (keyring?.canKeepSecrets() ?? true) && !tynnAccount.status().signedIn) {
+    if (takeResumeSignIn(genieRoot()) === 'tynn' && (keyring?.canKeepSecrets() ?? true) && !tynnAccount.status().signedIn) {
         void tynnAccount.startSignIn().then(({ url }) => { featureState = { ...featureState, tynnSignInUrl: url, tynnMessage: null }; pushFeatures(); }, () => { /* the person signs in by hand */ });
     }
     // GITHUB (beta.33 item 25; Genie 1's main/github/*): Genie 1's sign-in carried over — read from its genie.db, decrypted
@@ -2949,7 +2957,7 @@ async function boot(): Promise<void> {
     // Check again or after a sign-in (no polling of the API).
     // THE ACCOUNT AND ITS TOKENS ARE THE HOST'S (P3.4 cut c): this window reads a replica and asks the host to act. Only a window running its own engine opens one here.
     githubAccount = agentEngineLink ? agentEngineLink.client.github({ openExternal: (url) => shell.openExternal(url) }) : await GithubAccount.open({
-        file: join(genieHome(), 'github.json'),
+        file: join(genieRoot(), 'github.json'),
         secrets: new Keychain(),
         fetch: (url, init) => net.fetch(url, init),
         openExternal: (url) => shell.openExternal(url),
@@ -2964,7 +2972,7 @@ async function boot(): Promise<void> {
     const identityCipher = osCipher(safeStorage, process.platform);
     // THE KEY IS THE HOST'S (P3.4): this window asks it to sign. Only a window running its own engine holds one, in the keychain just the same.
     const machineIdentity: WorkstationPort = agentEngineLink ? agentEngineLink.client.workstation() : new WorkstationService({
-        store: workstationKeyStore(join(genieHome(), 'workstation.json'), new Keychain()),
+        store: workstationKeyStore(join(genieRoot(), 'workstation.json'), new Keychain()),
         request: (path, init) => tynnAccount ? tynnAccount.request(path, init) : Promise.reject(new Error('Sign in to Tynn first')),
         host: () => tynnAccount?.host() ?? TYNN_HOST,
         hostname,
@@ -3086,7 +3094,7 @@ async function boot(): Promise<void> {
         processBook = agentEngineLink.client.processBook();
         processScheduler = agentEngineLink.client.processBook();
     } else {
-        const ownBook = await ProcessBook.open(genieHome(), {
+        const ownBook = await ProcessBook.open(genieRoot(), {
             supervisor: composed.supervisor,
             envFor: (workspaceId) => composed.engines.envFor(workspaceId),
             // Each kept process's own app credential (genie#1345), under its workspace's switch.
@@ -3212,7 +3220,7 @@ async function boot(): Promise<void> {
                         throw new Error(`${method} is not offered to plugins`);
                     },
                     // genie#871: sandboxed — its folder, the workspace only if declared, the declared hosts only.
-                    launch: launchSubprocessIn(join(genieHome(), 'plugin-sandbox')),
+                    launch: launchSubprocessIn(join(genieRoot(), 'plugin-sandbox')),
                     capabilities: input.manifest.capabilities,
                     timeoutMs: 30_000,
                     label: `${input.manifest.id}.${input.tool.name}`,
@@ -3227,7 +3235,7 @@ async function boot(): Promise<void> {
         mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
-        const endpointFile = join(genieHome(), 'mcp-endpoint.json');
+        const endpointFile = join(genieRoot(), 'mcp-endpoint.json');
         if (engineLink) {
             /*
              * GENIE'S MCP SERVER IS GENIE-HOST'S (the host split, P3.1; plan §11d): agents keep its tools when this window
@@ -3793,7 +3801,7 @@ async function boot(): Promise<void> {
         pushAgent(agentId);
         // Which agents are started, for doctor mode — rewritten only when that set changes.
         const started = host?.startedIds().sort() ?? [];
-        if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieHome(), started); }
+        if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieRoot(), started); }
         // A model or tool setting waiting for this agent to be free applies the moment it is.
         settingApplier?.changed(agentId);
         estate.request('estate');
@@ -3821,7 +3829,7 @@ async function boot(): Promise<void> {
     });
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
     // in the store of the site's own workspace.
-    livePanels = sitePanels({ window: () => window, genieHome: genieHome(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? '_shared', openInWindow: (url, activation) => { void openLocalBrowser(url, activation); }, browserCall: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : null), restart: panelRestart(confirmTray, restartGenie) });
+    livePanels = sitePanels({ window: () => window, genieHome: genieRoot(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? '_shared', openInWindow: (url, activation) => { void openLocalBrowser(url, activation); }, browserCall: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : null), restart: panelRestart(confirmTray, restartGenie) });
     mainWindowDeps = { frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
     mountMainWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
     // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
@@ -3895,7 +3903,7 @@ async function boot(): Promise<void> {
     cookieBridge = new BrowserCookieBridge({
         call: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : Promise.resolve(null)),
         me: () => browserConnection,
-        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieHome(), workspaceId, side: 'window', frontDoorPort: composed.frontDoorPort, caPem: frontDoorNow.caPem }).ses,
+        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieRoot(), workspaceId, side: 'window', frontDoorPort: composed.frontDoorPort, caPem: frontDoorNow.caPem }).ses,
     });
     watchWorkspaceStores(cookieBridge);
     publishBrowserFacts = () => {
@@ -4027,6 +4035,8 @@ app.on('before-quit', (event) => {
     if (step === 'close-ui') { event.preventDefault(); closeUi('the quit’s answer'); return; }
     autoCheckStop?.();
     autoCheckStop = null;
+    scratchSweepStop?.();
+    scratchSweepStop = null;
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
     if (step === 'record') {
         event.preventDefault();
@@ -4071,7 +4081,7 @@ const quitPorts: QuitPorts = {
         localDoor.dispose();
         void filesHost?.close();
         filesWatch?.close();
-        clearGenieRunning(genieHome());
+        clearGenieRunning(genieRoot());
     },
     // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
     // OpenConsole.exe processes with no message, because nothing reaped them.
@@ -4090,7 +4100,7 @@ applyLinuxPasswordStore({
     // An installed-but-not-yet-started Secret Service (Omarchy at login, before any app asked for a secret) is ACTIVATED
     // first, so a Genie that starts at login does not land on the plaintext store (linux-password-store.ts).
     probe: () => probeOwnedBusNames(passwordStoreBusNames(), undefined, { activateSecretService: true }),
-    remembered: () => readRememberedPasswordStore(genieHome()),
+    remembered: () => readRememberedPasswordStore(genieRoot()),
     appendSwitch: (key, value) => app.commandLine.appendSwitch(key, value),
 });
 

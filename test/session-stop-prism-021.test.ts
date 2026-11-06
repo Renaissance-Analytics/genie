@@ -102,7 +102,7 @@ describe('the paths that do not change', () => {
 describe('the supervisor is prepared at start-up, in Genie’s own runtime folder', () => {
     const main = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
     it('prepared under Genie’s runtime dir (src/main/prism-supervisor.ts, genie#1259); a failure is logged and said, never swallowed', () => {
-        expect(main).toMatch(/prepareGenieSupervisor\(runtimeDir\(genieHome\(\)\)\)/);
+        expect(main).toMatch(/prepareGenieSupervisor\(runtimeDir\(genieRoot\(\)\)\)/);
         expect(main).toMatch(/prepareGenieSupervisor\([^;]*\)\.catch\(\(error: unknown\) => \{[\s\S]{0,400}lifecycleLog\(/);
     });
 });

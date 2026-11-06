@@ -171,6 +171,8 @@ describe('wherever the agent is seen', () => {
 
 describe('the login window', () => {
     function fakes() {
+        // P7: the login's scratch is the caller's (`<genie root>/cache/tmp/<this process>`), never the OS temp folder.
+        const scratch = tempDir('genie2-design-login-scratch-');
         const opened: Array<{ workspaceId: string; cwd: string; command?: string | undefined; shell?: boolean | undefined }> = [];
         const windows: string[] = [];
         const statusRan: string[] = [];
@@ -186,8 +188,9 @@ describe('the login window', () => {
             runStatus: async (command) => { statusRan.push(command); return 0; },
             onSignedIn: () => {},
             onDesignLoginEnded: () => { ended += 1; },
+            scratch: () => scratch,
         });
-        return { host, opened, windows, statusRan, ended: () => ended, exit: (id: string, code: number) => exit!(id, code) };
+        return { host, scratch, opened, windows, statusRan, ended: () => ended, exit: (id: string, code: number) => exit!(id, code) };
     }
 
     it('runs the interactive claude, no arguments, in a fresh scratch folder, in a window that carries the design notice', () => {
@@ -196,7 +199,7 @@ describe('the login window', () => {
         expect(f.opened).toHaveLength(1);
         expect(f.opened[0]!.command).toBe('claude');
         expect(basename(f.opened[0]!.cwd)).toMatch(/^genie-login-claude-design-/);
-        expect(dirname(f.opened[0]!.cwd)).toBe(tmpdir());
+        expect(dirname(f.opened[0]!.cwd)).toBe(f.scratch);
         expect(f.windows).toEqual([`genie://takeover/t1?login=${DESIGN_LOGIN}`]);
         expect(parseRoute(f.windows[0]!)).toMatchObject({ surface: 'takeover', terminalId: 't1', login: DESIGN_LOGIN });
     });
