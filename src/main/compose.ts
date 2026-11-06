@@ -198,6 +198,8 @@ export interface ComposeInput extends HostingOptions {
     readonly roster?: () => readonly AgentRecord[];
     /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
     readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
+    readonly refusalForRecipient?: (address: string) => string | null;
+    readonly inboxParticipantVisible?: (id: string) => boolean;
     /**
      * The registered workspaces (id, folder, asleep), late-bound like the roster. Their envelopes' `sites`
      * are what Hosting lists and serves (§6.6); absent = no workspaces, no declared sites.
@@ -316,6 +318,8 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     setFlowToolCaller(call: FlowToolCall): void;
     /** The registered workspaces' ids, now — what a flow's save checks a step's workspace against (genie#1204). */
     workspaceIds(): string[];
+    mailRefusal(address: string): string | null;
+    workspaceVisible(id: string): boolean;
     shutdown(): Promise<void>;
 }
 
@@ -372,6 +376,14 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const inbox: WindowAgentStores['inbox'] = input.agentStores?.inbox ?? ownStores!.inbox;
     const attention: WindowAgentStores['attention'] = input.agentStores?.attention ?? ownStores!.attention;
     const knowledge: WindowAgentStores['knowledge'] = input.agentStores?.knowledge ?? ownStores!.knowledge;
+    const hiddenWorkspaces = () => (input.workspaces?.() ?? []).filter((w) => w.asleep === true).map((w) => w.id);
+    ownStores?.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
+    ownStores?.inbox.setVisibility((message) => {
+        if (input.inboxParticipantVisible) return input.inboxParticipantVisible(message.from) && input.inboxParticipantVisible(message.to);
+        const hidden = new Set(hiddenWorkspaces());
+        const ghosts = new Set((input.roster?.() ?? []).filter((r) => hidden.has(r.workspaceId)).map((r) => r.id as string));
+        return !ghosts.has(message.from) && !ghosts.has(message.to);
+    });
     // FLOWS (P3.3d): genie-host's when it runs — its scheduler fires armed flows with no window, and this window reads and
     // drives them through a replica. This window's own (its store, scheduler and file trigger) only on the emergency path.
     // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.
@@ -380,6 +392,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     stage?.begin('flows');
     if (!input.flowsEngine) {
         ownFlows = await FlowStore.open(input.userData, now);
+        ownFlows.setHiddenWorkspaces(hiddenWorkspaces);
         // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
         if (input.v1Flows) await runV1FlowImport(ownFlows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
     }
@@ -451,7 +464,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const workspaceTrust = hosting.trust;
     /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */
     const mayWriteInto = (folder: string): Promise<boolean> => workspaceTrust.mayWriteInto(folder);
-    const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
+    const roster = (): readonly AgentRecord[] => (input.roster?.() ?? []).filter((record) => !(input.workspaces?.() ?? []).some((workspace) => workspace.id === record.workspaceId && workspace.asleep === true));
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
     const agents = (): Map<string, { name: string; workspaceId: string }> => new Map(roster().map((r) => [r.id as string, { name: r.name, workspaceId: r.workspaceId }]));
     const reminders = new ReminderBook();
@@ -536,6 +549,12 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     }) : null;
     // Leaving safe mode arms the own flow clock again; it starts nothing by itself.
     if (ownEngine) input.safeModeLeft?.(() => { ownEngine.scheduler.plan(); });
+    let flowVisibility = JSON.stringify(hiddenWorkspaces().sort());
+    const stopFlowVisibility = input.onWorkspacesChange?.(() => {
+        const key = JSON.stringify(hiddenWorkspaces().sort());
+        if (key === flowVisibility) return;
+        flowVisibility = key; ownFlows?.visibilityChanged();
+    });
     const flowScheduler: FlowSchedulerApi = input.flowsEngine?.scheduler ?? ownEngine!.scheduler;
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
@@ -610,8 +629,9 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         routes: () => hosting.routes(),
         configuredHosts: () => hosting.configuredHosts(),
         deckItems: () => {
-            const workspaceNames: Record<string, string> = Object.fromEntries((input.workspaces?.() ?? []).map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)]));
-            const workspaceColors: Record<string, string> = Object.fromEntries((input.workspaces?.() ?? []).flatMap((w) => {
+            const awake = (input.workspaces?.() ?? []).filter((workspace) => workspace.asleep !== true);
+            const workspaceNames: Record<string, string> = Object.fromEntries(awake.map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)]));
+            const workspaceColors: Record<string, string> = Object.fromEntries(awake.flatMap((w) => {
                 const color = input.workspaceColor?.(w.path) ?? null;
                 return color ? [[w.id, color]] : [];
             }));
@@ -705,14 +725,17 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
         resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
+        mailRefusal: (text) => input.refusalForRecipient?.(text) ?? null,
+        workspaceVisible: (id) => !hiddenWorkspaces().includes(id),
         setFlowToolCaller: (call) => { ownEngine?.setToolCaller(call); },
-        workspaceIds: () => workspacesNow().map((w) => w.id),
+        workspaceIds: () => workspacesNow().filter((workspace) => workspace.asleep !== true).map((workspace) => workspace.id),
         shutdown: () => {
             setGitReadPolicy(null);
             down ??= (async () => {
                 stagingSweep.abort(); stopStagingSweep();
                 ownApprovals?.cancelAll('Genie is shutting down');
                 stopLiveness();
+                stopFlowVisibility?.();
                 // No flow fires from here: its timer is cancelled for good, so nothing starts after `settled()` answers (genie#1351).
                 ownEngine?.stop();
                 // Nothing more is started (a port probe still in flight) or synced (a pending hosts write, the docker watch, a

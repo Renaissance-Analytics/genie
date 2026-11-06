@@ -6,6 +6,7 @@ import type { AgentRow, Delivery } from './dashboard-view.js';
 import type { AgentRecord } from './identity.js';
 import type { TurnState } from './session.js';
 import type { ProviderExtensions } from './provider-commands.js';
+import { isSleeping } from './agent-status.js';
 
 /**
  * RECORD + LIVE SESSION → DASHBOARD ROW.
@@ -55,6 +56,10 @@ export interface LiveSession {
      * with Working. Display only: `turnState` is `idle` and nothing waits for it. Absent = not cooling (or an older host).
      */
     cooling?: boolean | undefined;
+    /** When this running session became Idle after Cooling; display only, never a work gate. */
+    idleSince?: number | null | undefined;
+    /** Its person stopped the last turn; the process may still be alive. Display only here. */
+    stoppedByYou?: boolean | undefined;
     /**
      * A turn in flight by Genie's own record (`AgentSession.inTurn`) — not `working`, which provider activity before any
      * turn of the run reads as too. A Restart that cuts one tells the agent (genie#1238). Absent = not reported.
@@ -164,12 +169,14 @@ export function agentRowFor(
     const fidelity = 'declared' as const;
 
     const state: AgentRow['state'] =
-        session === null ? 'idle'
+        session === null ? 'stopped'
         : session.pendingApproval !== null ? 'waiting'
         : session.failure !== null ? 'broken'
+        : !session.running || session.turnState === 'stopped' || session.stoppedByYou === true ? 'stopped'
         : session.running && session.turnState === 'working' ? 'working'
         // Between turns: Cooling for COOLING_MS, sorted with Working, so a turn ending does not reorder the board.
         : session.running && session.turnState === 'idle' && session.cooling === true ? 'cooling'
+        : isSleeping(session, now) ? 'sleeping'
         : 'idle';
 
     return {

@@ -30,6 +30,26 @@ beforeEach(async () => {
 afterEach(async () => { vi.restoreAllMocks(); await rm(dir, { recursive: true, force: true }); });
 
 describe('story 394: a hibernated workspace supplies no data', () => {
+    it('a hidden duplicate name cannot shadow an active public mail address', async () => {
+        await store.writeAgents([{ ...awake, name: 'Dormant' }, ghost]); await registry.refresh();
+        registry.setWorkspaceNamer(() => 'ghost');
+        const refusal = (registry as unknown as { mailRefusal?: (text: string) => string | null }).mailRefusal;
+        expect(refusal?.call(registry, 'Dormant@ghost')).toBeNull();
+        const host = new HostRegistry(store); await host.refresh(); host.setNames(new Map([['awake', 'ghost'], ['ghost', 'ghost']]));
+        expect((host as unknown as { mailRefusal?: (text: string) => string | null }).mailRefusal?.('Dormant@ghost')).toBeNull();
+    });
+    it('child windows can follow workspace visibility without subscribing to every agent activity snapshot', async () => {
+        const subscribe = (registry as unknown as { subscribeWorkspaceVisibility?: (listener: (snapshot: ReturnType<Registry['snapshot']>) => void) => () => void }).subscribeWorkspaceVisibility;
+        expect(typeof subscribe).toBe('function');
+        const seen = vi.fn(); const off = subscribe!.call(registry, seen);
+        registry.touch(); expect(seen).not.toHaveBeenCalled();
+        await registry.setAsleep('ghost', false); expect(seen).toHaveBeenCalledOnce();
+        expect(seen.mock.calls[0]![0].workspaces.map((w: { id: string }) => w.id)).toContain('ghost');
+        registry.touch(); expect(seen).toHaveBeenCalledOnce();
+        await registry.setAsleep('ghost', true); expect(seen).toHaveBeenCalledTimes(2);
+        expect(seen.mock.calls[1]![0].workspaces.map((w: { id: string }) => w.id)).not.toContain('ghost');
+        off(); await registry.setAsleep('ghost', false); expect(seen).toHaveBeenCalledTimes(2);
+    });
     it('a failed redock metadata write leaves the workspace hidden in memory and on disk', async () => {
         vi.spyOn(store, 'writeWorkspaces').mockRejectedValueOnce(new Error('disk refused the redock'));
         await expect(registry.setAsleep('ghost', false)).rejects.toThrow('disk refused');

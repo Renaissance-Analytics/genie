@@ -58,45 +58,38 @@ describe('the grid is the board\u2019s, exactly', () => {
         // The template is a single constant on purpose. Transcribing it twice is how a header
         // and its body drift by a few pixels and nobody can say when it started.
         const html = render([row({ id: 'a' }), row({ id: 'b' }), row({ id: 'c' })]);
-        const template = 'grid-cols-[150px_minmax(190px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px]';
+        const template = 'grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px]';
 
         // 3 agent rows + 1 column header. COUNT, not "contains" — one row rendering a
         // different template would pass a `toContain`.
         expect(html.split(template).length - 1).toBe(4);
     });
 
-    it('holds the stated row heights: 56px view header, 28px header rows, 32px body rows', () => {
-        // Two agents in `tynn`, and `fancy` left empty, so the arithmetic is worth writing
-        // out — the first draft of this test guessed it and failed, which was the fixture
-        // being wrong rather than the component. The board's heights are:
-        //   view header 56 (h-14) · column header 28 (h-7) · group header 28 (h-7)
-        //   agent row 32 (h-8)   · empty-workspace row 32 (h-8)
+    it('keeps 32px agent rows and one 28px column header; the view header and empty CTA may wrap', () => {
         const html = render([row({ id: 'a' }), row({ id: 'b' })]);
 
-        expect(html.split(' h-14 ').length - 1).toBe(1);  // the view header, once
-        expect(html.split(' h-8 ').length - 1).toBe(3);   // 2 agents + `fancy`'s "No agents"
-        expect(html.split(' h-7 ').length - 1).toBe(3);   // 1 column header + 2 group headers
-
-        // And no row anywhere is left to the browser's own line-height. A height that is
-        // merely "about right" is what turns a 20-agent budget into 14 on someone's machine.
+        expect(html.split(' min-h-14 ').length - 1).toBe(1);
+        expect(html.split(' h-8 ').length - 1).toBe(2);
+        expect(html.split(' h-7 ').length - 1).toBe(1);
+        expect(html).toContain('data-empty-workspace="fancy"');
         expect(html).not.toMatch(/class="[^"]*row[^"]*"(?![^>]*h-)/);
     });
 });
 
 describe('the sort order reaches the DOM', () => {
-    it('emits waiting \u2192 broken \u2192 working \u2192 idle \u2192 remote in document order', () => {
+    it('emits all states in alphabetical agent-name order', () => {
         // The view-model is tested for this separately. This asserts the component does not
         // re-order, re-group or stably-sort it back to insertion order on the way out.
         const html = render([
-            row({ id: 'idle-one', state: 'idle' }),
-            row({ id: 'remote-one', state: 'remote', fidelity: 'remote' }),
-            row({ id: 'working-one', state: 'working' }),
-            row({ id: 'broken-one', state: 'broken', fixes: ['Sign in to kimi'] }),
-            row({ id: 'waiting-one', state: 'waiting', ask: 'Allow migrate --force?' }),
+            row({ id: 'idle-one', name: 'Charlie', state: 'idle' }),
+            row({ id: 'remote-one', name: 'Bravo', state: 'remote', fidelity: 'remote' }),
+            row({ id: 'working-one', name: 'Echo', state: 'working' }),
+            row({ id: 'broken-one', name: 'Alpha', state: 'broken', fixes: ['Sign in to kimi'] }),
+            row({ id: 'waiting-one', name: 'Delta', state: 'waiting', ask: 'Allow migrate --force?' }),
         ]);
 
         const order = [...html.matchAll(/data-agent="([^"]+)"/g)].map((m) => m[1]);
-        expect(order).toEqual(['waiting-one', 'broken-one', 'working-one', 'idle-one', 'remote-one']);
+        expect(order).toEqual(['broken-one', 'remote-one', 'idle-one', 'waiting-one', 'working-one']);
     });
 });
 

@@ -543,6 +543,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
     const mail = services.inbox.all();
+    const visibleMail = new Set(mail.map((m) => m.id));
     const nameOf = participantNamer(roster, mail);
     return {
         seq,
@@ -552,7 +553,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         trust: services.trustSteps(),
-        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems() },
+        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list().filter((p) => services.workspaceVisible(p.workspaceId)) : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems() },
         // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
         // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
         services: { instances: await timed('engines', () => engineStatusesWithin(services, ports)), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
@@ -562,8 +563,10 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200),
             threads: inboxThreads(mail, nameOf), uncollected: uncollected(mail),
             // Served in the answer to the action that asked, once — never in a pushed snapshot.
-            thread: state.inboxThread ?? null, servedAttachment: state.servedAttachment ?? null,
-            search: state.inboxSearch ?? null, question: state.servedQuestion ?? null,
+            thread: state.inboxThread?.messages.every((m) => visibleMail.has(m.id)) ? state.inboxThread : null,
+            servedAttachment: state.servedAttachment && mail.some((m) => m.attachments.some((a) => a.id === state.servedAttachment!.id)) ? state.servedAttachment : null,
+            search: state.inboxSearch?.hits.every((m) => visibleMail.has(m.id)) ? state.inboxSearch : null,
+            question: state.servedQuestion ?? null,
         },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
@@ -1550,6 +1553,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'inbox.send': {
+            const hibernated = services.mailRefusal(action.to);
+            if (hibernated) throw new Error(hibernated);
             const target = services.resolveAddress(action.to);
             if (target.kind === 'none') throw new Error(`nobody at ${action.to}`);
             if (target.kind === 'ambiguous') throw new Error(`${action.to} names more than one agent — use one of: ${target.forms.join(', ')}`);

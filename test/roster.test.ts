@@ -90,11 +90,9 @@ describe('a running session', () => {
         expect(row.fixes).toEqual(['Sign in to claude']);
     });
 
-    it('is IDLE — not broken — when a session simply ended', () => {
-        // A stopped agent is not a fault, and painting it red is how a board cries wolf. Only
-        // a reported failure is broken.
+    it('is Stopped when a session ended without a failure', () => {
         const row = agentRowFor(record(), session({ running: false, turnState: 'stopped' }), () => Date.now());
-        expect(row.state).toBe('idle');
+        expect(row.state).toBe('stopped');
     });
 
     it('reports UNKNOWN turn state as idle rather than guessing at working', () => {

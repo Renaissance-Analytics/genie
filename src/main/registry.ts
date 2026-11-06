@@ -16,6 +16,7 @@ export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readR
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
+import { hibernatedRecipientRefusal } from '../core/inbox.js';
 
 /**
  * THE REGISTRY — the main process's single answer to "what is going on".
@@ -241,7 +242,7 @@ export class Registry {
 
     /** Count of live sessions — the only correct source for "how many agents are running". */
     get runningCount(): number {
-        return this.#agents.filter((a) => this.#probe(a.id)?.running === true).length;
+        return this.listAgents().filter((a) => this.#probe(a.id)?.running === true).length;
     }
 
     snapshot(): GenieSnapshot {
@@ -279,7 +280,7 @@ export class Registry {
              * broke six tests that asserted exact counts, and mass fixture churn is the signal
              * to suspect the guard rather than the fixtures. It was the guard.
              */
-            agents: this.#agents
+            agents: this.listAgents()
                 .filter((record) => record.workspaceId !== OS_WORKSPACE)
                 // An agent with a live Take Over is OBSERVED: Genie sees its bytes and nothing
                 // else, and the row says so (§4.1). Otherwise the declared row as before.
@@ -303,8 +304,11 @@ export class Registry {
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
                 // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
-                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...this.#colorOf(w.path) }))
+                ? this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: false, ...(w.governs && w.governs.length > 0 ? { governs: w.governs.filter((id) => !this.#isHibernated(id)) } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...this.#colorOf(w.path) }))
                 : null,
+            ...(this.#loaded && this.#workspaces.some((workspace) => workspace.asleep) ? {
+                hibernatedWorkspaces: this.#workspaces.filter((workspace) => workspace.asleep).map((workspace) => ({ id: workspace.id, path: workspace.path, name: workspace.hibernatedName ?? folderName(workspace.path), asleep: true as const })),
+            } : {}),
             /*
              * The attention band.
              *
@@ -334,11 +338,14 @@ export class Registry {
      */
     /** Live sessions' permission requests, then everything the composition root's Deck source holds. */
     #deckItems(): readonly DeckItem[] {
-        return [...this.#sessionApprovals(), ...this.#deckSource()];
+        return [...this.#sessionApprovals(), ...this.#deckSource()].filter((item) => {
+            const workspaceId = item.workspaceId ?? this.#agents.find((record) => record.id === item.agentId)?.workspaceId;
+            return workspaceId === undefined || !this.#isHibernated(workspaceId);
+        });
     }
 
     #sessionApprovals(): DeckItem[] {
-        return this.#agents.flatMap((record): DeckItem[] => {
+        return this.listAgents().flatMap((record): DeckItem[] => {
             const live = this.#probe(record.id);
             const approval = live?.pendingApproval;
             if (!approval) return [];
@@ -467,15 +474,16 @@ export class Registry {
 
     /** The workspace that governs `childId`, or `null`. */
     governorOf(childId: string): string | null {
-        return this.#workspaces.find((w) => (w.governs ?? []).includes(childId))?.id ?? null;
+        return this.#isHibernated(childId) ? null : this.listWorkspaces().find((w) => (w.governs ?? []).includes(childId))?.id ?? null;
     }
 
     agentsOf(workspaceId: string): readonly AgentRecord[] {
-        return this.#agents.filter((a) => a.workspaceId === workspaceId);
+        return this.listAgents().filter((a) => a.workspaceId === workspaceId);
     }
 
     /** The workspace's default agent (Genie 1's), or `null` — none designated is a normal state. */
     defaultAgentOf(workspaceId: string): string | null {
+        if (this.#isHibernated(workspaceId)) return null;
         return this.#workspaces.find((w) => w.id === workspaceId)?.defaultAgentId ?? null;
     }
 
@@ -502,11 +510,33 @@ export class Registry {
 
     /** Hibernate / wake (§6.1). On disk, so it survives restarts and upgrades. */
     async setAsleep(workspaceId: string, asleep: boolean): Promise<boolean> {
-        if (!this.#workspaces.some((w) => w.id === workspaceId)) return false;
-        this.#workspaces = this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, asleep } : w));
-        await this.#store.writeWorkspaces(this.#workspaces);
+        const workspace = this.#workspaces.find((w) => w.id === workspaceId);
+        if (!workspace) return false;
+        if (workspace.asleep === true && !asleep) {
+            // Persist first, before any consumer can see the workspace as awake and start its agents.
+            const redockAt = new Date().toISOString();
+            this.#agents = this.#agents.map((record) => record.workspaceId === workspaceId ? { ...record, redockAt } : record);
+            await this.#store.writeAgents(this.#agents);
+        }
+        const hibernatedName = asleep && workspace.asleep !== true ? this.#namer(workspace.path) : workspace.hibernatedName;
+        const workspaces = this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, asleep, ...(hibernatedName ? { hibernatedName } : {}) } : w));
+        await this.#store.writeWorkspaces(workspaces);
+        this.#workspaces = workspaces;
         this.#emit();
         return true;
+    }
+
+    /** A late acknowledgement must not consume a newer redock's reorientation. */
+    async clearRedock(agentId: AgentId, at: string): Promise<void> {
+        const record = this.#agents.find((candidate) => candidate.id === agentId);
+        if (!record || record.redockAt !== at) return;
+        this.#agents = this.#agents.map((candidate) => {
+            if (candidate.id !== agentId) return candidate;
+            const { redockAt: _redockAt, ...rest } = candidate;
+            return rest;
+        });
+        await this.#store.writeAgents(this.#agents);
+        this.#changed(agentId);
     }
 
     /** Remove from Genie (§6.1): the workspace and its agent records go; the folder is not this class's to touch. */
@@ -675,7 +705,7 @@ export class Registry {
      * is found by its id only).
      */
     find(id: AgentId): AgentRecord | null {
-        const byId = this.#agents.find((a) => a.id === id);
+        const byId = this.listAgents().find((a) => a.id === id);
         if (byId) return byId;
         if ((id as string) === OS_AGENT_NAME) return this.#agents.find((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME) ?? null;
         return null;
@@ -684,16 +714,35 @@ export class Registry {
     /** Every workspace record, for the one-time v1 import to plan against. */
     /** Each workspace's address slug (core/address.ts slugsFor) — the same names, in the same order, the window uses. */
     workspaceSlugs(): Map<string, string> {
-        return slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path) })));
+        return slugsFor(this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path) })));
     }
 
     listWorkspaces(): readonly WorkspaceRecord[] {
-        return this.#workspaces;
+        return this.#workspaces.filter((workspace) => workspace.asleep !== true);
+    }
+
+    /** Internal lifecycle metadata. Never enumerate it in a view or read an asleep folder through it. */
+    workspaceStates(): readonly WorkspaceRecord[] { return this.#workspaces; }
+
+    /** Internal ownership lookup for mail. This reads metadata only, including hidden identities. */
+    mailParticipantVisible(id: string): boolean {
+        const record = this.#agents.find((a) => a.id === id);
+        return !record || !this.#isHibernated(record.workspaceId);
+    }
+
+    mailRefusal(text: string, workspaceScope?: string): string | null {
+        const asleep = new Set(this.#workspaces.filter((w) => w.asleep === true).map((w) => w.id));
+        const slugs = slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: w.asleep === true ? w.hibernatedName ?? folderName(w.path) : this.#namer(w.path) })));
+        return hibernatedRecipientRefusal(text, this.#agents, asleep, slugs, workspaceScope);
     }
 
     /** Every agent record, for the same. */
     listAgents(): readonly AgentRecord[] {
-        return this.#agents;
+        return this.#agents.filter((record) => !this.#isHibernated(record.workspaceId));
+    }
+
+    #isHibernated(workspaceId: string): boolean {
+        return this.#workspaces.some((workspace) => workspace.id === workspaceId && workspace.asleep === true);
     }
 
     /** `{ color }` when the workspace has one; nothing otherwise, so every other workspace literal stays exact. */

@@ -31,6 +31,7 @@ export type StoresCall = (store: StoreName, method: string, args: readonly unkno
 export class InboxReplica {
     #messages: InboxMessage[] = [];
     #cursors: Record<string, number> = {};
+    #filtered = false;
     readonly #involving = new InvolvingCache<InboxMessage>();
     readonly #sendListeners = new Set<(to: Participant, message: InboxMessage) => void>();
     readonly #readListeners = new Set<(reader: Participant, ids?: readonly string[]) => void>();
@@ -43,6 +44,7 @@ export class InboxReplica {
     rebase(mail: StoresDump['inbox']): void {
         this.#messages = [...mail.messages];
         this.#cursors = { ...mail.cursors };
+        this.#filtered = mail.filtered === true;
     }
 
     apply(event: Extract<StoresEvent, { store: 'inbox' }>): void {
@@ -54,7 +56,10 @@ export class InboxReplica {
                 this.#messages = this.#messages.filter((m) => !removed.has(m.id)).map((m) => updated.get(m.id) ?? m);
             }
             for (const m of event.appended) this.#messages.push(m);
+            // Restoring hidden history may append an older sequence than the current window holds.
+            if (event.appended.length) this.#messages.sort((a, b) => a.seq - b.seq);
             this.#cursors = { ...event.cursors };
+            this.#filtered = event.filtered === true;
             return;
         }
         if (event.kind === 'sent') {
@@ -92,7 +97,8 @@ export class InboxReplica {
     }
 
     unread(participant: Participant): InboxMessage[] {
-        return unreadOf(this.#view(), participant);
+        const messages = unreadOf(this.#view(), participant);
+        return this.#filtered ? messages.filter((m) => m.readAt === null) : messages;
     }
 
     unreadCount(participant: Participant): number {

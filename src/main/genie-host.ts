@@ -257,6 +257,9 @@ async function main(): Promise<void> {
     if (safeMode.active()) void Promise.all([registryStore.readRunningAtQuit(), registryStore.readInterruptedAtQuit()]).then(([running, interrupted]) => safeMode.wasRunning([...running, ...interrupted]), () => {});
     const hostRegistry = new HostRegistry(registryStore);
     await hostRegistry.refresh();
+    const hiddenWorkspaces = () => hostRegistry.workspaceStates().filter((w) => w.asleep === true).map((w) => w.id);
+    own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
+    own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to));
     let engineRef: SessionEngineServer | null = null;
     const approvals = new ApprovalQueue({
         autoApproved: (caller) => hostRegistry.listAgents().some((a) => a.id === caller.agentId && a.autoApprove === true),
@@ -312,6 +315,7 @@ async function main(): Promise<void> {
         roster: () => hostRegistry.listAgents(),
         slugs: () => hostRegistry.workspaceSlugs(),
         defaultAgentOf: (workspaceId) => hostRegistry.defaultAgentOf(workspaceId),
+        refusalForRecipient: (text, workspaceId) => hostRegistry.mailRefusal(text, workspaceId),
         enabled: (workspaceId) => settings.snapshotFor(workspaceId).app_inbox !== false,
         siteHosts: (workspaceId) => hostingNow?.sites.list(workspaceId).map((s) => s.host) ?? [],
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
@@ -340,7 +344,7 @@ async function main(): Promise<void> {
             settings,
             appEnv: (source) => appInboxDoor.envFor(source),
             elevate: (steps) => hostingElevation.run(steps),
-            workspaces: () => hostRegistry.listWorkspaces(),
+            workspaces: () => hostRegistry.workspaceStates(),
             // Safe mode: no site and no stopped engine starts by itself; the held sites go on the banner.
             safeMode: safeNow,
             heldSite: (siteId, name) => safeMode.hold('site', { id: siteId, name }),
@@ -694,7 +698,8 @@ async function main(): Promise<void> {
         },
     });
     engineRef = engine;
-    files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), gitTree: gitTreeStatus, repoStatus, log: say });
+    files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
+    stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
     const host = new SessionHost({
         userData: home,
@@ -798,6 +803,7 @@ async function main(): Promise<void> {
     const openFlows = (databasePath: string): Promise<void> => {
         flowsOpening ??= (async () => {
             const store = await FlowStore.open(home);
+            store.setHiddenWorkspaces(hiddenWorkspaces);
             // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
             await runV1FlowImport(store, { database: databasePath, workspaces: hostRegistry.listWorkspaces() }).catch((error: unknown) => say(`v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
             // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
@@ -847,7 +853,14 @@ async function main(): Promise<void> {
             clocks.push(engineFlows);
             planners.push(engineFlows.scheduler);
             // A hibernate or a wake changes what may fire: plan again on every registry write.
-            stores.onEvent((event) => { if (event.store === 'registry') engineFlows.scheduler.plan(); });
+            let flowVisibility = JSON.stringify(hiddenWorkspaces().sort());
+            stores.onEvent((event) => {
+                if (event.store !== 'registry') return;
+                engineFlows.scheduler.plan();
+                const key = JSON.stringify(hiddenWorkspaces().sort());
+                if (key === flowVisibility) return;
+                flowVisibility = key; store.visibilityChanged();
+            });
             lifecycleLog(`flows open: ${store.list().length} flow(s)`);
         })();
         return flowsOpening;
@@ -886,7 +899,14 @@ async function main(): Promise<void> {
             clocks.push(scheduler);
             planners.push(scheduler);
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
-            stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
+            let processVisibility = JSON.stringify(hiddenWorkspaces().sort());
+            stores.onEvent((event) => {
+                if (event.store !== 'registry') return;
+                scheduler.plan();
+                const key = JSON.stringify(hiddenWorkspaces().sort());
+                if (key === processVisibility) return;
+                processVisibility = key; processBook.visibilityChanged();
+            });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             processBookNow = processBook;
             const restored = processBook.restore();

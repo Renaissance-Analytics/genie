@@ -73,7 +73,7 @@ describe('registering an agent', () => {
 
         expect(registry.runningCount).toBe(0);
         expect(registry.snapshot().agents).toHaveLength(1);
-        expect(registry.snapshot().agents[0]).toMatchObject({ name: 'atlas', state: 'idle' });
+        expect(registry.snapshot().agents[0]).toMatchObject({ name: 'atlas', state: 'stopped' });
     });
 
     it('survives a restart, by the id the UI looks it up with', async () => {
@@ -124,7 +124,7 @@ describe('counting what is running', () => {
 
         session = null;
         expect(registry.runningCount).toBe(0);
-        expect(registry.snapshot().agents[0]).toMatchObject({ id: a.id, state: 'idle' });
+        expect(registry.snapshot().agents[0]).toMatchObject({ id: a.id, state: 'stopped' });
     });
 });
 

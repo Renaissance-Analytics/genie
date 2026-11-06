@@ -88,6 +88,17 @@ export type Resolution =
     | { kind: 'ambiguous'; forms: readonly string[] }
     | { kind: 'none' };
 
+/** A known hibernated target is refused, without advertising it in the reachable roster. No folder reads. */
+export function hibernatedRecipientRefusal(text: string, records: readonly AgentRecord[], asleep: ReadonlySet<string>, slugs: ReadonlyMap<string, string>, workspaceScope?: string): string | null {
+    const scoped = records.filter((r) => workspaceScope === undefined || r.workspaceId === workspaceScope);
+    if (resolveAddress(text, scoped.filter((r) => !asleep.has(r.workspaceId)), slugs).kind !== 'none') return null;
+    const hidden = scoped.filter((r) => asleep.has(r.workspaceId));
+    const target = resolveAddress(text, hidden, slugs);
+    if (target.kind === 'one') return `${hidden.find((r) => r.id === target.id)!.name}'s workspace is hibernated; redock it first`;
+    if (target.kind === 'ambiguous') return `${parseAddress(text)!.name}'s workspace is hibernated; redock it first`;
+    return null;
+}
+
 /**
  * Resolve an address against the roster.
  *

@@ -164,6 +164,12 @@ function decodeCursor(cursor: string | undefined): number {
 }
 
 export class KnowledgeStore {
+    #hiddenWorkspaces: () => readonly string[] = () => [];
+
+    /** Host-owned read policy; hibernation never changes the archive. */
+    setHiddenWorkspaces(read: () => readonly string[]): void { this.#hiddenWorkspaces = read; }
+
+    #visible(row: Row): boolean { return row.scope_kind !== 'workspace' || !this.#hiddenWorkspaces().includes(row.scope_id ?? ''); }
     readonly #db: DatabaseSync;
     readonly #now: () => string;
 
@@ -318,7 +324,7 @@ export class KnowledgeStore {
 
     get(id: string): KnowledgeNode | null {
         const row = this.#db.prepare('SELECT * FROM nodes WHERE id = ?').get(id) as Row | undefined;
-        if (!row) return null;
+        if (!row || !this.#visible(row)) return null;
         const { links, unresolved } = this.#resolveEdges(id);
         return { ...this.#node(row), links, backlinks: this.#backlinks(row), unresolved };
     }
@@ -422,6 +428,11 @@ export class KnowledgeStore {
     #filters(scopes: ScopeFilter, cls: MemoryClass | undefined): { where: string; params: (string | null)[] } {
         const clauses: string[] = [];
         const params: (string | null)[] = [];
+        const hidden = this.#hiddenWorkspaces();
+        if (hidden.length) {
+            clauses.push(`(n.scope_kind <> 'workspace' OR n.scope_id NOT IN (${hidden.map(() => '?').join(',')}))`);
+            params.push(...hidden);
+        }
         if (scopes !== 'all') {
             const parts = scopes.map((s) => {
                 if (s.kind === 'system') return "(n.scope_kind = 'system')";

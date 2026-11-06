@@ -102,10 +102,15 @@ function Reconnecting() {
     );
 }
 
-export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect, agents, workspaces, selectedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+    const hibernated = new Set((registeredWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
+    const workspaces = registeredWorkspaces?.filter((workspace) => !hibernated.has(workspace.id)) ?? registeredWorkspaces;
+    const selectedWorkspace = requestedWorkspace !== null && hibernated.has(requestedWorkspace) ? null : requestedWorkspace;
+    const items = reportedItems?.filter((item) => item.workspaceId === null || !hibernated.has(item.workspaceId)) ?? reportedItems;
+    const activeRows = agents?.rows?.filter((row) => !hibernated.has(row.workspaceId)) ?? agents?.rows;
     const wsLabel = (id: string | null): string | null => (id === null ? null : workspaceLabel(workspaces, id));
     const shownItems = items === null || selectedWorkspace === null ? items : items.filter((i) => i.workspaceId === selectedWorkspace);
-    const shownRows = agents?.rows == null || selectedWorkspace === null ? agents?.rows ?? null : agents.rows.filter((r) => r.workspaceId === selectedWorkspace);
+    const shownRows = activeRows == null || selectedWorkspace === null ? activeRows ?? null : activeRows.filter((row) => row.workspaceId === selectedWorkspace);
     return (
         <div data-mobile="shell" className={SCREEN}>
             <header className={`flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 pb-3 ${SAFE_TOP}`}>

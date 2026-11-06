@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_ROUTE, formatRoute, parseRoute, type Route } from '../src/core/route.js';
 
 describe('routes are the application’s state, so they parse exactly', () => {
-    it('lands on the Dashboard by default, grouped by workspace', () => {
+    it('lands on the Dashboard by default, as one flat list', () => {
         // The default surface is the Dashboard, reachable with no shortcut and no prior state.
-        expect(DEFAULT_ROUTE).toBe('genie://dashboard?group=workspace');
-        expect(parseRoute(DEFAULT_ROUTE)).toEqual({ surface: 'dashboard', group: 'workspace', chat: null, pin: null });
+        expect(DEFAULT_ROUTE).toBe('genie://dashboard');
+        expect(parseRoute(DEFAULT_ROUTE)).toEqual({ surface: 'dashboard', chat: null, pin: null });
     });
 
     it('parses an agent route with its tab, lane range and event anchor', () => {
@@ -23,8 +23,8 @@ describe('routes are the application’s state, so they parse exactly', () => {
 
     it('carries the chat flyout and its pin on ANY surface', () => {
         // The flyout is a modifier, not a surface — it rides whatever you are looking at.
-        expect(parseRoute('genie://dashboard?group=status&chat=wren&pin=right')).toEqual({
-            surface: 'dashboard', group: 'status', chat: 'wren', pin: 'right',
+        expect(parseRoute('genie://dashboard?chat=wren&pin=right')).toEqual({
+            surface: 'dashboard', chat: 'wren', pin: 'right',
         });
         expect(parseRoute('genie://workspace/tynn?panel=files&chat=kai')).toMatchObject({
             surface: 'workspace', workspaceId: 'tynn', panel: 'files', chat: 'kai', pin: null,
@@ -48,8 +48,8 @@ describe('routes are the application’s state, so they parse exactly', () => {
         // The rail writes routes and the chrome displays them; a format/parse pair that
         // disagrees means the bar shows one place while the view renders another.
         const routes = [
-            'genie://dashboard?group=workspace',
-            'genie://dashboard?group=status&chat=wren&pin=right',
+            'genie://dashboard',
+            'genie://dashboard?chat=wren&pin=right',
             'genie://deck',
             'genie://agent/kai?tab=stream',
             'genie://agent/kai?tab=stream&lane=tools&at=ev_8831',
@@ -96,7 +96,7 @@ describe('routes are the application’s state, so they parse exactly', () => {
         // bar's text differ from the link an agent pasted, for no visible reason.
         const shapes: Route[] = [
             { surface: 'deck', item: null, chat: null, pin: null },
-            { surface: 'dashboard', group: 'workspace', chat: null, pin: null },
+            { surface: 'dashboard', chat: null, pin: null },
             { surface: 'agent', agentId: 'kai', tab: 'stream', lane: null, at: null, range: null, layout: 'ledger', chat: null, pin: null },
             { surface: 'workspace', workspaceId: 'tynn', panel: null, view: 'home', file: null, line: null, filter: null, detached: false, chat: null, pin: null },
         ];

@@ -33,6 +33,7 @@ it('story394: an already-connected window loses hidden history and restores its 
         expect(replica.unread('human')).toEqual([]);
         await service.call('registry', 'writeWorkspaces', [[{ id: 'ghost', path: join(dir, 'ghost'), asleep: false }]]);
         expect(replica.all().map((m) => m.id)).toEqual(before.map((m) => m.id));
+        expect(replica.involving('human').map((m) => m.id)).toEqual(before.map((m) => m.id));
         expect(replica.unread('human').map((m) => m.text)).toEqual(['Older hidden mail']);
         await own.inbox.receive({ participant: 'human' });
         expect(replica.unread('human')).toEqual([]);

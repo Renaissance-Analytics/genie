@@ -52,6 +52,8 @@ export interface SidebarProps {
      */
     available: readonly RailSurface[];
     onNavigate: (route: string) => void;
+    /** A ghost row requests redocking; it never navigates into hibernated data. */
+    onWakeWorkspace?: ((workspaceId: string) => void) | undefined;
     /** Add a workspace (Tynn #283): the `+` in the rail's tools, any time. Absent = no `+` (a control that does nothing is not offered). */
     onAddWorkspace?: (() => void) | undefined;
     /**
@@ -203,7 +205,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null }: SidebarProps) {
     countRender('Sidebar');
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
@@ -226,7 +228,13 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
     // No orphan badge: the Deck's count has nowhere to live without the Deck.
     const badge = has('deck') ? deckBadge(deckCount) : null;
     const asleepCount = workspaces.filter((w) => w.asleep === true).length;
-    const shown = filterRail(workspaces.filter((w) => showAsleep || w.asleep !== true || current === `genie://workspace/${w.id}`), collapsed ? '' : query);
+    const shown = filterRail(workspaces.filter((w) => showAsleep || w.asleep !== true).map((workspace) => workspace.asleep
+        ? { id: workspace.id, path: workspace.path, ...(workspace.name ? { name: workspace.name } : {}), asleep: true, count: null, alert: null }
+        : workspace), collapsed ? '' : query);
+    const openWorkspace = (workspace: RailItem): void => {
+        if (workspace.asleep) onWakeWorkspace?.(workspace.id);
+        else onNavigate(`genie://workspace/${workspace.id}`);
+    };
     const asleepLabel = `${showAsleep ? 'Hide' : 'Show'} ${asleepCount} hibernated workspace${asleepCount === 1 ? '' : 's'}`;
     // THE HIBERNATED TOOL (Tynn #282): an eye, no words — its count and action are its name and tooltip.
     const asleepTool = asleepCount > 0 ? (
@@ -283,7 +291,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             // THE PULSE (Genie 1's glow): its agents are working — their sessions say so, not a terminal.
                             {...(working ? { 'data-agent-active': 'true' } : {})}
                             {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
-                            onClick={() => onNavigate(route_)}
+                            onClick={() => openWorkspace(w)}
                             {...(w.alert === true ? { dot: 'amber' as const, dotLabel: 'needs you' } : { 'aria-label': name })}
                             icon={
                                 <span className="font-mono text-[11px] font-semibold uppercase">
@@ -415,7 +423,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
                         {...((w.working ?? 0) > 0 ? { 'data-agent-active': 'true' } : {})}
                         {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
-                        onClick={() => onNavigate(route_)}
+                        onClick={() => openWorkspace(w)}
                         {...(w.alert === true ? { dot: 'amber' as const, dotLabel: 'needs you' } : {})}
                         {...(w.count !== null ? { badgeLabel: `${w.count} agent${w.count === 1 ? '' : 's'}` } : {})}
                         icon={<Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />}

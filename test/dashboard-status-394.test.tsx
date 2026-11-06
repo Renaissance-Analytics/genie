@@ -85,6 +85,9 @@ describe('story 394: one alphabetical status table', () => {
             expect(entry.className).toContain('var(--agent-status)');
         }
         expect(container.querySelector<HTMLElement>('[data-agent="sleeping"]')!.style.getPropertyValue('--agent-status')).toMatch(/grey|gray|zinc|fg-4/);
+        const sleepingOpacity = container.querySelector<HTMLElement>('[data-agent="sleeping"]')!.style.opacity;
+        expect(sleepingOpacity).not.toBe(''); expect(Number(sleepingOpacity)).toBeGreaterThan(0); expect(Number(sleepingOpacity)).toBeLessThan(1);
+        expect(container.querySelector<HTMLElement>('[data-agent="working"]')!.style.opacity).toBe('');
         expect(container.querySelector<HTMLElement>('[data-agent="stopped"]')!.style.getPropertyValue('--agent-status')).toBe('var(--danger)');
     });
 });

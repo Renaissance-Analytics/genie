@@ -22,7 +22,7 @@ import { mailSignals, type MailSignal } from '../core/mail-signals.js';
 import { arrive, NO_PULSES, pulse, pulsingIds, type Pulses } from '../core/view-requests.js';
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
-import { chatSubjectFor } from '../core/chat-scope.js';
+import { chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
@@ -247,7 +247,14 @@ function useAgentDetail(
         return () => { live = false; off?.(); };
     }, [bridge, agentId]);
 
-    return state;
+    return agentId === null ? { detail: null, resolved: false } : state;
+}
+
+/** Once the roster is known, a stale route cannot keep watching an identity the host has hidden. */
+function visibleAgentSubject(snapshot: GenieSnapshot, subject: string | null): string | null {
+    if (subject === null || snapshot.workspaces === null) return subject;
+    if (subject === 'genie' || subject === snapshot.osAgent?.id) return subject;
+    return resolveChatAgent(subject, snapshot.agents) ? subject : null;
 }
 
 /** The own window's cached bridge, including local protocol families and retained native window/channel ports. */
@@ -668,7 +675,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     }, []);
     const view = mobileView(hash);
     const go = (next: Parameters<typeof mobileHash>[0]) => { window.location.hash = mobileHash(next); };
-    const agentId = view.kind === 'agent' ? view.agentId : null;
+    const agentId = visibleAgentSubject(snapshot, view.kind === 'agent' ? view.agentId : null);
     const { detail } = useAgentDetail(bridge, agentId);
     const [sending, setSending] = useState(false);
     const [sendRefusal, setSendRefusal] = useState<string | null>(null);
@@ -984,7 +991,7 @@ function DesktopApp({ bridge }: AppProps) {
     };
 
     const parsed = parseRoute(route);
-    const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
+    const agentId = visibleAgentSubject(snapshot, parsed.surface === 'agent' ? parsed.agentId : null);
     const { detail, resolved } = useAgentDetail(resolvedBridge, agentId);
     // Every conversation you open is remembered, newest first (eight), across restarts: a workspace's chat opens on the latest.
     const [openedThreads, setOpenedThreads] = useState<readonly string[]>(() => {
@@ -995,7 +1002,7 @@ function DesktopApp({ bridge }: AppProps) {
     // The agent picked on the Dashboard (genie#1209): the window's, never the address's; gone once the Dashboard is left.
     const [dashboardChat, setDashboardChat] = useState<string | null>(null);
     useEffect(() => { if (parsed.surface !== 'dashboard') setDashboardChat(null); }, [parsed.surface]);
-    const chatSubject = chatSubjectFor(parsed, snapshot.agents, snapshot.workspaces ?? [], dashboardChat);
+    const chatSubject = visibleAgentSubject(snapshot, chatSubjectFor(parsed, snapshot.agents, snapshot.workspaces ?? [], dashboardChat));
     // The chat SUBJECT's detail — never the route's `chat=` alone (the owner, 2026-10-19, three times: "THE CHAT DOES NOT
     // EVER CLOSE"). The subject is permanent (the route's, else the agent the view says); loading only for `chat=` left
     // every page reached without it showing an empty chat, which reads as a closed one. The flyout's transcript is derived
@@ -1803,6 +1810,13 @@ function DesktopApp({ bridge }: AppProps) {
             route={route}
             address={shownAddress}
             snapshot={snapshot}
+            onWakeWorkspace={(workspaceId) => {
+                if (!resolvedBridge) return;
+                void resolvedBridge.workspaces.wake(workspaceId).then((result) => {
+                    if (result.ok) navigate(`genie://workspace/${workspaceId}`);
+                    else showAlert({ title: 'Could not redock workspace', body: result.reason });
+                }, (error: unknown) => showAlert({ title: 'Could not redock workspace', body: error instanceof Error ? error.message : String(error) }));
+            }}
             chatDrafts={keptDrafts}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}

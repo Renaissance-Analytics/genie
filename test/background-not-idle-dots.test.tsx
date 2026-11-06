@@ -20,7 +20,7 @@ const row = (over: Partial<AgentRow>): AgentRow => ({
 });
 
 const DOT: Record<AgentRow['state'], string> = {
-    working: 'text-[var(--success)]', cooling: 'text-[var(--sky-400)]', waiting: 'text-[var(--warning)]', broken: 'text-[var(--danger)]', idle: 'text-[var(--zinc-400)]', remote: 'text-[var(--fg-4)]',
+    working: 'var(--success)', cooling: 'var(--sky-400)', waiting: 'var(--warning)', broken: 'var(--danger)', idle: 'var(--zinc-400)', remote: 'var(--fg-4)', sleeping: 'var(--fg-4)', stopped: 'var(--danger)',
 };
 
 /** Each row, and the state its dots show. The same table goes through every surface below. */
@@ -41,8 +41,8 @@ const lanes = (r: AgentRow) => workspaceDashboard({ rows: [r], workspaceId: 'ws'
 describe.each(CASES)('%s', (_name, r, shown) => {
     it('the Dashboard row’s dot', () => {
         const html = renderToStaticMarkup(<Dashboard rows={[r]} workspaces={[{ id: 'ws', name: 'WS', path: '/w/ws' }]} onOpenAgent={() => {}} onAddAgent={() => {}} />);
-        const dot = /data-agent="a"[^]*?data-fidelity="\w+" class="([^"]*)"/.exec(html);
-        expect(dot?.[1]).toContain(DOT[shown]);
+        const dot = /data-agent="a"[^]*?<span[^>]*data-fidelity="\w+"[^>]*>/.exec(html);
+        expect(dot?.[0]).toContain(`--agent-status:${DOT[shown]}`);
     });
 
     it('the workspace dashboard’s lane dot, and the strip’s (Workspace.tsx)', () => {

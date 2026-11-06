@@ -1,6 +1,8 @@
 import { slugsFor } from '../core/address.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { workspaceNameFor } from './workspace-names.js';
+import { folderName } from '../core/workspace-name.js';
+import { hibernatedRecipientRefusal } from '../core/inbox.js';
 import type { Store, WorkspaceRecord } from './store.js';
 
 /**
@@ -32,15 +34,30 @@ export class HostRegistry {
     }
 
     listAgents(): readonly AgentRecord[] {
-        return this.#agents;
+        return this.#agents.filter((record) => this.workspace(record.workspaceId)?.asleep !== true);
     }
 
     find(id: AgentId | string): AgentRecord | null {
-        return this.#agents.find((a) => a.id === id) ?? null;
+        return this.listAgents().find((a) => a.id === id) ?? null;
     }
 
     listWorkspaces(): readonly WorkspaceRecord[] {
-        return this.#workspaces;
+        return this.#workspaces.filter((workspace) => workspace.asleep !== true);
+    }
+
+    /** Internal lifecycle metadata; public rosters/selectors use listWorkspaces instead. */
+    workspaceStates(): readonly WorkspaceRecord[] { return this.#workspaces; }
+
+    /** Internal mail ownership lookup, including hidden records, without probing any folder. */
+    mailParticipantVisible(id: string): boolean {
+        const record = this.#agents.find((a) => a.id === id);
+        return !record || this.workspace(record.workspaceId)?.asleep !== true;
+    }
+
+    mailRefusal(text: string, workspaceScope?: string): string | null {
+        const asleep = new Set(this.#workspaces.filter((w) => w.asleep === true).map((w) => w.id));
+        const slugs = slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: w.asleep === true ? w.hibernatedName ?? this.#names.get(w.id) ?? folderName(w.path) : this.#names.get(w.id) ?? workspaceNameFor(w.path) })));
+        return hibernatedRecipientRefusal(text, this.#agents, asleep, slugs, workspaceScope);
     }
 
     workspace(id: string): WorkspaceRecord | null {
@@ -48,10 +65,11 @@ export class HostRegistry {
     }
 
     defaultAgentOf(workspaceId: string): string | null {
+        if (this.workspace(workspaceId)?.asleep === true) return null;
         return this.workspace(workspaceId)?.defaultAgentId ?? null;
     }
 
     workspaceSlugs(): Map<string, string> {
-        return slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#names.get(w.id) ?? workspaceNameFor(w.path) })));
+        return slugsFor(this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#names.get(w.id) ?? workspaceNameFor(w.path) })));
     }
 }
