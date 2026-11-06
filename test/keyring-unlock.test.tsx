@@ -82,7 +82,9 @@ describe('at start, and from the card', () => {
     it('dismissed: "Your keyring is still locked", never manual steps; the button asks again (COUNTED: two asks)', async () => {
         const s = session('dismissed');
         const k = await openWith(s.ports, { unlockAtStart: true });
-        await k.fix();
+        await k.fix(); // joins the ask the start made
+        await settle();
+        await k.fix(); // the button: asks again
         await settle();
         const view = k.view();
         expect(view?.state).toBe('refused');
@@ -113,7 +115,10 @@ describe('the card’s words', () => {
     it('while asking: "Genie is asking to unlock your keyring", busy', () => {
         const html = card({ state: 'refused', step: 'unlocking' as never, failure: null, ...base });
         expect(html).toContain('Genie is asking to unlock your keyring');
-        expect(html).toMatch(/data-action="keyring-fix"[^>]*aria-busy="true"/);
+        // Read the button's own tag: react-fancy puts its attributes before the forwarded ones.
+        const tag = /<button[^>]*data-action="keyring-fix"[^>]*>/.exec(html)?.[0] ?? '';
+        expect(tag).toContain('aria-busy="true"');
+        expect(html).toContain('data-action="keyring-cancel"');
     });
     it('locked, or dismissed: one Unlock button, no instructions', () => {
         const html = card({ state: 'refused', step: null, failure: 'Your keyring is still locked', ...base });
