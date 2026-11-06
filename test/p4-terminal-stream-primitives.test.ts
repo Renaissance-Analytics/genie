@@ -4,6 +4,9 @@ import { IPC_INVENTORY } from '../src/core/ipc-inventory.js';
 import { serveSpawnHost } from '../src/main/spawn-host-server.js';
 import type { SpawnChannel, SpawnFrame, SpawnMethod } from '../src/main/spawn-host-protocol.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
+import { TerminalHost } from '../src/main/terminal-host.js';
+import { TerminalsService, TerminalsReplica } from '../src/main/terminals-host.js';
+import { SpawnHostClient } from '../src/main/spawn-host-client.js';
 
 const core = async () => { const file: string = '../src/core/terminal-stream.js'; return import(file); };
 const host = async () => { const file: string = '../src/main/terminal-streams.js'; return import(file); };
@@ -39,19 +42,44 @@ it('counts UTF-16 code units monotonically and never derives a lifetime offset f
     expect(counter.snapshot()).toEqual({ epoch: 'epochA', endOffset: 8 });
 });
 
-function producer() {
+function producer(send?: (frame: SpawnFrame) => void) {
     const frames: SpawnFrame[] = []; let receive!: (frame: SpawnFrame) => void, data!: (id: string, text: string) => void, exit!: (id: string, code: number) => void, serial = 0, request = 0;
     const tails = new Map<string, string>();
     const pty: PtyPort = { open: () => { const id = 'engine-' + ++serial; tails.set(id, ''); return { id, pid: 100 + serial, shell: 'sh', scrollback: '' }; },
         write: () => true, resize: () => true, kill: id => tails.delete(id), scrollback: id => tails.get(id)?.slice(-4),
         onData: fn => { data = fn; return () => {}; }, onExit: fn => { exit = fn; return () => {}; } };
-    const channel: SpawnChannel = { send: frame => { frames.push(frame); }, onFrame: fn => { receive = fn; }, onClose: () => {} };
+    const channel: SpawnChannel = { send: frame => { frames.push(frame); send?.(frame); }, onFrame: fn => { receive = fn; }, onClose: () => {} };
     const server = serveSpawnHost(channel, { exec: vi.fn() as never, stream: vi.fn() as never, pty });
     const call = (method: SpawnMethod, args: unknown[]) => { const id = ++request; receive({ kind: 'call', id, method, args }); return id; };
     const emit = (text: string) => { const id = 'engine-' + serial; tails.set(id, (tails.get(id) ?? '') + text); data(id, text); };
     const payloads = (name: string) => frames.filter((f): f is Extract<SpawnFrame, { kind: 'event' }> => f.kind === 'event' && f.channel === name).map(f => f.payload as Record<string, unknown>);
-    return { frames, call, emit, payloads, end: () => exit('engine-' + serial, 0), close: () => server.killAll() };
+    return { frames, call, emit, payloads, receive: (frame: SpawnFrame) => receive(frame), end: () => exit('engine-' + serial, 0), close: () => server.killAll() };
 }
+it('passes producer positions through the real spawn client, terminal host, engine dump and replica events', async () => {
+    let client: SpawnHostClient | undefined;
+    const f = producer(frame => client?.linkFrame(frame));
+    client = new SpawnHostClient({ entry: 'never-forked.js', link: { send: frame => f.receive(frame) } });
+    await client.linkUp();
+    const terminals = new TerminalHost(client.ptyPort()), service = new TerminalsService(terminals), replica = new TerminalsReplica(async () => true);
+    const opened = terminals.open({ workspaceId: 'w', cwd: '/synthetic' });
+    f.emit('A雪'); f.emit('😀'); f.emit('last');
+    const dump = service.dump() as unknown as { positions: Record<string, { epoch: string; endOffset: number }> };
+    expect(dump.positions[opened.id]).toMatchObject({ epoch: expect.any(String), endOffset: 8 });
+    replica.rebase(service.dump());
+    const snapshot = (replica as unknown as { streamSnapshot(id: string): unknown }).streamSnapshot(opened.id);
+    expect(snapshot).toMatchObject({ id: opened.id, epoch: dump.positions[opened.id]!.epoch, endOffset: 8, tail: 'A雪😀last' });
+    const events: unknown[] = []; service.onEvent(event => { events.push(event); replica.apply(event); });
+    f.emit('next'); f.end();
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'data', id: opened.id, epoch: dump.positions[opened.id]!.epoch, offset: 8, data: 'next' }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'exit', id: opened.id, epoch: dump.positions[opened.id]!.epoch, endOffset: 12, code: 0 }));
+    f.close();
+});
+it('a replica with an old producer tail exposes unknown position rather than inventing a lifetime offset', () => {
+    const replica = new TerminalsReplica(async () => true);
+    replica.rebase({ terminals: [{ id: 't', workspaceId: 'w', pid: 1, shell: 'sh' }], tails: { t: 'retained' }, limits: {} });
+    const snapshot = (replica as unknown as { streamSnapshot(id: string): unknown }).streamSnapshot('t');
+    expect(snapshot).toMatchObject({ id: 't', tail: 'retained', epoch: null, endOffset: null });
+});
 it('the real spawn producer attaches true offsets and one epoch to every data frame', () => {
     const f = producer(); f.call('pty.open', ['t', { cwd: '/synthetic' }, { kind: 'terminal', workspaceId: 'w', shell: 'sh' }]);
     for (const text of ['A雪', '😀', 'last']) f.emit(text);
