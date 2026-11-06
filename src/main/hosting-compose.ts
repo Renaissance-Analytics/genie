@@ -143,6 +143,10 @@ export interface HostingOptions {
 
 export interface HostingComposeInput extends HostingOptions {
     readonly userData: string;
+    /** SAFE MODE (Tynn #386; genie-host's): while on, no site and no stopped engine is started by a launch or a wake. */
+    readonly safeMode?: () => boolean;
+    /** A site safe mode held down, with the name the banner shows it by. */
+    readonly heldSite?: (siteId: string, name: string) => void;
     readonly now?: () => number;
     /** The registered workspaces (id, folder, asleep), late-bound: their envelopes' `sites` are what Hosting lists and serves. */
     readonly workspaces?: () => readonly WorkspaceRef[];
@@ -535,6 +539,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         {
             ...enginePorts,
             personStopped: () => engineStopped,
+            ...(input.safeMode ? { safeMode: input.safeMode } : {}),
             // A hibernated workspace stays asleep through a restart: an engine only sleeping workspaces use is not started.
             asleepOnly: (i) => asleepOnlyEngine(i, { chosen: engineUse.chosen, workspaces: engineUse.workspaces() }),
             start: (id) => engines.start(id),
@@ -618,6 +623,8 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         },
         envFor: (workspaceId) => engines.envFor(workspaceId),
         log: (line) => console.error(line),
+        ...(input.safeMode ? { safeMode: input.safeMode } : {}),
+        held: (siteId) => input.heldSite?.(siteId, sites.get(siteId)?.host ?? siteId),
     });
     // A site waiting for its first start here is not configured yet: the person's Start is what asks for its name.
     // CONFIGURED, not running (genie#624): a site that exists resolves whether or not it is up, so a start or a stop never

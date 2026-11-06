@@ -39,6 +39,7 @@ import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
 import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
+import type { SafeModeView } from '../core/safe-mode.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -150,6 +151,8 @@ export interface EngineServerOptions {
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
     readonly updates?: UpdatesService;
+    /** The host's safe mode (Tynn #386: safe-mode-host.ts): told to EVERY window before ready and on change; `engine.safeMode` leaves it. */
+    readonly safeMode?: { view(): SafeModeView; leave(): SafeModeView; onChange(listener: (view: SafeModeView) => void): () => void };
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     /** IssueWatch in the host (P5c: issue-watch-host.ts). Absent = `engine.issueWatch` is refused. Local windows only. */
@@ -260,6 +263,8 @@ export class SessionEngineServer {
             const owner = event.kind === 'list' ? undefined : event.owner;
             for (const conn of this.#connections) if (conn.authed && (owner === undefined || owner === String(conn.id))) this.#event(conn, 'terminals.event', event);
         });
+        // Safe mode (Tynn #386) travels to EVERY window: each one shows its banner.
+        options.safeMode?.onChange((view) => { for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'safeMode.event', view); });
         // The updater's state (P5b) travels on LOCAL window links only, as the hosting's does (P4 rules).
         options.updates?.onEvent((state) => {
             for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'updates.event', state);
@@ -439,6 +444,8 @@ export class SessionEngineServer {
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
+        // Safe mode BEFORE ready: the window's own boot restore holds on it (relaunch-restore.ts).
+        if (this.#options.safeMode) this.#event(conn, 'safeMode.event', this.#options.safeMode.view());
         conn.transport.send(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: { running: host ? host.startedIds() : [] } }));
         const queued = this.#queue.splice(0, this.#queue.length);
         for (const callback of queued) this.#event(conn, 'engine.callback', callback);
@@ -618,6 +625,11 @@ export class SessionEngineServer {
                 if (!this.#options.appInbox) throw new Error('This host runs no app door.');
                 if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');
                 return this.#options.appInbox.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.safeMode':
+                if (!this.#options.safeMode) throw new Error('This host keeps no safe mode.');
+                if (str(0) !== 'leave') throw new Error(`safe mode has no ${str(0)}`);
+                // Leaving starts nothing here: the host's listener re-arms its clocks, and that is all.
+                return this.#options.safeMode.leave();
             case 'engine.updates':
                 if (!this.#options.updates) throw new Error('This host runs no updater.');
                 if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');

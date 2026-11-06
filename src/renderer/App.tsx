@@ -1963,6 +1963,7 @@ function DesktopApp({ bridge }: AppProps) {
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId); }}
             onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] start refused:', r.reason); }); }}
+            onSafeModeStartAgent={restartOne}
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
             onOpenPalette={() => setPaletteOpen(true)}

@@ -356,6 +356,8 @@ export type FeatureAction =
     /** One repo's IssueWatch switch in Tynn (watch it; include a fork's upstream) — one field at a time. */
     | { kind: 'issueWatch.setRepo'; workspaceId: string; owner: string; repo: string; enabled?: boolean; includeUpstream?: boolean }
     | { kind: 'whatsNew.show' }
+    /** "Leave safe mode" (Tynn #386): genie-host's leave. Starts nothing; automatic behaviour is back on. */
+    | { kind: 'safeMode.leave' }
     | { kind: 'whatsNew.close'; version: string }
     | { kind: 'knowledge.search'; query: string }
     | { kind: 'knowledge.openAdd'; workspaceId?: string }

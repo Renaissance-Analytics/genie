@@ -44,6 +44,9 @@ export interface EnvelopeSitesPorts {
     /** The workspace's service env (its engines + the shared ones), for every process of its sites. */
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
     readonly log?: (line: string) => void;
+    /** SAFE MODE (Tynn #386): while on, no site is started by a launch or a wake; each is told to `held`. */
+    readonly safeMode?: () => boolean;
+    readonly held?: (siteId: string) => void;
 }
 
 let tmpCounter = 0;
@@ -310,6 +313,11 @@ export class EnvelopeSites {
 
     /** A boot/wake start that is refused (no Caddy, a root outside the repo) is kept on the site as its problem; the others still start. */
     #tryStart(siteId: string): void {
+        // SAFE MODE (Tynn #386): a launch or a wake starts no site; it is named as held, and the person's Start serves it. safe mode holds
+        if (this.#ports.safeMode?.() === true) {
+            this.#ports.held?.(siteId);
+            return;
+        }
         try {
             this.#sites.start(siteId);
         } catch (error) {

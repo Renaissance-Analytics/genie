@@ -116,7 +116,7 @@ const projectOfDir = (dir: string | undefined): string | null => {
  * genie-host's parts, as genie-host.ts builds them, with NO window: the registry, the inbox, the sessions, the mail wake
  * with IssueWatch's queue as its second source, and the IssueWatch service on the host's Tynn account.
  */
-async function hostRig(options: { authStatus?: number } = {}) {
+async function hostRig(options: { authStatus?: number; safeMode?: () => boolean } = {}) {
     const dir = await mkdtemp(join(tmpdir(), 'p5c-host-'));
     const acme = await workspaceDir(true);
     const loose = await workspaceDir(false);
@@ -149,7 +149,7 @@ async function hostRig(options: { authStatus?: number } = {}) {
         },
     });
     const log: string[] = [];
-    const off = wireHostMailWake({ inbox, host, registry, settings, osaDir: dir, log: (l) => log.push(l), issueWatch: issueWatch.delivery });
+    const off = wireHostMailWake({ inbox, host, registry, settings, osaDir: dir, log: (l) => log.push(l), issueWatch: issueWatch.delivery, ...(options.safeMode ? { safeMode: options.safeMode } : {}) });
     cleanups.push(async () => { issueWatch.stop(); off(); host.stopAll(); await host.settled(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
     return { host, registry, tynn, issueWatch, pusher, waiter, outsider, log, projectFor };
 }
@@ -167,6 +167,17 @@ describe('with no window, a GitHub change reaches the linked workspace’s agent
         await settle(40);
         expect(r.host.probe(r.pusher.id as AgentId)?.running).toBe(true);
         expect(fakes.get(r.pusher.id)?.prompts.join('\n') ?? '').toMatch(notice);
+    });
+
+    it('SAFE MODE (Tynn #386): the same delta wakes nobody — the `push` agent stays stopped (the CONTROL is the test above)', async () => {
+        const r = await hostRig({ safeMode: () => true });
+        r.issueWatch.start();
+        await settle();
+        await r.tynn.live(r.tynn.sockets[0]!);
+        r.tynn.pushNewPr(r.tynn.sockets[0]!);
+        await settle(40);
+        expect(r.host.probe(r.pusher.id as AgentId)).toBeNull();
+        expect(r.log.join('\n')).toMatch(/safe mode/i);
     });
 
     it('a `next-turn` agent is NOT woken by it, and is told when it next runs', async () => {

@@ -57,6 +57,7 @@ import type { UpdateState } from './updater.js';
 import type { UpdateFailedRecord } from './updates-host.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
+import type { SafeModeView } from '../core/safe-mode.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -356,6 +357,9 @@ export class SessionEngineClient {
                 this.hosting().rebase(payload as HostingDump);
                 return;
             // genie-host's updater (P5b): its whole state, on this window's local link only.
+            case 'safeMode.event':
+                this.#setSafeMode(payload as SafeModeView);
+                return;
             case 'updates.dump':
             case 'updates.event':
                 this.updates().rebase(payload as UpdateState);
@@ -560,6 +564,32 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#appInbox;
+    }
+
+    /** genie-host's safe mode (Tynn #386), as this window last heard it; `null` = the host has said nothing (an older host). */
+    safeModeView(): SafeModeView | null { return this.#safeMode; }
+
+    onSafeMode(listener: (view: SafeModeView) => void): () => void {
+        this.#safeModeListeners.add(listener);
+        return () => { this.#safeModeListeners.delete(listener); };
+    }
+
+    /** "Leave safe mode": the host's leave. It starts nothing; it lets the automatic behaviour run again. */
+    async leaveSafeMode(): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.safeMode', ['leave']);
+        if (!reply.ok) return reply;
+        this.#setSafeMode(reply.value as SafeModeView);
+        return { ok: true };
+    }
+
+    #safeMode: SafeModeView | null = null;
+    readonly #safeModeListeners = new Set<(view: SafeModeView) => void>();
+
+    #setSafeMode(view: SafeModeView): void {
+        const was = this.#safeMode;
+        this.#safeMode = view;
+        if (was !== null && JSON.stringify(was) === JSON.stringify(view)) return;
+        for (const l of [...this.#safeModeListeners]) l(view);
     }
 
     #updates: UpdatesReplica | null = null;
