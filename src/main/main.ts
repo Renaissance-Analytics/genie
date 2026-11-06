@@ -2826,6 +2826,8 @@ async function boot(): Promise<void> {
                 setModel: (id, model) => setModel(agentOps, id, model).finally(() => registry?.touch()),
                 models: (id, refresh) => listModels(agentOps, id, refresh),
                 diagnose: (id) => diagnose(agentOps, id),
+                // A tool row's whole output, read by the agent host from its own store (Tynn story #386).
+                toolOutput: (id, toolCallId) => (host ? host.toolOutput(id as AgentId, toolCallId) : Promise.resolve({ ok: false as const, reason: 'Genie’s agents are not running yet' })),
             },
             features: {
                 snapshot: () => featureSnapshot(services!, featureState, processPorts()),

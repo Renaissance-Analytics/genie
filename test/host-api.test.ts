@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
+import { capabilityOf } from '../src/core/remote-protocol.js';
 import type { GenieSnapshot, UpdateState } from '../src/renderer/bridge.js';
 import type { FeatureData } from '../src/renderer/features.js';
 
@@ -149,6 +150,18 @@ describe('invoke', () => {
         expect(await api.invoke('agents.setBudget', ['agent_a', null])).toMatchObject({ ok: true });
         expect(await api.invoke('agents.diagnose', ['agent_a'])).toMatchObject({ ok: true, diagnosis: { state: 'healthy' } });
         expect(f.calls).toEqual(['agent-restart:agent_a:fresh', 'agent-delete:agent_a:delete', 'agent-switch:agent_a:codex', 'agent-budget:agent_a:null']);
+    });
+
+    it('agents.toolOutput (Tynn story #386): a tool row’s whole output, on demand, from the host; a read; its arguments narrowed', async () => {
+        const f = fakes();
+        const asked: string[] = [];
+        const toolOutput = async (agentId: string, toolCallId: string) => { asked.push(`${agentId}:${toolCallId}`); return { ok: true as const, text: 'whole', bytes: 5, cut: false }; };
+        const api = buildHostApi({ ...f.deps, agentOps: { ...f.deps.agentOps, toolOutput } } as typeof f.deps);
+        expect(await api.invoke('agents.toolOutput' as never, ['agent_a', 'call_1'])).toEqual({ ok: true, text: 'whole', bytes: 5, cut: false });
+        expect(asked).toEqual(['agent_a:call_1']);
+        expect(await api.invoke('agents.toolOutput' as never, ['agent_a', 7])).toMatchObject({ ok: false });
+        expect(asked).toHaveLength(1);
+        expect(capabilityOf('agents.toolOutput' as never)).toBe('read');
     });
 
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {

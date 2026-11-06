@@ -1,4 +1,5 @@
 import type { StreamEvent } from '../core/stream-event.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -955,6 +956,11 @@ export class SessionEngineClient {
     /** The agent's newest recorded rows, bounded in rows and bytes, as the host reads them from its own store (`SessionHost.historyRows`). */
     historyRows(agentId: AgentId, options: { limit: number; maxBytes: number }): Promise<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }> {
         return this.#value<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }>('engine.historyRows', [agentId, { limit: options.limit, maxBytes: options.maxBytes }], { rows: [], cut: false });
+    }
+
+    /** A tool row's whole output, read by the host from its own store, bounded (`SessionHost.toolOutput`, Tynn story #386). */
+    toolOutput(agentId: AgentId, toolCallId: string): Promise<ToolOutputReply> {
+        return this.#value<ToolOutputReply>('engine.toolOutput', [agentId, toolCallId], { ok: false, reason: 'Genie’s agents are not running yet' });
     }
 
     async settled(): Promise<void> {

@@ -405,6 +405,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 : answer('agents.setModel', agentId, model),
             models: (agentId, refresh) => answer('agents.models', agentId, refresh === true),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
+            toolOutput: (agentId, toolCallId) => answer('agents.toolOutput', agentId, toolCallId),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: phone ? {

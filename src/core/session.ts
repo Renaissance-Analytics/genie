@@ -1,11 +1,12 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
-import { openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
+import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-store.js';
+import { boundToolEvent } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
 import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
-import type { AgentId } from './identity.js';
+import { threadKeyFor, type AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
 import { carriedLabel, type CarryOver } from './carry-over.js';
 import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult, startTimeUnknown } from './process-tree.js';
@@ -1715,8 +1716,15 @@ export class AgentSession {
      * A rejected write never breaks the chain: the next write runs whether this one failed or not. A row that still
      * cannot be saved is counted (`unpersistedEvents`) AND said in the ledger, once per run (`#sayNotSaved`).
      */
-    #record(event: StreamEvent): Promise<void> {
+    /** `whole`: a tool's output that did not fit its row's preview, kept beside the ledger first (Tynn story #386). */
+    #record(event: StreamEvent, whole: string | null = null): Promise<void> {
         const write = async (): Promise<void> => {
+            const store = this.#options.store;
+            if (whole !== null && event.kind === 'tool' && store instanceof ThreadStore) {
+                // Before the row that names it. A sidecar that cannot be written leaves the row and its preview: the
+                // whole is then "not kept" when a person opens it, and the conversation is still saved.
+                try { await store.writeToolOutput(threadKeyFor(this.agentId), event.toolCallId, whole); } catch { /* the preview stands */ }
+            }
             for (let attempt = 0; ; attempt += 1) {
                 try {
                     const thread = openAgentThread(this.#options.store, this.agentId);
@@ -1957,15 +1965,22 @@ export class AgentSession {
      * One row that is not a message chunk — from the wire or minted here (a turn marker): closes the open message,
      * reaches the renderer synchronously, and is written to the thread after the message it closed.
      */
-    async #emitRow(event: StreamEvent): Promise<void> {
+    async #emitRow(raw: StreamEvent): Promise<void> {
         this.#closeMessage();
 
+        /*
+         * BOUNDED BEFORE ANYONE HOLDS IT (Tynn story #386): a tool row carries at most a 16 KB preview of its input and
+         * output, and an unfinished call none — in this session's rows, the window's, and the ledger. The whole output
+         * goes in a sidecar the row names, read only when a person opens the row. A store that keeps no files beside
+         * its log (a test's memory store) keeps the preview alone.
+         */
+        const { event, whole } = boundToolEvent(raw, { sidecar: this.#options.store instanceof ThreadStore });
         this.#options.onEvent?.(event, { replacesLast: false });
 
         // ON THE SAME CHAIN as the message writes: waiting for the chain and then writing outside it let two rows
         // emitted together (a turn marker and your message) reach the thread in either order. A storage fault must not
         // take the turn down with it — and must not vanish either (`#record`).
-        await this.#record(event);
+        await this.#record(event, whole);
     }
 }
 

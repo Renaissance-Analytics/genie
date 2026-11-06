@@ -1929,6 +1929,7 @@ function DesktopApp({ bridge }: AppProps) {
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
             tynnBoard={tynnBoardHost}
+            loadToolOutput={resolvedBridge ? (agentId, toolCallId) => resolvedBridge.agents.toolOutput(agentId, toolCallId) : undefined}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}

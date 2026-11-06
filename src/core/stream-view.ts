@@ -92,6 +92,12 @@ export interface LedgerRow {
     prose?: boolean | undefined;
     /** A thought's WHOLE text, drawn when the row is expanded (the owner: click the thinking line to see the reasoning). */
     full?: string | undefined;
+    /**
+     * A tool call's answer, opened under the row (Tynn story #386). `text` is what the window holds — the row's preview,
+     * at most 16 KB; `cut` says it is not the whole; `whole` is the whole's size when the host kept it (fetched only
+     * when the row is opened, `agents.toolOutput`), `null` when there is nothing more to fetch.
+     */
+    toolOutput?: { text: string; toolCallId: string; whole: number | null; cut: boolean } | undefined;
     meta: string | null;
     /** `warn` = a tool still running (the board's amber `running`). */
     metaTone: 'default' | 'bad' | 'warn';
@@ -226,6 +232,10 @@ function toolRow(
     // broken diff rather than as missing data.
     const hasArguments = event.rawInput !== null && event.rawInput !== undefined;
 
+    const answer = !isEdit && typeof event.output === 'string' && event.output !== ''
+        ? { text: event.output, toolCallId: event.toolCallId, whole: event.outputFile !== undefined && event.outputBytes !== undefined ? event.outputBytes : null, cut: event.outputBytes !== undefined }
+        : undefined;
+
     const note =
         event.toolKind === null ? '(kind not reported)'
         : isEdit && !hasArguments ? '(arguments not reported)'
@@ -240,7 +250,9 @@ function toolRow(
         mono: true,
         italic: false,
         clamp: true,
-        expandable: false,
+        // A call's answer opens under its row; an edit opens the inspector instead.
+        expandable: answer !== undefined,
+        ...(answer !== undefined ? { toolOutput: answer } : {}),
         meta: metaFor(event, context, isEdit),
         metaTone: event.status === 'failed' ? 'bad' : event.status === 'in_progress' || event.status === 'pending' ? 'warn' : 'default',
         // The board's kind column: the tool's name. A nameless tool gets no kind — its note already says so.
@@ -561,8 +573,19 @@ export function repeatsCompaction(previous: StreamEvent | undefined, event: Stre
 /**
  * ONE ROW PER TOOL CALL. A call arrives as a `tool_call` and then its `tool_call_update`s — same toolCallId, usually no
  * name, title or kind. Each update is folded into the call's own row, where the call was: name, title, kind and input
- * from the first frame that said them, status from the latest. An update whose call never arrived keeps its own row.
+ * from the first frame that said them, status from the latest; the output, with its size and its sidecar, from the
+ * latest frame that carried one (the terminal row's: a running call carries none, Tynn story #386). An update whose call
+ * never arrived keeps its own row.
  */
+/** A tool frame's output and what says it is a preview, as one: the three travel together. */
+function outputOf(e: Extract<StreamEvent, { kind: 'tool' }>): Pick<typeof e, 'output' | 'outputBytes' | 'outputFile'> {
+    return {
+        ...(e.output !== undefined ? { output: e.output } : {}),
+        ...(e.outputBytes !== undefined ? { outputBytes: e.outputBytes } : {}),
+        ...(e.outputFile !== undefined ? { outputFile: e.outputFile } : {}),
+    };
+}
+
 export function joinToolCalls(rows: readonly TimedEvent[]): TimedEvent[] {
     const out: TimedEvent[] = [];
     const at = new Map<string, number>();
@@ -572,8 +595,9 @@ export function joinToolCalls(rows: readonly TimedEvent[]): TimedEvent[] {
         const i = at.get(e.toolCallId);
         if (i === undefined) { at.set(e.toolCallId, out.length); out.push(r); continue; }
         const prev = out[i]!;
-        const p = prev.event as typeof e;
-        out[i] = { ...prev, event: { ...p, name: p.name ?? e.name, title: p.title ?? e.title, toolKind: p.toolKind ?? e.toolKind, rawInput: p.rawInput ?? e.rawInput, status: e.status } };
+        const { output: _o, outputBytes: _b, outputFile: _f, ...p } = prev.event as typeof e;
+        const output = e.output !== undefined ? outputOf(e) : outputOf(prev.event as typeof e);
+        out[i] = { ...prev, event: { ...p, name: p.name ?? e.name, title: p.title ?? e.title, toolKind: p.toolKind ?? e.toolKind, rawInput: p.rawInput ?? e.rawInput, status: e.status, ...output } };
     }
     return out;
 }
