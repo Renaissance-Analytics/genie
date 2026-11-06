@@ -11,7 +11,7 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 async function fixture(count = 100) {
-    const root = await mkdtemp(join(tmpdir(), 'genie-artboard-file-sources-')), board = join(root, '.artboard'); await mkdir(board);
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'genie-artboard-file-sources-'))), board = join(root, '.artboard'); await mkdir(board);
     cleanups.push(() => rm(root, { recursive: true, force: true }));
     const bytes = Buffer.alloc(2 * 1024 * 1024, 37), html = '<h1>Body must not be loaded by a list</h1>';
     await writeFile(join(board, 'image.png'), bytes); await writeFile(join(board, 'post.html'), html);
