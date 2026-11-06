@@ -7,7 +7,7 @@ export function installArtboardMainTrace(root, injected) {
         syncBuiltinESMExports: process.getBuiltinModule('node:module').syncBuiltinESMExports,
         now: () => performance.now(), wallNow: () => Date.now(), cpuUsage: () => process.cpuUsage(),
     };
-    const events = [], originMs = ports.now(), originWallMs = ports.wallNow(); let dropped = 0, stopped = false;
+    const events = [], originMs = ports.now(), originWallMs = ports.wallNow(); let dropped = 0, stopped = false, modes = null;
     const originalExec = ports.child.execFile, originalPost = ports.inspector.Session.prototype.post, custom = ports.util.promisify.custom;
     const owned = ports.path.resolve(root);
     function targets(file, args) {
@@ -68,8 +68,15 @@ export function installArtboardMainTrace(root, injected) {
         finally { synced(span); }
     }
     ports.child.execFile = wrappedExec; ports.inspector.Session.prototype.post = wrappedPost; ports.syncBuiltinESMExports();
+    const marker = begin({ kind: 'trace-install', synthetic: true, label: 'synthetic-install-marker' }); finish(marker, null); synced(marker);
     return {
-        snapshot: () => ({ originMs, originWallMs, stopped, dropped, events: events.map(event => ({ ...event, ...(event.targets ? { targets: [...event.targets] } : {}) })) }),
+        setModes(value) {
+            if (!value || typeof value.profiler !== 'boolean' || typeof value.privateAclLaunch !== 'boolean' || !['stallStacksWanted', 'legacy-always-on'].includes(value.profilerPolicy)) throw new Error('invalid effective trace modes');
+            modes = { profiler: value.profiler, profilerPolicy: value.profilerPolicy, privateAclLaunch: value.privateAclLaunch };
+        },
+        snapshot: () => ({ originMs, originWallMs, stopped, dropped, modes: modes ? { ...modes } : null,
+            installed: { execFile: ports.child.execFile === wrappedExec, inspectorPost: ports.inspector.Session.prototype.post === wrappedPost },
+            events: events.map(event => ({ ...event, ...(event.targets ? { targets: [...event.targets] } : {}) })) }),
         stop() {
             if (stopped) return; stopped = true;
             if (ports.child.execFile === wrappedExec) ports.child.execFile = originalExec;
@@ -77,4 +84,13 @@ export function installArtboardMainTrace(root, injected) {
             ports.syncBuiltinESMExports();
         },
     };
+}
+
+/** A synthetic installation event cannot stand in for expected native work. No profiler calls are made here. */
+export function validateArtboardMainTrace(trace) {
+    if (!trace || trace.stopped || trace.installed?.execFile !== true || trace.installed?.inspectorPost !== true) throw new Error('the pre-entry trace hooks are not installed');
+    if (!Array.isArray(trace.events) || !trace.events.some(event => event.kind === 'trace-install' && event.synthetic === true && event.label === 'synthetic-install-marker' && event.state === 'done')) throw new Error('the pre-entry trace installation marker is missing');
+    if (!trace.modes || typeof trace.modes.profiler !== 'boolean' || typeof trace.modes.privateAclLaunch !== 'boolean' || !['stallStacksWanted', 'legacy-always-on'].includes(trace.modes.profilerPolicy)) throw new Error('the pre-entry trace effective modes are missing');
+    if (trace.modes.profiler && !trace.events.some(event => event.kind === 'profiler')) throw new Error('the pre-entry trace missed the expected profiler span');
+    if (trace.modes.privateAclLaunch && !trace.events.some(event => event.kind === 'private-acl')) throw new Error('the pre-entry trace missed the expected private-ACL launch span');
 }

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { measureArtboardPage } from './artboard-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
-import { installArtboardMainTrace } from './artboard-main-trace.mjs';
+import { installArtboardMainTrace, validateArtboardMainTrace } from './artboard-main-trace.mjs';
 
 const WIN = process.platform === 'win32', BASELINE = process.argv.includes('--baseline'), OUT = resolve('smoke-out'), PORT = 9346, INSPECT = 9347, started = Date.now(), sessions = [], reports = [];
 const TRACE = process.argv.includes('--trace-main');
@@ -65,12 +65,16 @@ async function preparePostRunner(repo, workspace, agentId) {
         const { runOfficialTool } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/main/official-tools.ts')).href, parent);
         const { OFFICIAL_PLUGINS } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/core/official-plugins.ts')).href, parent);
         const { parseManifest } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/core/plugins.ts')).href, parent);
+        const { stallStacksWanted } = await scoped.import(url.pathToFileURL(path.join(repo, 'src/main/stall-profile.ts')).href, parent);
+        const traceModes = { profiler: typeof stallStacksWanted === 'function' ? stallStacksWanted(process.env) : true,
+            profilerPolicy: typeof stallStacksWanted === 'function' ? 'stallStacksWanted' : 'legacy-always-on', privateAclLaunch: process.platform === 'win32' && process.type === 'browser' };
+        globalThis.__artboardTrace?.setModes(traceModes);
         const parsed = parseManifest(OFFICIAL_PLUGINS.find(plugin => plugin.manifest.id === 'ai.genie.artboard').manifest);
         if (!parsed.ok) throw new Error(parsed.reason);
         const input = { pluginId: 'ai.genie.artboard', tool: 'post', args: { id: 'posted-image', title: 'Posted 2 MiB image', kind: 'image', imagePath: 'fixture.png', askVerdict: false },
             caller: { agentId, agentName: 'ArtBoard fixture', workspaceId: 'tynn', workspacePath: workspace }, manifest: parsed.manifest };
         globalThis.__artboardPost = { run: async () => { const at = performance.now(); const result = await runOfficialTool(input); return { result, elapsedMs: performance.now() - at }; }, stop: () => scoped.unregister() };
-        return { elapsedMs: performance.now() - started, entry: 'runOfficialTool', location: 'owned Electron main', transport: 'direct native runner, not MCP/provider dispatch' };
+        return { elapsedMs: performance.now() - started, entry: 'runOfficialTool', location: 'owned Electron main', transport: 'direct native runner, not MCP/provider dispatch', traceModes };
     } catch (error) { await scoped.unregister(); throw error; }
 }
 
@@ -177,8 +181,8 @@ finally {
     if (TRACE) {
         try {
             const trace = await main?.evaluate('globalThis.__artboardTrace?.snapshot()');
-            if (!trace || trace.events.length === 0 || (WIN && !trace.events.some(event => event.kind === 'private-acl'))) throw new Error('the pre-entry trace missed its profiler/private-ACL positive controls');
-            reports.push({ label: 'main-trace', ...trace }); console.log('ARTBOARD_TRACE ' + JSON.stringify(trace));
+            if (trace) { reports.push({ label: 'main-trace', ...trace }); console.log('ARTBOARD_TRACE ' + JSON.stringify(trace)); }
+            validateArtboardMainTrace(trace);
         } catch (error) { code = 1; failure ??= error.stack ?? String(error); }
         try { await main?.evaluate('globalThis.__artboardTrace?.stop();true'); } catch {}
     }
@@ -189,7 +193,7 @@ finally {
     const record = root ? json(join(root, '.genie', 'runtime', 'host.json')) : null;
     if (hostRecord && record?.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt && Number.isFinite(record.startedAt) && record.startedAt >= started) { try { process.kill(record.pid, 'SIGTERM'); } catch {} }
     const finalHead = head(); if (initialHead && finalHead && initialHead !== finalHead) { code = 1; failure = 'checkout HEAD changed during the measurement'; }
-    const scriptHashes = {}; for (const path of ['scripts/artboard-cdp.mjs', 'scripts/artboard-measure-page.mjs', 'scripts/artboard-main-trace.mjs', 'src/main/official-tools.ts']) { try { scriptHashes[path] = sha(readFileSync(path)); } catch { scriptHashes[path] = null; } }
+    const scriptHashes = {}; for (const path of ['scripts/artboard-cdp.mjs', 'scripts/artboard-measure-page.mjs', 'scripts/artboard-main-trace.mjs', 'src/main/official-tools.ts', 'src/main/stall-profile.ts']) { try { scriptHashes[path] = sha(readFileSync(path)); } catch { scriptHashes[path] = null; } }
     const result = { code, baseline: BASELINE, traceMain: TRACE, platform: process.platform, head: finalHead, initialHead, scriptHashes, root, failure, reports, startup,
         limits: ['P4 server stays in main', 'startup and one-time scoped native-runner import reported separately', 'direct existing native plugin runner in owned Electron main; MCP/provider dispatch unmeasured', 'oracle hash verification outside transfer latency', '16ms sampled main RSS; transient peak and genie-host peak unmeasured', 'physical VM and installed-ASAR gates remain coordinator-owned'] };
     mkdirSync(OUT, { recursive: true }); writeFileSync(join(OUT, 'artboard-result.json'), JSON.stringify(result, null, 2));
