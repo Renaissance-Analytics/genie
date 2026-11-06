@@ -1,4 +1,4 @@
-import { BEAT_MS, toMb, type CrashRecord, type WindowBeatPayload } from '../core/crash-record.js';
+import { BEAT_MS, UNKNOWN_HEADER, toMb, type CrashHeader, type CrashRecord, type WindowBeatPayload } from '../core/crash-record.js';
 
 /**
  * WINDOW MAIN'S HEARTBEAT AND ITS LAST-KNOWN STATE (Tynn story #386; spec §1).
@@ -37,6 +37,8 @@ export interface WindowCrashRecorderOptions {
     /** Writes the record synchronously; answers its file, or `null`. */
     readonly write: (record: CrashRecord) => string | null;
     readonly remove: (file: string) => void;
+    /** The common header (crash-records.ts `crashHeader`): this Genie's version, the host's build, OS and uptime. */
+    readonly header: () => CrashHeader;
 }
 
 export class WindowCrashRecorder {
@@ -99,6 +101,7 @@ export class WindowCrashRecorder {
             let agents: string[] = [];
             try { agents = this.#o.agents().map(String); } catch { /* unread */ }
             const record: CrashRecord = {
+                ...UNKNOWN_HEADER,
                 kind: 'exit',
                 at: new Date((this.#o.now ?? Date.now)()).toISOString(),
                 pid: this.#o.pid,

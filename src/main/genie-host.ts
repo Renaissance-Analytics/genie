@@ -17,7 +17,7 @@ import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRu
 import { SessionEngineServer } from './session-engine-server.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
-import { previousRunCause, readLifecycleTail, writeCrashRecord } from './crash-records.js';
+import { crashHeader, previousRunCause, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
@@ -549,6 +549,7 @@ async function main(): Promise<void> {
         },
         lifecycle: () => readLifecycleTail(runtime),
         log: lifecycleLog,
+        header: () => crashHeader(build.split('+')[0] ?? build, build),
     });
     hangWatchdog.start();
     const engine = new SessionEngineServer({

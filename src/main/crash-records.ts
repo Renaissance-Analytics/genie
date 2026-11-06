@@ -1,6 +1,11 @@
 import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
-import { CRASH_KEEP, LIFECYCLE_TAIL_LINES, crashCause, fitCrashRecord, type CrashRecord } from '../core/crash-record.js';
+import { CRASH_KEEP, LIFECYCLE_TAIL_LINES, crashCause, fitCrashRecord, type CrashHeader, type CrashRecord } from '../core/crash-record.js';
+
+/** The common header for a record this process writes. Not built yet. */
+export function crashHeader(_version: string, _build: string): CrashHeader {
+    throw new Error('not built yet (Tynn #386)');
+}
 
 /**
  * THE CRASH RECORDS ON DISK (Tynn story #386): `<genieRoot()>/runtime/crash/<ISO time>.json`, written by genie-host for

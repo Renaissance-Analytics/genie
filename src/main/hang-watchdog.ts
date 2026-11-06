@@ -1,4 +1,4 @@
-import { HANG_MS, LOST_GRACE_MS, RSS_EVERY_MS, mainStallLines, parseBeat, toMb, type CrashRecord, type RssSample, type RunningAgentNote } from '../core/crash-record.js';
+import { HANG_MS, LOST_GRACE_MS, RSS_EVERY_MS, UNKNOWN_HEADER, mainStalls, parseBeat, toMb, type CrashHeader, type CrashRecord, type RssSample, type RunningAgentNote } from '../core/crash-record.js';
 
 /**
  * GENIE-HOST'S HANG WATCHDOG (Tynn story #386; spec `.ai/plans/genie-crash-safe-mode-reporting-spec.md` §1).
@@ -42,6 +42,8 @@ export interface HangWatchdogOptions {
     /** The last lifecycle lines (crash-records.ts `readLifecycleTail`). */
     readonly lifecycle: () => string[];
     readonly log: (line: string) => void;
+    /** The common header (crash-records.ts `crashHeader`): this host's version, build, OS and uptime. */
+    readonly header: () => CrashHeader;
     readonly hangMs?: number;
     readonly lostMs?: number;
     readonly rssEveryMs?: number;
@@ -172,12 +174,13 @@ export class HangWatchdog {
         w.ended = true;
         const lifecycle = this.#safe(() => this.#o.lifecycle(), []);
         const record: CrashRecord = {
+            ...UNKNOWN_HEADER,
             kind: 'hang',
             at: new Date(now).toISOString(),
             windowPid: w.pid,
             lastBeatAt: new Date(w.lastBeatAt).toISOString(),
             lifecycle,
-            stalls: mainStallLines(lifecycle),
+            stalls: mainStalls(lifecycle),
             memory: [...this.#samples],
             agents: this.#safe(() => this.#o.agents(), []),
         };
@@ -190,6 +193,7 @@ export class HangWatchdog {
 
     #lost(w: Watched, now: number): void {
         const record: CrashRecord = {
+            ...UNKNOWN_HEADER,
             kind: 'lost',
             at: new Date(now).toISOString(),
             windowPid: w.pid,

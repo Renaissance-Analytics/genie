@@ -2,8 +2,9 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CRASH_KEEP, CRASH_MAX_BYTES, crashCause, type CrashRecord } from '../src/core/crash-record.js';
-import { latestCrashRecord, readLifecycleTail, writeCrashRecord } from '../src/main/crash-records.js';
+import { release } from 'node:os';
+import { CRASH_KEEP, CRASH_MAX_BYTES, crashCause, type CrashHeader, type CrashRecord } from '../src/core/crash-record.js';
+import { crashHeader, latestCrashRecord, readLifecycleTail, writeCrashRecord } from '../src/main/crash-records.js';
 
 /**
  * THE CRASH RECORDS (Tynn story #386): `<genieRoot()>/runtime/crash/<ISO time>.json`, one per hang, lost window or exit
@@ -18,7 +19,9 @@ afterEach(() => {
 });
 const fresh = (): string => (dir = mkdtempSync(join(tmpdir(), 'crash-records-')));
 
+const HEADER: CrashHeader = { schema: 1, version: '2.0.0-beta.60', build: '2.0.0-beta.60+abc123def456', os: 'linux', osRelease: '6.1.0', arch: 'x64', uptimeS: 42 };
 const hang = (at: number, lifecycle: string[] = []): CrashRecord => ({
+    ...HEADER,
     kind: 'hang',
     at: new Date(at).toISOString(),
     windowPid: 4242,
@@ -83,6 +86,21 @@ describe('crash records on disk', () => {
     });
 });
 
+describe('the common header', () => {
+    it('this process: the version and build it is given, the OS, its release, the arch, its uptime in seconds, schema 1', () => {
+        const h = crashHeader('2.0.0-beta.60', '2.0.0-beta.60+abc');
+        expect(h).toEqual({ schema: 1, version: '2.0.0-beta.60', build: '2.0.0-beta.60+abc', os: process.platform, osRelease: release(), arch: process.arch, uptimeS: expect.any(Number) });
+        expect(Number.isInteger(h.uptimeS)).toBe(true);
+        expect(h.uptimeS).toBeGreaterThanOrEqual(0);
+    });
+
+    it('a record written to disk keeps its header, cut to fit or not', () => {
+        const crash = fresh();
+        const file = writeCrashRecord(crash, hang(Date.UTC(2026, 10, 6, 12, 0, 0, 0), Array.from({ length: 5000 }, (_, i) => `line ${i} ${'x'.repeat(2000)}`)));
+        expect(JSON.parse(readFileSync(file!, 'utf8'))).toMatchObject(HEADER);
+    });
+});
+
 describe('the last 200 lifecycle lines', () => {
     it('the newest 200 of lifecycle.log, reaching into lifecycle.log.1 when the live file has fewer', () => {
         const runtime = fresh();
@@ -100,8 +118,8 @@ describe('the last 200 lifecycle lines', () => {
 describe('the cause the safe-mode banner shows, from the record', () => {
     it('a hang, an exit with its code, and anything else', () => {
         expect(crashCause(hang(Date.now()))).toBe('it stopped responding');
-        expect(crashCause({ kind: 'exit', at: '2026-11-06T10:00:00.000Z', pid: 1, reason: 'exit', code: 3, rssMb: 100, agents: [] })).toBe('it exited with code 3');
-        expect(crashCause({ kind: 'lost', at: '2026-11-06T10:00:00.000Z', windowPid: 1, lastBeatAt: null, lastRssMb: null, lifecycle: [], memory: [] })).toBe('it ended without a trace');
+        expect(crashCause({ ...HEADER, kind: 'exit', at: '2026-11-06T10:00:00.000Z', pid: 1, reason: 'exit', code: 3, rssMb: 100, agents: [] })).toBe('it exited with code 3');
+        expect(crashCause({ ...HEADER, kind: 'lost', at: '2026-11-06T10:00:00.000Z', windowPid: 1, lastBeatAt: null, lastRssMb: null, lifecycle: [], memory: [] })).toBe('it ended without a trace');
         expect(crashCause(null)).toBe('it ended without a trace');
     });
 });

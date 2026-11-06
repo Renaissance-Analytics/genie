@@ -41,14 +41,48 @@ export interface RunningAgentNote {
     readonly lastToolBytes: number | null;
 }
 
-export type CrashRecord =
+/** Every record's version of its own shape. */
+export const CRASH_SCHEMA = 1;
+/** A stall's stack: at most this many frames. */
+export const STACK_FRAMES = 12;
+
+/**
+ * THE COMMON HEADER, on every kind: which Genie, which machine, how long the writing process had run. No user data.
+ * `build` is the host build string (`<version>+<host bundle hash>`); `uptimeS` is the writing process's own uptime.
+ */
+export interface CrashHeader {
+    readonly schema: typeof CRASH_SCHEMA;
+    readonly version: string;
+    readonly build: string;
+    readonly os: string;
+    readonly osRelease: string;
+    readonly arch: string;
+    readonly uptimeS: number;
+}
+
+/** The header a writer that cannot read its own falls back to: the record is still written. */
+export const UNKNOWN_HEADER: CrashHeader = { schema: CRASH_SCHEMA, version: 'unknown', build: 'unknown', os: 'unknown', osRelease: 'unknown', arch: 'unknown', uptimeS: 0 };
+
+/**
+ * One of main's stalls, from lifecycle.log: when, how long, the route on screen, and — when the stall profiler caught it —
+ * the stack as a SIGNATURE (`fn file.js:12 < caller file.js:40 < …`, at most {@link STACK_FRAMES} frames): function
+ * names and file:line only, never a value.
+ */
+export interface StallNote {
+    readonly at: string;
+    readonly ms: number;
+    readonly route: string | null;
+    readonly stack: string | null;
+}
+
+export type CrashRecord = CrashHeader & (
     | {
           readonly kind: 'hang';
           readonly at: string;
           readonly windowPid: number;
           readonly lastBeatAt: string;
           readonly lifecycle: readonly string[];
-          readonly stalls: readonly string[];
+          readonly stalls: readonly StallNote[];
           readonly memory: readonly RssSample[];
           readonly agents: readonly RunningAgentNote[];
       }
@@ -72,7 +106,7 @@ export type CrashRecord =
           readonly agents: readonly string[];
           /** An error's TYPE (`TypeError`), never its message. */
           readonly error?: string;
-      };
+      });
 
 /** What window main says each second: its pid and its own RSS in bytes; `bye` = its quit ran to its end. */
 export interface WindowBeatPayload {
@@ -106,8 +140,8 @@ const MEMORY_SAMPLES = 60;
 const AGENTS = 50;
 
 /** Main's own stall lines from lifecycle lines (`<time> stall main …`); the host's are `<time> host stall main …`. */
-export function mainStallLines(lines: readonly string[]): string[] {
-    return lines.filter((line) => /^\S+ stall main /.test(line)).slice(-STALL_LINES);
+export function mainStalls(_lines: readonly string[]): StallNote[] {
+    throw new Error('not built yet (Tynn #386)');
 }
 
 const encoder = new TextEncoder();
@@ -141,7 +175,7 @@ export function runningAgentNote(name: string, rows: readonly TimedEvent[]): Run
 export function fitCrashRecord(record: CrashRecord): string {
     const lines = (list: readonly string[], n: number, chars: number): string[] => list.slice(-n).map((l) => clip(String(l), chars));
     let lifecycle = 'lifecycle' in record ? lines(record.lifecycle, LIFECYCLE_TAIL_LINES, LINE_CHARS) : [];
-    let stalls = record.kind === 'hang' ? lines(record.stalls, STALL_LINES, LINE_CHARS) : [];
+    let stalls: StallNote[] = record.kind === 'hang' ? record.stalls.slice(-STALL_LINES).map((s) => ({ at: s.at, ms: s.ms, route: s.route === null ? null : clip(s.route, NAME_CHARS * 2), stack: s.stack === null ? null : clip(s.stack, LINE_CHARS * 2) })) : [];
     let memory = record.kind === 'exit' ? [] : record.memory.slice(-MEMORY_SAMPLES);
     let agents = record.kind === 'hang' ? record.agents.slice(0, AGENTS).map((a) => ({ name: clip(a.name, NAME_CHARS), lastTool: a.lastTool === null ? null : clip(a.lastTool, NAME_CHARS), lastToolBytes: a.lastToolBytes })) : [];
     const exitAgents = record.kind === 'exit' ? record.agents.slice(0, AGENTS).map((a) => clip(a, NAME_CHARS)) : [];

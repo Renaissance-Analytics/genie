@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
-import type { CrashRecord } from '../src/core/crash-record.js';
+import type { CrashHeader, CrashRecord } from '../src/core/crash-record.js';
 import { WindowCrashRecorder, startHeartbeat, type WindowBeat } from '../src/main/window-crash-recorder.js';
 
 /**
@@ -10,6 +10,7 @@ import { WindowCrashRecorder, startHeartbeat, type WindowBeat } from '../src/mai
  */
 
 const MB = 1024 * 1024;
+const HEADER: CrashHeader = { schema: 1, version: '2.0.0-beta.60', build: '2.0.0-beta.60+abc123def456', os: 'linux', osRelease: '6.1.0', arch: 'x64', uptimeS: 42 };
 
 function rig(options: { agents?: () => string[]; failWrite?: boolean } = {}) {
     const written: Array<{ file: string; record: CrashRecord }> = [];
@@ -27,6 +28,7 @@ function rig(options: { agents?: () => string[]; failWrite?: boolean } = {}) {
             return file;
         },
         remove: (file) => { removed.push(file); },
+        header: () => HEADER,
     });
     const proc = new EventEmitter();
     const app = new EventEmitter();
@@ -35,10 +37,10 @@ function rig(options: { agents?: () => string[]; failWrite?: boolean } = {}) {
 }
 
 describe('every exit path window main can catch writes its record', () => {
-    it('process exit with a code: kind exit, the code, the time, the last RSS and the running agents’ NAMES', () => {
+    it('process exit with a code: the common header, kind exit, the code, the time, the last RSS and the running agents’ NAMES', () => {
         const r = rig();
         r.proc.emit('exit', 7);
-        expect(r.records()).toEqual([{ kind: 'exit', at: '2026-11-06T10:00:00.000Z', pid: 4242, reason: 'exit', code: 7, rssMb: 640, agents: ['tynn', 'tynn-slave'] }]);
+        expect(r.records()).toEqual([{ ...HEADER, kind: 'exit', at: '2026-11-06T10:00:00.000Z', pid: 4242, reason: 'exit', code: 7, rssMb: 640, agents: ['tynn', 'tynn-slave'] }]);
     });
 
     it('an uncaught exception and an unhandled rejection: recorded (its type only — never its message), once each', () => {

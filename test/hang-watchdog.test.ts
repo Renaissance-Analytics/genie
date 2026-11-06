@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CrashRecord, RunningAgentNote } from '../src/core/crash-record.js';
-import { runningAgentNote } from '../src/core/crash-record.js';
+import type { CrashHeader, CrashRecord, RunningAgentNote } from '../src/core/crash-record.js';
+import { mainStalls, runningAgentNote } from '../src/core/crash-record.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
 import { HangWatchdog } from '../src/main/hang-watchdog.js';
 
@@ -16,6 +16,7 @@ import { HangWatchdog } from '../src/main/hang-watchdog.js';
  */
 
 const MB = 1024 * 1024;
+const HEADER: CrashHeader = { schema: 1, version: '2.0.0-beta.60', build: '2.0.0-beta.60+abc123def456', os: 'linux', osRelease: '6.1.0', arch: 'x64', uptimeS: 42 };
 
 function rig(options: { agents?: () => RunningAgentNote[]; alive?: (pid: number) => boolean; lifecycle?: () => string[] } = {}) {
     let t = 1_700_000_000_000;
@@ -33,6 +34,7 @@ function rig(options: { agents?: () => RunningAgentNote[]; alive?: (pid: number)
         agents: options.agents ?? (() => []),
         lifecycle: options.lifecycle ?? (() => ['2026-11-06T10:00:00.000Z boot pid=4242 version=t', '2026-11-06T10:00:01.000Z stall main ms=1800 route=/', '2026-11-06T10:00:02.000Z host stall main ms=1200 route=-']),
         log: (line) => lines.push(line),
+        header: () => HEADER,
     });
     dog.start();
     /** One second of the clock, with the watchdog's own tick (as its 1 s interval would). */
@@ -54,13 +56,15 @@ describe('genie-host hears window main beat, and records a hang', () => {
         expect(r.records).toHaveLength(1);
         const record = r.records[0]!;
         expect(record.kind).toBe('hang');
+        // THE COMMON HEADER: which Genie, which machine, how long the host had run (schema 1).
+        expect(record).toMatchObject(HEADER);
         if (record.kind !== 'hang') throw new Error('not a hang');
         expect(record.windowPid).toBe(4242);
         expect(record.lastBeatAt).toBe(new Date(lastBeat).toISOString());
         expect(record.at).toBe(new Date(r.now()).toISOString());
         // The last lifecycle lines, main's own stall lines from them (the host's are not main's), memory, agents.
         expect(record.lifecycle).toContain('2026-11-06T10:00:00.000Z boot pid=4242 version=t');
-        expect(record.stalls).toEqual(['2026-11-06T10:00:01.000Z stall main ms=1800 route=/']);
+        expect(record.stalls).toEqual([{ at: '2026-11-06T10:00:01.000Z', ms: 1800, route: '/', stack: null }]);
         expect(Array.isArray(record.memory)).toBe(true);
         expect(record.agents).toEqual([]);
         expect(r.killed).toEqual([4242]);
@@ -134,6 +138,27 @@ describe('genie-host hears window main beat, and records a hang', () => {
     });
 });
 
+describe('main\u2019s stalls, structured from lifecycle.log', () => {
+    it('each `stall main` line is {at, ms, route, stack}; a stack line that follows is its SIGNATURE, at most 12 frames, no values', () => {
+        const frames = Array.from({ length: 15 }, (_, i) => `fn${i} main.js:${i + 1}`);
+        const lines = [
+            '2026-11-06T10:00:00.000Z stall main ms=1200 route=-',
+            '2026-11-06T10:00:01.000Z host stall main ms=1500 route=-',
+            '2026-11-06T10:00:02.000Z stall main ms=16600 route=/workspace/ws during=agents.history',
+            `2026-11-06T10:00:02.100Z stall main stack ms=16590 top=fn0 main.js:1 stack=${frames.join(' < ')}`,
+            '2026-11-06T10:00:03.000Z stall main ms=1100 route=/',
+            '2026-11-06T10:00:03.100Z stall main stack ms=1090 top=encode x stack=encode ndjson.js:9 < send({"text":"MESSAGE-SECRET"}) a.js:1 < (anonymous) b.js:2',
+        ];
+        const stalls = mainStalls(lines);
+        expect(stalls).toEqual([
+            { at: '2026-11-06T10:00:00.000Z', ms: 1200, route: null, stack: null },
+            { at: '2026-11-06T10:00:02.000Z', ms: 16600, route: '/workspace/ws', stack: frames.slice(0, 12).join(' < ') },
+            { at: '2026-11-06T10:00:03.000Z', ms: 1100, route: '/', stack: 'encode ndjson.js:9 < ? < (anonymous) b.js:2' },
+        ]);
+        expect(JSON.stringify(stalls)).not.toContain('MESSAGE-SECRET');
+    });
+});
+
 describe('RSS every 60 s, as one lifecycle line', () => {
     it('`rss window=<MB> host=<MB>` once a minute on the fake clock, from the newest beat’s reading', () => {
         const r = rig();
@@ -175,7 +200,7 @@ describe('a window connection that drops without a clean goodbye is LOST', () =>
         r.second(1);
         expect(r.records).toHaveLength(1);
         const record = r.records[0]!;
-        expect(record).toMatchObject({ kind: 'lost', windowPid: 4242, lastBeatAt: new Date(lastBeat).toISOString(), lastRssMb: 700 });
+        expect(record).toMatchObject({ ...HEADER, kind: 'lost', windowPid: 4242, lastBeatAt: new Date(lastBeat).toISOString(), lastRssMb: 700 });
         // Nothing is ended for a window that is already gone.
         expect(r.killed).toEqual([]);
     });

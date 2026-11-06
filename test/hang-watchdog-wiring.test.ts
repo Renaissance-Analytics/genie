@@ -41,6 +41,8 @@ describe('the entries are wired', () => {
         expect(host).toMatch(/kill: \(pid\) => killProcessAsync\(pid\)/);
         expect(host).toMatch(/writeCrashRecord\(join\(runtime, 'crash'\), record\)/);
         expect(host).toMatch(/heartbeat: hangWatchdog,/);
+        // Every record's common header: the host's version and its build string.
+        expect(host).toMatch(/header: \(\) => crashHeader\(build\.split\('\+'\)\[0\] \?\? build, build\),/);
         expect(host).toMatch(/hangWatchdog\.start\(\);/);
         // The host's own end is clean: the windows that drop with it are not lost.
         expect(host).toMatch(/shuttingDown = true;\n\s*hangWatchdog\.shuttingDown\(\);/);
@@ -49,6 +51,7 @@ describe('the entries are wired', () => {
     it('window main beats over the link and records every exit path it can catch', () => {
         const main = src('src/main/main.ts');
         expect(main).toMatch(/if \(launch\.kind === 'boot'\) crashRecorder\.install\(process, app\);/);
+        expect(main).toMatch(/header: \(\) => crashHeader\(app\.getVersion\(\), agentEngineLink\?\.client\.welcome\?\.build \?\? app\.getVersion\(\)\),/);
         expect(main).toMatch(/startHeartbeat\(\{\s*send: \(beat\) => agentEngineLink\?\.client\.heartbeat\(beat\)/);
         // before-quit: after a cancelled quit and "just close the UI" have returned, before the shutdown runs.
         expect(main).toMatch(/if \(step === 'close-ui'\) \{[^\n]*\}\n\s*crashRecorder\.beforeQuit\(\);/);

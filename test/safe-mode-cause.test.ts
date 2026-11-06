@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CrashRecord } from '../src/core/crash-record.js';
+import type { CrashHeader, CrashRecord } from '../src/core/crash-record.js';
 import { previousRunCause, writeCrashRecord } from '../src/main/crash-records.js';
 import { SafeMode } from '../src/main/safe-mode-host.js';
 
@@ -19,9 +19,10 @@ afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, f
 const fresh = (): string => { const d = mkdtempSync(join(tmpdir(), 'safe-mode-cause-')); dirs.push(d); return d; };
 const T0 = Date.UTC(2026, 10, 6, 23, 12, 0);
 const iso = (t: number): string => new Date(t).toISOString();
+const HEADER: CrashHeader = { schema: 1, version: '2.0.0-beta.60', build: '2.0.0-beta.60+abc123def456', os: 'linux', osRelease: '6.1.0', arch: 'x64', uptimeS: 42 };
 
-const hang = (at: number): CrashRecord => ({ kind: 'hang', at: iso(at), windowPid: 9, lastBeatAt: iso(at - 30_000), lifecycle: [], stalls: [], memory: [], agents: [] });
-const exit = (at: number, code: number | null): CrashRecord => ({ kind: 'exit', at: iso(at), pid: 9, reason: code === null ? 'before-quit' : 'exit', code, rssMb: 1, agents: [] });
+const hang = (at: number): CrashRecord => ({ ...HEADER, kind: 'hang', at: iso(at), windowPid: 9, lastBeatAt: iso(at - 30_000), lifecycle: [], stalls: [], memory: [], agents: [] });
+const exit = (at: number, code: number | null): CrashRecord => ({ ...HEADER, kind: 'exit', at: iso(at), pid: 9, reason: code === null ? 'before-quit' : 'exit', code, rssMb: 1, agents: [] });
 
 describe('the cause of the run that did not end cleanly', () => {
     it('the NEWEST record since that run started: a hang, an exit with its code; an older run’s records are not this one’s', () => {

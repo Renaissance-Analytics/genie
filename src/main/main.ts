@@ -105,7 +105,7 @@ import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
 import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js';
-import { removeCrashRecord, writeCrashRecord } from './crash-records.js';
+import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-records.js';
 import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
@@ -325,6 +325,8 @@ const crashRecorder = new WindowCrashRecorder({
     agents: () => (registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : []),
     write: (record) => writeCrashRecord(join(runtimeDir(genieRoot()), 'crash'), record),
     remove: removeCrashRecord,
+    // The host's build as this window last heard it (its welcome); this Genie's version until it has linked.
+    header: () => crashHeader(app.getVersion(), agentEngineLink?.client.welcome?.build ?? app.getVersion()),
 });
 if (launch.kind === 'boot') crashRecorder.install(process, app);
 /** Window main's heartbeat to genie-host's hang watchdog (hang-watchdog.ts): started once the engine link is up. */
