@@ -58,7 +58,7 @@ describe('the OSA’s home', () => {
 
     it('Genie runs the OSA there and writes its home there at boot, in normal mode', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main).toMatch(/OS_WORKSPACE\) return osaHomeDir\(genieHome\(\)\)/);
+        expect(main).toMatch(/OS_WORKSPACE\) return osaHomeDir\(genieRoot\(\)\)/);
         expect(main).toMatch(/osaHomeFiles\('normal'/);
         expect(main).not.toMatch(/OS_WORKSPACE\) return app\.getPath\('userData'\)/);
     });

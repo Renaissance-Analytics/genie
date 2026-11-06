@@ -5,6 +5,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
 import { LoginHost } from '../src/main/login-host.js';
 import { nodeEnvelopePorts } from '../src/main/envelope-fs.js';
+import * as launch from '../src/main/engine-launch.js';
 import * as paths from '../src/main/paths.js';
 
 /**
@@ -253,11 +254,59 @@ describe('the source guard: every host-side path from the one root', () => {
 describe('the window wires its scratch from its root, and stops the sweep on quit', () => {
     const main = readFileSync('src/main/main.ts', 'utf8');
     it('the login and Import from Git take the scratch area’s folder; the sweep is scheduled and stopped in before-quit', () => {
-        expect(main).toMatch(/scratchArea\(genieHome\(\)\)/);
+        expect(main).toMatch(/scratchArea\(genieRoot\(\)\)/);
         expect(main).toMatch(/new LoginHost\(\{[\s\S]{0,400}scratch: \(\) => /);
         expect(main).toMatch(/nodeEnvelopePorts\(\{ stagingBase: /);
-        expect(main).toMatch(/scheduleScratchSweep\(genieHome\(\)/);
+        expect(main).toMatch(/scheduleScratchSweep\(genieRoot\(\)/);
         const beforeQuit = main.slice(main.indexOf("app.on('before-quit'"));
         expect(beforeQuit.slice(0, 3000)).toMatch(/scratchSweepStop\?\.\(\)/);
+    });
+});
+
+/**
+ * #1605: THE WINDOW READS ITS ROOT THROUGH genieRoot() TOO, so every Genie process has one reader of GENIE_HOME, and the
+ * window passes that same root to the host. Before, a GENIE_HOME set for the whole app was overridden by the window's
+ * default (`genieHome()`, ~/.genie) when it started the host.
+ */
+interface HostSpawnSpec { file: string; args: readonly string[]; options: { env: Record<string, string | undefined>; detached: boolean } }
+const hostSpawnSpec = (launch as unknown as { hostSpawnSpec(ports: { execPath: string; hostScript: string; env: Record<string, string | undefined>; genieHome: string; build: string }): HostSpawnSpec }).hostSpawnSpec;
+
+describe('the window’s root is genieRoot(), and the host is started on that same root (#1605)', () => {
+    const fakeHome = resolve('/', 'p7-fake-home', 'wish');
+
+    it('with GENIE_HOME set for the app, the window’s root and the host’s GENIE_HOME are both that value', () => {
+        const set = resolve('/', 'p7-app-root', 'genie');
+        const env = { GENIE_HOME: set, PATH: 'p' };
+        const root = p7.genieRoot(env, fakeHome);
+        const spec = hostSpawnSpec({ execPath: 'genie-exe', hostScript: 'host.js', env, genieHome: root, build: 'b1' });
+        expect(root).toBe(set);
+        expect(spec.options.env['GENIE_HOME']).toBe(set);
+        expect(spec.options.env['ELECTRON_RUN_AS_NODE']).toBe('1');
+        expect(spec.options.env['GENIE_HOST_BUILD']).toBe('b1');
+        expect(spec).toMatchObject({ file: 'genie-exe', args: ['host.js'], options: { detached: true } });
+    });
+
+    it('control: with no GENIE_HOME, the root is <home>/.genie as before, and the host is told that', () => {
+        const root = p7.genieRoot({ PATH: 'p' }, fakeHome);
+        expect(root).toBe(join(fakeHome, '.genie'));
+        expect(hostSpawnSpec({ execPath: 'genie-exe', hostScript: 'host.js', env: { PATH: 'p' }, genieHome: root, build: 'b1' }).options.env['GENIE_HOME']).toBe(join(fakeHome, '.genie'));
+    });
+
+    it('the window (main.ts) and the doctor never call genieHome(): every root they use is genieRoot(), the host’s launch included', () => {
+        for (const file of ['src/main/main.ts', 'src/main/doctor.ts']) {
+            const offenders = codeLines(resolve(file)).filter((l) => /\bgenieHome\(\)/.test(l.text)).map((l) => `${file}:${l.line}: ${l.text}`);
+            expect(offenders).toEqual([]);
+        }
+        const main = codeLines(resolve('src/main/main.ts')).map((l) => l.text).join('\n');
+        // Positive control: the window does name its root, through genieRoot().
+        expect(main).toMatch(/genieHome: genieRoot\(\),/);
+        expect(main).toMatch(/runtimeDir: runtimeDir\(genieRoot\(\)\),/);
+    });
+
+    it('spawnHostProcess starts the host from hostSpawnSpec, the one place its environment is made', () => {
+        const src = readFileSync('src/main/engine-launch.ts', 'utf8');
+        const body = src.slice(src.indexOf('export function spawnHostProcess'), src.indexOf('export async function linkToRunningHost'));
+        expect(body).toMatch(/hostSpawnSpec\(ports\)/);
+        expect(body).not.toMatch(/GENIE_HOME:/);
     });
 });
