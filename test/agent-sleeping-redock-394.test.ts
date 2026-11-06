@@ -72,6 +72,14 @@ describe('story 394: first accepted turn after redock', () => {
         expect(prompts[0]).toMatch(/hibernat|redock/i);
         expect(cleared).toEqual([[record.id, '2026-11-06T20:00:00.000Z']]);
     });
+    it('keeps a separate held trust instruction alongside the redock notice', () => {
+        const { host, record, prompts } = setup({ redockAt: '2026-11-06T20:00:00.000Z' });
+        host.holdForNextWork(record.id, 'Genie trust instructions must remain in this first turn.');
+        host.prompt(record.id, 'Continue work', 'you');
+        expect(prompts[0]).toContain('Genie trust instructions');
+        expect(prompts[0]).toMatch(/hibernat|redock/i);
+        expect(prompts[0]!.endsWith('Continue work')).toBe(true);
+    });
     it('leaves ordinary work unchanged when the workspace was not redocked', () => {
         const { host, record, prompts, cleared } = setup();
         expect(host.prompt(record.id, 'Normal work', 'you')).toBe(true);

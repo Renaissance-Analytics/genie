@@ -6,6 +6,11 @@ import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity
 import { HostRegistry } from '../src/main/host-registry.js';
 import { Registry } from '../src/main/registry.js';
 import { Store } from '../src/main/store.js';
+import { filterSnapshotForWorkspace } from '../src/core/remote-protocol.js';
+import { doctorDataTools } from '../src/main/doctor-data.js';
+import { InboxStore } from '../src/main/inbox-store.js';
+import { AttentionStore } from '../src/main/attention-store.js';
+import { genieTools } from '../src/main/mcp-tools.js';
 
 let dir: string;
 let store: Store;
@@ -66,6 +71,30 @@ describe('story 394: a hibernated workspace supplies no data', () => {
         expect([...host.workspaceSlugs().keys()]).toEqual(['awake']);
         expect(host.find(ghost.id)).toBeNull();
     });
+    it('the real AgentInbox list includes an awake peer but never a ghost peer', async () => {
+        const host = new HostRegistry(store); await host.refresh();
+        const inbox = await InboxStore.open(dir), attention = await AttentionStore.open(dir, inbox);
+        const tools = genieTools({ inbox, attention, roster: () => host.listAgents(), workspaceSlugs: () => host.workspaceSlugs(),
+            resolveCaller: () => ({ agentId: 'os-caller', agentName: 'genie', workspaceId: 'awake', workspacePath: dir }),
+            workspaceSetting: () => ({ scope: 'all' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+        });
+        const answer = await tools.find((t) => t.definition.name === 'agentinbox')!.handler({ action: 'list', terminalId: 'test' }, { server: 'genie', tool: 'agentinbox', headers: {} });
+        expect(answer.isError).toBe(false);
+        const peers = (JSON.parse(answer.text) as { peers: { workspaceId: string }[] }).peers;
+        expect(peers.map((p) => p.workspaceId)).toContain('awake');
+        expect(peers.map((p) => p.workspaceId)).not.toContain('ghost');
+    });
+    it('the OS doctor workspace/agent views exclude ghosts too', async () => {
+        const tools = doctorDataTools({ genieHome: dir });
+        const invoke = async (name: string, args: Record<string, string>) => tools.find((t) => t.definition.name === name)!.handler(args, { server: 'genie', tool: name, headers: {} });
+        const list = await invoke('workspaces', {});
+        expect(list.isError).toBe(false);
+        expect(list.text).toContain(awake.id);
+        expect(list.text).not.toContain(ghost.id);
+        expect(list.text).not.toContain('"ghost"');
+        expect((await invoke('loadWorkspace', { workspace: 'ghost' })).isError).toBe(true);
+        expect((await invoke('loadAgent', { workspace: 'ghost', agent: ghost.name })).isError).toBe(true);
+    });
     it('removes an already-visible workspace immediately on hibernation, while preserving the other workspace', async () => {
         await registry.setAsleep('ghost', false);
         expect(registry.listAgents().map((a) => a.id)).toContain(ghost.id);
@@ -75,6 +104,13 @@ describe('story 394: a hibernated workspace supplies no data', () => {
         const reopened = new Registry(store); await reopened.load({ name: 'test', healthy: true });
         expect(reopened.snapshot().agents.map((a) => a.id)).toEqual([awake.id]);
     });
+});
+
+it('workspace-scoped remote snapshots cannot leak another workspace’s sidebar ghost metadata', () => {
+    const snapshot = { agents: [], workspaces: [{ id: 'awake' }], hibernatedWorkspaces: [{ id: 'ghost', path: '/ghost', asleep: true }], deckItems: [] };
+    const scoped = filterSnapshotForWorkspace(snapshot, 'awake');
+    expect(scoped.workspaces).toEqual([{ id: 'awake' }]);
+    expect(scoped.hibernatedWorkspaces).toEqual([]);
 });
 
 describe('story 394: redocking requires each agent to reorient on its next turn', () => {

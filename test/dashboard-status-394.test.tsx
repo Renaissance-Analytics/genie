@@ -67,9 +67,12 @@ describe('story 394: one alphabetical status table', () => {
         click(filter('sleeping')); click(filter('stopped'));
         for (const state of ['working', 'waiting', 'broken', 'cooling', 'idle', 'sleeping', 'stopped']) {
             const entry = container.querySelector<HTMLElement>(`[data-agent="${state}"]`)!;
-            const chip = container.querySelector<HTMLElement>(`[data-chip="${state}"]`)!;
             expect(entry.style.getPropertyValue('--agent-status')).not.toBe('');
-            expect(chip.style.getPropertyValue('--agent-status')).toBe(entry.style.getPropertyValue('--agent-status'));
+            // Cooling keeps its colour while its census remains in Working, as before.
+            if (state !== 'cooling') {
+                const chip = container.querySelector<HTMLElement>(`[data-chip="${state}"]`)!;
+                expect(chip.style.getPropertyValue('--agent-status')).toBe(entry.style.getPropertyValue('--agent-status'));
+            }
             expect(entry.className).toContain('var(--agent-status)');
         }
         expect(container.querySelector<HTMLElement>('[data-agent="sleeping"]')!.style.getPropertyValue('--agent-status')).toMatch(/grey|gray|zinc|fg-4/);
