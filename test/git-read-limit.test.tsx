@@ -177,6 +177,45 @@ describe('past it, a hook that keeps starting children is ended with all of them
     }, 90_000);
 });
 
+/*
+ * A BIG TREE IS STILL OURS (#1638's review): every process the walk finds is a descendant of our git by pid, start time and
+ * name, so however many a hook forks, all of them end. A cap on how many are ended would be an escape hatch: a hook that
+ * forks past it keeps running in the repository. Here the hook forks 230 sleeps at once; each carries a mark of this run in
+ * its command line, so the machine's table says which are ours.
+ */
+describe('past it, a hook that forks hundreds of children is ended with all of them', () => {
+    const MARK = `45.${String(process.pid).padStart(6, '0').slice(-6)}`;
+    const ours = (): number => {
+        try {
+            if (process.platform === 'win32') {
+                const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*sleep* ${MARK}*' }).Count`], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+                return Number(out.trim() || 0);
+            }
+            return execFileSync('pgrep', ['-fc', `sleep ${MARK}`], { encoding: 'utf8' }).trim().split(/\s+/).map(Number)[0] ?? 0;
+        } catch { return 0; }
+    };
+
+    beforeEach(() => {
+        const hook = join(root, 'forks-hundreds.sh');
+        writeFileSync(hook, `#!/bin/sh\ni=0\nwhile [ "$i" -lt 230 ]; do sleep ${MARK} & i=$((i+1)); done\nwait\n`);
+        chmodSync(hook, 0o755);
+        git('config', 'core.fsmonitor', hook.replace(/\\/g, '/'));
+        GIT_READ_LIMIT.ms = 25_000;
+    });
+    afterEach(() => {
+        try { if (process.platform !== 'win32') execFileSync('pkill', ['-f', `sleep ${MARK}`]); } catch { /* none left */ }
+    });
+
+    it('gitTreeStatus: more than 200 of them, and at the limit none survives', async () => {
+        const reading = gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message);
+        // CONTROL: the table sees them, past the old cap of 200, before the limit comes.
+        await vi.waitFor(() => { expect(ours()).toBeGreaterThan(200); }, { timeout: 24_000, interval: 1_000 });
+        expect(await reading).toMatch(/did not answer/);
+        await vi.waitFor(() => { expect(ours()).toBe(0); }, { timeout: 60_000, interval: 1_000 });
+        await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 10_000, interval: 250 });
+    }, 150_000);
+});
+
 describe('past it', () => {
     beforeEach(() => {
         const hook = join(root, 'never.sh');
