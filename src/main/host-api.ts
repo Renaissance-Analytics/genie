@@ -350,7 +350,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'cancelTurn': {
                 const r = agent(args[0]);
                 // A remote window's Stop this turn or Interrupt and send: only `interrupt` is an interrupt (Tynn #672 part 3).
-                return r ? deps.host.cancel(r.id, cancelIntent(args[1])) : { ok: false, reason: 'unknown agent' };
+                return r ? deps.host.cancel(r.id) : { ok: false, reason: 'unknown agent' }; // BREAK PROBE 2: the remote API drops the intent
             }
             case 'prompt': {
                 const r = agent(args[0]);

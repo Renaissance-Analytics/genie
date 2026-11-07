@@ -544,7 +544,7 @@ export class SessionEngineServer {
             }
             case 'engine.cancel':
                 // Only `interrupt` is an interrupt; anything else, or nothing, is a Stop (Tynn #672 part 3).
-                return host.cancel(id(), by(1), cancelIntent(args[2]));
+                return host.cancel(id(), by(1)); // BREAK PROBE 1: the engine drops the intent
             case 'engine.deliver':
                 return host.deliver(id(), str(1), by(2));
             case 'engine.answerApproval':
