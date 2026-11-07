@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentRow } from '../src/core/dashboard-view.js';
 import { chatCommsOf, chatThreadFrom, mailSubject, type MailLike } from '../src/core/chat-view.js';
 import type { AgentDetail } from '../src/renderer/bridge.js';
-import { ChatDeliveryRow, ChatFlyout, ChatMailRow } from '../src/renderer/components/ChatFlyout.js';
+import { ChatFlyout, ChatMailRow } from '../src/renderer/components/ChatFlyout.js';
 
 /**
  * AGENTINBOX MAIL IN THE CHAT, WITH ITS CONTEXT (beta.33 items 7 + 18).
@@ -72,29 +72,25 @@ describe('the thread', () => {
         expect(chatThreadFrom(detail([mail('m1', 'a1', 'a2', 'x', T + 1)]), 'a1', rows, () => 0).messages.some((m) => m.who === 'mail')).toBe(true);
     });
 
-    it('Genie’s notice turn is a DELIVERY row naming each message it told about — who from, and what it says', () => {
-        const thread = chatThreadFrom(detail(null, [{
+    it('Genie’s notice does not add a row: the recipient’s one mail card is the notification', () => {
+        const thread = chatThreadFrom(detail([mail('m2', 'human', 'a1', FTQ_ANSWER, T + 70_000)], [{
             id: 'e3',
             event: { kind: 'message', speaker: 'peer', peerName: 'genie', text: NOTICE, mail: [{ id: 'm2', from: 'human', fromName: null, text: FTQ_ANSWER, sentAt: new Date(T + 70_000).toISOString() }] },
             at: T + 130_000,
         }]), 'a1', rows, () => 0);
-        const delivery = thread.messages.find((m) => m.id === 'e3')!;
-        expect(delivery.who).toBe('delivery');
-        expect(delivery.from).toBe('genie → atlas');
-        expect(delivery.text).toBe('told atlas about 1 AgentInbox message');
-        expect(delivery.mail).toEqual([{ id: 'm2', from: 'you', subject: 'Answer to your question q_1: Deploy — Ship it tonight? → Yes · Note: after the backup' }]);
+        expect(thread.messages.find((m) => m.id === 'e3')).toBeUndefined();
+        expect(thread.messages.filter((m) => m.mailId === 'm2')).toHaveLength(1);
+        expect(thread.messages.find((m) => m.id === 'm2')).toMatchObject({ who: 'mail', from: 'you → atlas', text: FTQ_ANSWER });
     });
 
-    it('a notice from before this change (no mail on it) still reads as Genie’s message — never an empty delivery', () => {
+    it('a legacy count-only notice is also omitted, never rendered as a separate nudge', () => {
         const thread = chatThreadFrom(detail(null, [{ id: 'e3', event: { kind: 'message', speaker: 'peer', peerName: 'genie', text: NOTICE }, at: T + 130_000 }]), 'a1', rows, () => 0);
-        expect(thread.messages.find((m) => m.id === 'e3')).toMatchObject({ who: 'peer', from: 'genie → atlas', text: NOTICE });
+        expect(thread.messages.find((m) => m.id === 'e3')).toBeUndefined();
     });
 
-    it('a delivery names an agent sender by name (its record’s, else the name it had when told, else its id)', () => {
-        const ev = (from: string, fromName: string | null) => ({ id: 'e3', event: { kind: 'message' as const, speaker: 'peer' as const, peerName: 'genie', text: NOTICE, mail: [{ id: 'mx', from, fromName, text: 'hi', sentAt: new Date(T).toISOString() }] }, at: T + 1 });
-        expect(chatThreadFrom(detail(null, [ev('a2', 'old-wren')]), 'a1', rows, () => 0).messages.find((m) => m.id === 'e3')!.mail![0]!.from).toBe('wren');
-        expect(chatThreadFrom(detail(null, [ev('a9', 'gone')]), 'a1', rows, () => 0).messages.find((m) => m.id === 'e3')!.mail![0]!.from).toBe('gone');
-        expect(chatThreadFrom(detail(null, [ev('a9', null)]), 'a1', rows, () => 0).messages.find((m) => m.id === 'e3')!.mail![0]!.from).toBe('a9');
+    it('a mail card names a known agent sender, and otherwise retains its id without inventing a sender', () => {
+        expect(chatThreadFrom(detail([mail('m1', 'a2', 'a1', 'hi', T)]), 'a1', rows, () => 0).messages.find(m => m.id === 'm1')!.from).toBe('wren → atlas');
+        expect(chatThreadFrom(detail([mail('m2', 'a9', 'a1', 'hi', T)]), 'a1', rows, () => 0).messages.find(m => m.id === 'm2')!.from).toBe('a9 → atlas');
     });
 });
 
@@ -155,8 +151,8 @@ describe('the rows', () => {
         expect(opened).toEqual(['m2']);
     });
 
-    it('a DELIVERY row: one entry per message told about, each naming who from and what it says, each opening its message', () => {
-        const thread = chatThreadFrom(detail(null, [{
+    it('multiple mails render their individual cards and links without the separate delivery row', () => {
+        const thread = chatThreadFrom(detail([mail('m2', 'human', 'a1', FTQ_ANSWER, T), mail('m4', 'a3', 'a1', 'review done', T)], [{
             id: 'e3',
             event: { kind: 'message', speaker: 'peer', peerName: 'genie', text: 'You have 2 unread AgentInbox messages; collect them with agentinbox receive.', mail: [
                 { id: 'm2', from: 'human', fromName: null, text: FTQ_ANSWER, sentAt: new Date(T).toISOString() },
@@ -164,13 +160,16 @@ describe('the rows', () => {
             ] },
             at: T + 130_000,
         }]), 'a1', rows, () => 0);
-        const m = thread.messages.find((x) => x.id === 'e3')!;
         const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} onOpenMail={() => {}} />);
-        expect(html).toMatch(/data-chat-message="e3" data-who="delivery"[\s\S]*told atlas about 2 AgentInbox messages[\s\S]*from you[\s\S]*Deploy — Ship it tonight\? → Yes[\s\S]*from vesper[\s\S]*review done/);
-        // The notice's own words to the agent ("collect it with agentinbox receive") are an instruction to it, not context.
+        expect(html).not.toContain('data-who="delivery"');
+        expect(html).not.toContain('told atlas');
+        expect(html).toContain('you → atlas');
+        expect(html).toContain('vesper → atlas');
+        expect(html).toContain('Deploy — Ship it tonight? → Yes');
+        expect(html).toContain('review done');
         expect(html).not.toContain('agentinbox receive');
         const opened: string[] = [];
-        const buttons = findAll(ChatDeliveryRow({ m, onOpenMail: (id) => opened.push(id) }), (p) => p['data-open-mail'] !== undefined);
+        const buttons = thread.messages.filter(m => m.who === 'mail').flatMap(m => findAll(ChatMailRow({ m, onOpenMail: id => opened.push(id) }), p => p['data-open-mail'] !== undefined));
         expect(buttons).toHaveLength(2);
         for (const b of buttons) (b.onClick as () => void)();
         expect(opened).toEqual(['m2', 'm4']);

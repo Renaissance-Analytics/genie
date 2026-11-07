@@ -46,7 +46,7 @@ import { fileURLToPath } from 'node:url';
 import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import type { TimedEvent } from '../core/stream-view.js';
-import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
+import { AGENT_PUSH_INTERVAL_MS, AgentPush, wireInboxChatUpdates } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { LatestPush } from '../core/latest-push.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
@@ -3640,8 +3640,8 @@ async function boot(): Promise<void> {
     composed.inbox.onSend(() => { registry?.touch(); });
     // One agent writing to another is the sender's action, with its own sound row (Tynn #766 C2a).
     composed.inbox.onSend((_to, message) => { const action = mailAction(message); if (action) broadcast('genie:action', action); });
-    // ...and the recipient's chat, whose system rows show it (the sender's own turn pushes the sender's).
-    composed.inbox.onSend((to) => { if (to !== 'human') pushAgent(to as AgentId); });
+    // The card is the notification: arrival, refusal and acceptance refresh both participants' watched chats.
+    wireInboxChatUpdates(composed.inbox, pushAgent);
     // THE TOOLCHAIN'S ACTIONS (toolchain-ops.ts): the real runner, process.env and the filesystem; progress is drawn as
     // the surface's busy line, pushed — nobody polls an install.
     const toolchainOps = (): ToolchainOpsPorts => ({

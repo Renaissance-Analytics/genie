@@ -44,9 +44,10 @@ const LONG = 'Diagnostic76ecPRnative126992199702passesrow10'.repeat(4);
 const at = 1_762_000_000_000;
 /** One of every row the chat draws, each carrying a long unbroken token. */
 const ROWS: ChatThreadMessage[] = [
-    { id: 'you', who: 'you', from: 'you', text: `look at ${LONG}`, delivered: true, at },
+    { id: 'you', who: 'you', from: 'you', text: `look at ${LONG}`, delivered: true, at, waiting: { step: LONG, since: at, kind: null } },
     { id: 'agent', who: 'agent', from: 'tynn', text: `Here: \`${LONG}\` and ${LONG}\n\n\`\`\`\n${LONG} ${LONG}\n\`\`\``, delivered: true, at },
     { id: 'mail', who: 'mail', from: 'tynn-slave → tynn', text: LONG, delivered: true, at, mailId: 'mail_1' },
+    { id: 'mail-waiting', who: 'mail', from: 'tynn-slave → tynn', text: LONG, delivered: false, at, mailId: 'mail_2', reason: LONG },
     { id: 'delivery', who: 'delivery', from: 'genie → tynn', text: 'told tynn about 1 AgentInbox message', delivered: true, at, mail: [{ id: 'mail_1', from: 'tynn-slave', subject: LONG }] },
     { id: 'system', who: 'system', from: 'tynn', text: `tynn → wren · ${LONG}`, delivered: true, at },
     { id: 'stopped', who: 'stopped', from: 'tynn', text: `Stopped · ${LONG}`, delivered: true, at },
@@ -74,30 +75,32 @@ describe('the chat never scrolls sideways', () => {
     it('CONTROL: every row kind rendered, each with its long token (so the next rule counts real rows)', () => {
         const log = mount(() => {});
         const kinds = [...log.querySelectorAll('[data-chat-message]')].map((e) => e.getAttribute('data-who'));
-        expect(kinds).toEqual(['you', 'agent', 'mail', 'delivery', 'system', 'stopped', 'thinking']);
-        expect(log.querySelector('[data-delivery-mail="mail_1"]')!.textContent).toContain(LONG);
+        expect(kinds).toEqual(['you', 'agent', 'mail', 'mail', 'system', 'stopped', 'thinking']);
+        // Mail deliberately caps its preview at160 characters; the refusal below retains the whole long token.
+        expect(log.querySelector('[data-mail-preview="mail"]')!.textContent).toBe(`${LONG.slice(0, 159)}…`);
+        expect(log.querySelector('[data-who="delivery"]')).toBeNull();
         expect(log.querySelector('[data-chat-error]')!.textContent).toContain(LONG);
     });
 
     for (const openable of [true, false]) {
-        it(`every one-line clip in a row is a block or a flex item, so it clips (the notice's entries ${openable ? 'as buttons' : 'as text'})`, () => {
+        it(`every one-line clip in a row is a block or a flex item, so it clips (mail links ${openable ? 'as buttons' : 'as text'})`, () => {
             const log = mount(openable ? () => {} : undefined);
             // Genie's own row markup: a reply's rendered Markdown is react-fancy's (its code blocks scroll in their own box).
             const clips = [...log.querySelectorAll('*')].filter((el) => !el.closest('[data-chat-prose]') && classes(el).some((c) => c === 'truncate' || c === 'whitespace-nowrap'));
-            // Positive control: the notice's subject IS one of them, so an empty list cannot pass for a clean one.
+            // Positive control: the queued step IS a clipped label, so an empty list cannot pass for a clean one.
             expect(clips.some((el) => el.textContent === LONG)).toBe(true);
             const stuck = clips.filter((el) => !BLOCKS.has(el.tagName) && !isFlex(el.parentElement)).map((el) => `${el.tagName.toLowerCase()} in ${el.parentElement?.tagName.toLowerCase()}.${classes(el.parentElement!).join('.')}`);
             expect(stuck).toEqual([]);
         });
     }
 
-    it('the notice entry keeps who wrote it and the subject apart: two flex items, not one run of text', () => {
+    it('the waiting card retains its sender and long refusal text without resurrecting the delivery nudge', () => {
         const log = mount(() => {});
-        const entry = log.querySelector('[data-delivery-mail="mail_1"]')!;
-        const subject = [...entry.querySelectorAll('span')].find((s) => s.textContent === LONG)!;
-        const from = [...entry.querySelectorAll('span')].find((s) => s.textContent === 'from tynn-slave')!;
-        expect(subject.parentElement).toBe(from.parentElement);
-        expect(isFlex(subject.parentElement)).toBe(true);
-        expect(classes(subject)).toContain('min-w-0');
+        const entry = log.querySelector('[data-chat-message="mail-waiting"]')!;
+        expect(entry.textContent).toContain('tynn-slave → tynn');
+        const refusal = entry.querySelector('[data-mail-refusal]');
+        expect(refusal).not.toBeNull();
+        expect(refusal!.textContent).toBe(LONG);
+        expect(log.querySelector('[data-who="delivery"]')).toBeNull();
     });
 });

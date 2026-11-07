@@ -254,11 +254,16 @@ export class InboxStore {
      */
     async deleteThread(a: Participant, b: Participant): Promise<number> {
         const before = this.#mail.messages.length;
+        const removed: InboxMessage[] = [];
         this.#mail.lastSeq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0);
-        this.#mail.messages = this.#mail.messages.filter((m) => !((m.from === a && m.to === b) || (m.from === b && m.to === a)));
+        this.#mail.messages = this.#mail.messages.filter((m) => {
+            const gone = (m.from === a && m.to === b) || (m.from === b && m.to === a);
+            if (gone) removed.push(m);
+            return !gone;
+        });
         const gone = before - this.#mail.messages.length;
         if (gone > 0) {
-            await this.#flush();
+            await this.#flush(removed);
             for (const l of this.#readListeners) l(a, []);
         }
         return gone;
@@ -315,7 +320,7 @@ export class InboxStore {
         // One durable write before either arrival is announced. No recursive send: two paused agents cannot loop.
         this.#mail.lastSeq = arrivals.at(-1)!.seq;
         this.#mail.messages.push(...arrivals);
-        await this.#flush();
+        await this.#flush(arrivals);
 
         for (const arrival of arrivals) {
             for (const w of [...this.#waiters]) {
@@ -346,14 +351,17 @@ export class InboxStore {
             this.#mail.cursors[participant] = deferred ? deferred.seq - 1 : last;
             // WHICH messages this receive read (genie#1209): the Dashboard marks each one's signal read.
             const read: string[] = [];
+            const changed: InboxMessage[] = [];
             const returned = new Set(page.map((m) => m.id));
             this.#mail.messages = this.#mail.messages.map((m) => {
                 if (!returned.has(m.id) || m.readAt !== null) return m;
                 read.push(m.id);
                 const { deliveryRefusal: _refusal, ...message } = m;
-                return { ...message, readAt };
+                const next = { ...message, readAt };
+                changed.push(next);
+                return next;
             });
-            await this.#flush();
+            await this.#flush(changed);
             page = page.map((m) => this.#mail.messages.find((x) => x.seq === m.seq)!);
             for (const l of this.#readListeners) l(participant, read);
         }
@@ -383,8 +391,14 @@ export class InboxStore {
         const pending = new Set(this.unread(participant).filter((m) => captured.has(m.id)).map((m) => m.id));
         if (pending.size === 0) return;
         const deliveryRefusal = { attempts: refusal.attempts, reason: refusal.reason.slice(0, 2_000), at: this.#now() };
-        this.#mail.messages = this.#mail.messages.map((m) => pending.has(m.id) ? { ...m, deliveryRefusal } : m);
-        await this.#flush();
+        const changed: InboxMessage[] = [];
+        this.#mail.messages = this.#mail.messages.map((m) => {
+            if (!pending.has(m.id)) return m;
+            const next = { ...m, deliveryRefusal };
+            changed.push(next);
+            return next;
+        });
+        await this.#flush(changed);
     }
 
     /** Mail for `participant` after their committed cursor. The UI's reminder count. */
@@ -603,12 +617,16 @@ export class InboxStore {
         await rename(tmp, target);
     }
 
-    async #flush(): Promise<void> {
+    async #flush(changed: readonly InboxMessage[] = []): Promise<void> {
         await writeJsonAtomic(this.mailFile, this.#mail);
         for (const l of this.#changeListeners) l();
+        if (changed.length > 0) for (const listener of [...this.#messageListeners]) {
+            try { listener(changed); } catch { /* A view failing cannot interrupt mail delivery. */ }
+        }
     }
 
     readonly #changeListeners = new Set<() => void>();
+    readonly #messageListeners = new Set<(messages: readonly InboxMessage[]) => void>();
 
     /**
      * Every change that reached the disk (the host split, P3.1): what genie-host sends the window's replica, before the
@@ -617,6 +635,12 @@ export class InboxStore {
     onChanged(listener: () => void): () => void {
         this.#changeListeners.add(listener);
         return () => { this.#changeListeners.delete(listener); };
+    }
+
+    /** Changed or removed mail, after its durable write: local views refresh only the affected participants. */
+    onMessagesChanged(listener: (messages: readonly InboxMessage[]) => void): () => void {
+        this.#messageListeners.add(listener);
+        return () => { this.#messageListeners.delete(listener); };
     }
 
     /** The mail as it is: oldest first, and each participant's committed cursor. Read-only: never written through. */
