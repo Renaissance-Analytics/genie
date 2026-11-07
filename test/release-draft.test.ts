@@ -78,9 +78,14 @@ describe('the release workflow publishes a DRAFT first', () => {
         expect(verify).not.toMatch(/^\s*if:/m);
         expect(code()).not.toMatch(/continue-on-error/);
         expect(code()).not.toMatch(/always\(\)/);
-        // `needs: publish` covers every leg of the matrix: both platforms are legs of the one job.
+        // Both publishing jobs are dependencies; only Windows receives the signing identity.
+        expect(verify).toMatch(/needs:\s*\[publish, publish-windows\]/);
         const publish = job('publish');
-        for (const os of ['windows-latest', 'ubuntu-latest']) expect(publish).toContain(os);
+        expect(publish).toContain('ubuntu-latest');
+        expect(publish).not.toContain('windows-latest');
+        const windows = job('publish-windows');
+        expect(windows).toContain('windows-latest');
+        expect(windows).toMatch(/gh release upload/);
     });
 
     it('verify writes the notes from the file, then checks notes + assets + flags with the release-check script', () => {

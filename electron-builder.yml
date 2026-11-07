@@ -135,6 +135,19 @@ protocols:
 
 win:
   icon: build/icon.ico
+  # Extra resources (including resources/bin/genie-launch.exe) use WinPackager's copy/sign
+  # transformer. signExts also covers DLLs at the root and in app.asar.unpacked.
+  signExts: ['.dll']
+  azureSignOptions:
+    publisherName: Renaissance Analytics
+    endpoint: https://eus.codesigning.azure.net
+    certificateProfileName: genie-public
+    codeSigningAccountName: renaissance-analytics
+    fileDigest: SHA256
+    timestampRfc3161: http://timestamp.acs.microsoft.com
+    timestampDigest: SHA256
+    # DefaultAzureCredential reaches azure/login's CLI session on the fresh hosted runner.
+    # No Exclude* switches: see docs/windows-signing.md for module/credential-chain docs.
   target:
     - nsis
   artifactName: ${productName}-${version}-setup.${ext}
