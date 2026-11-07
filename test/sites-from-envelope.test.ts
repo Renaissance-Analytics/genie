@@ -261,16 +261,19 @@ describe('the hosts file follows the CONFIGURED sites (S4)', () => {
         expect(hostsWrites).toBe(1);
         workspaces = [{ id: 'acme', path: acme }, { id: 'sleepy', path: sleepy, asleep: false }];
         for (const l of listeners) l();
-        await settle();
-        expect((await sitesOf(s)).find((x) => x.host === 'blog.gen')).toMatchObject({ state: 'running' });
-        expect(hostsWrites).toBe(2);
+        // Workspace sync and its hosts debounce finish asynchronously; assert their effects, not a 25ms sleep.
+        await vi.waitFor(async () => {
+            expect((await sitesOf(s)).find((x) => x.host === 'blog.gen')).toMatchObject({ state: 'running' });
+            expect(hostsWrites).toBe(2);
+        });
         // Positive control in the same run: a new site is exactly one write.
         await handleFeatureAction(s, {
             kind: 'hosting.createSite', workspaceId: 'acme', repoPath: join(acme, 'repos', 'new'),
             form: { name: 'fresh', mode: 'static', devServer: null, hostPort: null, root: 'build', spa: true },
         }, state());
-        await settle();
-        expect(hostsWrites).toBe(3);
-        expect(hostsContent).toContain('127.0.0.1 fresh.gen');
+        await vi.waitFor(() => {
+            expect(hostsWrites).toBe(3);
+            expect(hostsContent).toContain('127.0.0.1 fresh.gen');
+        });
     });
 });

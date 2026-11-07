@@ -33,6 +33,8 @@ it('story394: the redock refresh purpose survives the existing window-to-host ho
     const refreshed = vi.fn(async () => null);
     const none = () => () => {};
     const service = new HostingService({ sites: { onChange: none }, engines: { onChange: none, onStarted: none }, onFrontDoorChange: none, trust: { refresh: refreshed, onVerdict: none }, engineReconcile: Promise.resolve({}) } as never, { workspaces: () => ['workspace'], schedule: () => () => {} });
+    // The call publishes its dump after refresh. Isolate that unrelated snapshot assembly, not the real call/forwarding.
+    vi.spyOn(service, 'dump').mockReturnValue({ frontDoorPort: 0, browserTrust: { caPem: null, reason: 'fixture' }, externalFrontDoor: { running: false, reason: 'fixture' }, routes: [], configuredHosts: [], deckItems: [], sites: [], specs: {}, declared: {}, engines: [], workspaces: {}, dependents: {}, reconcile: null, problems: [] });
     const replica = new HostingReplica((method, args) => service.call(method, args));
     type Refresh = (id: string, purpose?: 'redock') => Promise<unknown>;
     await (replica.trust.refresh as Refresh)('workspace', 'redock');
