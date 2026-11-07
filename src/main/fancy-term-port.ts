@@ -1,11 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { PROGRAM_LOOKUP_VARIABLE, findBatchFile, findProgram, notFoundWords, unsafeBatchArgument, type LookupPorts } from '../core/program-lookup.js';
-import { shellLaunch } from '../core/shell-launch.js';
+import { ptyShellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
-import { join } from 'node:path';
 import {
     configureInProcessBackend,
-    createSnapshotStore,
     inProcessBackend,
     parseCommandLine,
     resolveDefaultShell,
@@ -96,9 +94,10 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
             // rather than open a new one, silently.
             const id = `term_${randomUUID()}`;
             // A command line asked to run through the shell is (`&&`, pipes, quoting); otherwise it is split as before.
-            const { command, args } = spawn.command
-                ? spawn.shell ? shellLaunch(options.platform ?? process.platform, options.defaultShell, spawn.command) : parseCommandLine(spawn.command)
-                : options.defaultShell();
+            // On Windows the line travels in the environment, never in the argv (genie#1428: a pty's argv cannot carry a quote to cmd).
+            const shellLine = spawn.command && spawn.shell ? ptyShellLaunch(options.platform ?? process.platform, options.defaultShell, spawn.command, { ...process.env, ...(spawn.env ?? {}) }) : null;
+            const { command, args } = shellLine ?? (spawn.command ? parseCommandLine(spawn.command) : options.defaultShell());
+            const launchEnv = shellLine?.env ?? {};
 
             // A whole path, always: the engine's own search must never see a bare name, whichever engine this is. Nothing found starts nothing, and the words say so.
             const lookup = options.lookup ?? { platform: options.platform ?? process.platform, env: process.env };
@@ -117,7 +116,7 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
                 // Only when given — a plain shell gets the user's environment untouched.
                 // GENIE_TERMINAL_ID in EVERY terminal (§6.9): the id is minted above, so the shell is born knowing which terminal it is.
                 // A caller's own GENIE_TERMINAL_ID wins (the Take Over host mints an attribution id of its own); the engine merges this over process.env.
-                env: { GENIE_TERMINAL_ID: id, ...(spawn.env ?? {}), ...(spawn.personal ? { [PROGRAM_LOOKUP_VARIABLE]: undefined as unknown as string } : {}) },
+                env: { GENIE_TERMINAL_ID: id, ...(spawn.env ?? {}), ...launchEnv, ...(spawn.personal ? { [PROGRAM_LOOKUP_VARIABLE]: undefined as unknown as string } : {}) },
             });
             // An engine that could not start the process answers a non-positive pid rather than
             // throwing (fancy-term-host 0.10.0-rc.1 on the installed app: the helper could not be
@@ -146,34 +145,14 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
     };
 }
 
-/** At-rest cipher for terminal snapshots — `fancy-term-host`'s own port, re-exported by shape. */
-export interface SnapshotEncryptor {
-    isAvailable(): boolean;
-    encrypt(bytes: Buffer): Buffer;
-    decrypt(bytes: Buffer): Buffer;
-}
+/** The engine's snapshot port, with nothing behind it: Genie saves no scrollback (the owner's decision 2, 2026-11-02; plan §13). */
+export const NO_SNAPSHOTS = { writeSnapshot: () => null, readSnapshot: () => null, deleteSnapshot: () => {}, encrypting: () => false };
 
 /**
  * The REAL engine, wired for this process.
  *
  * `fancy-term-host`'s in-process backend wants two ports: settings (which gate the cwd hook
- * and detached terminals) and a snapshot store (scrollback persisted across restarts, §6.5).
- *
- * ## The encryptor is the CALLER'S, on purpose
- *
- * The engine has a designed fallback: when the OS cannot encrypt, snapshots are written as
- * plaintext gzip with a `0x00` marker, because a resume that does not work is worse than a
- * scrollback on disk in the clear. The first version of this function hit that fallback by
- * passing an encryptor that always reported unavailable — not because the OS could not
- * encrypt, but because this module also loads under plain Node for the live check. A
- * development condition wearing the fallback's clothes, in a buffer where people paste tokens.
- * Fancy pointed it out, and the sharper half: the live check was then exercising the
- * PLAINTEXT branch, so the encrypted branch — the only one production takes — was the branch
- * nothing tested.
- *
- * So: Electron passes a `safeStorage`-backed encryptor; the live check passes one that really
- * transforms bytes; nothing here decides to write in the clear. The one in `fancy-term-host`
- * can still fall back on a machine that genuinely cannot encrypt, which is its call to make.
+ * and detached terminals) and a snapshot store, which here keeps nothing.
  *
  * Settings come from a tiny literal rather than a settings subsystem that does not exist yet:
  * cwd tracking on, detached terminals off. A missing key makes the engine apply its default.
@@ -195,11 +174,11 @@ export function engineSettingsFrom(values: () => Readonly<Record<string, boolean
     };
 }
 
-export function realFancyTermPort(userData: string, encryptor: SnapshotEncryptor, settingsValues: () => Readonly<Record<string, boolean | string>> = () => ({ track_cwd: true, detached_terminals: false })): PtyPort {
+export function realFancyTermPort(settingsValues: () => Readonly<Record<string, boolean | string>> = () => ({ track_cwd: true, detached_terminals: false })): PtyPort {
     const settings = engineSettingsFrom(settingsValues);
     configureInProcessBackend({
         settings,
-        snapshots: createSnapshotStore({ baseDir: join(userData, 'terminal-snapshots'), encryptor }),
+        snapshots: NO_SNAPSHOTS,
     });
     return fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
 }

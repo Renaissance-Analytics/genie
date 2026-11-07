@@ -233,10 +233,19 @@ describe("Genie 1's background processes, imported once at boot", () => {
         expect(md5(v1File)).toBe(before);
     });
 
-    it('boot wires v1 into the book it opens, before the restore runs', () => {
-        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*\/\/.*$/, '')).join('\n');
-        const openAt = main.indexOf('processBook = await ProcessBook.open(');
-        const restoreAt = main.indexOf('processBook.restore()');
+    it('boot wires v1 into the book it opens, before the restore runs — in genie-host, and on a window\'s emergency path', () => {
+        const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+        // genie-host (the host split, P3.3c): the database the window names at its v1 import.
+        const host = read('../src/main/genie-host.ts');
+        const hostOpen = host.indexOf('processBook = await ProcessBook.open(');
+        const hostRestore = host.indexOf('processBook.restore()');
+        expect(hostOpen).toBeGreaterThan(0);
+        expect(hostRestore).toBeGreaterThan(hostOpen);
+        expect(host.slice(hostOpen, hostRestore)).toMatch(/v1:\s*\{\s*database:\s*databasePath/);
+        // A window with no host (its own book).
+        const main = read('../src/main/main.ts');
+        const openAt = main.indexOf('ownBook = await ProcessBook.open(');
+        const restoreAt = main.indexOf('ownBook.restore()');
         expect(openAt).toBeGreaterThan(0);
         expect(restoreAt).toBeGreaterThan(openAt);
         expect(main.slice(openAt, restoreAt)).toMatch(/v1:\s*\{\s*database:\s*v1DatabaseFile\(\)/);

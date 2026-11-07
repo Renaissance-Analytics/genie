@@ -1,3 +1,4 @@
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * THE SMOKE PATH — a real Electron window, driven over the Chrome DevTools Protocol.
  *
@@ -7,15 +8,16 @@
  *
  * ## Why CDP and not a test framework
  *
- * Because it needs **no third-party dependency and no test-only code in the product.**
+ * Because it needs no third-party dependency.
  * `--remote-debugging-port` is a Chromium flag passed on the command line in the container;
- * Node 22 has a global `WebSocket`; the protocol is JSON. Nothing is added to the tree and
- * nothing in `src/` knows this file exists.
+ * Node 22 has a global `WebSocket`; the protocol is JSON. Launch with GENIE_PAGE_PROBE=1:
+ * window.genieTest exposes the same bridge the app uses, with its existing connection.
  *
  * That last part matters more than the convenience. The previous build had a `GENIE_E2E`
  * escape hatch that short-circuited the single-instance lock, and the measured result was two
  * instances opening windows on the owner's desktop while real agents were mid-turn. A harness
  * that requires the product to behave differently is a harness that tests a different product.
+ * GENIE_PAGE_PROBE changes only bridge exposure; product behavior, locks and routes stay the same.
  *
  * ## Where it runs
  *
@@ -582,7 +584,8 @@ if (!approvalEnabled) {
 } else {
     // The agent's PAGE, by its route: a Dashboard row click now opens the chat beside the board (genie#1209, step 17).
     // Start it with Start (the one restart; opening starts nothing since q_04ce323c), then its page — the approval needs a running agent.
-    await cdp.evaluate(`window.genie.agents.restart('${codexRow}', 'graceful'); window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
+    await waitForPageProbe(cdp);
+    await cdp.evaluate(`window.genieTest.agents.restart('${codexRow}', 'graceful'); window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]'))`, 'the codex agent');
 
     // The composer must be REACHABLE — that is a claim about this screen and worth asserting.
@@ -1010,6 +1013,28 @@ if (!approvalEnabled) {
         'an xterm to mount for the panel’s terminal',
     );
     check(paneUp, '36. the panel’s terminal is a real terminal pane with xterm mounted');
+    // WHAT THE TERMINAL DREW, AND WHEN (said only if 37 or 38 fails; it changes no timing): from the moment xterm mounts,
+    // when anything first appears in it and what, so a failure says whether the shell ever drew a prompt before the typing.
+    await cdp.evaluate(`(() => {
+        const rows = document.querySelector('[data-terminal-pane] .xterm-rows');
+        const watch = window.__smokeTerminal = { mountedAt: performance.now(), firstOutputMs: null, firstText: '' };
+        if (!rows) return true;
+        const seen = () => {
+            const text = (rows.innerText ?? '').trim();
+            if (watch.firstOutputMs === null && text !== '') { watch.firstOutputMs = Math.round(performance.now() - watch.mountedAt); watch.firstText = text.slice(0, 200); }
+        };
+        seen();
+        new MutationObserver(seen).observe(rows, { childList: true, subtree: true, characterData: true });
+        return true;
+    })()`);
+    /** On a failure of 37 or 38: the rows (numbered, the drawn ones), the cursor's row, and whether a prompt was ever drawn. */
+    const terminalDump = async () => cdp.evaluate(`(() => {
+        const rows = [...(document.querySelector('[data-terminal-pane] .xterm-rows')?.children ?? [])];
+        const drawn = rows.map((r, i) => [i, (r.innerText ?? '').replace(/\\s+$/, '')]).filter(([, s]) => s !== '').map(([i, s]) => i + ': ' + s.slice(0, 160));
+        const cursorRow = rows.findIndex((r) => r.querySelector('.xterm-cursor'));
+        const w = window.__smokeTerminal ?? null;
+        return JSON.stringify({ drawn: drawn.slice(-12), cursorRow, firstOutputMs: w?.firstOutputMs ?? null, firstText: w?.firstText ?? '', sinceMountMs: w ? Math.round(performance.now() - w.mountedAt) : null });
+    })()`).catch((e) => `(unread: ${e?.message ?? e})`);
 
     // Let the shell print its prompt, then focus xterm's textarea and type.
     await new Promise((r) => setTimeout(r, 1200));
@@ -1021,12 +1046,14 @@ if (!approvalEnabled) {
     const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
     const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
     check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
+    if (!typed) console.log(`  TERMINAL_AT_37 ${await terminalDump()}`);
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
     const ran = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 >= 2`, 'the shell to print the token back');
     const count = await cdp.evaluate(`${rowsText}.split('${token}').length - 1`);
     check(ran, '38. the SHELL ran it — the token comes back as output, not just as typed', `${count} occurrence(s)`);
+    if (!ran) console.log(`  TERMINAL_AT_38 ${await terminalDump()}`);
 
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     if (shot.result?.data) {

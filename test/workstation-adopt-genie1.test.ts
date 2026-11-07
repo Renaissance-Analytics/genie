@@ -1,3 +1,4 @@
+import { fakeKeychain } from './helpers/tynn-storage.js';
 import { createPublicKey, verify } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -206,7 +207,7 @@ describe('workstationKeyStore: "settled" survives a new key', () => {
 
     it('round-trips, per Tynn host, and a later write keeps it', async () => {
         const d = mkdtempSync(join(tmpdir(), 'ws-adopt-')); dirs.push(d);
-        const store = workstationKeyStore(join(d, 'workstation.json'), cipher);
+        const store = workstationKeyStore(join(d, 'workstation.json'), fakeKeychain());
         await store.write(HOST, { workstationId: 'ws_1', privateKeyPem: generateHostKeypair().privateKeyPem });
         expect(await store.legacyDone!(HOST)).toBeNull();
         await store.markLegacyDone!(HOST, '01kxw523');

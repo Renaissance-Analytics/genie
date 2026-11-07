@@ -44,13 +44,13 @@ describe('main: opening shows, a message starts', () => {
         // …and that is the shared rule (main/start-on-demand.ts), not a start of its own: the person's message rule
         // (a new driver when the run's own stopped itself, prism-acp 0.37.0) over `startOnDemand`.
         expect(main).toMatch(/const startForYours = \(record: AgentRecord\): Promise<StartForWork> => startForYourMessage\(\{\s*startForWork: startOnDemand,/);
-        expect(main).toMatch(/const startOnDemand = \(record: AgentRecord\): StartForWork => startForWork\(/);
+        expect(main).toMatch(/const startOnDemand = \(record: AgentRecord\): Promise<StartForWork> => startForWork\(/);
     });
 
     it('a flow’s prompt can start the agent too (the sessions port flows are given has `start`)', () => {
         const at = main.indexOf('agentSessions: {');
         expect(at).toBeGreaterThan(-1);
-        expect(main.slice(at, at + 800)).toMatch(/start:\s*\(id\)\s*=>/);
+        expect(main.slice(at, at + 800)).toMatch(/start:\s*(?:async\s*)?\(id\)\s*=>/);
     });
 });
 
@@ -77,6 +77,12 @@ describe('a remote window (host API): the same rules', () => {
         expect(calls).toEqual([]);
     });
 
+    it('a start that answers LATER (genie-host) is awaited: refused there, nothing is delivered and the reason is said', async () => {
+        const later = api({ startForWork: () => new Promise((r) => setTimeout(() => r({ ok: false, reason: 'claude is not installed' }), 5)) });
+        expect(await later.api.invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: false, reason: 'claude is not installed' });
+        expect(later.calls).toEqual([]);
+    });
+
     it('prompt starts the agent on demand first, then delivers; a refused start delivers nothing and says why', async () => {
         const order: string[] = [];
         const { api: a, calls } = api({ startForWork: (r) => { order.push(`start-for-work:${r.id}`); return { ok: true, started: true }; } });
@@ -99,6 +105,29 @@ describe('a flow prompting an agent that is not running', () => {
             session: () => state,
             rows: () => rows,
             start: (id) => { calls.push(`start:${id}`); state = { running: true, turnState: 'idle', pendingApproval: null }; return true; },
+            prompt: (id, text) => {
+                calls.push(`prompt:${id}:${text}`);
+                state = { running: true, turnState: 'working', pendingApproval: null };
+                setTimeout(() => { rows.push({ event: { kind: 'message', speaker: 'agent', peerName: null, text: 'done' } }); state = { running: true, turnState: 'idle', pendingApproval: null }; for (const l of listeners) l(id); }, 0);
+                return true;
+            },
+            subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
+        };
+        const prompt = agentPrompter({ sessions, resolve: () => ({ kind: 'one', id: 'agent_atlas' as never }), agent: () => ({ name: 'atlas', workspaceId: 'pa' }), asleep: () => false, by: 'flow "nightly"' });
+        expect(await prompt('claude:atlas', 'post the standup')).toBe('done');
+        expect(calls).toEqual(['start:agent_atlas', 'prompt:agent_atlas:post the standup']);
+    });
+
+    it('a sessions port whose start answers LATER (the agent engine in genie-host): the flow waits for it, then delivers', async () => {
+        let state: { running: boolean; turnState: string; pendingApproval: unknown } | null = null;
+        const rows: Array<{ event: unknown }> = [];
+        const listeners = new Set<(id: string) => void>();
+        const calls: string[] = [];
+        const sessions: AgentSessionsPort = {
+            session: () => state,
+            rows: () => rows,
+            // The replica learns of the session only when the host's answer comes back.
+            start: (id) => new Promise<boolean>((r) => setTimeout(() => { calls.push(`start:${id}`); state = { running: true, turnState: 'idle', pendingApproval: null }; r(true); }, 5)),
             prompt: (id, text) => {
                 calls.push(`prompt:${id}:${text}`);
                 state = { running: true, turnState: 'working', pendingApproval: null };

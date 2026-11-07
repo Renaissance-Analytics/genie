@@ -54,8 +54,8 @@ export interface WorkspaceOpsPorts {
     };
     host: {
         probe(agentId: AgentRecord['id']): LiveSession | null;
-        prompt(agentId: AgentRecord['id'], text: string): boolean;
-        stop(agentId: AgentRecord['id']): boolean;
+        prompt(agentId: AgentRecord['id'], text: string): boolean | Promise<boolean>;
+        stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
     };
     attention: { finished(): readonly { agentId: string; handoff: string | null; at: string }[] };
     terminals: { list(): readonly { id: string; workspaceId: string }[]; close(id: string): boolean };
@@ -435,7 +435,7 @@ export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: str
     return { ok: true, id, kind: 'empty', stamped: null };
 }
 
-export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord, load?: { running: number; cap: number }): string | null {
+export function startRefusal(ports: { readonly registry: { workspace(id: string): { readonly id: string; readonly asleep?: boolean | undefined } | null } }, record: AgentRecord, load?: { running: number; cap: number }): string | null {
     const workspace = ports.registry.workspace(record.workspaceId);
     if (workspace?.asleep) return `${workspace.id} is hibernating; wake it before starting ${record.name}`;
     // §6.1 caps: a start past the cap is refused with the number and the setting named — never queued, never silent.

@@ -18,7 +18,8 @@ function fixture() {
     const calls: Array<{ path: string; method: string; body: any }> = [];
     const state = { userId: 'user-7' as string | null, signedIn: true, saved: null as string | null, status: 0, encryption: true, minted: 0, registered: 0, wrongProject: false, wrongMint: false, lostResponse: false, shared: false, error: '', ignoreCalls: 0 };
     const file = join(dir, 'agent-keys.json');
-    const storage = { file, cipher: { isAvailable: () => state.encryption, encrypt: (s: string) => Buffer.from(`sealed:${s}`), decrypt: (b: Buffer) => b.toString().slice(7) } };
+    const held = new Map<string, string>();
+    const storage = { file, secrets: { probe: async () => (state.encryption ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(state.encryption) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(state.encryption)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } } };
     const local = (name = 'atlas') => agentRecord({ id: mintAgentId(), workspaceId: 'workspace', name, provider: 'codex', mode: 'automated', instructions: `.agents/${name}/AGENT.md` });
     const add = (name: string, external_id: string | null, status = 'active'): Remote => {
         const row = { id: `remote-${agents.length + 1}`, name, external_id, status, config: {}, tokens: [] };
@@ -164,7 +165,7 @@ describe('one Tynn principal and encrypted key per Genie agent', () => {
         expect(t.state.ignoreCalls).toBe(0);
     });
 
-    it('refuses to mint before OS encryption is available', async () => {
+    it('refuses to mint before the keychain answers', async () => {
         const t = fixture(); t.state.encryption = false;
         expect(await t.ensure(t.open(), t.local())).toMatchObject({ status: 'failed' });
         expect(t.state.minted).toBe(0); expect(t.state.registered).toBe(0);

@@ -1,34 +1,22 @@
-import { phpWorkerEnvWithTrust } from './php-trust-host.js';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, stat, readdir as readdirP, readFile as readFileP, rename, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
+import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom, type AskerState } from '../core/deck-sources.js';
 import { folderName } from '../core/workspace-name.js';
-import { asleepOnlyEngine, enginesToRelease, enginesToResume } from '../core/hibernate-engines.js';
-import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandshake, reconcileEngines, type EngineStatusView, type ReadinessBound, type ReconcileReport } from '../core/engine-reconcile.js';
-import { PortAllocator } from '../core/port-allocator.js';
-import type { ServiceInstance } from '../core/services.js';
-import { websocketRoutes } from './websocket-front-door.js';
-import { mailpitRoutes } from '../core/mailpit-name.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
-import type { GenRoute } from '../core/gen-router.js';
-import { frontDoorCaddyfile, hostsFilePath, type FrontDoorTls } from '../core/front-door-caddy.js';
-import { trustDeckItem, trustInstallStep } from '../core/gen-ca.js';
-import { GenCa, osTrustStore, type CaSource, type CertIssuer, type TrustStorePort } from './gen-ca.js';
 import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
-import { runV1ServicesAdoption } from './v1-services.js';
 import { runV1FlowImport } from './v1-flows.js';
-import { ensureFlowToolKinds, questionWaiter, type FlowToolCall } from './flow-tools.js';
+import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
 import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { OS_WORKSPACE } from '../core/os-agent.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
+import { inboxNotices } from './inbox-notices.js';
 import type { NoticeMail } from '../core/stream-event.js';
 import { isAppSender } from '../core/app-inbox.js';
 import type { AppEnvSource } from './app-inbox-service.js';
@@ -39,9 +27,12 @@ import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
 import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
 import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
-import type { AgentCredentialPorts } from './tynn-agent-identities.js';
+import { agentTynnPrep } from './agent-tynn-prep.js';
+import type { AgentSecrets } from './tynn-agent-identities.js';
+import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type HostVault, type MigrationSource } from './keychain-migration.js';
+import { holdMigration, portsOf } from './migration-holds.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
-import { nodeTynnConfigFs, reconcileLegacyTynnConfig } from './tynn-config-cleanup.js';
+import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
@@ -50,38 +41,33 @@ import { Baton, PairingPins } from '../core/remote.js';
 import { PairApprovals } from '../core/pair-confirm.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
-import { AttentionStore } from './attention-store.js';
-import { Elevator, realHostsIo, runElevatedBatch, stepOutcome, type ElevationOutcome, type PrivilegedStep } from './elevate.js';
-import { agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
-import { FlowScheduler } from './flow-scheduler.js';
-import { startFileSource, type RawWatchEvent } from './flow-file-source.js';
-import { fileMover } from './flow-file-move.js';
-import { FileTriggerWatches, nodeWatch } from './flow-file-watch.js';
+import type { AgentSessionsPort } from './flow-runner.js';
+import type { FlowScheduler } from './flow-scheduler.js';
+import { startFlowsEngine } from './flows-engine.js';
+import type { FlowSchedulerApi, FlowsApi } from './flows-host.js';
 import { FlowStore } from './flow-store.js';
-import { GenRouterServer } from './gen-router-server.js';
-import { GenLeafContexts } from './browser-trust.js';
-import { FRONT_DOOR_PORTS, bindFailure, heldReason, realFrontDoorPorts, type FrontDoorBlocked, type FrontDoorPort, type FrontDoorPorts } from './front-door-port.js';
-import { HostsSync, type HostsIo, type HostsSyncResult } from './hosts-file.js';
-import { InboxStore } from './inbox-store.js';
-import { KnowledgeStore } from './knowledge-store.js';
+import type { OwnAgentStores, WindowAgentStores } from './agent-stores-api.js';
+import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { runtimeDir } from './paths.js';
-import { ProcessSupervisor } from './process-supervisor.js';
+import { LocalStagingArea } from './local-staging-area.js';
+import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
+import type { ListedPty } from './spawn-host-protocol.js';
 import { DeviceStore } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
-import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
-import { ServiceDriver, dockerRunnerOver, type DockerEventsPort, type DockerRunner } from './service-driver.js';
-import { ServiceRegistry } from './service-registry.js';
-import { DotEnvSync, envFileSites, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
-import { fileIsTracked, folderGitConfig, setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
+import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
-import { WorkspaceTrust } from './workspace-trust-host.js';
+import { trustSteps, type TrustApi } from './hosting-trust.js';
 import { SettingsStore } from './settings-store.js';
-import { SiteManager, type PhpCgiResolution } from './site-manager.js';
-import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sites-host.js';
-import { readJson, writeJsonAtomic } from './store.js';
+import type { WorkspaceRef } from './envelope-sites-host.js';
 import type { PtyPort } from './terminal-host.js';
-import { execFileRunner, lineStreamRunner } from './toolchain-runner.js';
-import { TRUST_PASS_MS, TrustWatch, watchOneFolder } from './trust-watch.js';
+import { composeHosting, type HostingOptions } from './hosting-compose.js';
+import { composeStageDiagnostics, type ComposeStageSample } from './compose-stage-diagnostics.js';
+import type { EnginesApi, EnvelopeSitesApi, HostingApi, SitesApi } from './hosting-host.js';
+import type { SiteManager } from './site-manager.js';
+import type { EnvelopeSites } from './envelope-sites-host.js';
+import type { ServiceRegistry } from './service-registry.js';
+import type { DotEnvSync } from './dotenv-sync.js';
+import type { GenRouterServer } from './gen-router-server.js';
 
 /**
  * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
@@ -94,7 +80,21 @@ import { TRUST_PASS_MS, TrustWatch, watchOneFolder } from './trust-watch.js';
  * close the front door's connections, wait for an in-flight flow run, close the knowledge database.
  */
 
-export interface ComposeInput {
+export interface ComposeInput extends HostingOptions {
+    /**
+     * SAFE MODE (Tynn #386), on the emergency no-host path: this window's own flows, sites and engines start nothing by
+     * themselves while it is on (window-safe-mode.ts reads it from the runtime files). `heldSite` names a site it held;
+     * `safeModeLeft` is told when the person leaves it, so the own flow clock plans again.
+     */
+    readonly safeMode?: () => boolean;
+    readonly heldSite?: (siteId: string, name: string) => void;
+    readonly safeModeLeft?: (listener: () => void) => void;
+    /** This Genie's build, said in the remote `welcome` (P10.1e). Absent = 'dev'. */
+    readonly build?: string;
+    /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
+    readonly onComposeStage?: (sample: ComposeStageSample) => void;
+    /** Internal scheduling port: maintenance runs after ready, and the returned callback cancels a pending sweep. */
+    readonly scheduleStagingSweep?: (work: () => Promise<void>) => () => void;
     readonly userData: string;
     /** Read-only live pause state for AgentInbox's automatic replies; no session is started by this probe. */
     readonly inboxSession?: InboxSessionProbe;
@@ -105,11 +105,11 @@ export interface ComposeInput {
      */
     readonly processPty?: PtyPort;
     /**
-     * `docker events` as a stream of lines, so engine states are read on change instead of on every look (genie#1397).
-     * Absent with no `docker` given = the real one, created where `execFileRunner`'s commands are; absent with a `docker`
-     * given (a test's fake) = no watch, every look asks.
+     * Live supervised ptys a previous window started, still running under genie-host (the host split, P2.1): adopted
+     * as the supervisor is built — BEFORE any site or kept process starts — so each one's first start claims its
+     * running process instead of starting it a second time on the same port.
      */
-    readonly dockerEvents?: DockerEventsPort;
+    readonly adoptPtys?: readonly ListedPty[];
     /** Reads v1's settings table, or `null` when there is no v1 database. Called once, on first run only. */
     readonly v1Settings: () => Readonly<Record<string, string>> | null;
     /**
@@ -120,11 +120,19 @@ export interface ComposeInput {
     /** Reads Genie 1's AgentInbox history (`readV1Inbox`), or `null`; called at boot until the inbox records an import that saw v1. */
     readonly v1Inbox?: () => V1Inbox | null;
     /**
-     * Genie 1's database, for TAKING OVER its service engines in place and stopping its sandbox/site containers
-     * (main/v1-services.ts) — at boot until services.json records a take-over that saw Genie 1 and Docker. Before the
-     * sites and the process book start, because both read the engines' env. Absent = no Genie 1 to take over from.
+     * The stores agents write to, when genie-host owns them (the host split, P3.1): the window's replicas. Absent = this
+     * window opens them itself — only on the emergency path, when no host could start.
      */
-    readonly v1Services?: { readonly database: string };
+    readonly agentStores?: WindowAgentStores;
+    /** genie-host's process supervisor, through this window's replica (P3.3b). Absent = this window runs its own. */
+    readonly supervisor?: SupervisorApi;
+    /**
+     * genie-host's front door, service engines and site routes, through this window's replica (the host split, P5a): this
+     * window then builds none of its own. Absent = it builds its own (hosting-compose.ts) — the emergency path, until P6.
+     */
+    readonly hosting?: HostingApi;
+    /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
+    readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
     /**
      * Genie 1's database, for bringing its FLOWS over as disarmed canvas flows (main/v1-flows.ts, genie#1204). Absent = none.
      */
@@ -134,22 +142,6 @@ export interface ComposeInput {
      * roster. Absent = no agent is running, so a scheduled prompt fails with that reason.
      */
     readonly agentSessions?: AgentSessionsPort;
-    readonly caddyBin: string | null;
-    /** What every site's php-cgi worker is given on top of the pty host's env: Genie's CA ini directory (toolchain-ops.ts). */
-    readonly phpWorkerEnv?: () => Readonly<Record<string, string>>;
-    /** This machine's system CA roots for PHP's trust bundle (main/php-trust-host.ts systemRootsPem). Absent = none. */
-    readonly phpSystemRoots?: () => string | null;
-    /** Which php-cgi a site's PHP pin runs (main/php-versions.ts `resolvePhpCgi`); absent = PATH php-cgi, pins refused. */
-    readonly resolvePhpCgi?: (pin: string | undefined) => PhpCgiResolution;
-    /** Right before a pinned site's php-cgi starts (main/php-versions.ts `refreshManagedIni`). */
-    readonly preparePhpCgi?: (pin: string | undefined) => void;
-    /** php-cgi workers per PHP site (site-manager PHP_WORKERS when absent). */
-    readonly phpWorkers?: number;
-    /** 0 picks a free loopback port. */
-    readonly frontDoorPort?: number;
-    readonly allocatePort?: () => number;
-    /** Whether 127.0.0.1:<port> is free to bind (the shared allocator's probe); a real bind probe by default. */
-    readonly portFree?: (port: number) => Promise<boolean>;
     readonly now?: () => number;
     /**
      * Whether a supervised process's pid is still a live OS process (`osPidAlive` in production, main.ts) — one of the two
@@ -157,39 +149,6 @@ export interface ComposeInput {
      * are never put to the real OS.
      */
     readonly pidAlive?: (pid: number) => boolean;
-    /** Runs `docker <args>`; execFile in production. A missing Docker answers a non-zero exit, never a throw. */
-    readonly docker?: DockerRunner;
-    /** ONE readiness probe of an engine on its loopback port; the engine's own handshake over a real socket by default. */
-    readonly engineAnswers?: (instance: ServiceInstance) => Promise<boolean>;
-    /**
-     * A started site's readiness wait (parity audit #9): true once its port answers. main.ts passes the real one
-     * (port-probe.ts `siteAnswers`); absent = no wait, a site is running when its process is (most composition tests).
-     */
-    readonly siteProbe?: (port: number, options: { behindCaddy: boolean }) => Promise<boolean>;
-    /** How long an engine started at Genie start is waited for, and how often it is asked. */
-    readonly engineReadiness?: ReadinessBound;
-    /** Does git ignore a `.env` in a folder (`git check-ignore` by default)? Asked before a service password is written into one. */
-    readonly gitIgnored?: DotEnvSyncPorts['gitIgnored'];
-    /** The OS hosts file; the real one by default. */
-    readonly hostsIo?: HostsIo;
-    /**
-     * Runs a BATCH of steps through ONE OS elevation prompt and says which step, if any, stopped it (elevate.ts). The real
-     * prompt by default. Genie calls it one batch at a time, and a hosts write due when the person trusts rides along.
-     */
-    readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
-    /** How long a burst of site changes is waited out before the one hosts write; 250 ms by default. */
-    readonly hostsDebounceMs?: number;
-    /** The front door's :443/:80 — free, or held and by whom; real bind probes and the OS's listener table by default. */
-    readonly frontDoorPorts?: FrontDoorPorts;
-    /**
-     * Genie 1's `host-gen` folders (`<Genie 1 userData>/host-gen`), where its `.gen` CA may be — ADOPTED by copying when
-     * Genie 2 has no CA of its own. None by default: only main.ts names Genie 1's real folders.
-     */
-    readonly v1CaDirs?: readonly string[];
-    /** The OS trust store, asked by thumbprint; the real one (read-only) by default. */
-    readonly trustStore?: TrustStorePort;
-    /** Issues the CA and the leaf; the node:crypto X.509 builder by default. */
-    readonly certIssuer?: CertIssuer;
     /** This machine's name as remote devices see it; the OS hostname by default. */
     readonly hostName?: string;
     /** Where remote connections come from (fancy-ws on a socket); none by default — nothing listens. */
@@ -204,12 +163,24 @@ export interface ComposeInput {
     readonly appInboxEnv?: (source: AppEnvSource) => Readonly<Record<string, string>>;
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
+    /** With a host, a workspace's agent config is the host's to write. */
+    readonly hostConfigSync?: () => { configSync(request: WorkspaceConfigRequest): Promise<readonly SyncResult[]> } | null;
     /**
      * The scoped Tynn account, late-bound because it opens after composition. Used only during private agent preparation.
      */
     readonly tynn?: () => TynnSessionPort | null;
     /** OS encryption from Electron; the vault's path is fixed under Genie's own userData, never an envelope path. */
-    readonly tynnCipher?: AgentCredentialPorts['cipher'];
+    /** Where agents' keys are held: the host's keychain, over the link (agent-secrets.ts). */
+    readonly tynnSecrets?: AgentSecrets;
+    /** The one-time move of keys an older Genie sealed: the window opens them, the host keeps and reads back. */
+    readonly tynnCipher?: { decrypt(bytes: Buffer): string };
+    readonly tynnVault?: HostVault;
+    /** What else an older Genie sealed, moved the same way: each joins this with its reader (the Tynn pairing, cut c). */
+    readonly legacySecrets?: () => Promise<readonly MigrationSource[]>;
+    /** Where a secret that did not move is said, as well as the console: the lifecycle log, which someone can read afterwards. Names and states, never a value. */
+    readonly secretsLog?: (line: string) => void;
+    /** Something moved: whoever reads it reads again. */
+    readonly onSecretsMoved?: () => void;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -250,29 +221,16 @@ export interface ComposeInput {
     readonly askerLive?: (agentId: string) => AskerState | null | undefined;
 }
 
-/**
- * The external front door, beyond "Caddy runs": the hosts block; Genie's CA (whose it is, its thumbprint) and whether
- * the OS trust store holds it — READ from the store, `null` until the first read answers; the last Trust's failure, with
- * its reason; and a leaf that could not be issued.
- */
-export type FrontDoorStatus =
-    | {
-          running: true;
-          caddyfile: string;
-          hostsPath: string;
-          hosts: HostsSyncResult | null;
-          authority: { source: CaSource; thumbprint: string };
-          trusted: boolean | null;
-          trustError: string | null;
-          certificateError: string | null;
-      }
-    /**
-     * Off: no bundled Caddy or no CA (`reason` alone), or — `blocked` — a port the front door needs is held by another
-     * process (or refused by the OS): Caddy is not started and not restarted until the person tries again.
-     */
-    | { running: false; reason: string; blocked?: { port: FrontDoorPort; holder: string | null } };
+export type { FrontDoorStatus } from './hosting-compose.js';
 
-export interface ComposedServices {
+/**
+ * What compose built. `S` is the stores agents write to as this window holds them: genie-host's replicas (engine mode,
+ * `WindowServices`) or the stores themselves (`OwnAgentStores`, the default: the emergency path, and every test that composes alone).
+ */
+/** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
+type S_Settings = NonNullable<WindowAgentStores['settings']>;
+
+export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown' | 'sites' | 'engines' | 'envelopeSites' | 'trust'> {
     /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
     prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
     /** Why this agent's last start went without its Tynn server, for a note in its chat; `null` when it has it (genie#1234). */
@@ -281,51 +239,44 @@ export interface ComposedServices {
      * Signed in to Tynn: the agents to restart so they get their Tynn server — those that started without it because of
      * the account (signed out, unreachable), and those whose unverified stored key Tynn now refuses (genie#1234).
      */
-    tynnRecovery(): Promise<string[]>;
-    readonly inbox: InboxStore;
-    readonly attention: AttentionStore;
-    readonly knowledge: KnowledgeStore;
-    readonly flows: FlowStore;
-    readonly flowScheduler: FlowScheduler;
-    readonly settings: SettingsStore;
-    readonly supervisor: ProcessSupervisor;
-    readonly sites: SiteManager;
-    /** The workspaces' declared sites over the manager: loaded at boot, started by v1's rule, created/removed into project.json. */
-    readonly envelopeSites: EnvelopeSites;
-    /** What each workspace's own files say would run, and whether the person has said yes to it. */
-    readonly workspaceTrust: WorkspaceTrust;
+    tynnRecovery(asked?: { readonly secretsMoved?: boolean }): Promise<string[]>;
+    /** The keychain answers now: the one-time move tries what it could not do before. */
+    moveSecretsAgain(): Promise<void>;
+    readonly inbox: S['inbox'];
+    readonly attention: S['attention'];
+    readonly knowledge: S['knowledge'];
+    /** The stores themselves when THIS window opened them (the emergency path); null when genie-host owns them. */
+    readonly own: OwnAgentStores | null;
+    readonly flows: S extends OwnAgentStores ? FlowStore : FlowsApi;
+    readonly flowScheduler: S extends OwnAgentStores ? FlowScheduler : FlowSchedulerApi;
+    /** The flows file itself when THIS window opened it (the emergency path); null when genie-host owns it (P3.3d). */
+    readonly ownFlows: FlowStore | null;
+    readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
+    readonly supervisor: SupervisorApi;
+    /**
+     * WHAT EACH WORKSPACE'S OWN FILES SAY WOULD RUN, AND WHETHER THE PERSON HAS SAID YES TO IT (genie#1519). The host owns
+     * it: genie-host's verdicts through this window's replica (failing closed before the first dump and after the link
+     * drops), or this window's own hosting's on the emergency path, until P6.
+     */
+    readonly workspaceTrust: TrustApi;
     /** Genie's own files for an agent whose workspace is not trusted, or `null`. */
     untrustedFilesFor(record: { readonly workspaceId: string }): Promise<import('./session-host.js').GenieInstructionFiles | null>;
     /** The workspaces read and not trusted, with what would run: the person's trust step. */
     trustSteps(): readonly { readonly workspaceId: string; readonly changed: boolean; readonly list: import('../core/workspace-trust.js').TrustList }[];
     /** The verdict as last read, without reading: for a shell call. A workspace not read yet is not trusted. */
     untrustedNow(record: { readonly workspaceId: string }): boolean;
-    /** Service engines per workspace (and the shared ones), on the Docker driver. */
-    readonly engines: ServiceRegistry;
     /**
-     * Genie start's pass over the registered engines (core/engine-reconcile.ts): the ones not running and not stopped by
-     * the person are started and waited for; with Docker down, each says so. Boot does not wait for it. Never rejects.
+     * Genie's hosting (P5a): the classes themselves when THIS window built it (the emergency path, and every test that
+     * composes alone); the narrow surface a window uses (hosting-host.ts) when it is genie-host's, through the replica.
      */
-    readonly engineReconcile: Promise<ReconcileReport>;
-    /** Every engine with its status for the Services tab — `docker-not-running`, with Docker's reason, when Docker is not there to ask. */
-    engineStatuses(): Promise<EngineStatusView[]>;
-    /** The PERSON's start / stop / remove of an engine: recorded (machine-local), so a restart keeps a stopped engine stopped. */
-    startEngine(id: string): Promise<void>;
-    stopEngine(id: string): Promise<void>;
-    /**
-     * A hibernating or waking workspace's engines (parity audit #12, core/hibernate-engines.ts): which to release and
-     * which to resume, and the registry's own stop and start — NOT the person's Stop, which a wake must respect.
-     */
-    hibernationEngines: { toRelease(workspaceId: string): string[]; toResume(workspaceId: string): string[]; stop(id: string): Promise<void>; start(id: string): Promise<void> };
-    /** Workspaces currently receiving this engine's env, plus their running sites and processes. */
-    engineDependents(id: string): readonly string[];
-    /** `workspaceId` = who a delete-data acts for: refused while any OTHER workspace keeps data in it (core/service-tenancy.ts). */
-    removeEngine(id: string, options: { deleteData: boolean; workspaceId?: string }): Promise<void>;
-    /** The workspace's service connection kept current in each site repo's `.env` — refused where git would commit it. */
-    readonly envFiles: DotEnvSync;
-    readonly frontDoor: GenRouterServer;
+    readonly sites: S extends OwnAgentStores ? SiteManager : SitesApi;
+    readonly envelopeSites: S extends OwnAgentStores ? EnvelopeSites : EnvelopeSitesApi;
+    readonly engines: S extends OwnAgentStores ? ServiceRegistry : EnginesApi;
+    /** The `.env` sync and the in-app front door, when THIS window built its hosting; null when they are genie-host's. */
+    readonly envFiles: S extends OwnAgentStores ? DotEnvSync : DotEnvSync | null;
+    readonly frontDoor: S extends OwnAgentStores ? GenRouterServer : GenRouterServer | null;
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
-    readonly approvals: ApprovalQueue;
+    readonly approvals: S['approvals'];
     /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
     readonly remote: RemoteHost;
     /** "Pair this device?" — what waits for Allow on this screen (q_8c07b142). */
@@ -355,36 +306,6 @@ export interface ComposedServices {
     readonly pluginsDir: string;
     /** Re-read the plugins folder (after developer mode flips, or a plugin was dropped in). */
     pluginsRefresh(): Promise<void>;
-    readonly frontDoorPort: number;
-    /**
-     * S7: the root the Genie Browser's session trusts for `.gen` hosts (and nothing else) — Genie's CA, PEM — or why
-     * there is none, in which case `.gen` sites do not open in the in-app browser and the reason is logged.
-     */
-    browserTrust(): { readonly caPem: string; readonly thumbprint: string } | { readonly caPem: null; readonly reason: string };
-    /** Genie's own Caddy on 443 for EXTERNAL browsers (https://<name>.gen), or why it is off. */
-    readonly externalFrontDoor: FrontDoorStatus;
-    /** Fires when the front door state changes (a hosts sync landed, the root got trusted). */
-    onFrontDoorChange(listener: () => void): () => void;
-    /** Observe current controller and hosts work without requesting changes; does not acknowledge Caddy's --watch reload. */
-    frontDoorSettled(): Promise<void>;
-    /** Sync the hosts block now — the person's "try again" after a declined prompt. */
-    syncHosts(): Promise<HostsSyncResult>;
-    /** The person's Try again on a front door whose port was held: asked again, and Caddy started when it is free. */
-    retryFrontDoor(): Promise<FrontDoorStatus>;
-    /**
-     * Install Genie's CA into the OS trust store through ONE elevation. Trusted only when the store, read again
-     * afterwards, holds the CA's thumbprint; a declined prompt or a failed install answers its reason and marks nothing.
-     */
-    trustCertificate(): Promise<{ ok: true } | { ok: false; reason: string }>;
-    /** The person's Not now on the Deck's Trust item: not asked again for this CA (Hosting's line stays). */
-    deferTrustCertificate(): void;
-    /** `<name>.gen → 127.0.0.1:<port>` for every site that is up — what the front door reads. */
-    routes(): GenRoute[];
-    /**
-     * The `.gen` names the hosts file carries: every site that is CONFIGURED (servable, not declared `enabled: false`),
-     * running or not — plus any site up right now, so a name Caddy serves always resolves (genie#624's union).
-     */
-    configuredHosts(): string[];
     /** The Deck's items from the stores, now. */
     deckItems(): DeckItem[];
     /** Every roster agent's full address with its name — the human's peer list. */
@@ -398,515 +319,88 @@ export interface ComposedServices {
     shutdown(): Promise<void>;
 }
 
-/**
- * The EXTERNAL front door: Genie's bundled Caddy serving https://<name>.gen on 443 with GENIE'S OWN CA's leaf
- * (core/gen-ca.ts — Genie 1's CA adopted on upgrade, so a root the browser already trusts), as ONE supervised process
- * started with --watch, so the routes change by rewriting the Caddyfile and never by spawning a second Caddy. Without
- * a bundled binary nothing starts, and the reason is recorded for the Hosting surface — the in-app browser does not
- * need this path.
- */
-interface FrontDoorController {
-    status(): FrontDoorStatus;
-    onChange(listener: () => void): () => void;
-    settled(): Promise<void>;
-    syncHosts(): Promise<HostsSyncResult>;
-    /** Boot has loaded the workspaces' sites: the hosts file follows them from here, starting with one sync. */
-    beginHosts(): void;
-    retry(): Promise<FrontDoorStatus>;
-    trust(): Promise<{ ok: true } | { ok: false; reason: string }>;
-    deferTrust(): void;
-    /** Genie's own Deck items about the front door: the one Trust ask. */
-    deckItems(): DeckItem[];
-    /** Shutdown: nothing more is started or synced. */
-    close(): void;
-}
-
-const FRONT_DOOR_ID = 'genie-front-door';
-const TRUST_STEP_ID = 'trust';
-/** How much of each message a notice's row keeps: enough to read it in the chat; the whole message stays in the inbox. */
-const NOTICE_MAIL_CHARS = 4_000;
-
-const NO_CADDY = 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works';
-
-const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
-/**
- * Genie's `.gen` CA, opened ONCE for both doors: the external Caddy serves its leaf, and the in-app browser's tunnel
- * (S7) serves the same leaf and trusts the same root. A CA that cannot be set up is a reason, never a throw.
- */
-function openGenCa(input: { caDir: string; v1CaDirs: readonly string[]; issuer: CertIssuer | undefined; now: () => number }): { ca: GenCa; error: null } | { ca: null; error: string } {
-    try {
-        return { ca: GenCa.open({ dir: input.caDir, v1Dirs: input.v1CaDirs, now: input.now, ...(input.issuer ? { issuer: input.issuer } : {}), log: (line) => console.log(line) }), error: null };
-    } catch (error) {
-        console.error(`[gen-ca] ${message(error)}`);
-        return { ca: null, error: message(error) };
-    }
-}
-
-function startExternalFrontDoor(input: {
-    caddyBin: string | null;
-    caddyDir: string;
-    /** Opens the shared CA on first call (main: once, for both doors). */
-    genCa: () => { ca: GenCa; error: null } | { ca: null; error: string };
-    trustStore: TrustStorePort;
-    platform: NodeJS.Platform;
-    now: () => number;
-    sites: SiteManager;
-    /** Every route the door serves: the sites' and the shared engines' browser-facing ones (websocketRoutes). */
-    routes: () => GenRoute[];
-    /** Called when routes other than the sites' change (an engine attached or detached). */
-    onRoutesChange: (listener: () => void) => void;
-    /** The names the hosts file carries — configured, not running (ComposedServices.configuredHosts). */
-    configuredHosts: () => readonly string[];
-    supervisor: ProcessSupervisor;
-    hostsIo: HostsIo;
-    hostsPath: string;
-    hostsDebounceMs: number;
-    elevator: Elevator;
-    ports: FrontDoorPorts;
-}): FrontDoorController {
-    const listeners = new Set<() => void>();
-    const onChange = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
-    const notify = () => { for (const l of listeners) l(); };
-    const { caddyBin, caddyDir, sites, supervisor } = input;
-    const off = (reason: string): FrontDoorController => ({
-        status: () => ({ running: false, reason }),
-        onChange,
-        settled: async () => {},
-        syncHosts: async () => { throw new Error(reason); },
-        beginHosts: () => {},
-        retry: async () => ({ running: false, reason }),
-        trust: async () => ({ ok: false, reason }),
-        deferTrust: () => {},
-        deckItems: () => [],
-        close: () => {},
-    });
-    if (caddyBin === null) return off(NO_CADDY);
-    // Without a CA there is no certificate to serve: say so, and start nothing that would serve a broken one.
-    const opened = input.genCa();
-    if (opened.ca === null) return off(`Genie’s certificate authority could not be set up (${opened.error}); https://<name>.gen is off in external browsers and in the in-app browser`);
-    const ca = opened.ca;
-    const caddyfile = join(caddyDir, 'Caddyfile');
-    // Caddy's storage: where XDG_DATA_HOME (below) has put it since the first beta, now named in the Caddyfile too.
-    const caddyStorage = join(caddyDir, 'data', 'caddy');
-    /** What this process last wrote to the Caddyfile; null = not yet, so the first render always writes. */
-    let written: string | null = null;
-    // Earlier betas remembered `caddy trust` (Caddy's own root) with this marker. Trust is read from the OS store now,
-    // and that root is no longer served; the marker would only mislead whoever reads the folder.
-    rmSync(join(caddyDir, 'trusted'), { force: true });
-    let trusted: boolean | null = null;
-    let trustError: string | null = null;
-    let certificateError: string | null = null;
-    let askedAt: number | null = null;
-    let deferredFor = ca.trustDeferred();
-    let trusting: Promise<{ ok: true } | { ok: false; reason: string }> | null = null;
-    /** A front-door port another process holds (or the OS refused): Caddy is down on purpose, with the reason. */
-    let blocked: FrontDoorBlocked | null = null;
-    let failure: string | null = null;
-    let closed = false;
-    const reportFailure = (error: unknown) => {
-        if (closed) return;
-        failure = `Genie could not complete its external front door check: ${message(error)}`;
-        notify();
-    };
-    // Include state updates and notifications in each completion, not just the underlying OS request.
-    const pending = new Set<Promise<unknown>>();
-    let generation = 0;
-    const track = <T>(work: Promise<T>): Promise<T> => {
-        generation += 1;
-        const tracked: Promise<T> = work.finally(() => { pending.delete(tracked); });
-        pending.add(tracked);
-        return tracked;
-    };
-    const render = () => {
-        const routes = input.routes();
-        let tls: FrontDoorTls | null = null;
-        if (routes.length > 0) {
-            try {
-                tls = ca.leafFor(routes.map((r) => r.host));
-                certificateError = null;
-            } catch (error) {
-                // The previous Caddyfile (and leaf) stay as they were; the failure is a fact on the Hosting surface.
-                certificateError = `Genie could not issue the certificate for ${routes.map((r) => r.host).join(', ')}: ${message(error)}`;
-                console.error(`[gen-ca] ${certificateError}`);
-                return;
-            }
-        }
-        // Written only when the config CHANGED. render() runs on every process status change anywhere in Genie, and
-        // each one rewrote the same bytes: a file write Defender scans and a reload decision Caddy's --watch makes.
-        const next = frontDoorCaddyfile(routes, tls, caddyStorage);
-        if (next === written) return;
-        mkdirSync(caddyDir, { recursive: true });
-        writeFileSync(caddyfile, next, 'utf8');
-        written = next;
-    };
-    // READ from the OS store by the CA's thumbprint — never a marker. A store that cannot be read is untrusted with
-    // the reason, so the person still has the Trust door.
-    const readTrust = async (): Promise<boolean> => {
-        let holds: boolean;
-        try {
-            holds = await input.trustStore.has(ca.thumbprint);
-            if (holds) trustError = null;
-        } catch (error) {
-            holds = false;
-            trustError = `Genie could not read the trust store: ${message(error)}`;
-        }
-        trusted = holds;
-        return holds;
-    };
-    // The hosts block follows the CONFIGURED names, so a start or a stop never writes it (and never prompts); a burst of
-    // changes is one write, one sync at a time, and a declined prompt is a recorded fact with the block to paste.
-    const hosts = new HostsSync({
-        names: input.configuredHosts,
-        io: input.hostsIo,
-        elevator: input.elevator,
-        debounceMs: input.hostsDebounceMs,
-        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        onResult: notify,
-    });
-    render();
-    sites.onChange(() => { render(); hosts.changed(); });
-    input.onRoutesChange(() => { render(); hosts.changed(); });
-    supervisor.onChange((status) => {
-        render();
-        // Started again (by the person's Restart in Processes, or by Try again): whatever held the port is asked anew —
-        // Caddy's own words below set it again if it still cannot bind.
-        if (status.id === FRONT_DOOR_ID && status.state === 'running' && (blocked !== null || failure !== null)) { blocked = null; failure = null; notify(); }
-    });
-    const spec = {
-        id: FRONT_DOOR_ID,
-        workspaceId: '_genie',
-        name: 'Genie front door (Caddy)',
-        command: `${caddyBin} run --config ${caddyfile} --adapter caddyfile --watch`,
-        cwd: caddyDir,
-        env: { XDG_DATA_HOME: join(caddyDir, 'data'), XDG_CONFIG_HOME: join(caddyDir, 'config') },
-        restart: 'always' as const,
-    };
-    const block = (port: FrontDoorPort, holder: string | null, reason: string) => {
-        blocked = { port, holder, reason };
-        notify();
-    };
-    /** Caddy's recent output, across chunks (a line can arrive in two). */
-    let output = '';
-    // ASKED before Caddy starts: a port another process holds is reported, and Caddy is not started into a restart loop.
-    const startCaddy = async (): Promise<void> => {
-        for (const port of FRONT_DOOR_PORTS) {
-            if ((await input.ports.probe(port)) !== 'held') continue;
-            const holder = await input.ports.holder(port);
-            if (closed) return;
-            failure = null;
-            block(port, holder, heldReason(port, holder));
-            return;
-        }
-        if (closed) return;
-        blocked = null;
-        failure = null;
-        output = '';
-        supervisor.start(spec);
-        notify();
-    };
-    // And READ from Caddy's own words while it runs: a bind that fails at start, or on a --watch reload that brings the
-    // first route (with no routes Caddy binds nothing), stops the front door instead of letting `always` restart it.
-    supervisor.onOutput((id, data) => {
-        if (id !== FRONT_DOOR_ID || closed) return;
-        output = (output + data).slice(-4_000);
-        const failed = bindFailure(output);
-        if (!failed) return;
-        output = '';
-        supervisor.stop(FRONT_DOOR_ID);
-        block(failed.port, null, failed.kind === 'held' ? heldReason(failed.port, null) : `the front door could not listen on :${failed.port} (${failed.words}); https://<name>.gen in external browsers is off — the in-app browser still works`);
-        // Who: when the OS lists a listener on the port, that process holds it — whatever words the bind failed with
-        // (Windows answers "forbidden", not "in use", for a port http.sys holds).
-        void track(input.ports.holder(failed.port).then((holder) => {
-            if (holder !== null && blocked?.port === failed.port && blocked.holder === null) block(failed.port, holder, heldReason(failed.port, holder));
-        }).catch((error: unknown) => {
-            if (blocked?.port === failed.port && blocked.holder === null) reportFailure(error);
-        }));
-    });
-    const status = (): FrontDoorStatus =>
-        failure !== null
-            ? { running: false, reason: failure, ...(blocked !== null ? { blocked: { port: blocked.port, holder: blocked.holder } } : {}) }
-            : blocked !== null
-            ? { running: false, reason: blocked.reason, blocked: { port: blocked.port, holder: blocked.holder } }
-            : { running: true, caddyfile, hostsPath: input.hostsPath, hosts: hosts.result, authority: { source: ca.source, thumbprint: ca.thumbprint }, trusted, trustError, certificateError };
-    void track(startCaddy().catch(reportFailure));
-    void track(readTrust().then(notify));
-    return {
-        status,
-        onChange,
-        settled: async () => {
-            for (;;) {
-                const started = generation;
-                await Promise.allSettled([...pending]);
-                await hosts.settled();
-                if (pending.size === 0 && started === generation) return;
-            }
-        },
-        syncHosts: () => hosts.flush(),
-        beginHosts: () => hosts.begin(),
-        retry: async () => {
-            if (supervisor.status(FRONT_DOOR_ID)?.state !== 'running') {
-                await track(startCaddy().catch((error: unknown) => { reportFailure(error); throw error; }));
-            }
-            return status();
-        },
-        trust: () => {
-            // One Trust at a time: the Deck's and Hosting's buttons pressed together raise ONE prompt. A hosts write that
-            // is due rides in that same prompt (genie#604): trusting never costs two approvals.
-            trusting ??= track((async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
-                if (await readTrust()) { notify(); return { ok: true }; }
-                const trustStep: PrivilegedStep = { id: TRUST_STEP_ID, label: 'install Genie’s certificate into the trust store', step: trustInstallStep(input.platform, ca.certPath) };
-                let ran: readonly PrivilegedStep[] = [trustStep];
-                const outcome = await hosts.joinElevation(async (hostsSteps) => {
-                    ran = [trustStep, ...hostsSteps];
-                    return { outcome: await input.elevator.run(ran), steps: ran };
-                });
-                const mine = stepOutcome(outcome, ran, TRUST_STEP_ID);
-                if (!mine.ok) {
-                    trustError = `Genie could not install its certificate into the trust store: ${mine.error}`;
-                    notify();
-                    return { ok: false, reason: trustError };
-                }
-                // The install said it worked; the store is the judge.
-                trustError = null;
-                if (!(await readTrust())) {
-                    trustError ??= `the install finished, but the trust store does not hold Genie’s certificate (thumbprint ${ca.thumbprint})`;
-                    notify();
-                    return { ok: false, reason: trustError };
-                }
-                notify();
-                return { ok: true };
-            })().finally(() => { trusting = null; }));
-            return trusting;
-        },
-        deferTrust: () => {
-            ca.deferTrust();
-            deferredFor = ca.thumbprint;
-            notify();
-        },
-        deckItems: () => {
-            const all = sites.list();
-            if (trusted !== false || all.length === 0) return [];
-            askedAt ??= input.now();
-            const item = trustDeckItem({ trusted, sites: all.length, host: sites.routes()[0]?.host ?? all[0]?.host ?? null, deferredFor, thumbprint: ca.thumbprint, at: askedAt });
-            return item ? [item] : [];
-        },
-        close: () => {
-            closed = true;
-            hosts.close();
-        },
-    };
-}
-
 /** How long a quit waits for in-flight flow runs before it goes on. */
 const FLOW_SETTLE_ON_QUIT_MS = 5_000;
 
-export async function composeServices(input: ComposeInput): Promise<ComposedServices> {
+/** What a window that composed against genie-host's stores holds (the host split, P3.1). */
+export type WindowServices = ComposedServices<WindowAgentStores>;
+
+/** Compose with the stores agents write to opened HERE: the emergency path (no host), and every test that composes alone. */
+export async function composeServices(input: Omit<ComposeInput, 'agentStores'>): Promise<ComposedServices<OwnAgentStores>> {
+    return (await composeWith(input)) as ComposedServices<OwnAgentStores>;
+}
+
+/** Compose with genie-host's stores, through this window's replicas (the host split, P3.1). */
+export async function composeWindowServices(input: ComposeInput & { readonly agentStores: WindowAgentStores }): Promise<WindowServices> {
+    return composeWith(input);
+}
+
+async function composeWith(input: ComposeInput): Promise<WindowServices> {
+    const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
+    stage?.begin('runtime-directory');
     await mkdir(runtimeDir(input.userData), { recursive: true });
+    stage?.end(); stage?.begin('local-staging');
+    // No process discovery, staging directories or permission helper on the ready path. First use still verifies all of them.
+    const createLocalUploads = async () => (await LocalStagingArea.open(input.userData)).createConnection(now);
+    stage?.end();
 
-    const settings = await SettingsStore.open(input.userData, iso);
-    await settings.carryOverFromV1(input.v1Settings());
-
-    const inbox = await InboxStore.open(input.userData, iso, input.inboxSession);
-    const attention = await AttentionStore.open(input.userData, inbox, iso);
-    const knowledge = KnowledgeStore.open(input.userData, iso);
-    // Genie 1's memories, once (knowledge-store.ts records it). Not gated on ~/.genie/v1-import.json: installs that
-    // imported their workspaces before this existed have that file and an empty graph, and must still get theirs.
-    if (input.v1Knowledge && !knowledge.v1Import()?.sawV1) {
-        try {
-            const done = knowledge.importFromV1(planV1KnowledgeImport(input.v1Knowledge()));
-            const notes = knowledge.v1Import()?.notes ?? [];
-            if (!done.alreadyDone) console.log(`[genie] v1 knowledge import: ${done.noV1 ? 'no v1 knowledge graph seen' : `${done.imported} memories imported, ${done.kept} already here`}${notes.length ? `; ${notes.length} noted: ${notes.join(' | ')}` : ''}`);
-        } catch (error) {
-            // Not recorded as done (one transaction), so the next boot tries again; the graph Genie 2 has is untouched.
-            console.error(`[genie] v1 knowledge import failed: ${(error as Error).message}`);
-        }
+    // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
+    // whoever, fires the listeners below with the new value readable. Opened here only on the emergency path.
+    let ownSettings: SettingsStore | null = null;
+    stage?.begin('settings');
+    if (!input.agentStores?.settings) {
+        ownSettings = await SettingsStore.open(input.userData, iso);
+        stage?.end(); stage?.begin('settings-carry-over');
+        await ownSettings.carryOverFromV1(input.v1Settings());
     }
-    // Genie 1's AgentInbox history, once (inbox-store.ts records it), mapped onto the roster the v1 agent import already registered.
-    if (input.v1Inbox) await runV1InboxImport(inbox, input.v1Inbox, { roster: input.roster?.() ?? [], now: now() });
+    stage?.end();
+    const settings: S_Settings = input.agentStores?.settings ?? ownSettings!;
+
+    // THE STORES AGENTS WRITE TO (the host split, P3.1): genie-host's, through this window's replicas — or, only when no
+    // host could start, this window's own, opened here with Genie 1's history taken once.
+    let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
+    stage?.begin('agent-stores');
+    if (!input.agentStores) {
+        ownStores = await openAgentStores(input.userData, iso, input.inboxSession);
+        stage?.end(); stage?.begin('agent-store-imports');
+        importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
+        await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
+    }
+    stage?.end();
+    const inbox: WindowAgentStores['inbox'] = input.agentStores?.inbox ?? ownStores!.inbox;
+    const attention: WindowAgentStores['attention'] = input.agentStores?.attention ?? ownStores!.attention;
+    const knowledge: WindowAgentStores['knowledge'] = input.agentStores?.knowledge ?? ownStores!.knowledge;
+    // FLOWS (P3.3d): genie-host's when it runs — its scheduler fires armed flows with no window, and this window reads and
+    // drives them through a replica. This window's own (its store, scheduler and file trigger) only on the emergency path.
     // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.
     ensureFlowToolKinds();
-    let flowToolCall: FlowToolCall | null = null;
-    let handFlowTools: (call: FlowToolCall) => void = () => {};
-    const flowToolsReady = new Promise<FlowToolCall>((resolve) => { handFlowTools = resolve; });
-    const flows = await FlowStore.open(input.userData, now);
-    // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
-    if (input.v1Flows) await runV1FlowImport(flows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
-
-    const supervisor = new ProcessSupervisor(input.processPty ?? input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
-    // ONE loopback allocator for sites and engines: two things never share a port — not a port an engine has
-    // RECORDED (services.json, read through the registry every time), not one something else on this machine holds
-    // (a bind probe), and the same ports for the same records after a restart (core/port-allocator.ts).
-    let registry: ServiceRegistry | null = null;
-    const portAllocator = input.allocatePort
-        ? null
-        // Reserved: every live engine's ports AND the ones a removed engine is remembered by (handed back on re-add).
-        : new PortAllocator({ first: 4101, reserved: () => registry?.reservedPorts() ?? [], isFree: input.portFree ?? loopbackPortFree, log: (line) => console.error(line) });
-    const allocatePort = input.allocatePort ?? (() => portAllocator!.next());
-    // Only a pull gets the long bound (service-driver.ts); every other docker call keeps the short one.
-    const docker: DockerRunner = input.docker ?? dockerRunnerOver(execFileRunner);
-    const driver = new ServiceDriver(docker);
-    const dockerEvents: DockerEventsPort | undefined = input.dockerEvents ?? (input.docker ? undefined : (args, onLine, onEnd) => lineStreamRunner('docker', args, onLine, onEnd));
-    if (dockerEvents) driver.watch(dockerEvents);
-    const engines = await ServiceRegistry.open(input.userData, driver, { allocatePort, randomPassword: () => randomBytes(18).toString('base64url'), portFree: input.portFree ?? loopbackPortFree });
-    registry = engines;
-    // Genie 1's engines, taken over in place (and its sandboxes stopped) BEFORE anything reads a workspace's env, primes
-    // a port or reconciles: the adopted engines' ports are then reserved, and the reconcile sees them as registered.
-    if (input.v1Services) {
-        try {
-            await runV1ServicesAdoption(engines, {
-                database: input.v1Services.database,
-                docker,
-                reportFile: join(input.userData, 'v1-services.json'),
-                now,
-                workspaces: () => input.workspaces?.() ?? [],
-            });
-        } catch (error) {
-            // Not recorded as done, so the next boot tries again; the engines Genie 2 already had are untouched.
-            console.error(`[genie] taking over Genie 1's service engines failed: ${(error as Error).message}`);
-        }
+    let ownFlows: FlowStore | null = null;
+    stage?.begin('flows');
+    if (!input.flowsEngine) {
+        ownFlows = await FlowStore.open(input.userData, now);
+        // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
+        if (input.v1Flows) await runV1FlowImport(ownFlows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
     }
-    await portAllocator?.prime();
-    // The person's engine Stops are machine-local like the sites' (site-run-state.json below): a restart keeps them stopped.
-    const engineRunState = join(runtimeDir(input.userData), 'engine-run-state.json');
-    const engineStopped = new Set<string>(
-        await readJson<{ stopped?: unknown }>(engineRunState, { stopped: [] }).then((data) => (Array.isArray(data.stopped) ? data.stopped.filter((s): s is string => typeof s === 'string') : [])),
-    );
-    const saveEngineStopped = () => writeJsonAtomic(engineRunState, { stopped: [...engineStopped] });
-    // WHO USES WHICH ENGINE, and who is asleep (core/hibernate-engines.ts; parity audit #12): the registry's chosen engine
-    // per kind, and the registered workspaces as they are now.
-    const engineUse = {
-        chosen: (ws: string) => new Set(engines.choices(ws).flatMap((c) => (c.chosen ? [c.chosen.id] : []))),
-        workspaces: () => (input.workspaces?.() ?? []).map((w) => ({ id: w.id, asleep: w.asleep === true })),
-    };
-    const enginePorts = {
-        available: () => driver.available(),
-        instances: () => engines.list(),
-        state: async (id: string) => (await engines.status(id)).state,
-    };
-    // Not awaited: readiness is bounded in tens of seconds and nothing else at boot needs it. The readiness clock is
-    // the real one, never `input.now` — a fixed test clock would never reach the deadline.
-    const engineReconcile: Promise<ReconcileReport> = reconcileEngines(
-        {
-            ...enginePorts,
-            personStopped: () => engineStopped,
-            // A hibernated workspace stays asleep through a restart: an engine only sleeping workspaces use is not started.
-            asleepOnly: (i) => asleepOnlyEngine(i, { chosen: engineUse.chosen, workspaces: engineUse.workspaces() }),
-            start: (id) => engines.start(id),
-            // Found running: a shared Redis's workspace users are put back (`start` above does it for one it starts).
-            restore: (i) => engines.restoreSlices(i.id),
-            answers: input.engineAnswers ?? ((i) => loopbackAnswers(i.publishedPort, readinessHandshake(i.engine))),
-            now: Date.now,
-            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-        },
-        input.engineReadiness ?? DEFAULT_READINESS,
-    ).then(
-        (report) => {
-            for (const e of report.engines) if ('reason' in e) console.error(`[engines] ${e.outcome}: ${e.reason}`);
-            return report;
-        },
-        (error: unknown): ReconcileReport => {
-            const message = error instanceof Error ? error.message : String(error);
-            console.error(`[engines] the registered engines could not be checked at start: ${message}`);
-            return { docker: null, engines: [], error: message };
-        },
-    );
+    stage?.end();
+    const flows: FlowsApi = input.flowsEngine?.flows ?? ownFlows!;
+
+    // THE PROCESS SUPERVISOR (P3.3b): genie-host's when it runs — its restart policy keeps sites and workers alive with the
+    // UI closed, and this window drives it through a replica. This window's own only on the emergency path.
+    let supervisor: SupervisorApi;
+    if (input.supervisor) supervisor = input.supervisor;
+    else {
+        const own = new ProcessSupervisor(input.processPty ?? input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
+        for (const pty of input.adoptPtys ?? []) own.adopt(pty);
+        supervisor = own;
+    }
     /** A source's app credential, while its workspace allows apps (the setting's default is on). */
     const appEnvOf = (source: AppEnvSource): Readonly<Record<string, string>> =>
         input.appInboxEnv && settings.snapshotFor(source.workspaceId).app_inbox !== false ? input.appInboxEnv(source) : {};
-    const sites = new SiteManager({
-        supervisor,
-        allocatePort,
-        caddyBin: input.caddyBin,
-        configDir: join(runtimeDir(input.userData), 'sites'),
-        writeConfig: (path, content) => {
-            // Synchronous on purpose: the Caddy process is started right after and must find its file.
-            mkdirSync(join(path, '..'), { recursive: true });
-            writeFileSync(path, content, 'utf8');
-        },
-        // Every PHP worker trusts Genie's own CA too (core/php-trust.ts): a site's server side reaches https .gen addresses.
-        phpWorkerEnv: () => phpWorkerEnvWithTrust({
-            base: input.phpWorkerEnv?.() ?? {},
-            genCaPem: () => { const opened = genCa(); if (opened.ca === null) return null; try { return readFileSync(opened.ca.certPath, 'utf8'); } catch { return null; } },
-            systemRoots: () => input.phpSystemRoots?.() ?? null,
-            dir: join(runtimeDir(input.userData), 'php-trust'),
-            platform: process.platform,
-            fs: {
-                readText: (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } },
-                writeText: (p, t) => { mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, t, 'utf8'); },
-            },
-        }),
-        ...(input.resolvePhpCgi ? { resolvePhpCgi: input.resolvePhpCgi } : {}),
-        ...(input.preparePhpCgi ? { preparePhpCgi: input.preparePhpCgi } : {}),
-        ...(input.phpWorkers !== undefined ? { phpWorkers: input.phpWorkers } : {}),
-        serviceEnv: (workspaceId) => engines.envFor(workspaceId),
-        ...(input.siteProbe ? { probeReady: input.siteProbe } : {}),
-        appEnv: (site) => appEnvOf(site),
-    });
-    // An engine change reaches the running sites it changed the env of, with no restart asked of anyone.
-    engines.onChange(() => { sites.serviceEnvChanged(); });
-    // The app switch moved (genie#1345): that workspace's running sites gain or lose their app credential now.
-    settings.onChange((key, _value, workspaceId) => { if (key === 'app_inbox') sites.serviceEnvChanged(workspaceId); });
-    // The sites' routes and the shared WebSockets server's browser-facing ones (core/services.ts websocketRoutes).
-    // Mailpit's web inbox at its .gen name (core/mailpit-name.ts): the Genie browser opens .gen sites only.
-    const routes = () => [...sites.routes(), ...websocketRoutes(engines.list()), ...mailpitRoutes(engines.list())];
-    // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.
-    const siteRunState = join(runtimeDir(input.userData), 'site-run-state.json');
-    const envelopeSites = new EnvelopeSites(sites, {
-        fs: nodeEnvelopeFs(),
-        runState: {
-            load: async () => {
-                const data = await readJson<{ stopped?: unknown }>(siteRunState, { stopped: [] });
-                return Array.isArray(data.stopped) ? data.stopped.filter((s): s is string => typeof s === 'string') : [];
-            },
-            save: (stopped) => writeJsonAtomic(siteRunState, { stopped }),
-        },
-        trust: {
-            // A record that cannot be read is moved aside whole, for a person to look at; envelope-sites-host.ts writes a new one.
-            load: async () => {
-                const file = join(runtimeDir(input.userData), 'workspace-trust.json');
-                try {
-                    return await readJson<unknown>(file, null);
-                } catch (error) {
-                    await rename(file, `${file}.unreadable`).catch(() => undefined);
-                    throw error;
-                }
-            },
-            save: (book) => writeJsonAtomic(join(runtimeDir(input.userData), 'workspace-trust.json'), book),
-        },
-        envFor: (workspaceId) => engines.envFor(workspaceId),
-        log: (line) => console.error(line),
-    });
-    // A site waiting for its first start here is not configured yet: the person's Start is what asks for its name.
-    // CONFIGURED, not running (genie#624): a site that exists resolves whether or not it is up, so a start or a stop never
-    // moves the hosts file. Unioned with what is up only so a name Caddy serves always resolves (a site started by
-    // hand that its envelope declares disabled).
-    const configuredHosts = (): string[] => [
-        ...new Set([
-            ...sites.list().filter((s) => s.state !== 'unservable' && s.firstStart === undefined && !envelopeSites.disabled(s.id)).map((s) => s.host),
-            ...routes().map((r) => r.host),
-        ]),
-    ];
-    // S7: the in-app browser opens https://<name>.gen through this door's CONNECT tunnel, terminated with Genie's leaf.
-    // The CA is opened on first need — the external front door's start, or the browser's first .gen page — and once.
-    let genCaOpened: ReturnType<typeof openGenCa> | null = null;
-    const genCa = () => (genCaOpened ??= openGenCa({ caDir: join(runtimeDir(input.userData), 'gen-ca'), v1CaDirs: input.v1CaDirs ?? [], issuer: input.certIssuer, now }));
-    let leafContexts: GenLeafContexts | null = null;
-    const frontDoor = new GenRouterServer(routes, {
-        tls: (host) => {
-            const opened = genCa();
-            if (opened.ca === null) throw new Error(`Genie’s certificate authority could not be set up (${opened.error})`);
-            leafContexts ??= new GenLeafContexts(opened.ca, routes);
-            return leafContexts.forHost(host);
-        },
-    });
-    const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
-
     // An autonomous agent's gated actions run without asking, recorded (Tynn #801): read from its record at each ask.
     // A permission switch the person turned on answers its own actions the same way (genie#1294, SWITCH_ANSWERS).
-    const approvals = new ApprovalQueue({
+    const ownApprovals = input.agentStores ? null : new ApprovalQueue({
         now,
         autoApproved: (caller) => (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true),
         granted: (caller, action) => {
@@ -914,16 +408,21 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             return flag !== undefined && (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a[flag] === true);
         },
     });
+    const approvals: WindowAgentStores['approvals'] = input.agentStores?.approvals ?? ownApprovals!;
 
     const hostName = input.hostName ?? hostname();
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
     const pluginsDir = join(input.userData, 'plugins');
     const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS });
+    stage?.begin('plugins');
     let plugins = await openPlugins();
+    stage?.end(); stage?.begin('remote-devices');
     const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
+    stage?.end();
     // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
     const pairing = new PairApprovals({ host: hostName, now });
     const remote = new RemoteHost({
+        createLocalUploads,
         api: input.remoteApi ?? { invoke: async () => { throw new Error(`${hostName} has no remote host API wired in this build`); }, onEvent: () => () => {}, workspaceOfAgent: () => null },
         hostName,
         baton: new Baton(),
@@ -933,207 +432,78 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         confirm: pairing,
         transport: input.remoteTransport ?? { onConnection: () => () => {} },
         now,
+        ...(input.build ? { build: input.build } : {}),
     });
-    const elevationRun = (plan: { command: string; args: readonly string[] }) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 });
-    const frontDoorCtl = startExternalFrontDoor({
-        caddyBin: input.caddyBin,
-        caddyDir: join(runtimeDir(input.userData), 'caddy'),
-        genCa,
-        // Read-only: one PowerShell Test-Path per Root store on Windows, the System keychain on macOS, the bundles on Linux.
-        trustStore: input.trustStore ?? osTrustStore(process.platform, (command, args) => execFileRunner(command, args, { timeoutMs: 20_000 })),
-        platform: process.platform,
-        now,
-        sites,
-        supervisor,
-        routes,
-        onRoutesChange: (listener) => { engines.onChange(listener); },
-        configuredHosts,
-        hostsIo: input.hostsIo ?? realHostsIo({ platform: process.platform, tmpDir: runtimeDir(input.userData) }),
-        hostsPath: hostsFilePath(process.platform),
-        hostsDebounceMs: input.hostsDebounceMs ?? 250,
-        // Every elevation Genie raises goes through this one Elevator: one prompt at a time, batches carried whole.
-        elevator: new Elevator(input.elevate ?? ((steps) => runElevatedBatch(process.platform, steps, elevationRun))),
-        ports: input.frontDoorPorts ?? realFrontDoorPorts(process.platform, (command, args) => execFileRunner(command, args, { timeoutMs: 10_000 })),
-    });
-    // The workspaces' declared sites, after the front door so it re-renders as they start. Awaited: Hosting's
-    // first snapshot lists them. A workspace added, hibernated or woken later is synced as it happens.
+    // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
+    // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA. Its own
+    // (hosting-compose.ts) only on the emergency path, built exactly as it always was.
+    stage?.begin('hosting');
+    const ownHosting = input.hosting ? null : await composeHosting({ ...input, supervisor, settings, appEnv: appEnvOf });
+    stage?.end();
+    const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
-    await envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] the workspaces' sites could not be loaded: ${error instanceof Error ? error.message : String(error)}`));
-    // One verdict for each workspace. Until a workspace has been read it is not trusted, so git reads there check its config first.
-    const trustFs = nodeEnvelopeFs();
-    const workspaceTrust = new WorkspaceTrust({
-        readText: trustFs.readText,
-        gitConfig: folderGitConfig,
-        isTracked: fileIsTracked,
-        workspaces: workspacesNow,
-        record: () => envelopeSites.trustRecord(),
-        recordWorkspace: (id, hash) => envelopeSites.recordWorkspace(id, hash),
-        approveSites: (id) => envelopeSites.approveSites(id),
-        verdictMoved: (id) => input.onTrustVerdict?.(id),
-    });
-    setGitReadPolicy(trustAwarePolicy((path) => workspaceTrust.isTrustedPath(path)));
-    // One pass at a time, and a quit waits for the one in flight: it reads through git in the workspace's folder and writes the record.
-    let trustPass: Promise<unknown> = Promise.resolve();
-    let trustClosed = false;
-    const refreshTrust = () => {
-        if (trustClosed) return;
-        trustPass = trustPass.then(() => Promise.all(workspacesNow().map((w) => workspaceTrust.refresh(w.id).catch((error: unknown) => console.error(`[trust] ${w.id} could not be read: ${error instanceof Error ? error.message : String(error)}`)))));
-    };
-    refreshTrust();
-    // A pull while an agent runs: nobody asks for the verdict, so what it reads is watched (trust-watch.ts).
-    const trustWatch = new TrustWatch({
-        workspaces: workspacesNow,
-        readText: trustFs.readText,
-        fingerprint: async (path) => {
-            const info = await stat(path).catch(() => null);
-            return info ? `${info.mtimeMs}:${info.size}` : null;
-        },
-        watchFolder: (folder, changed) => (input.trustWatchFolders === false ? null : watchOneFolder(folder, changed)),
-        refresh: (id) => {
-            if (trustClosed) return;
-            trustPass = trustPass.then(() => workspaceTrust.refresh(id).catch((error: unknown) => console.error(`[trust] ${id} could not be read: ${error instanceof Error ? error.message : String(error)}`)));
-        },
-        settleMs: 500,
-    });
-    const watchPass = () => { trustWatch.pass().catch((error: unknown) => console.error(`[trust] ${error instanceof Error ? error.message : String(error)}`)); };
-    watchPass();
-    const trustWatchTimer = setInterval(watchPass, input.trustWatchEveryMs ?? TRUST_PASS_MS);
-    trustWatchTimer.unref();
+    // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With genie-host's, this window's own git reads follow the host's
+    // verdicts through the replica, which fails closed; the emergency path's own hosting set this process's policy itself.
+    if (!ownHosting) {
+        setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.isTrustedPath(path)));
+        hosting.trust.onVerdict((id) => input.onTrustVerdict?.(id));
+    }
+    const workspaceTrust = hosting.trust;
     /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */
-    const mayWriteInto = async (folder: string): Promise<boolean> => {
-        const workspace = workspacesNow().find((w) => w.path === folder);
-        if (!workspace) return true;
-        return (await workspaceTrust.refresh(workspace.id))?.trusted !== false;
-    };
-    // Only now does the hosts file follow the sites: the boot's declare-and-start burst is ONE sync of the whole
-    // configured set, never a write of a half-loaded list (which would drop names, then prompt again to add them).
-    frontDoorCtl.beginHosts();
-    // Each site repo's `.env` follows the workspace's engines: after the sites are known, and on every engine or site change.
-    const envFiles = new DotEnvSync({
-        envFor: (workspaceId) => engines.envFor(workspaceId),
-        sites: () => envFileSites(sites.list()),
-        fs: nodeEnvelopeFs(),
-        gitIgnored: input.gitIgnored ?? gitIgnoredOver(execFileRunner),
-        // The name each workspace was registered with (Settings → General "Env file name"); none recorded is `.env`.
-        envFileOf: (workspaceId) => workspacesNow().find((w) => w.id === workspaceId)?.envFile,
-        log: (line) => console.error(line),
-    });
-    const syncEnvFiles = () => { envFiles.syncAll().catch((error: unknown) => console.error(`[env] ${error instanceof Error ? error.message : String(error)}`)); };
-    syncEnvFiles();
-    engines.onChange(syncEnvFiles);
-    sites.onChange(syncEnvFiles);
-    const stopWatchingWorkspaces = input.onWorkspacesChange?.(() => {
-        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`)).finally(() => { refreshTrust(); watchPass(); });
-    }) ?? (() => {});
+    const mayWriteInto = (folder: string): Promise<boolean> => workspaceTrust.mayWriteInto(folder);
     const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
     const agents = (): Map<string, { name: string; workspaceId: string }> => new Map(roster().map((r) => [r.id as string, { name: r.name, workspaceId: r.workspaceId }]));
     const reminders = new ReminderBook();
     // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
     const agentFiles = new AgentFilesHealth();
-    const tynnTokens = tynnAgentTokens({
-        file: join(input.userData, 'agent-credentials', 'agents.json'),
-        cipher: input.tynnCipher ?? { isAvailable: () => false, encrypt: () => { throw new Error('OS encryption unavailable'); }, decrypt: () => { throw new Error('OS encryption unavailable'); } },
-    });
-    // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
-    const configWork = new Map<string, Promise<unknown>>();
-    const withConfig = <T>(path: string, run: () => Promise<T>): Promise<T> => {
-        const previous = configWork.get(path) ?? Promise.resolve();
-        const next = previous.then(run, run).finally(() => { if (configWork.get(path) === next) configWork.delete(path); });
-        configWork.set(path, next); return next;
+    const tynnVaultFile = join(input.userData, 'agent-credentials', 'agents.json');
+    const tynnSecretsPort: AgentSecrets = input.tynnSecrets ?? {
+        probe: async () => ({ ok: false, reason: 'no keychain' }),
+        get: async () => ({ kind: 'unavailable', reason: 'no keychain' }),
+        set: async () => ({ ok: false, reason: 'no keychain' }),
     };
-    const projectText = async (workspacePath: string): Promise<string | null> => {
-        try {
-            const file = join(workspacePath, 'project.json');
-            const stat = await lstat(file);
-            if (stat.isSymbolicLink() || !stat.isFile()) throw new Error();
-            const text = await readFileP(file, 'utf8');
-            const data: unknown = JSON.parse(text);
-            if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
-            return text;
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-            throw new McpPreparationError('workspace');
-        }
-    };
-    /*
-     * OFF GRID (genie#1234, the owner 2026-10-26: "Genie must work off grid"). Since #1216 a Tynn-linked agent did not start
-     * at all when its private Tynn credential could not be prepared, and when Genie signed itself out every such agent
-     * showed Broken. Now it starts without the `tynn` server and is told why; sign-in brings the server back.
+    const tynnTokens = tynnAgentTokens({ file: tynnVaultFile, secrets: tynnSecretsPort });
+    /**
+     * THE KEYS AN OLDER GENIE SEALED MOVE TO THE KEYCHAIN (P3.4 cut b's engine, switched on with this reader). At boot, so a host
+     * that loses this window still has them; and awaited before a key is read. What could not move is tried again next time.
      */
-    type TynnFailure = NonNullable<Extract<Awaited<ReturnType<typeof tynnTokens.ensure>>, { status: 'failed' }>['code']>;
-    const tynnWithout = new Map<string, TynnFailure>();
-    const tynnUnverified = new Map<string, { agent: AgentRecord; path: string; text: string | null }>();
-    const tynnRestart = new Set<string>();
-    const TYNN_NOTES: Record<TynnFailure, string> = {
-        refused: 'Genie is not signed in to Tynn, so this agent started without its Tynn tools. They come back by themselves when you sign in (Settings → Accounts).',
-        offline: 'Tynn could not be reached, so this agent started without its Tynn tools. They come back when Genie signs in to Tynn again, or restart this agent once Tynn answers.',
-        inactive: 'This agent’s Tynn identity or key is inactive, so it started without its Tynn tools. Renew its key in Tynn, then restart the agent.',
-        conflict: 'This agent has a conflicting Tynn identity or project binding, so it started without its Tynn tools. Resolve it in Tynn, then restart the agent.',
-        pending: 'An earlier Tynn key request for this agent is unconfirmed, so it started without its Tynn tools. Review its keys in Tynn, then restart the agent.',
-        storage: 'This agent’s private Tynn credential could not be unlocked or saved, so it started without its Tynn tools. Unlock OS credential encryption, then restart the agent.',
-    };
-    const tynnNote = (agentId: string): string | null => {
-        const code = tynnWithout.get(agentId);
-        return code ? `Tynn unavailable — ${TYNN_NOTES[code] ?? TYNN_NOTES.refused} Nothing else is affected, and no shared workspace credential was used.` : null;
-    };
-    /** Signed out or unreachable: the failures a sign-in can cure. The rest need the person, and are not restarted in a loop. */
-    const SIGN_IN_CURES: ReadonlySet<TynnFailure> = new Set<TynnFailure>(['refused', 'offline']);
-    const tynnRecovery = async (): Promise<string[]> => {
-        const tynn = input.tynn?.() ?? null;
-        if (!tynn?.status().signedIn) return [];
-        const named = new Set<string>(tynnRestart);
-        for (const [id, code] of tynnWithout) if (SIGN_IN_CURES.has(code)) named.add(id);
-        // The keys handed out unverified are checked now; one Tynn refuses is taken away by a restart without it.
-        for (const [id, held] of [...tynnUnverified]) {
-            const result = await tynnTokens.ensure({
-                workspacePath: held.path, agent: held.agent, tynn,
-                fs: { read: async () => held.text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } },
-            });
-            if (result.status === 'failed') {
-                if (result.code === 'offline') continue;
-                tynnUnverified.delete(id); tynnRestart.add(id); named.add(id);
-            } else if (result.status === 'unlinked' || !result.unverified) tynnUnverified.delete(id);
-        }
-        return [...named];
-    };
-    const prepareAgentMcp = async (agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]> => {
-        const checkStop = () => { if (signal.aborted) throw new McpPreparationError('cancelled'); };
-        checkStop();
-        if (agent.workspaceId === OS_WORKSPACE) return [];
-        const workspace = input.workspaces?.().find((w) => w.id === agent.workspaceId);
-        if (!workspace || workspace.asleep) throw new McpPreparationError('workspace');
-        const text = await projectText(workspace.path);
-        await withConfig(workspace.path, () => reconcileLegacyTynnConfig({ workspacePath: workspace.path, fs: nodeTynnConfigFs(workspace.path) }));
-        checkStop();
-        const projectId = tynnProjectIdOf(text);
-        if (projectId === null) return [];
-        const ensure = (tynn: TynnSessionPort | null) => tynnTokens.ensure({
-            workspacePath: workspace.path, agent, signal, tynn,
-            fs: { read: async () => text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } },
-        });
-        const asked = input.tynn?.() ?? null;
-        const signedInThen = asked?.status().signedIn === true;
-        let result = await ensure(asked);
-        checkStop();
-        // The account signed in WHILE this agent prepared (at launch it opens after the first agents start): its change
-        // event has already gone by, so nothing would recover this agent later. Asked once more, now.
-        const now = input.tynn?.() ?? null;
-        if (result.status === 'failed' && result.code === 'refused' && now?.status().signedIn && (now !== asked || !signedInThen)) {
-            result = await ensure(now);
-            checkStop();
-        }
-        tynnRestart.delete(agent.id); tynnUnverified.delete(agent.id);
-        // No credential: the agent starts WITHOUT the tynn server (genie#1234), never on a shared workspace credential.
-        if (result.status === 'failed') { tynnWithout.set(agent.id, result.code ?? 'refused'); return []; }
-        if (result.status === 'unlinked') throw new McpPreparationError('workspace');
-        const current = input.workspaces?.().find((w) => w.id === agent.workspaceId);
-        if (!current || current.asleep || current.path !== workspace.path || tynnProjectIdOf(await projectText(workspace.path)) !== projectId) throw new McpPreparationError('workspace');
-        checkStop();
-        tynnWithout.delete(agent.id);
-        if (result.unverified) tynnUnverified.set(agent.id, { agent, path: workspace.path, text });
-        return [{ type: 'http', name: 'tynn', url: result.mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${result.mcp.token}` }] }];
-    };
+    let keysMoved: Promise<void> | null = null;
+    const stuckSaid = new Set<string>();
+    const moveAgentKeys = (): Promise<void> => keysMoved ??= (async () => {
+        const { tynnCipher, tynnVault } = input;
+        if (!tynnCipher || !tynnVault) return;
+        const sources = await gatherSources([
+            { file: 'agents.json', covers: 'tynn/agent/', sources: () => tynnTokens.legacyKeys(tynnCipher) },
+            { file: 'legacy secrets', covers: '', sources: async () => (await input.legacySecrets?.()) ?? [] },
+        ]);
+        const outcomes = await migrateSecrets(...portsOf(holdMigration({ sources, vault: tynnVault, book: migrationBook })));
+        if (outcomes.some((o) => o.status === 'moved')) input.onSecretsMoved?.();
+        const stuck = outcomes.some((o) => !['moved', 'nothing', 'already'].includes(o.status));
+        for (const line of stuckLines(outcomes, stuckSaid)) { console.error(line); input.secretsLog?.(line); }
+        if (stuck) keysMoved = null;
+    })().catch((error: unknown) => {
+        keysMoved = null;
+        const line = `[keychain] secrets could not be moved: ${error instanceof Error ? error.message : String(error)}`;
+        console.error(line);
+        input.secretsLog?.(line);
+    });
+    const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'), { log: (line) => { console.error(line); input.secretsLog?.(line); } });
+    void moveAgentKeys();
+    // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
+    const withConfig = configWriter();
+    // A window running its own engine prepares its agents here (agent-tynn-prep.ts). With a host, the host does, and this goes unused.
+    const tynnPrep = agentTynnPrep({
+        vaultFile: tynnVaultFile,
+        secrets: tynnSecretsPort,
+        tynn: () => input.tynn?.() ?? null,
+        workspaces: () => input.workspaces?.() ?? [],
+        withConfig,
+        ready: () => moveAgentKeys(),
+    });
+    const prepareAgentMcp = tynnPrep.prepare;
+    const tynnNote = tynnPrep.note;
+    const tynnRecovery = tynnPrep.recovery;
     // FLOWS RUN (P4): the scheduler fires an armed flow through the runner (flow-runner.ts) — a command as a supervised
     // process whose log is kept like any background process's, a prompt to a live agent (held back while it is mid-turn),
     // a knowledge write — and every run's outcome is recorded on the flow. Planned here, after every await that could
@@ -1141,161 +511,104 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const workspaceRef = (id: string): WorkspaceRef | undefined => workspacesNow().find((w) => w.id === id);
     const asleep = (id: string): boolean => workspaceRef(id)?.asleep === true;
     const sessions: AgentSessionsPort = input.agentSessions ?? { session: () => null, rows: () => [], prompt: () => false, subscribe: () => () => {} };
-    const flowScheduler = new FlowScheduler({
-        store: flows,
+    const ownEngine = ownFlows ? startFlowsEngine({
+        store: ownFlows,
         now,
-        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        run: createFlowRunner({
-            now,
-            asleep,
-            ports: (flow) => ({
-                escapesPromptValues: (address) => {
-                    const found = resolveOnRoster(address, roster(), input.workspaceSlugs?.());
-                    if (found.kind !== 'one') return false;
-                    const agent = roster().find((r) => r.id === found.id);
-                    if (agent?.provider !== 'codex') return false;
-                    const workspace = workspacesNow().find((w) => w.id === agent.workspaceId);
-                    return workspace !== undefined && workspaceTrust.view(workspace.id)?.trusted !== true;
-                },
-                promptAgent: agentPrompter({
-                    sessions,
-                    resolve: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
-                    agent: (id) => agents().get(id) ?? null,
-                    asleep,
-                    by: `flow "${flow.name}"`,
-                }),
-                // One supervised process per flow: every run's output lands in the same kept log, after the runs before it.
-                runCommand: supervisedCommand(
-                    { supervisor, workspacePath: (id) => workspaceRef(id)?.path ?? null, envFor: (id) => engines.envFor(id) },
-                    { processId: `flow-run:${flow.id}`, name: `flow: ${flow.name}` },
-                ),
-                // The person armed it (an agent never can), so what it writes is theirs.
-                addKnowledge: async (entry) => ({ id: knowledge.add({ ...entry, source: 'user' }).id }),
-                // genie#1204: no shell; its own arrival is told to the file source first, so the move does not start the flow again.
-                moveFile: fileMover({ workspacePath: (id) => workspaceRef(id)?.path ?? null, expectArrival: (path) => fileSource.expectArrival(path) }),
-                // Genie's tools as steps (genie#1204): late-bound — main builds the tools after composing (setFlowToolCaller).
-                // A step that comes before main has handed them over WAITS for them: the runs Genie quit under resume while
-                // this composes (below), and failing there failed exactly the tool steps that are safe to resume (a
-                // question, an issues check, knowledge) — found by the Flows acceptance suite.
-                callTool: async (tool, args) => (flowToolCall ?? (await flowToolsReady))(flow, tool, args),
-                // A flow's question holds the run until the person answers (genie#1204).
-                awaitQuestion: questionWaiter(attention),
-            }),
-        }),
-    });
-    flowScheduler.plan();
-    // A run Genie quit under resumes now, when the step it reached is safe to run again (genie#1204).
-    void flowScheduler.resumeInterrupted().catch((error: unknown) => console.error(`[flows] resume: ${error instanceof Error ? error.message : String(error)}`));
-    // THE FILE TRIGGER (genie#1204): only the workspaces an armed file flow names are watched (flow-file-watch.ts); what
-    // lands there becomes an addition (flow-file-source.ts: de-duplicated, reported once it is finished — quiet, never
-    // empty, never at a partial size) and starts the armed flows it matches; one nothing took is watched a while longer.
-    const fileListeners = new Set<(event: RawWatchEvent) => void>();
-    const fileSource = startFileSource({
-        subscribe: (listener) => { fileListeners.add(listener); return () => { fileListeners.delete(listener); }; },
-        statFile: nodeWatch.statFile,
-        emit: (event) => flowScheduler.fileAdded(event),
-    });
-    const fileWatches = new FileTriggerWatches({
-        store: flows,
+        asleep,
         workspacePath: (id) => workspaceRef(id)?.path ?? null,
-        watch: nodeWatch.watch,
-        onEvent: (event) => { for (const l of fileListeners) l(event); },
-    });
+        sessions,
+        resolve: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
+        agent: (id) => agents().get(id) ?? null,
+        supervisor,
+        envFor: (id) => hosting.engines.envFor(id),
+        addKnowledge: async (entry) => ({ id: (await knowledge.add(entry as never)).id }),
+        attention,
+        ...(input.safeMode ? { safeMode: input.safeMode } : {}),
+        // A Codex agent in a workspace not trusted gets a flow's values with Genie's skill names escaped (genie#1519).
+        escapesPromptValues: (address) => {
+            const found = resolveOnRoster(address, roster(), input.workspaceSlugs?.());
+            if (found.kind !== 'one') return false;
+            const agent = roster().find((r) => r.id === found.id);
+            if (agent?.provider !== 'codex') return false;
+            const workspace = workspacesNow().find((w) => w.id === agent.workspaceId);
+            return workspace !== undefined && hosting.trust.view(workspace.id)?.trusted !== true;
+        },
+    }) : null;
+    // Leaving safe mode arms the own flow clock again; it starts nothing by itself.
+    if (ownEngine) input.safeModeLeft?.(() => { ownEngine.scheduler.plan(); });
+    const flowScheduler: FlowSchedulerApi = input.flowsEngine?.scheduler ?? ownEngine!.scheduler;
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
     const stopLiveness = supervisor.watchLiveness();
     let down: Promise<void> | null = null;
 
+    const stagingSweep = new AbortController();
+    let sweeping: Promise<void> | null = null;
+    const sweepOldStaging = (): Promise<void> => sweeping ??= LocalStagingArea.sweepOld(input.userData, { signal: stagingSweep.signal })
+        .catch(() => { if (!stagingSweep.signal.aborted) console.warn('[genie] old local staging could not be swept'); });
+    const stopStagingSweep = input.scheduleStagingSweep ? input.scheduleStagingSweep(sweepOldStaging) : (() => {
+        const timer = setTimeout(() => { void sweepOldStaging(); }, 0); timer.unref();
+        return () => clearTimeout(timer);
+    })();
+    stage?.ready();
     return {
+        own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
+        ownFlows,
         inbox,
         prepareAgentMcp,
         tynnNote,
         tynnRecovery,
+        moveSecretsAgain: moveAgentKeys,
         attention,
         knowledge,
         flows,
         flowScheduler,
         settings,
         supervisor,
-        sites,
-        envelopeSites,
+        sites: hosting.sites,
+        envelopeSites: hosting.envelopeSites,
+        engines: hosting.engines,
+        engineReconcile: hosting.engineReconcile,
+        envFiles: ownHosting?.envFiles ?? null,
+        engineStatuses: () => hosting.engineStatuses(),
+        engineDependents: (id) => hosting.engineDependents(id),
+        startEngine: (id) => hosting.startEngine(id),
+        stopEngine: (id) => hosting.stopEngine(id),
+        hibernationEngines: hosting.hibernationEngines,
+        removeEngine: (id, options) => hosting.removeEngine(id, options),
+        updateEngine: (id, options) => hosting.updateEngine(id, options),
+        hostingProblems: () => hosting.hostingProblems(),
+        frontDoor: ownHosting?.frontDoor ?? null,
         workspaceTrust,
         untrustedFilesFor: async (record) => {
             const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
             // Not in a workspace: the built-in Genie agent, in a folder of Genie's own.
             if (!workspace) return null;
-            const view = await workspaceTrust.refresh(workspace.id);
-            if (view === null || view.trusted) return null;
+            const view = await workspaceTrust.refresh(workspace.id).catch(() => null);
+            if (view !== null && view.trusted) return null;
             return writeGenieInstructions(join(runtimeDir(input.userData), 'untrusted-agent'), input.mcpTools?.() ?? []);
         },
-        trustSteps: () => workspacesNow().flatMap((workspace) => {
-            const view = workspaceTrust.view(workspace.id);
-            return view === null || view.trusted ? [] : [{ workspaceId: workspace.id, changed: view.changed, list: view.list }];
-        }),
+        trustSteps: () => trustSteps(workspaceTrust.entries()),
         untrustedNow(record) {
             const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
             if (!workspace) return false;
             return workspaceTrust.view(workspace.id)?.trusted !== true;
         },
-        engines,
-        engineReconcile,
-        envFiles,
-        engineStatuses: () => engineStatusesOf(enginePorts),
-        engineDependents: (id) => {
-            const i = engines.list().find((x) => x.id === id);
-            if (!i) throw new Error(`no service ${id}`);
-            const workspaceIds = new Set([
-                ...(input.workspaces?.() ?? []).map((w) => w.id),
-                ...(i.scope.kind === 'dedicated' ? [i.scope.workspaceId] : []),
-                ...Object.keys(i.slices ?? {}),
-                ...sites.list().map((x) => x.workspaceId),
-                ...supervisor.list().map((x) => x.workspaceId),
-            ]);
-            const using = new Set([...workspaceIds].filter((ws) => (i.engine === 'custom' && i.scope.kind === 'dedicated' && i.scope.workspaceId === ws) || engines.choices(ws).some((c) => c.chosen?.id === id)));
-            return [
-                ...[...using].map((ws) => `workspace ${ws}`),
-                ...sites.list().filter((x) => using.has(x.workspaceId) && ['running', 'starting', 'external'].includes(x.state)).map((x) => `site ${x.host} (workspace ${x.workspaceId})`),
-                ...supervisor.list().filter((x) => using.has(x.workspaceId) && ['running', 'restarting'].includes(x.state)).map((x) => `process ${x.name} (workspace ${x.workspaceId})`),
-            ];
-        },
-        startEngine: async (id) => {
-            // The person wants it running: no longer stopped by them, even if Docker refuses (the refusal is the answer).
-            if (engineStopped.delete(id)) await saveEngineStopped();
-            await engines.start(id);
-        },
-        stopEngine: async (id) => {
-            await engines.stop(id);
-            engineStopped.add(id);
-            await saveEngineStopped();
-        },
-        hibernationEngines: {
-            toRelease: (workspaceId) => enginesToRelease({ workspaceId, instances: engines.list(), chosen: engineUse.chosen, workspaces: engineUse.workspaces() }),
-            toResume: (workspaceId) => enginesToResume({ workspaceId, instances: engines.list(), chosen: engineUse.chosen, personStopped: engineStopped }),
-            stop: (id) => engines.stop(id),
-            start: (id) => engines.start(id),
-        },
-        removeEngine: async (id, options) => {
-            await engines.remove(id, options);
-            if (engineStopped.delete(id)) await saveEngineStopped();
-        },
-        frontDoor,
         approvals,
         remote,
         pairing,
-        frontDoorPort,
-        browserTrust: () => {
-            const opened = genCa();
-            return opened.ca ? { caPem: readFileSync(opened.ca.certPath, 'utf8'), thumbprint: opened.ca.thumbprint } : { caPem: null, reason: opened.error };
-        },
-        get externalFrontDoor() { return frontDoorCtl.status(); },
-        onFrontDoorChange: frontDoorCtl.onChange,
-        frontDoorSettled: frontDoorCtl.settled,
-        syncHosts: frontDoorCtl.syncHosts,
-        retryFrontDoor: frontDoorCtl.retry,
-        trustCertificate: frontDoorCtl.trust,
-        deferTrustCertificate: frontDoorCtl.deferTrust,
-        routes,
-        configuredHosts,
+        // Read at each use (P5a.2): a host that comes back on a new port reaches this window.
+        get frontDoorPort() { return hosting.frontDoorPort; },
+        browserTrust: () => hosting.browserTrust(),
+        get externalFrontDoor() { return hosting.externalFrontDoor; },
+        onFrontDoorChange: (listener) => hosting.onFrontDoorChange(listener),
+        frontDoorSettled: () => hosting.frontDoorSettled(),
+        syncHosts: () => hosting.syncHosts(),
+        retryFrontDoor: () => hosting.retryFrontDoor(),
+        trustCertificate: () => hosting.trustCertificate(),
+        deferTrustCertificate: () => hosting.deferTrustCertificate(),
+        routes: () => hosting.routes(),
+        configuredHosts: () => hosting.configuredHosts(),
         deckItems: () => {
             const workspaceNames: Record<string, string> = Object.fromEntries((input.workspaces?.() ?? []).map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)]));
             const workspaceColors: Record<string, string> = Object.fromEntries((input.workspaces?.() ?? []).flatMap((w) => {
@@ -1309,7 +622,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                     const color = i.workspaceId === null ? undefined : workspaceColors[i.workspaceId];
                     return name === undefined && color === undefined ? i : { ...i, ...(name === undefined ? {} : { workspaceName: name }), ...(color === undefined ? {} : { workspaceColor: color }) };
                 }),
-                ...frontDoorCtl.deckItems(),
+                ...hosting.trustDeckItems(),
                 ...deckItemsFrom({
                     questions: attention.pending(),
                     userList: attention.allUserItems(),
@@ -1322,28 +635,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 }),
             ];
         },
-        inboxReminders: ({ run }) =>
-            [...agents().keys()].flatMap((id) => {
-                // No run, no notice (`reminders.due` answers null for it): its mail is not read on every session event.
-                const runNow = run(id);
-                if (runNow === null) return [];
-                const unread = inbox.unread(id as never);
-                // How many came from APPS (genie#1345): the notice says so, and nothing of what they say.
-                const fromApps = unread.filter((m) => isAppSender(m.from)).length;
-                const text = reminders.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: runNow, fromApps });
-                if (!text) return [];
-                // WHAT THE NOTICE IS ABOUT (beta.33 item 18): each unread message, who from and what it says, carried on
-                // the notice's row so the chat shows the context — the prompt itself stays the short instruction.
-                const roster = agents();
-                const mail = unread.map((m): NoticeMail => ({
-                    id: m.id,
-                    from: m.from,
-                    fromName: m.from === HUMAN ? null : m.app ? m.app.label : roster.get(m.from)?.name ?? null,
-                    text: m.text.length > NOTICE_MAIL_CHARS ? `${m.text.slice(0, NOTICE_MAIL_CHARS - 1)}…` : m.text,
-                    sentAt: m.sentAt,
-                }));
-                return [{ agentId: id, text, mail }];
-            }),
+        inboxReminders: ({ run }) => inboxNotices({ agents: agents(), unread: (id) => inbox.unread(id as never), reminders, run }),
         inboxNoticeSettled: (agentId, delivered) => reminders.settled(agentId, delivered),
         appEnv: (source) => appEnvOf(source),
         signals: ({ osAgentWorking, githubBlocked }) => ({
@@ -1362,7 +654,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         get plugins() { return plugins; },
         pluginsDir,
         pluginsRefresh: async () => { plugins = await openPlugins(); },
-        syncConfig: async (workspacePath, source = 'start') => withConfig(workspacePath, async () => {
+        syncConfig: async (workspacePath, source = 'start') => {
             // Nothing of Genie's goes into a folder the person has not trusted, its token above all.
             if (!(await mayWriteInto(workspacePath))) return [];
             const endpoint = input.mcpEndpoint?.() ?? null;
@@ -1373,26 +665,13 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             }
             const values = settings.snapshot();
             const flag = (k: string) => values[k] !== false;
-            const fs = {
-                read: async (p: string) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
-                write: async (p: string, text: string) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
-                remove: async (p: string) => { try { await unlinkP(p); } catch { /* not there: nothing to remove */ } },
-                list: async (d: string) => { try { return await readdirP(d); } catch { return []; } },
-            };
-            const flags = { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') };
-            try {
-                await reconcileLegacyTynnConfig({ workspacePath, fs: nodeTynnConfigFs(workspacePath) });
-                await writeAgentGitignore({ workspacePath, fs });
-            } catch {
-                const failed: SyncResult[] = [{ id: 'tynn', label: 'Tynn (legacy config cleanup)', ok: false, error: new McpPreparationError('config').message }];
-                agentFiles.config(workspacePath, failed, Date.now(), source);
-                return failed;
-            }
-            const targets = configSyncTargets({ workspacePath, fs, flags });
-            const results = await configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
+            const request: WorkspaceConfigRequest = { workspacePath, endpoint, flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') } };
+            // One writer (workspace-config-sync.ts): the host's when there is one, and a failure there is not a reason to write here.
+            const host = input.hostConfigSync?.() ?? null;
+            const results = [...await (host ? host.configSync(request) : withConfig(workspacePath, () => writeWorkspaceConfig(request)))];
             agentFiles.config(workspacePath, results, Date.now(), source);
             return results;
-        }),
+        },
         syncAgentDocs: async (workspacePath, source = 'start') => {
             if (!(await mayWriteInto(workspacePath))) return;
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -1426,42 +705,42 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
         resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
-        setFlowToolCaller: (call) => { flowToolCall = call; handFlowTools(call); },
+        setFlowToolCaller: (call) => { ownEngine?.setToolCaller(call); },
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
             setGitReadPolicy(null);
             down ??= (async () => {
-                approvals.cancelAll('Genie is shutting down');
-                stopWatchingWorkspaces();
+                stagingSweep.abort(); stopStagingSweep();
+                ownApprovals?.cancelAll('Genie is shutting down');
                 stopLiveness();
-                driver.unwatch();
-                fileWatches.stop();
-                fileSource.stop();
                 // No flow fires from here: its timer is cancelled for good, so nothing starts after `settled()` answers (genie#1351).
-                flowScheduler.stop();
-                // Nothing more is started (a port probe still in flight) or synced (a pending hosts write) from here.
-                frontDoorCtl.close();
+                ownEngine?.stop();
+                // Nothing more is started (a port probe still in flight) or synced (a pending hosts write, the docker watch, a
+                // workspace change) from here.
+                ownHosting?.quiesce();
                 // EVERYTHING SUPERVISED STOPS FIRST, before anything is waited on (hosting fixes 2.2): behind the `.env`
                 // pass below, a slow or stuck git kept every dev server, worker and the front door running — and a quit
-                // that does not wait that long left them running for good.
-                for (const p of supervisor.list()) supervisor.stop(p.id);
+                // that does not wait that long left them running for good. Only what THIS window runs: genie-host's
+                // supervised processes (its sites, its front door, its kept workers) are the host's to stop, at "Shut down
+                // everything" (host-shutdown.ts), and "Just close the UI" keeps them (P5a.3).
+                if (!input.supervisor) for (const p of supervisor.list()) supervisor.stop(p.id);
                 // Then the `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short.
-                await envFiles.close();
-                trustClosed = true;
-                clearInterval(trustWatchTimer);
-                trustWatch.stop();
-                await trustPass;
-                await new Promise<void>((r) => frontDoor.close(r));
+                await ownHosting?.drainEnvFiles();
+                // The trust passes end before the front door: a pass in flight reads git in a workspace and writes the record.
+                await ownHosting?.closeTrust();
+                if (!ownHosting) setGitReadPolicy(null);
+                await ownHosting?.closeFrontDoor();
                 // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
                 // soon, and a quit does not wait on an agent — bounded, then the run is left unrecorded.
                 let quitWait: ReturnType<typeof setTimeout> | undefined;
-                await Promise.race([flowScheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
+                if (ownEngine) await Promise.race([ownEngine.scheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
                 clearTimeout(quitWait);
                 // And the flows file's last write has landed (a held record, the run in flight kept as it goes).
-                await flows.flushed();
+                await ownFlows?.flushed();
                 await remoteDevices.flushed();
-                await portAllocator?.settled();
-                knowledge.close();
+                await ownHosting?.settled();
+                await sweeping;
+                ownStores?.knowledge.close();
             })();
             return down;
         },

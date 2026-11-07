@@ -4,11 +4,11 @@ import { secureMcpUrl, tynnAgentTokens } from '../src/main/tynn-agent-token.js';
 import { configSyncTargets } from '../src/main/config-sync-targets.js';
 
 const agent = agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider: 'codex', name: 'atlas' });
-const cipher = { isAvailable: () => true, encrypt: (text: string) => Buffer.from(text), decrypt: (bytes: Buffer) => bytes.toString() };
+const secrets = { probe: async () => ({ ok: true as const }), get: async () => ({ kind: 'missing' as const }), set: async () => ({ ok: true as const }) };
 
 it('refuses a legacy caller without an agent before reading a shared credential or making an API request', async () => {
     let reads = 0; let requests = 0;
-    const result = await tynnAgentTokens({ file: '/unused/agents.json', cipher }).ensure({
+    const result = await tynnAgentTokens({ file: '/unused/agents.json', secrets }).ensure({
         workspacePath: '/workspace', fs: { read: async () => { reads++; return '{}'; }, write: async () => { throw new Error('No workspace credential writes'); } },
         tynn: { status: () => ({ signedIn: true }), request: async () => { requests++; throw new Error('No legacy mint'); } },
     } as never);
@@ -23,7 +23,7 @@ it('requires private vault configuration for an agent instead of falling back to
 });
 
 it('does not provision an unlinked workspace or expose a project read error', async () => {
-    const vault = tynnAgentTokens({ file: '/unused/agents.json', cipher });
+    const vault = tynnAgentTokens({ file: '/unused/agents.json', secrets });
     const base = { workspacePath: '/workspace', agent, tynn: null, fs: { read: async () => '{}', write: async () => {} } };
     expect(await vault.ensure(base)).toEqual({ status: 'unlinked' });
     const result = await vault.ensure({ ...base, fs: { ...base.fs, read: async () => { throw new Error('synthetic-sensitive-error'); } } });

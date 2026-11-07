@@ -19,7 +19,8 @@ import { createRequire } from 'node:module';
 import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PHP_RECIPES, type PhpPlatform } from '../../src/core/php-versions.js';
-import { httpFetch, installPhpVersion, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
+import { httpFetchOver, installPhpVersion, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { execFileRunner } from '../../src/main/toolchain-runner.js';
 import type { CommandRunner } from '../../src/main/toolchain-prober.js';
 import { describeGauge, startMainBlockGauge } from './main-block-gauge.js';
@@ -34,7 +35,7 @@ async function main(): Promise<void> {
     const run: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 45 * 60_000, ...(options?.env ? { env: options.env } : {}) });
     const version = PHP_RECIPES.find((r) => r.version === '8.4.27')?.version ?? PHP_RECIPES[0]!.version;
     const outcome = await installPhpVersion(version, true, {
-        platform, root: phpVersionsRoot(join(base, 'toolchain')), fs: nodePhpVersionsFs(), run, fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, cpus: availableParallelism(),
+        platform, root: phpVersionsRoot(join(base, 'toolchain')), fs: nodePhpVersionsFs(), run, fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, cpus: availableParallelism(),
         progress: () => {},
     } as Parameters<typeof installPhpVersion>[2]);
     if (outcome.kind !== 'installed') { console.log(`PHP did not install: ${JSON.stringify(outcome).slice(0, 300)}`); process.exit(1); }

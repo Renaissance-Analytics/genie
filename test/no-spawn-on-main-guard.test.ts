@@ -10,6 +10,10 @@ import { describe, expect, it } from 'vitest';
  * This guard holds the line. A main-process module may import `node:child_process` only if it is:
  *  - the spawn host's own implementation (`spawn-exec.ts`: what the child runs; in main only as the logged fallback
  *    when the child cannot start), or the client that forks the child (`spawn-host-client.ts`: one spawn, at boot);
+ *  - the launcher of the agent host (`engine-launch.ts`, the host split #1387: one DETACHED spawn of genie-host at boot,
+ *    again only when the host was lost; on Windows through genie-launch.exe, asynchronously, #1628 — test/host-spawn-async
+ *    holds that no synchronous child start is ever made there). It cannot go through the spawn host: that child ends every process it made
+ *    when the window ends, and genie-host must outlive the window;
  *  - on the KNOWN list below: modules that still spawn on main, each with its reason and owner. The list may only
  *    SHRINK. A new module that spawns goes through `execFileRunner` (or the spawn host) instead.
  *
@@ -17,7 +21,9 @@ import { describe, expect, it } from 'vitest';
  * neither list, on purpose.
  */
 
-const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts']);
+// `spawn-relay.ts` runs in genie-host, never in Electron main: it forks the spawn host's children there (the host split,
+// P2.1), which is what takes process creation out of the window entirely.
+const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts', 'src/main/engine-launch.ts', 'src/main/spawn-relay.ts']);
 
 /** Still spawning on main, by name. Remove a line when its module moves; never add one. */
 const KNOWN: Readonly<Record<string, string>> = {
@@ -40,6 +46,11 @@ const IMPORT = /(?:from\s+|require\()\s*['"](?:node:)?child_process['"]/;
 function files(dir: string): string[] {
     return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name).replaceAll('\\', '/')] : []));
 }
+
+it('the Windows helper is never started on Electron main, and spawns nothing of its own', () => {
+    expect(readFileSync('src/main/windows-helper.ts', 'utf8')).not.toMatch(/node:child_process/);
+    expect(readFileSync('src/main/private-credentials.ts', 'utf8')).toMatch(/\.type === 'browser' \? null : windowsHelper\(\)/);
+});
 
 describe('no process is created on Electron main (genie#1397)', () => {
     const spawning = [...files('src/main'), ...files('src/core')].filter((f) => IMPORT.test(readFileSync(f, 'utf8')));

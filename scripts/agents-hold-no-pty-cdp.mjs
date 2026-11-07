@@ -5,7 +5,7 @@
  *   node scripts/agents-hold-no-pty-cdp.mjs
  *
  * Runs against an app launched with `--remote-debugging-port=9222` after `smoke-seed.mjs`,
- * with `GENIE2_CODEX_BINARY` pointing at the stub app-server (so an agent can actually run).
+ * with GENIE_PAGE_PROBE=1 and `GENIE2_CODEX_BINARY` pointing at the stub app-server (so an agent can actually run).
  * The unit layer (test/no-agent-pty.test.ts) proves the host never ASKS for a pty on an
  * agent's behalf; the type layer makes "agent on a pty" uncompilable; this is the third layer
  * §8.2 asks for — a process scan while agents run:
@@ -18,6 +18,7 @@
  * processes is the number of live ptys on an otherwise idle machine. On Linux it is the number
  * of allocated pty slaves (`/dev/pts`). Deltas against a baseline taken before anything starts.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
@@ -123,7 +124,8 @@ try {
 
     // START AN AGENT, the way a person does.
     // Start (the one restart): opening an agent starts nothing since q_04ce323c.
-    await cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
+    await waitForPageProbe(cdp);
+    await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
     let running = null;
     for (const end = Date.now() + 30_000; Date.now() < end && running !== true;) {
         // Past its preparation too: a session reads as running while its launch is still being prepared, before there is any process to count.

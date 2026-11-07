@@ -4,6 +4,7 @@ import { stableView } from '../stable-view.js';
 import { providerLogin } from '../../core/provider-login.js';
 import { headroomLine, headroomTitle, headroomOf } from '../../core/headroom.js';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import type { ToolOutputReply } from '../../core/tool-row-bound.js';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
@@ -254,6 +255,8 @@ export interface AgentViewProps {
     initialDiskChanges?: readonly { path: string; at: number }[] | null | undefined;
     /** The commits in the workspace's repos since a moment (git's own account), for an observed agent's Activity tab. */
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
+    /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
+    loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
     initialCommits?: readonly RepoCommit[] | null | undefined;
     /** The live Take Over probe for an OBSERVED agent (§4.2): its terminal, its bursts. `null`/absent = none. */
     takeOver?: TakeOverProbe | null | undefined;
@@ -331,7 +334,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
@@ -356,6 +359,14 @@ function AgentViewBody({
     const clock = now ?? (() => Date.now());
     // CHANGES (§4.2): the files THIS agent changed this session, from the file host's groups; re-read on every change
     // the host reports. `null` = absent — the tab says so in a sentence.
+    // A tool row's whole output, for THIS agent (Tynn story #386). Stable while the agent is: an unchanged row is not redrawn.
+    const toolOutputRef = useRef(loadToolOutput);
+    toolOutputRef.current = loadToolOutput;
+    const canLoadToolOutput = loadToolOutput !== undefined;
+    const agentToolOutput = useMemo(
+        () => (canLoadToolOutput ? (toolCallId: string) => toolOutputRef.current!(agent.id, toolCallId) : undefined),
+        [agent.id, canLoadToolOutput],
+    );
     const [changes, setChanges] = useState<readonly string[] | null>(initialChanges ?? null);
     const [diskChanges, setDiskChanges] = useState<readonly { path: string; at: number }[] | null>(initialDiskChanges ?? null);
     // COMMITS since the Take Over window opened (the board's blind index): read when the view mounts and when the
@@ -389,7 +400,9 @@ function AgentViewBody({
         let live = true;
         const read = () => { void files.state(workspace.id).then((s) => { if (live) { setChanges(agentChanges(s, agent.name)); setDiskChanges(s?.diskChanges ?? null); } }); };
         read();
-        const off = files.onChange((id) => { if (id === workspace.id) read(); });
+        // ITS OWN subscription (the host split, P2.2): it only listened before, so its disk changes depended on another
+        // view's watcher being open. Batches only; no git.
+        const off = files.subscribe ? files.subscribe(workspace.id, {}, (event) => { if (!event.git) read(); }) : files.onChange((id) => { if (id === workspace.id) read(); });
         return () => { live = false; off(); };
     }, [files, workspace, agent.name]);
     const pill = statePill(session, now ?? (() => Date.now()), { turns, takeOver: agent.fidelity === 'observed' ? takeOver : null });
@@ -991,6 +1004,7 @@ function AgentViewBody({
                                     parked={parkedDivider(session, now ?? (() => Date.now()))}
                                     persona={persona}
                                     markup={streamMarkup}
+                                    loadToolOutput={agentToolOutput}
                                     onChat={() => onNavigate(chatRoute)}
                                     onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}
                                 />
@@ -1172,8 +1186,8 @@ function AgentViewBody({
                                                         the agent starts a NEW conversation there (a provider's conversation is its own). */}
                                                     <section data-rail="provider" data-agent-provider={agent.provider}>
                                                         <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h3>
-                                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: providerName(p) }))} prefix={<ProviderLogo provider={agent.provider} />} value={agent.provider} disabled={ops.providerSwitch?.kind === 'working'} onValueChange={(to) => { if (to !== agent.provider) ops.onSwitchDriver(to); }} aria-label={`${agent.name}'s provider`} />
-                                                        <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its name, inbox and history stay; it starts a new conversation on the new provider.')}</p>
+                                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: providerName(p) }))} prefix={<ProviderLogo provider={agent.provider} />} value={agent.provider} disabled={ops.providerSwitch?.kind === 'working'} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
+                                                        <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its conversation comes with it. Switching back resumes the old one.')}</p>
                                                         {/* WHERE THE SWITCH STANDS, beside it (genie#1569): a refusal used to be a silent flash back. */}
                                                         <ProviderSwitchStatus state={ops.providerSwitch} onRetry={(to) => ops.onSwitchDriver(to)} />
                                                     </section>

@@ -105,6 +105,13 @@ export interface ProcessInfo {
     readonly name: string;
 }
 
+/**
+ * A PROCESS WHOSE START TIME WAS NEVER READ (the machine could not be read when it was spawned). No real process has this start time, so `sameProcess` matches nothing: a record
+ * with it says a provider was started and ends nothing, because a pid alone is not a process, and it may by now be someone else's.
+ */
+export const START_UNKNOWN = -1;
+export const startTimeUnknown = (pid: number, ppid: number): ProcessInfo => ({ pid, ppid, started: START_UNKNOWN, name: 'start time unknown' });
+
 export interface ReapResult {
     killed: number;
     /** True when the reap was declined as unsafe. `reason` says why, for a surface to report. */
@@ -306,8 +313,19 @@ function win32Snapshot(): ProcessInfo[] {
     return parseWin32Snapshot(execFileSync(resolveProgram('powershell'), WIN32_ARGS, WIN32_OPTIONS), process.pid);
 }
 
+/**
+ * WHO READS IT, WHERE A LONG-LIVED HELPER RUNS (genie-host): 1.8 to 2.2 s a launch, about 65 ms through the helper. Its failure is not the reading's: a launch still answers. The helper is left out of
+ * the reading the same way a scan's own PowerShell is, by the pid the script reports.
+ */
+let win32Reader: ((script: string) => Promise<string>) | null = null;
+export function setWin32ProcessReader(reader: ((script: string) => Promise<string>) | null): void { win32Reader = reader; }
+
 /** The same reading, off the event loop (genie#1201). */
 async function win32SnapshotAsync(): Promise<ProcessInfo[]> {
+    if (win32Reader) {
+        const text = await win32Reader(WIN32_SCRIPT).catch(() => null);
+        if (text !== null) return parseWin32Snapshot(text, process.pid);
+    }
     const { stdout } = await execFileAsync(resolveProgram('powershell'), WIN32_ARGS, WIN32_OPTIONS);
     return parseWin32Snapshot(stdout, process.pid);
 }

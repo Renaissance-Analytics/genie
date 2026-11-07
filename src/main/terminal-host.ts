@@ -1,5 +1,7 @@
 import { fanOut } from '../core/fan-out.js';
+import type { ListedPty, PtyTag } from './spawn-host-protocol.js';
 import { limitRefusal } from '../core/shell-limits.js';
+import type { TerminalPosition, TerminalDataPosition, TerminalStreamSnapshot } from '../core/terminal-stream.js';
 
 /**
  * TERMINALS — for shells, builds, services and hosted sites. **No agent has one.**
@@ -29,6 +31,8 @@ import { limitRefusal } from '../core/shell-limits.js';
  */
 
 export interface PtySpawnOptions {
+    /** The id to open it under — a window's replica mints it so its pane opens at once (the host split, P3.3e). Absent = the engine mints one. */
+    id?: string | undefined;
     cwd: string;
     /**
      * What to run. **Absent means the user's own login shell**, resolved by the engine.
@@ -51,6 +55,11 @@ export interface PtySpawnOptions {
      * the engine. Absent for a plain shell.
      */
     env?: Readonly<Record<string, string>> | undefined;
+    /**
+     * What this pty is to the window (the host split, P2.1): kept by a spawn host that outlives the window, so the next
+     * window takes it back. Not the engine's: a port that runs the pty in this process ignores it.
+     */
+    tag?: PtyTag | undefined;
 }
 
 /** A live pty, as the engine reports it. */
@@ -77,10 +86,12 @@ export interface PtyPort {
     resize(id: string, cols: number, rows: number): boolean;
     kill(id: string): boolean;
     scrollback(id: string): string | undefined;
+    /** Producer-authoritative position, when this port has one. An old/in-process producer stays unknown. */
+    position?(id: string): TerminalPosition | null;
     /** Subscribe to output. Returns an unsubscribe. */
-    onData(listener: (id: string, data: string) => void): () => void;
+    onData(listener: (id: string, data: string, position?: TerminalDataPosition) => void): () => void;
     /** Subscribe to a pty ending on its own. Returns an unsubscribe. */
-    onExit(listener: (id: string, exitCode: number) => void): () => void;
+    onExit(listener: (id: string, exitCode: number, position?: TerminalPosition) => void): () => void;
     /** Subscribe to the shell's working directory, as the engine learns it (OSC-7). Optional: an engine without it tracks nothing. */
     onCwd?(listener: (id: string, cwd: string) => void): () => void;
     /**
@@ -89,11 +100,16 @@ export interface PtyPort {
      * leaves liveness to the exit event and the pid.
      */
     isLive?(id: string): boolean;
-    /** Subscribe to a pty's pid once it is known, for a port whose `open` answered 0 (the spawn host, genie#1397). */
-    onPid?(listener: (id: string, pid: number) => void): () => void;
+    /**
+     * Subscribe to a pty's pid once it is known, for a port whose `open` answered 0 (the spawn host, genie#1397), with the
+     * shell the engine resolved when it says one (the default shell's real name; `open` could only echo the request).
+     */
+    onPid?(listener: (id: string, pid: number, shell?: string) => void): () => void;
 }
 
 export interface TerminalOptions {
+    /** The id to open it under (P3.3e: a window's replica mints it). Absent = the engine mints one. */
+    id?: string | undefined;
     /**
      * The workspace this terminal belongs to.
      *
@@ -116,6 +132,13 @@ export interface TerminalOptions {
      * `false` for Genie's own system terminals: a Take Over of an agent, a provider login, the OS scratch shell.
      */
     limited?: boolean | undefined;
+    /**
+     * A THROWAWAY TERMINAL (Tynn story #378; the workspace header's Terminal button): it lives only while its window does.
+     * Not listed (no tab, no panel row, not in the workspace's terminals, not handed to a new window), its working
+     * directory never the workspace's last one, its pty tagged so it is never adopted, and once it is closed or ends
+     * nothing of it is kept — no output, no ended record.
+     */
+    disposable?: boolean | undefined;
 }
 
 /** The workspace's limits a host enforces, read live (the workspace's settings can change at any moment). */
@@ -140,15 +163,34 @@ export interface Terminal {
 const TAIL_MAX = 262_144; // 256 KiB
 /** How many ended terminals keep their output for reading. */
 const FINISHED_KEPT = 50;
+/** How long `openReady` waits for a pty made elsewhere to say its pid before answering what it has. */
+const OPEN_READY_WAIT_MS = 15_000;
 
 export class TerminalHost {
     readonly #pty: PtyPort;
-    #terminals: Terminal[] = [];
-    readonly #dataListeners = new Set<(id: string, data: string) => void>();
-    readonly #exitListeners = new Set<(id: string, exitCode: number) => void>();
+    #list: Terminal[] = [];
+    readonly #changeListeners = new Set<() => void>();
+    // Every change to the list goes through here, so whoever mirrors it (genie-host's windows, P3.3e) is told of each.
+    get #terminals(): Terminal[] { return this.#list; }
+    set #terminals(next: Terminal[]) { this.#list = next; for (const l of [...this.#changeListeners]) l(); }
+
+    /** The list changed: a terminal opened, ended, closed, or its pid, shell or working directory came in. */
+    onChange(listener: () => void): () => void {
+        this.#changeListeners.add(listener);
+        return () => { this.#changeListeners.delete(listener); };
+    }
+
+    /** The workspace's terminal limit; null = none. What a window's replica refuses by before it asks (P3.3e). */
+    limitFor(workspaceId: string): number | null {
+        return this.#limits ? this.#limits.terminals(workspaceId) : null;
+    }
+    readonly #dataListeners = new Set<(id: string, data: string, position?: TerminalDataPosition) => void>();
+    readonly #exitListeners = new Set<(id: string, exitCode: number, position?: TerminalPosition) => void>();
     #cwdClock = 0;
     /** Each live terminal's latest output (its tail), kept here: the engine forgets a process's scrollback when it ends. */
     readonly #tails = new Map<string, string>();
+    /** Live disposable terminals (`TerminalOptions.disposable`): never in the list, nothing kept once they are gone. */
+    readonly #disposable = new Map<string, Terminal>();
     /** Terminals that ended: their last output and exit code, for a `read` after the fact — the newest FINISHED_KEPT. */
     readonly #finished = new Map<string, { workspaceId: string; exitCode: number; text: string }>();
 
@@ -158,11 +200,18 @@ export class TerminalHost {
         this.#pty = pty;
         this.#limits = limits;
 
-        this.#pty.onData((id, data) => {
+        this.#pty.onData((id, data, position) => {
             const tail = (this.#tails.get(id) ?? '') + data;
             this.#tails.set(id, tail.length > TAIL_MAX ? tail.slice(-TAIL_MAX) : tail);
             // Each listener on its own (core/fan-out.ts): one that throws never reaches the engine's flush (a lost exit).
-            fanOut(this.#dataListeners, [id, data], 'terminal data');
+            fanOut(this.#dataListeners, position ? [id, data, position] : [id, data], 'terminal data');
+        });
+
+        // A pty made elsewhere (the spawn host under genie-host) says its pid and shell after `open` answered: kept here.
+        this.#pty.onPid?.((id, pid, shell) => {
+            const scratch = this.#disposable.get(id);
+            if (scratch) { this.#disposable.set(id, { ...scratch, pid, ...(shell ? { shell } : {}) }); return; }
+            this.#terminals = this.#terminals.map((t) => (t.id === id ? { ...t, pid, ...(shell ? { shell } : {}) } : t));
         });
 
         this.#pty.onCwd?.((id, cwd) => {
@@ -170,7 +219,7 @@ export class TerminalHost {
             this.#terminals = this.#terminals.map((t) => (t.id === id ? { ...t, cwd, cwdAt: ++this.#cwdClock } : t));
         });
 
-        this.#pty.onExit((id, exitCode) => {
+        this.#pty.onExit((id, exitCode, position) => {
             /*
              * FORGET IT FIRST, then tell anybody watching.
              *
@@ -180,6 +229,12 @@ export class TerminalHost {
              * listeners run means a listener that asks `list()` sees the truth rather than the
              * state from a moment ago.
              */
+            // A disposable terminal leaves nothing behind: no output, no ended record (Tynn story #378).
+            if (this.#disposable.delete(id)) {
+                this.#tails.delete(id);
+                fanOut(this.#exitListeners, position ? [id, exitCode, position] : [id, exitCode], 'terminal exit');
+                return;
+            }
             // Its output and exit code stay readable (an agent's command that finished before it could look).
             const ended = this.#terminals.find((t) => t.id === id);
             if (ended) {
@@ -188,7 +243,7 @@ export class TerminalHost {
             }
             this.#tails.delete(id);
             this.#terminals = this.#terminals.filter((t) => t.id !== id);
-            fanOut(this.#exitListeners, [id, exitCode], 'terminal exit');
+            fanOut(this.#exitListeners, position ? [id, exitCode, position] : [id, exitCode], 'terminal exit');
         });
     }
 
@@ -225,6 +280,7 @@ export class TerminalHost {
             if (refused) throw new Error(refused);
         }
         const opened = this.#pty.open({
+            ...(options.id ? { id: options.id } : {}),
             cwd: options.cwd,
             command: options.command,
             ...(options.shell ? { shell: true } : {}),
@@ -232,13 +288,49 @@ export class TerminalHost {
             ...(options.cols === undefined ? {} : { cols: options.cols }),
             ...(options.rows === undefined ? {} : { rows: options.rows }),
             ...(options.env === undefined ? {} : { env: options.env }),
+            // What it is to the window: the NEXT window adopts it by this (the host split, P2.1) — never a disposable one.
+            tag: { kind: 'terminal', workspaceId: options.workspaceId, shell: options.command ?? '', ...(options.disposable ? { disposable: true as const } : {}) },
         });
 
-        this.#terminals = [
-            ...this.#terminals,
-            { id: opened.id, workspaceId: options.workspaceId, pid: opened.pid, shell: opened.shell, ...(options.limited === false ? { unlimited: true as const } : {}) },
-        ];
+        const terminal: Terminal = { id: opened.id, workspaceId: options.workspaceId, pid: opened.pid, shell: opened.shell, ...(options.limited === false ? { unlimited: true as const } : {}) };
+        if (options.disposable) {
+            this.#disposable.set(opened.id, terminal);
+            return opened;
+        }
+
+        this.#terminals = [...this.#terminals, terminal];
         return opened;
+    }
+
+    /**
+     * `open`, answered once the terminal's pid and shell are known (the host split, P2.1). Under genie-host the pty is made
+     * in another process, so `open` answers before it exists (pid 0, the shell only as asked). Whoever ASKS for a terminal
+     * — the person's tab, an agent's `manageTerminals create` — gets the real ones. A pty that ends first answers pid 0,
+     * and one whose pid never comes answers what it has after OPEN_READY_WAIT_MS: never a hang.
+     */
+    async openReady(options: TerminalOptions): Promise<PtyOpened> {
+        const known = new Map<string, { pid: number; shell?: string | undefined }>();
+        const ended = new Set<string>();
+        let wake: (() => void) | null = null;
+        const offPid = this.#pty.onPid?.((id, pid, shell) => { known.set(id, { pid, shell }); wake?.(); }) ?? (() => {});
+        const offExit = this.#pty.onExit((id) => { ended.add(id); wake?.(); });
+        try {
+            const opened = this.open(options);
+            if (opened.pid > 0 || !this.#pty.onPid) return opened;
+            const deadline = Date.now() + OPEN_READY_WAIT_MS;
+            while (!known.has(opened.id) && !ended.has(opened.id) && Date.now() < deadline) {
+                await new Promise<void>((resolve) => {
+                    const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+                    wake = () => { clearTimeout(timer); resolve(); };
+                });
+                wake = null;
+            }
+            const said = known.get(opened.id);
+            return said ? { ...opened, pid: said.pid, shell: said.shell || opened.shell } : opened;
+        } finally {
+            offPid();
+            offExit();
+        }
     }
 
     /**
@@ -260,7 +352,8 @@ export class TerminalHost {
 
     scrollback(id: string): string | undefined {
         if (!this.#has(id)) return this.#finished.get(id)?.text;
-        return this.#pty.scrollback(id);
+        // A port that runs the pty elsewhere (the spawn host over a link) holds none: this host's own tail is it.
+        return this.#pty.scrollback(id) ?? this.#tails.get(id);
     }
 
     /** A terminal that ENDED: whose it was and how it ended. `null` for a live one and for one this host never had. */
@@ -271,14 +364,38 @@ export class TerminalHost {
 
     /** JOIN a running terminal (§6.5 multi-attach): what it has shown so far, and whose it is. Null for an id this host does not have. */
     attach(id: string): { id: string; pid: number; shell: string; workspaceId: string; scrollback: string } | null {
-        const t = this.#terminals.find((x) => x.id === id);
+        const t = this.#terminals.find((x) => x.id === id) ?? this.#disposable.get(id);
         if (!t) return null;
-        return { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#pty.scrollback(id) ?? '' };
+        return { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#pty.scrollback(id) ?? this.#tails.get(id) ?? '' };
+    }
+
+    /** Stream-only snapshot: the native attach result keeps its established shape. */
+    streamSnapshot(id: string): TerminalStreamSnapshot | null {
+        const attached = this.attach(id);
+        return attached ? { id, tail: attached.scrollback, ...(this.#pty.position?.(id) ?? { epoch: null, endOffset: null }) } : null;
+    }
+
+    /**
+     * A live terminal a previous window opened, found under genie-host (the host split, P2.1): taken back with what it
+     * printed, so the panel reopens on it. A pty that is not a terminal (a supervised process) is the supervisor's.
+     */
+    adopt(pty: ListedPty): void {
+        if (pty.tag?.kind !== 'terminal') return;
+        // A disposable terminal is never taken back (Tynn story #378): it ended with its window.
+        if (pty.tag.disposable) return;
+        if (this.#has(pty.id)) return;
+        this.#terminals = [...this.#terminals, { id: pty.id, workspaceId: pty.tag.workspaceId, pid: pty.pid, shell: pty.shell || pty.tag.shell || 'shell' }];
+        this.#tails.set(pty.id, pty.scrollback.length > TAIL_MAX ? pty.scrollback.slice(-TAIL_MAX) : pty.scrollback);
     }
 
     close(id: string): boolean {
         if (!this.#has(id)) return false;
 
+        if (this.#disposable.delete(id)) {
+            this.#tails.delete(id);
+            this.#pty.kill(id);
+            return true;
+        }
         this.#pty.kill(id);
         this.#terminals = this.#terminals.filter((t) => t.id !== id);
         return true;
@@ -292,6 +409,7 @@ export class TerminalHost {
      * running a dozen agents, the difference is stopping one thing or stopping the room.
      */
     closeWorkspace(workspaceId: string): number {
+        for (const scratch of [...this.#disposable.values()]) if (scratch.workspaceId === workspaceId) this.close(scratch.id);
         const mine = this.#terminals.filter((t) => t.workspaceId === workspaceId);
         for (const terminal of mine) this.#pty.kill(terminal.id);
         this.#terminals = this.#terminals.filter((t) => t.workspaceId !== workspaceId);
@@ -305,6 +423,7 @@ export class TerminalHost {
      * at all, because nothing reaped what the app had spawned.
      */
     closeAll(): number {
+        for (const id of [...this.#disposable.keys()]) this.close(id);
         const all = this.#terminals;
         for (const terminal of all) this.#pty.kill(terminal.id);
         this.#terminals = [];
@@ -312,18 +431,18 @@ export class TerminalHost {
     }
 
     /** Subscribe to output from any terminal. Returns an unsubscribe. */
-    onData(listener: (id: string, data: string) => void): () => void {
+    onData(listener: (id: string, data: string, position?: TerminalDataPosition) => void): () => void {
         this.#dataListeners.add(listener);
         return () => this.#dataListeners.delete(listener);
     }
 
     /** Subscribe to any terminal ending. Returns an unsubscribe. */
-    onExit(listener: (id: string, exitCode: number) => void): () => void {
+    onExit(listener: (id: string, exitCode: number, position?: TerminalPosition) => void): () => void {
         this.#exitListeners.add(listener);
         return () => this.#exitListeners.delete(listener);
     }
 
     #has(id: string): boolean {
-        return this.#terminals.some((t) => t.id === id);
+        return this.#disposable.has(id) || this.#terminals.some((t) => t.id === id);
     }
 }

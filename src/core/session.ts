@@ -1,16 +1,18 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
-import { openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
+import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-store.js';
+import { boundToolEvent } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
 import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
-import type { AgentId } from './identity.js';
+import { threadKeyFor, type AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
-import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult } from './process-tree.js';
+import { carriedLabel, type CarryOver } from './carry-over.js';
+import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult, startTimeUnknown } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
-import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
+import { RATE_LIMIT_META, headroomFromMeta, rateLimitWarning, type Headroom } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
 import { randomUUID } from 'node:crypto';
@@ -266,6 +268,14 @@ export interface AgentSessionOptions {
     /** Resume this provider-side conversation instead of starting a fresh one. */
     resumeSessionId?: string | null;
     /**
+     * THE CONVERSATION A PROVIDER SWITCH CARRIES (Tynn story #380, core/carry-over.ts): attached ONCE, above the words of
+     * the next prompt that goes; the chat marks that turn with a `notice` row carrying the exact text sent, and the
+     * person's message row stays their words alone. A send the provider refuses, or a turn that does not reply (failed,
+     * stopped, held), keeps it for the next prompt; a turn that replied calls `onCarryOverSent`.
+     */
+    carryOver?: CarryOver | null;
+    onCarryOverSent?: () => void;
+    /**
      * Notified for every ledger row, so a surface can render without re-reading the thread.
      *
      * `meta.replacesLast` means this row SUPERSEDES the one emitted immediately before it: the
@@ -351,6 +361,8 @@ export interface AgentSessionOptions {
      * (hosting plan 1.2). What the host writes into its spawn ledger, so a crash cannot orphan them unrecorded.
      */
     onSpawned?: (processes: readonly ProcessInfo[]) => void;
+    /** The machine could not be read after a spawn, twice: these pids are recorded with no start time. */
+    onReadingFailed?: (pids: readonly number[]) => void;
     /** Output arrived from this run after it was stopped (hosting plan 1.4). Said once per run. */
     onStraggler?: () => void;
     /** Genie's clock, for the stamps below (when an approval parked, when a failure was recorded). Injected so a host's clock reaches them. */
@@ -521,6 +533,12 @@ export class AgentSession {
     #heldBeside: StreamEvent[] = [];
     /** A subagent's calls not yet answered, and the call that spawned each: a row of one is known as theirs even if it comes without the mark. */
     #subagentCalls = new Map<string, string>();
+    /** The carry-over waiting for the next prompt, and the one sent with the turn now running (Tynn story #380). */
+    #carryOver: CarryOver | null = null;
+    #carryInFlight: CarryOver | null = null;
+    /** Per-agent provider reading; a turn end arms delivery with the next accepted input. */
+    #latestHeadroom: Headroom | null = null;
+    #rateWarningPending = false;
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -541,6 +559,7 @@ export class AgentSession {
     constructor(options: AgentSessionOptions) {
         this.#options = options;
         this.agentId = options.agentId;
+        this.#carryOver = options.carryOver ?? null;
         if (options.turnsBefore !== undefined && options.turnsBefore >= 0) { this.#turns = options.turnsBefore; this.#marked = options.turnsBefore; }
     }
 
@@ -917,6 +936,11 @@ export class AgentSession {
         }
     }
 
+    /** The ids of the prompts held for the turn's end, in order — what the agent host tells a window (the host split). */
+    get queuedPromptIds(): readonly string[] {
+        return this.#afterTurn.map((p) => p.id);
+    }
+
     hasQueuedPrompt(id: string): boolean {
         return this.#afterTurn.some((p) => p.id === id);
     }
@@ -1113,6 +1137,8 @@ export class AgentSession {
                     this.#turns += 1;
                     this.#endedThisRun += 1;
                     this.#inTurn = false;
+                    // Arm before queued mail is flushed. This never sends input or starts a turn by itself.
+                    this.#rateWarningPending = rateLimitWarning(this.#latestHeadroom, this.#now()) !== null;
 
                     // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
                     // idle would present a crashed turn as a completed one, which is the
@@ -1134,6 +1160,13 @@ export class AgentSession {
                     // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
                     const byOverload = crashed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
                     this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
+                    // The carry-over this turn took: gone with a reply; otherwise the next prompt carries it again (Tynn story #380).
+                    if (this.#carryInFlight !== null) {
+                        const carried = this.#carryInFlight;
+                        this.#carryInFlight = null;
+                        if (this.#lastTurnEnd === 'replied') this.#options.onCarryOverSent?.();
+                        else this.#carryOver ??= carried;
+                    }
                     this.#limitThisTurn = false;
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
@@ -1310,9 +1343,16 @@ export class AgentSession {
                 const pids: number[] = [];
                 const read = tree.read.bind(tree);
                 const reading: Promise<void> = Promise.resolve().then(async () => {
-                    const after = await read().catch(() => null);
+                    let after = await read().catch(() => null);
+                    if (after === null && this.#rootsReading === reading) after = await read().catch(() => null);
                     if (this.#rootsReading !== reading) return;
-                    if (after === null) { this.#roots = null; return; }
+                    if (after === null) {
+                        // Still no reading. A crash must not leave this provider unrecorded, so its pid goes in with no start time: said at every boot, and never reaped.
+                        this.#roots = null;
+                        this.#options.onSpawned?.(pids.map((pid) => startTimeUnknown(pid, process.pid)));
+                        this.#options.onReadingFailed?.(pids);
+                        return;
+                    }
                     this.#roots = after.filter((p) => pids.includes(p.pid) && p.ppid === process.pid);
                     this.#members = subtreeOf(after, this.#roots);
                     this.#options.onSpawned?.(this.#members);
@@ -1416,10 +1456,19 @@ export class AgentSession {
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
         // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
+        // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
+        const carry = this.#carryOver;
+        // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
+        const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
+        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
+        // What Genie held for the next work goes between the carry-over and the person's words.
         const held = this.#inTurn ? null : this.#heldForNextWork;
         const handed = held === null ? text : `${held}\n\n${text}`;
-        this.#driver.prompt(sent ? (held === null ? sent.content : [{ type: 'text', text: held }, ...sent.content]) : handed);
+        const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
+        this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
+        this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
+        if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
             const sentNow = this.#heldSent;
             this.#heldForNextWork = null;
@@ -1436,13 +1485,16 @@ export class AgentSession {
             this.#inTurn = true;
             this.#limitThisTurn = false;
         }
+        // What the turn carried, marked where it happened: the exact text sent, opened from the chat — never your message.
+        if (carry) void this.#emitRow({ kind: 'notice', level: 'info', message: carriedLabel(carry), carried: { from: carry.from, turns: carry.turns, text: carry.text } });
+        if (rateWarning) void this.#emitRow({ kind: 'notice', level: 'warning', message: rateWarning });
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
         // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
         if (held !== null) void this.#emitRow(promptRow(held, 'genie', null, {}));
         if (record) void this.#emitRow(promptRow(text, by, sent, context));
-        // A provider that DOES echo it is not recorded twice (see `#handle`).
-        this.#echo = handed;
+        // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
+        this.#echo = `${above}${handed}`;
         this.#echoSeen = '';
         this.#turnState = 'working';
         // A new turn during Cooling goes straight to Working, and its timer goes with it.
@@ -1698,6 +1750,18 @@ export class AgentSession {
         return driver.modelState();
     }
 
+    /**
+     * Whether `modelState()` / `switchModel()` would answer rather than `null` — read without asking the provider, so the
+     * agent host can tell a window that is not in its process (the host split, phase 1).
+     */
+    get canSayModels(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.modelState === 'function';
+    }
+
+    get canSwitchModel(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.setModel === 'function';
+    }
+
     /** Ask the running provider to read its rate limits, or `null` when nothing is running or it cannot (`SessionDriver.readRateLimits`). */
     get canReadRateLimits(): boolean {
         return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.readRateLimits === 'function';
@@ -1846,8 +1910,15 @@ export class AgentSession {
      * A rejected write never breaks the chain: the next write runs whether this one failed or not. A row that still
      * cannot be saved is counted (`unpersistedEvents`) AND said in the ledger, once per run (`#sayNotSaved`).
      */
-    #record(event: StreamEvent): Promise<void> {
+    /** `whole`: a tool's output that did not fit its row's preview, kept beside the ledger first (Tynn story #386). */
+    #record(event: StreamEvent, whole: string | null = null): Promise<void> {
         const write = async (): Promise<void> => {
+            const store = this.#options.store;
+            if (whole !== null && event.kind === 'tool' && store instanceof ThreadStore) {
+                // Before the row that names it. A sidecar that cannot be written leaves the row and its preview: the
+                // whole is then "not kept" when a person opens it, and the conversation is still saved.
+                try { await store.writeToolOutput(threadKeyFor(this.agentId), event.toolCallId, whole); } catch { /* the preview stands */ }
+            }
             for (let attempt = 0; ; attempt += 1) {
                 try {
                     const thread = openAgentThread(this.#options.store, this.agentId);
@@ -1907,10 +1978,8 @@ export class AgentSession {
         }
         if (typeof meta === 'object' && meta !== null && RATE_LIMIT_META in meta) {
             const raw = (meta as Record<string, unknown>)[RATE_LIMIT_META];
-            if (this.#options.onHeadroom) {
-                const room = headroomFromMeta(raw);
-                if (room) this.#options.onHeadroom(room);
-            }
+            const room = headroomFromMeta(raw);
+            if (room) { this.#latestHeadroom = room; this.#options.onHeadroom?.(room); }
             const readings = limitReadingsFromMeta(raw);
             if (readings.length > 0) {
                 const notice = update['notice'];
@@ -2088,15 +2157,22 @@ export class AgentSession {
      * One row that is not a message chunk — from the wire or minted here (a turn marker): closes the open message,
      * reaches the renderer synchronously, and is written to the thread after the message it closed.
      */
-    async #emitRow(event: StreamEvent): Promise<void> {
+    async #emitRow(raw: StreamEvent): Promise<void> {
         this.#closeMessage();
 
+        /*
+         * BOUNDED BEFORE ANYONE HOLDS IT (Tynn story #386): a tool row carries at most a 16 KB preview of its input and
+         * output, and an unfinished call none — in this session's rows, the window's, and the ledger. The whole output
+         * goes in a sidecar the row names, read only when a person opens the row. A store that keeps no files beside
+         * its log (a test's memory store) keeps the preview alone.
+         */
+        const { event, whole } = boundToolEvent(raw, { sidecar: this.#options.store instanceof ThreadStore });
         this.#options.onEvent?.(event, { replacesLast: false });
 
         // ON THE SAME CHAIN as the message writes: waiting for the chain and then writing outside it let two rows
         // emitted together (a turn marker and your message) reach the thread in either order. A storage fault must not
         // take the turn down with it — and must not vanish either (`#record`).
-        await this.#record(event);
+        await this.#record(event, whole);
     }
 }
 

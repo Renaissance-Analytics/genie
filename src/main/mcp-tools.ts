@@ -56,6 +56,11 @@ export type ToolProgress = (message: string, progress?: number, total?: number) 
 export interface McpCall {
     readonly signal?: AbortSignal | undefined;
     readonly progress?: ToolProgress | undefined;
+    /**
+     * A call genie-host forwarded to the window (the host split, P3.1): its id there, so an approval the window's tool asks
+     * of the host's queue is tied to the agent's REAL call — it ends when that call goes (genie#1360), as it always did.
+     */
+    readonly forwardedCallId?: string | undefined;
 }
 
 export interface ToolContext extends McpCall {

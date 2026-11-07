@@ -1,9 +1,10 @@
+import { fakeKeychain } from './helpers/tynn-storage.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GithubApiError, GithubNotInstalledError } from '../src/core/github.js';
-import { GithubAccount, type GithubAccountPorts, type GithubCipher } from '../src/main/github-account.js';
+import { GithubAccount, type GithubAccountPorts } from '../src/main/github-account.js';
 
 /**
  * ADD WORKSPACE PARITY ITEMS 8 + 12 — the GitHub sign-in's half.
@@ -23,19 +24,7 @@ import { GithubAccount, type GithubAccountPorts, type GithubCipher } from '../sr
 const TOKEN = 'ghu_exampletoken0000000000000000000000';
 const NOW = 1_800_000_000_000;
 
-function cipher(key: string): GithubCipher {
-    const xor = (b: Buffer) => Buffer.from(b.map((c, i) => c ^ key.charCodeAt(i % key.length)));
-    return {
-        isAvailable: () => true,
-        encrypt: (text) => Buffer.concat([Buffer.from(`${key}:`), xor(Buffer.from(text, 'utf8'))]),
-        decrypt: (bytes) => {
-            const head = `${key}:`;
-            if (bytes.subarray(0, head.length).toString() !== head) throw new Error('cannot decrypt');
-            return xor(bytes.subarray(head.length)).toString('utf8');
-        },
-    };
-}
-const C = cipher('k1');
+const SECRETS = fakeKeychain();
 
 type Answer = { status: number; body?: unknown; headers?: Record<string, string> };
 interface Call { method: string; url: string; body?: string }
@@ -68,11 +57,12 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-github-brows
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 async function signedIn() {
-    await writeFile(file, JSON.stringify({ version: 1, state: 'signed-in', login: 'ada', name: 'Ada', source: 'sign-in', tokenEnc: C.encrypt(TOKEN).toString('base64') }));
+    await writeFile(file, JSON.stringify({ version: 1, state: 'signed-in', login: 'ada', name: 'Ada', source: 'sign-in' }));
+    SECRETS.held.set('github/access', TOKEN);
 }
 async function open(gh: ReturnType<typeof fakeGithub>) {
     const sleeps: number[] = [];
-    const account = await GithubAccount.open({ file, cipher: C, fetch: gh.fetch, now: () => NOW, sleep: async (ms) => { sleeps.push(ms); } });
+    const account = await GithubAccount.open({ file, secrets: SECRETS, fetch: gh.fetch, now: () => NOW, sleep: async (ms) => { sleeps.push(ms); } });
     return { account, sleeps };
 }
 

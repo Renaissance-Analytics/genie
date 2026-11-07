@@ -48,7 +48,7 @@ describe('the engine in the lock', () => {
 
 describe('every process starts with it', () => {
     const firstImport = (file: string) => /^\s*import\s+[^;]*?['"]([^'"]+)['"]/m.exec(readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n'))?.[1];
-    it.each(['src/main/entry.ts', 'src/main/spawn-host.ts'])('%s imports it before anything else', (file) => {
+    it.each(['src/main/entry.ts', 'src/main/spawn-host.ts', 'src/main/genie-host.ts'])('%s imports it before anything else', (file) => {
         expect(firstImport(file)).toMatch(/process-start\.js$/);
     });
 });

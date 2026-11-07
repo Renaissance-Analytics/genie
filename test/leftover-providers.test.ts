@@ -90,11 +90,18 @@ describe('the leftovers at boot', () => {
 
 describe('wired', () => {
     it('main sweeps the leftovers BEFORE the relaunch plan starts any agent — awaited, off the loop (beta.53 freezes)', () => {
+        // The restore moved to relaunch-restore.ts (Tynn #386): main's sweep is its `beforeStart`, awaited there before the plan.
         const main = readFileSync('src/main/main.ts', 'utf8');
+        const hook = main.indexOf('beforeStart: async () => {');
         const sweep = main.indexOf('await sweepLeftoverProvidersAsync(');
-        const plan = main.indexOf('relaunchPlan({');
-        expect(sweep).toBeGreaterThan(-1);
-        expect(plan).toBeGreaterThan(sweep);
+        expect(hook).toBeGreaterThan(-1);
+        expect(sweep).toBeGreaterThan(hook);
+        expect(main.indexOf('start: async (agentId, resume)')).toBeGreaterThan(sweep);
+        const restore = readFileSync('src/main/relaunch-restore.ts', 'utf8');
+        const awaited = restore.lastIndexOf('await p.beforeStart?.();');
+        const plan = restore.indexOf('relaunchPlan({');
+        expect(awaited).toBeGreaterThan(-1);
+        expect(plan).toBeGreaterThan(awaited);
     });
 });
 

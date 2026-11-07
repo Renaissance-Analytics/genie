@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
+import { capabilityOf } from '../src/core/remote-protocol.js';
 import type { GenieSnapshot, UpdateState } from '../src/renderer/bridge.js';
 import type { FeatureData } from '../src/renderer/features.js';
 
@@ -69,7 +70,7 @@ function fakes() {
             restart: async (id, kind) => { calls.push(`agent-restart:${id}:${kind}`); return { ok: true, kind }; },
             previewDelete: async () => ({ ok: true, plan: { outcome: 'unmount', removes: [], keeps: [], external: [] } }),
             delete: async (id, outcome) => { calls.push(`agent-delete:${id}:${outcome}`); return { ok: true, plan: { outcome, removes: [], keeps: [], external: [] } }; },
-            switchDriver: async (id, to) => { calls.push(`agent-switch:${id}:${to}`); return { ok: true, carries: [], from: 'claude', to }; },
+            switchDriver: async (id, to) => { calls.push(`agent-switch:${id}:${to}`); return { ok: true, from: 'claude', to }; },
             setBudget: async (id, usd) => { calls.push(`agent-budget:${id}:${usd}`); return { ok: true, decision: { kind: 'proceed', remainingUsd: null } }; },
             setMode: async (id, mode) => { calls.push(`agent-mode:${id}:${mode}`); return { ok: true }; },
             setAccessScope: async (id, scope) => { calls.push(`agent-scope:${id}:${scope}`); return { ok: true }; },
@@ -151,6 +152,18 @@ describe('invoke', () => {
         expect(f.calls).toEqual(['agent-restart:agent_a:fresh', 'agent-delete:agent_a:delete', 'agent-switch:agent_a:codex', 'agent-budget:agent_a:null']);
     });
 
+    it('agents.toolOutput (Tynn story #386): a tool row’s whole output, on demand, from the host; a read; its arguments narrowed', async () => {
+        const f = fakes();
+        const asked: string[] = [];
+        const toolOutput = async (agentId: string, toolCallId: string) => { asked.push(`${agentId}:${toolCallId}`); return { ok: true as const, text: 'whole', bytes: 5, cut: false }; };
+        const api = buildHostApi({ ...f.deps, agentOps: { ...f.deps.agentOps, toolOutput } } as typeof f.deps);
+        expect(await api.invoke('agents.toolOutput' as never, ['agent_a', 'call_1'])).toEqual({ ok: true, text: 'whole', bytes: 5, cut: false });
+        expect(asked).toEqual(['agent_a:call_1']);
+        expect(await api.invoke('agents.toolOutput' as never, ['agent_a', 7])).toMatchObject({ ok: false });
+        expect(asked).toHaveLength(1);
+        expect(capabilityOf('agents.toolOutput' as never)).toBe('read');
+    });
+
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {
         const api = buildHostApi(fakes().deps);
         await expect(api.invoke('addWorkspace', [])).rejects.toThrow(/folder picker/);
@@ -227,10 +240,11 @@ describe('events', () => {
             ['terminal-exit', { id: 'term_1', exitCode: 0 }],
             ['features', { knowledge: {} }],
             ['updates', { phase: 'none' }],
+            ['local-updates', { phase: 'none' }],
         ]);
         off();
         for (const l of f.listeners.snapshot) l({ agents: [] } as never);
-        expect(got).toHaveLength(6);
+        expect(got).toHaveLength(7);
         expect(f.listeners.snapshot.size).toBe(0);
     });
 

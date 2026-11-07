@@ -1,9 +1,11 @@
+import { fakeKeychain } from './helpers/tynn-storage.js';
+import { writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GITHUB_INSTALL_URL } from '../src/core/github.js';
-import { GithubAccount, type GithubAccountPorts, type GithubCipher } from '../src/main/github-account.js';
+import { GithubAccount, type GithubAccountPorts } from '../src/main/github-account.js';
 
 /**
  * THIS GENIE'S GITHUB SIGN-IN (beta.33 item 25, Tynn #780) — Genie 1's, carried over and ported.
@@ -17,31 +19,19 @@ import { GithubAccount, type GithubAccountPorts, type GithubCipher } from '../sr
  * blob gave a 40-character `ghu_` token, and GitHub answered `GET /user/installations` with 200 and seven genie-aos
  * installations. So Genie 2's safeStorage decrypts Genie 1's login as it is; nobody signs in again.
  *
- * Here the cipher is a fake with a KEY (a blob made under another key does not decrypt, as with another OS user's
- * keychain), GitHub is a fake that answers like the real one, and the sleeps are recorded — the device flow polls at the
+ * Here the keychain is a fake, GitHub is a fake that answers like the real one, and the sleeps are recorded — the device flow polls at the
  * interval GitHub dictates (the protocol, RFC 8628, not a choice of ours).
  */
 
 const TOKEN = 'ghu_exampletoken0000000000000000000000';
 const NEW_TOKEN = 'ghu_freshtoken11111111111111111111111';
 
-function cipher(key: string, available = true): GithubCipher & { encrypted: string[] } {
-    const encrypted: string[] = [];
-    const xor = (b: Buffer) => Buffer.from(b.map((c, i) => c ^ key.charCodeAt(i % key.length)));
-    return {
-        encrypted,
-        isAvailable: () => available,
-        encrypt: (text) => { encrypted.push(text); return Buffer.concat([Buffer.from(`${key}:`), xor(Buffer.from(text, 'utf8'))]); },
-        decrypt: (bytes) => {
-            const head = `${key}:`;
-            if (bytes.subarray(0, head.length).toString() !== head) throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.');
-            return xor(bytes.subarray(head.length)).toString('utf8');
-        },
-    };
+/** What a window's one-time move or an earlier sign-in leaves: the record on disk, the token in the keychain. */
+function seeded(): ReturnType<typeof fakeKeychain> {
+    writeFileSync(file, JSON.stringify({ version: 1, state: 'signed-in', login: 'ada', name: null, source: 'genie-1' }));
+    return fakeKeychain({ 'github/access': TOKEN });
 }
-
-/** Genie 1's blob for a token: base64 of what safeStorage.encryptString returned. */
-const v1Blob = (c: GithubCipher, token: string) => c.encrypt(token).toString('base64');
+const noKeychain = (): ReturnType<typeof fakeKeychain> => ({ ...fakeKeychain(), probe: (async () => ({ ok: false, reason: 'locked' })) as never, get: (async () => ({ kind: 'unavailable', reason: 'locked' })) as never });
 
 interface FakeGithub {
     calls: Array<{ method: string; url: string; auth: string | null; body?: string }>;
@@ -91,7 +81,7 @@ function ports(over: Partial<GithubAccountPorts> & { gh: FakeGithub }): GithubAc
     const opened: string[] = [];
     return {
         file,
-        cipher: cipher('k1'),
+        secrets: fakeKeychain(),
         fetch: over.gh.fetch,
         openExternal: async (url) => { opened.push(url); },
         sleep: async (ms, signal) => {
@@ -106,28 +96,10 @@ function ports(over: Partial<GithubAccountPorts> & { gh: FakeGithub }): GithubAc
     };
 }
 
-describe('Genie 1’s login carries over', () => {
-    it('decrypted with this Genie’s key and kept encrypted in its own file: signed in, said to come from Genie 1, no sign-in', async () => {
-        const gh = fakeGithub();
-        const c = cipher('k1');
-        const p = ports({ gh, cipher: c, v1Settings: () => ({ github_token_enc: v1Blob(c, TOKEN), github_user: 'ada', github_refresh_enc: '' }) });
-        const account = await GithubAccount.open(p);
-        expect(account.view()).toMatchObject({ status: 'signed-in', user: { login: 'ada' }, device: null });
-        // No migration label (the owner, 2026-10-21): the view does not say where the login came from.
-        expect('carriedFromGenie1' in account.view()).toBe(false);
-        const stored = await readFile(file, 'utf8');
-        expect(stored).not.toContain(TOKEN);
-        expect(JSON.parse(stored)).toMatchObject({ state: 'signed-in', login: 'ada', source: 'genie-1' });
-        // Encrypted through the cipher, not merely encoded.
-        expect(c.encrypted).toContain(TOKEN);
-        // No device flow was started.
-        expect(gh.calls.some((x) => x.url.startsWith('https://github.com/login/'))).toBe(false);
-    });
-
+describe('a saved sign-in', () => {
     it('then reads the REAL status from GitHub: who, every installation, its repositories (listed when selected, counted when all), and the permissions granted', async () => {
         const gh = fakeGithub();
-        const c = cipher('k1');
-        const account = await GithubAccount.open(ports({ gh, cipher: c, v1Settings: () => ({ github_token_enc: v1Blob(c, TOKEN), github_user: 'ada' }) }));
+        const account = await GithubAccount.open(ports({ gh, secrets: seeded() }));
         await account.refresh();
         const view = account.view();
         expect(view.user).toEqual({ login: 'ada', name: 'Ada' });
@@ -144,49 +116,12 @@ describe('Genie 1’s login carries over', () => {
     it('a carried token GitHub no longer accepts: shown as needing a sign-in again, and the Deck is told', async () => {
         const gh = fakeGithub();
         gh.accepts.delete(TOKEN);
-        const c = cipher('k1');
-        const account = await GithubAccount.open(ports({ gh, cipher: c, v1Settings: () => ({ github_token_enc: v1Blob(c, TOKEN), github_user: 'ada' }) }));
+        const account = await GithubAccount.open(ports({ gh, secrets: seeded() }));
         await account.refresh();
         expect(account.view()).toMatchObject({ status: 'expired', user: { login: 'ada' }, message: expect.stringMatching(/no longer accepts/i) });
         expect(account.view().signal).not.toBeNull();
     });
 
-    it('a Genie 1 login this Genie cannot decrypt (another key): signed out, saying exactly why, nothing written', async () => {
-        const gh = fakeGithub();
-        const account = await GithubAccount.open(ports({ gh, cipher: cipher('k1'), v1Settings: () => ({ github_token_enc: v1Blob(cipher('other-user'), TOKEN), github_user: 'ada' }) }));
-        expect(account.view()).toMatchObject({ status: 'signed-out', message: expect.stringMatching(/Genie 1.*cannot decrypt/i) });
-        await expect(readFile(file, 'utf8')).rejects.toThrow();
-    });
-
-    it('OS encryption unavailable: Genie 1’s login is left where it is, and the reason is the encryption, not the login', async () => {
-        const gh = fakeGithub();
-        const k = cipher('k1');
-        const account = await GithubAccount.open(ports({ gh, cipher: cipher('k1', false), v1Settings: () => ({ github_token_enc: v1Blob(k, TOKEN), github_user: 'ada' }) }));
-        expect(account.view()).toMatchObject({ status: 'signed-out', message: expect.stringMatching(/encryption is unavailable/i) });
-        await expect(readFile(file, 'utf8')).rejects.toThrow();
-    });
-
-    it('this Genie’s own sign-in wins over Genie 1’s; after Sign out, Genie 1’s is NOT imported again', async () => {
-        const gh = fakeGithub();
-        const c = cipher('k1');
-        const v1 = () => ({ github_token_enc: v1Blob(c, TOKEN), github_user: 'ada' });
-        const first = await GithubAccount.open(ports({ gh, cipher: c, v1Settings: v1 }));
-        expect(first.view().status).toBe('signed-in');
-        await first.signOut();
-        expect(first.view()).toMatchObject({ status: 'signed-out', user: null });
-        const stored = await readFile(file, 'utf8');
-        expect(stored).not.toContain(TOKEN);
-        expect(JSON.parse(stored)).toEqual({ version: 1, state: 'signed-out' });
-        const again = await GithubAccount.open(ports({ gh, cipher: c, v1Settings: v1 }));
-        expect(again.view().status).toBe('signed-out');
-        expect(again.view().message).toBeNull();
-    });
-
-    it('a saved sign-in this Genie can no longer decrypt (the keychain changed): needs a sign-in again, in words', async () => {
-        await writeFile(file, JSON.stringify({ version: 1, state: 'signed-in', login: 'ada', name: 'Ada', source: 'sign-in', tokenEnc: cipher('old').encrypt(TOKEN).toString('base64') }));
-        const account = await GithubAccount.open(ports({ gh: fakeGithub(), cipher: cipher('k1') }));
-        expect(account.view()).toMatchObject({ status: 'expired', user: { login: 'ada' }, message: expect.stringMatching(/cannot decrypt/i) });
-    });
 });
 
 describe('signing in: Genie 1’s device flow', () => {
@@ -236,12 +171,12 @@ describe('signing in: Genie 1’s device flow', () => {
         expect(gh.calls.filter((x) => x.url === 'https://github.com/login/oauth/access_token')).toHaveLength(0);
     });
 
-    it('without OS encryption the sign-in is refused BEFORE GitHub is asked — a token that could only be kept in the clear is never minted', async () => {
+    it('without a keychain the sign-in is refused BEFORE GitHub is asked — a token that could only be kept in the clear is never minted', async () => {
         const gh = fakeGithub();
-        const account = await GithubAccount.open(ports({ gh, cipher: cipher('k1', false) }));
+        const account = await GithubAccount.open(ports({ gh, secrets: noKeychain() }));
         await account.startSignIn();
         expect(gh.calls).toEqual([]);
-        expect(account.view()).toMatchObject({ status: 'signed-out', message: expect.stringMatching(/encryption is unavailable/i) });
+        expect(account.view()).toMatchObject({ status: 'signed-out', message: expect.stringMatching(/no keyring running/i) });
     });
 
     it('GitHub unreachable: the reason in words, still signed out', async () => {
@@ -256,8 +191,7 @@ describe('signing in: Genie 1’s device flow', () => {
 describe('the token never leaves main', () => {
     it('no view, message or change carries it — signed in, signing in, expired', async () => {
         const gh = fakeGithub();
-        const c = cipher('k1');
-        const account = await GithubAccount.open(ports({ gh, cipher: c, v1Settings: () => ({ github_token_enc: v1Blob(c, TOKEN), github_user: 'ada' }) }));
+        const account = await GithubAccount.open(ports({ gh, secrets: seeded() }));
         await account.refresh();
         expect(JSON.stringify(account.view())).not.toContain(TOKEN);
         gh.accepts.delete(TOKEN);
@@ -267,8 +201,7 @@ describe('the token never leaves main', () => {
 
     it('the clone credential is handed out only for a repository of an account the App is installed on with Contents', async () => {
         const gh = fakeGithub();
-        const c = cipher('k1');
-        const account = await GithubAccount.open(ports({ gh, cipher: c, v1Settings: () => ({ github_token_enc: v1Blob(c, TOKEN), github_user: 'ada' }) }));
+        const account = await GithubAccount.open(ports({ gh, secrets: seeded() }));
         // GitHub not read yet: no installation is known, so nothing is claimed.
         expect(account.cloneAuth('https://github.com/ada/one.git')).toBeNull();
         await account.refresh();
@@ -283,8 +216,7 @@ describe('the token never leaves main', () => {
 describe('the pages a person goes to', () => {
     it('install on more repositories, one installation’s own page, and GitHub’s device page — Genie’s own URLs, never one the window sends', async () => {
         const gh = fakeGithub();
-        const c = cipher('k1');
-        const p = ports({ gh, cipher: c, v1Settings: () => ({ github_token_enc: v1Blob(c, TOKEN), github_user: 'ada' }) });
+        const p = ports({ gh, secrets: seeded() });
         const account = await GithubAccount.open(p);
         await account.refresh();
         await account.openPage({ page: 'install' });

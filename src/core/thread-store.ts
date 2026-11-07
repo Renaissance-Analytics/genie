@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { open, stat, type FileHandle } from 'node:fs/promises';
+import { mkdir, open, stat, writeFile, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSessionStore, Thread, type SessionStore } from '@particle-academy/prism-harness';
 import { threadKeyFor, type AgentId } from './identity.js';
 import type { StreamEvent } from './stream-event.js';
+import { boundToolEvent, toolOutputFileName, utf8Bytes } from './tool-row-bound.js';
 
 /**
  * WHERE AN AGENT'S CONVERSATION LIVES BETWEEN RUNS.
@@ -76,7 +77,47 @@ export class ThreadStore extends FileSessionStore {
 
     /** The key's log file: see {@link threadLogFile}. */
     logFile(key: string): string {
-        return join(this.#directory, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.jsonl`);
+        return join(this.#directory, `${ledgerName(key)}.jsonl`);
+    }
+
+    /**
+     * A tool call's WHOLE output (BOUNDED-LEDGERS-386; Tynn story #386): `<ledger>/tool-<id>.out`, in a folder named like the
+     * key's log, beside it. The row keeps a 16 KB preview and names this file (core/tool-row-bound.ts).
+     */
+    toolOutputFile(key: string, toolCallId: string): string {
+        return join(this.#directory, ledgerName(key), toolOutputFileName(toolCallId));
+    }
+
+    async writeToolOutput(key: string, toolCallId: string, text: string): Promise<void> {
+        await mkdir(join(this.#directory, ledgerName(key)), { recursive: true });
+        await writeFile(this.toolOutputFile(key, toolCallId), text, 'utf8');
+    }
+
+    /** At most `maxBytes` of a call's kept output, cut on a character; `null` when none was kept. */
+    async readToolOutput(key: string, toolCallId: string, maxBytes: number): Promise<{ text: string; bytes: number; cut: boolean } | null> {
+        let handle: FileHandle;
+        try {
+            handle = await open(this.toolOutputFile(key, toolCallId), 'r');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw error;
+        }
+        try {
+            const { size } = await handle.stat();
+            const want = Math.max(0, Math.min(size, maxBytes));
+            const buf = Buffer.allocUnsafe(want);
+            let got = 0;
+            while (got < want) {
+                const { bytesRead } = await handle.read(buf, got, want - got, got);
+                if (bytesRead === 0) break;
+                got += bytesRead;
+            }
+            let end = got;
+            if (got < size) while (end > 0 && (buf[end]! & 0xc0) === 0x80) end -= 1;
+            return { text: buf.subarray(0, end).toString('utf8'), bytes: size, cut: end < size };
+        } finally {
+            await handle.close();
+        }
     }
 
     override async logLength(key: string): Promise<number | null> {
@@ -169,6 +210,10 @@ export class ThreadStore extends FileSessionStore {
 }
 
 /** The file's size, or `null` when there is none. */
+function ledgerName(key: string): string {
+    return createHash('sha256').update(key).digest('hex').slice(0, 32);
+}
+
 async function sizeOf(path: string): Promise<number | null> {
     try {
         return (await stat(path)).size;
@@ -217,7 +262,27 @@ export function openAgentThread(store: SessionStore, agentId: AgentId): Thread {
 export type HistoryRow = { event: StreamEvent; at: number | null; position: number };
 /** `lastTurn`: the highest turn number in the WHOLE record, window or not — where a new run's turns continue from. */
 export type History = { rows: HistoryRow[]; earlier: number; earlierTurns: number; lastTurn: number };
-export type HistoryOptions = { before?: number; run?: string; limit?: number };
+/**
+ * `maxBytes`: the most the rows read may come to, in bytes of JSON — the newest rows until it is reached, the rest
+ * counted as `earlier`. Held to {@link HISTORY_MAX_BYTES} whatever the caller asks; applies with `limit`.
+ */
+export type HistoryOptions = { before?: number; run?: string; limit?: number; maxBytes?: number };
+
+/**
+ * THE MOST ONE HISTORY LOAD COMES TO, in bytes of JSON, whatever its caller asks (Tynn story #386). A row bound alone
+ * let a boot load 3,000 rows of up to 238 KB each per resumed agent, and the window's main hung on it.
+ */
+export const HISTORY_MAX_BYTES = 4 * 1024 * 1024;
+
+function byteBound(options: HistoryOptions): number {
+    const asked = options.maxBytes;
+    return typeof asked === 'number' && Number.isFinite(asked) ? Math.max(0, Math.min(HISTORY_MAX_BYTES, Math.floor(asked))) : HISTORY_MAX_BYTES;
+}
+
+/** A row's size as the load counts it: its event and time, as JSON. */
+function rowBytes(row: HistoryRow): number {
+    return utf8Bytes(JSON.stringify({ event: row.event, at: row.at }));
+}
 
 /** One stored message as a history row, or `null` when the read leaves it out (see {@link readHistory}). */
 function historyRow(m: { position: number; message: unknown; recordedAt: string }, options: HistoryOptions): HistoryRow | null {
@@ -227,7 +292,9 @@ function historyRow(m: { position: number; message: unknown; recordedAt: string 
         if (options.run !== undefined && writtenBy === options.run) return null;
     } else if (options.before !== undefined && Number.isFinite(at) && at >= options.before) return null;
     if (typeof message.kind !== 'string' || message.unserialisable === true) return null;
-    return { event: message as unknown as StreamEvent, at: Number.isFinite(at) ? at : null, position: m.position };
+    // An OLD ledger is read bounded, never rewritten: an oversized tool row is cut to its preview here (Tynn story #386).
+    const { event } = boundToolEvent(message as unknown as StreamEvent, { sidecar: false });
+    return { event, at: Number.isFinite(at) ? at : null, position: m.position };
 }
 
 /**
@@ -241,8 +308,15 @@ export async function readWholeHistory(store: SessionStore, agentId: AgentId, op
         const row = historyRow(m, options);
         if (row) rows.push(row);
     }
-    const limit = options.limit ?? rows.length;
-    const earlier = Math.max(0, rows.length - limit);
+    let earlier = Math.max(0, rows.length - (options.limit ?? rows.length));
+    if (options.limit !== undefined) {
+        const maxBytes = byteBound(options);
+        let bytes = 0;
+        for (let i = rows.length - 1; i >= earlier; i -= 1) {
+            bytes += rowBytes(rows[i]!);
+            if (bytes > maxBytes) { earlier = i + 1; break; }
+        }
+    }
     // The turns the window cut off: the turns shown number on from them.
     const earlierTurns = rows.slice(0, earlier).filter((r) => r.event.kind === 'turn').length;
     return { rows: rows.slice(earlier), earlier, earlierTurns, lastTurn: lastTurnOf(rows) };
@@ -268,7 +342,11 @@ export async function readWholeHistory(store: SessionStore, agentId: AgentId, op
 export async function readHistory(store: SessionStore, agentId: AgentId, options: HistoryOptions = {}): Promise<History> {
     if (options.limit === undefined || !(store instanceof ThreadStore)) return readWholeHistory(store, agentId, options);
     const limit = Math.max(0, options.limit);
+    const maxBytes = byteBound(options);
     const newestFirst: HistoryRow[] = [];
+    let bytes = 0;
+    // The window is full: `limit` rows, or the next row would pass `maxBytes`. Everything older is `earlier`.
+    let full = limit === 0;
     let earlier = 0;
     let earlierTurns = 0;
     let lastTurn = 0;
@@ -282,11 +360,20 @@ export async function readHistory(store: SessionStore, agentId: AgentId, options
     };
     for await (const lines of store.linesFromEnd(threadKeyFor(agentId))) {
         for (const line of lines) {
-            if (newestFirst.length < limit || mayMatter(line, runToken, options.before)) {
+            if (!full || mayMatter(line, runToken, options.before)) {
                 const row = rowOf(line);
                 if (row === null) continue;
                 if (row.event.kind === 'turn' && row.event.n > lastTurn) lastTurn = row.event.n;
-                if (newestFirst.length < limit) { newestFirst.push(row); continue; }
+                if (!full) {
+                    const size = rowBytes(row);
+                    if (bytes + size <= maxBytes) {
+                        bytes += size;
+                        newestFirst.push(row);
+                        if (newestFirst.length >= limit) full = true;
+                        continue;
+                    }
+                    full = true;
+                }
                 earlier += 1;
                 if (row.event.kind === 'turn') earlierTurns += 1;
             } else {

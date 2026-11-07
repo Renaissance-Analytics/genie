@@ -17,7 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JAVA_RECIPES, javaIdOf, javaRelease } from '../src/core/java-versions.js';
 import { installJavaVersion, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from '../src/main/java-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
@@ -34,12 +35,12 @@ async function main(): Promise<void> {
     const platform = process.platform as 'win32' | 'linux';
     const ports: JavaVersionsPorts = {
         platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run,
-        fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = javaIdOf(javaRelease(JAVA_RECIPES[0]!, platform)!);
 
     console.log('1. a tampered release record');
-    const tampered = await installJavaVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"checksum":\s*"[0-9a-f]{64}"/g, `"checksum":"${'f'.repeat(64)}"`) } : r; } });
+    const tampered = await installJavaVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"checksum":\s*"[0-9a-f]{64}"/g, `"checksum":"${'f'.repeat(64)}"`) } : r; } });
     check(tampered.kind === 'not-installed' && /does not match the sha256 Adoptium publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : JSON.stringify(tampered));
     check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 

@@ -1,20 +1,31 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { chmod, lstat, readFile, rm } from 'node:fs/promises';
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
-import { PRIVATE_CREDENTIAL_STORE, type PrivateCredentialStore } from './private-credentials.js';
+import type { KeychainRead, KeychainResult, SecretName } from './keychain.js';
+import type { MigrationSource, OldRead } from './keychain-migration.js';
+import { PRIVATE_CREDENTIAL_STORE, restrictPrivateFile, type PrivateCredentialStore } from './private-credentials.js';
 
-/** The desktop pairing key stays encrypted in the main process. Exchange cookies are cleared;
+/** The desktop pairing key is in the OS keychain (P3.4 cut c), and the host holds the account. Exchange cookies are cleared;
  * subsequent API calls use only the scoped bearer, never the browser session. */
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type SessionFetch = (url: string, init: { method: Method; headers: Record<string, string>; body?: string; credentials: 'include' | 'omit'; redirect: 'error'; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+
+export interface TynnSecrets {
+    probe(): Promise<KeychainResult>;
+    get(name: SecretName): Promise<KeychainRead>;
+    set(name: SecretName, value: string): Promise<KeychainResult>;
+    delete(name: SecretName): Promise<KeychainResult>;
+}
+const PAIRING: SecretName = 'tynn/pairing';
 
 export interface TynnAccountPorts {
     readonly file: string;
     /** Previous shared-home file; migration restricts this file, never its parent directory. */
     readonly legacyFile?: string;
-    readonly cipher: { isAvailable(): boolean; encrypt(text: string): Buffer; decrypt(bytes: Buffer): string };
+    /** The keychain. No keychain refuses a sign-in; it never falls back to a file (decision 3). */
+    readonly secrets: TynnSecrets;
     /**
-     * Where the encrypted credential is kept. Absent = Genie's private store (main/private-credentials.ts), which is what
+     * Where the record of who is signed in is kept (the token is not in it). Absent = Genie's private store (main/private-credentials.ts), which is what
      * the app always uses; tests of the ACCOUNT inject a plain-file store, because on Windows the private store's ACL
      * work is PowerShell on every prepare and write (test/tynn-account.test.ts, 'the credential store it is given').
      */
@@ -56,6 +67,8 @@ export type TynnResponse = { ok: boolean; status: number; json(): Promise<unknow
 
 /** What the Settings surface and the IPC need — the account as a port, faked in tests. */
 export interface TynnAccountPort {
+    /** The proxy Tynn cannot be reached through, while that is so. */
+    unreachableThrough?(): string | null;
     status(): TynnStatus;
     host(): string;
     startSignIn(): Promise<{ url: string }>;
@@ -72,6 +85,8 @@ interface Me {
 const trimHost = (h: string) => h.trim().replace(/\/+$/, '');
 const UNREACHABLE = 'Tynn could not be reached. Check your connection and try again.';
 /** No keyring: refused BEFORE the code is exchanged, so the code is not spent (the owner, 2026-11-01). */
+/** What a person reads when Tynn is out of reach through a proxy: not signed out, and which proxy to look at. */
+export const unreachableThroughMessage = (proxy: string): string => `Tynn could not be reached through the proxy ${proxy}, the one this computer's settings name. Your sign-in is kept. Check that proxy, or the proxy settings.`;
 export const NO_KEYRING_FOR_TYNN = 'Genie needs a keyring to keep your sign-in safe, and this computer has none running. Set one up in the card above, then sign in again.';
 const REQUIRED_SCOPES = ['genie:discovery', 'genie:projects', 'genie:workstations', 'genie:agents', 'genie:agent-tokens', 'genie:issue-watch', 'genie:issues', 'genie:inbox'];
 const tokenValid = (s: unknown): s is string => typeof s === 'string' && /^gpk_[0-9A-HJKMNP-TV-Z]{26}\.[a-f0-9]{64}$/i.test(s);
@@ -82,11 +97,81 @@ const parseMe = (body: unknown): Me | null => {
         ? { id: String(b.id), user: { name: b.name, email: b.email } } : null;
 };
 
+/**
+ * THE PAIRING AN OLDER GENIE SEALED, for the one-time move (keychain-migration.ts). Only a window can open it. The delete takes the
+ * token field out and leaves the rest of the record: who is signed in is still true.
+ */
+export async function settleStaleLegacyPairing(options: { file: string; legacyFile: string; log?: (line: string) => void }): Promise<void> {
+    if (!await exists(options.legacyFile)) return;
+    const text = await readFile(options.file, 'utf8').catch(() => null);
+    if (text === null) return;
+    let current: unknown;
+    try { current = JSON.parse(text); } catch { return; }
+    if (typeof current !== 'object' || current === null || typeof (current as { tokenEnc?: unknown }).tokenEnc === 'string') return;
+    await rm(options.legacyFile, { force: true });
+    options.log?.('tynn/pairing: an older tynn.json beside a sign-in that has already moved was stale, and is gone');
+}
+
+const exists = (path: string): Promise<boolean> => lstat(path).then(() => true, () => false);
+
+/**
+ * TWO STORES: an older tynn.json beside credentials/tynn.json. A rename leaves only one, so this takes an older Genie run after a newer one. The store refuses to choose, and that is right for what it
+ * knows, but here the answer is known: credentials/tynn.json is the sign-in that is current. So the older file is not brought across while the current one is there. It goes once the current one has
+ * moved, or at once if that already happened.
+ */
+async function bringLegacyAcross(store: PrivateCredentialStore, legacyFile: string, file: string): Promise<void> {
+    if (await exists(file)) {
+        // Left where it is for now, and still a sealed key: as closed as it would have been coming across.
+        if (await exists(legacyFile)) { await chmod(legacyFile, 0o600).catch(() => {}); await restrictPrivateFile(legacyFile).catch(() => {}); }
+        return;
+    }
+    await store.migrate(legacyFile, file);
+}
+
+export function tynnPairingSource(options: { file: string; legacyFile?: string; cipher: { decrypt(bytes: Buffer): string }; store?: PrivateCredentialStore; log?: (line: string) => void }): MigrationSource {
+    const store = options.store ?? PRIVATE_CREDENTIAL_STORE;
+    const record = async (): Promise<Record<string, unknown> | null> => {
+        if (options.legacyFile) await bringLegacyAcross(store, options.legacyFile, options.file);
+        const text = await readFile(options.file, 'utf8').catch(() => null);
+        return text === null ? null : JSON.parse(text) as Record<string, unknown>;
+    };
+    return {
+        name: PAIRING,
+        old: {
+            read: async (): Promise<OldRead> => {
+                try {
+                    if (options.legacyFile && await exists(options.legacyFile) && await exists(options.file)) options.log?.('tynn/pairing: an older tynn.json sits beside the current sign-in; the current one moves, and the older one goes after its read-back');
+                    const data = await record();
+                    if (typeof data?.tokenEnc !== 'string') return { kind: 'none' };
+                    const token = options.cipher.decrypt(Buffer.from(data.tokenEnc, 'base64'));
+                    if (tokenValid(token)) return { kind: 'value', value: token };
+                    options.log?.('tynn/pairing: its seal opened to something that is not a pairing key');
+                    return { kind: 'unreadable' };
+                } catch (error) {
+                    // Words from Node or the OS, about a file or a seal: the value is what could not be read.
+                    options.log?.(`tynn/pairing: could not be read: ${error instanceof Error ? error.message : String(error)}`);
+                    return { kind: 'unreadable' };
+                }
+            },
+            remove: async () => {
+                const data = await record();
+                if (!data) return;
+                const { tokenEnc: _gone, ...kept } = data;
+                await store.write(options.file, JSON.stringify(kept));
+                if (options.legacyFile) await rm(options.legacyFile, { force: true });
+            },
+        },
+    };
+}
+
 export class TynnAccount implements TynnAccountPort {
     readonly #ports: TynnAccountPorts;
     #me: Me | null = null;
     #meHost = '';
     #credential: Credential | null = null;
+    /** Whose the record on disk says it is, whether or not the keychain has answered: a locked keychain is not signed out. */
+    #savedUser: string | null = null;
+    #through: string | null = null;
     #usedCodes: string[] = [];
     #authWork: Promise<unknown> = Promise.resolve();
     #diskWork: Promise<unknown> = Promise.resolve();
@@ -110,7 +195,7 @@ export class TynnAccount implements TynnAccountPort {
     }
 
     async #prepareStorage(): Promise<void> {
-        if (this.#ports.legacyFile) await this.#store.migrate(this.#ports.legacyFile, this.#ports.file);
+        if (this.#ports.legacyFile) await bringLegacyAcross(this.#store, this.#ports.legacyFile, this.#ports.file);
         await this.#store.prepare(this.#ports.file);
     }
 
@@ -123,20 +208,26 @@ export class TynnAccount implements TynnAccountPort {
             if (data.version !== 1 || data.host !== this.host()) return;
             if (Array.isArray(data.usedCodes)) this.#usedCodes = data.usedCodes.filter((s): s is string => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s)).slice(-8);
             const scopes = data.scopes;
-            if (data.state !== 'signed-in' || !this.#ports.cipher.isAvailable() || typeof data.tokenEnc !== 'string' || typeof data.userId !== 'string' || !Array.isArray(scopes) || !REQUIRED_SCOPES.every((s) => scopes.includes(s))) return;
-            const token = this.#ports.cipher.decrypt(Buffer.from(data.tokenEnc, 'base64'));
-            if (tokenValid(token)) this.#credential = { token, host: this.host(), userId: data.userId, scopes: scopes.filter((s): s is string => typeof s === 'string') };
+            if (data.state !== 'signed-in' || typeof data.userId !== 'string' || !Array.isArray(scopes) || !REQUIRED_SCOPES.every((s) => scopes.includes(s))) return;
+            this.#savedUser = data.userId;
+            const read = await this.#ports.secrets.get(PAIRING);
+            if (read.kind === 'value' && tokenValid(read.value)) this.#credential = { token: read.value, host: this.host(), userId: data.userId, scopes: scopes.filter((s): s is string => typeof s === 'string') };
         } catch { /* Missing, corrupt or locked credentials require pairing; never fall back to cookies. */ }
     }
 
     #persist(credential: Credential | null): Promise<void> {
         const run = async () => {
-            if (this.#ports.legacyFile) await this.#store.migrate(this.#ports.legacyFile, this.#ports.file);
+            if (this.#ports.legacyFile) await bringLegacyAcross(this.#store, this.#ports.legacyFile, this.#ports.file);
             const data = credential ? {
-                version: 1, state: 'signed-in', host: credential.host, userId: credential.userId, scopes: credential.scopes,
-                tokenEnc: this.#ports.cipher.encrypt(credential.token).toString('base64'), usedCodes: this.#usedCodes,
+                version: 1, state: 'signed-in', host: credential.host, userId: credential.userId, scopes: credential.scopes, usedCodes: this.#usedCodes,
             } : { version: 1, state: 'signed-out', host: this.host(), usedCodes: this.#usedCodes };
+            if (credential) {
+                const held = await this.#ports.secrets.set(PAIRING, credential.token);
+                if (!held.ok) throw new Error(held.reason);
+            }
             await this.#store.write(this.#ports.file, JSON.stringify(data));
+            // Signed out is on disk. An entry a locked keychain would not give up is revoked below and overwritten by the next sign-in.
+            if (!credential) await this.#ports.secrets.delete(PAIRING).catch(() => {});
         };
         const work = this.#diskWork.then(run, run);
         this.#diskWork = work.catch(() => {});
@@ -167,7 +258,10 @@ export class TynnAccount implements TynnAccountPort {
      * The saved credential's account, before Tynn has confirmed it this launch (genie#1234): an agent's own stored Tynn key
      * is usable off grid. `null` once signed out or the credential is forgotten.
      */
-    savedUserId(): string | null { return this.#credential && this.#credential.host === this.host() ? this.#credential.userId : null; }
+    savedUserId(): string | null {
+        const held = this.#credential;
+        return held?.host === this.host() ? held.userId : this.#savedUser;
+    }
     onChange(listener: () => void): () => void { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; }
     #set(me: Me | null, host = this.host()): void {
         const previous = JSON.stringify(this.status());
@@ -177,7 +271,7 @@ export class TynnAccount implements TynnAccountPort {
 
     async #forget(credential: Credential): Promise<void> {
         if (this.#credential !== credential) return;
-        this.#credential = null; this.#retry?.cancel(); this.#retry = null; this.#set(null);
+        this.#credential = null; this.#savedUser = null; this.#retry?.cancel(); this.#retry = null; this.#set(null);
         await this.#persist(null);
     }
 
@@ -208,6 +302,23 @@ export class TynnAccount implements TynnAccountPort {
         this.#set(me, credential.host);
     }
 
+    /** Read again what is kept: the move of an older Genie's pairing has finished, or the keychain answers now. */
+    reload(): Promise<void> {
+        return this.#serial(async () => {
+            if (this.#credential) return;
+            await this.#restore();
+            if (this.#credential) { try { await this.#whoami(); } catch { this.#retryAfter(0); } }
+        });
+    }
+
+    /** The proxy Tynn could not be reached through, while that is so. Not signed out: the sign-in and the credential stand. */
+    unreachableThrough(): string | null { return this.#through; }
+    #noteRoute(through: string | null): void {
+        if (this.#through === through) return;
+        this.#through = through;
+        for (const l of this.#listeners) l();
+    }
+
     async recheck(): Promise<TynnStatus> {
         this.#retry?.cancel(); this.#retry = null;
         try { await this.#whoami(); } catch { this.#retryAfter(0); }
@@ -226,7 +337,7 @@ export class TynnAccount implements TynnAccountPort {
         if (code === null) return { ok: false, reason: 'That is not a Tynn sign-in code. Paste the code Tynn shows after you sign in — 64 letters and digits.' };
         const hash = createHash('sha256').update(code).digest('hex');
         if (this.#usedCodes.includes(hash)) return this.status().signedIn ? { ok: true, user: this.#me!.user } : { ok: false, reason: 'That code was already used. Open Tynn again for a fresh sign-in code.' };
-        if (!this.#ports.cipher.isAvailable()) return { ok: false, reason: NO_KEYRING_FOR_TYNN };
+        if (!(await this.#ports.secrets.probe()).ok) return { ok: false, reason: NO_KEYRING_FOR_TYNN };
         await this.#prepareStorage();
         const host = this.host();
         const previous = { credential: this.#credential, me: this.#me, host: this.#meHost };
@@ -245,7 +356,7 @@ export class TynnAccount implements TynnAccountPort {
             await this.#ports.cookies.clear(host);
             this.#usedCodes = [...this.#usedCodes, hash].slice(-8);
             await this.#persist(issued);
-            this.#credential = issued; this.#set(me, host); accepted = true;
+            this.#credential = issued; this.#savedUser = issued.userId; this.#set(me, host); accepted = true;
             return { ok: true, user: me!.user };
         } catch { return { ok: false, reason: 'Tynn pairing could not be completed. Check your connection and OS keychain, then try again.' }; }
         finally {
@@ -261,7 +372,7 @@ export class TynnAccount implements TynnAccountPort {
 
     signOut(): Promise<SignOutResult> { return this.#serial<SignOutResult>(async () => {
         const credential = this.#credential;
-        this.#credential = null; this.#retry?.cancel(); this.#retry = null; this.#set(null);
+        this.#credential = null; this.#savedUser = null; this.#retry?.cancel(); this.#retry = null; this.#set(null);
         await this.#persist(null);
         await this.#ports.cookies.clear(this.host());
         if (!credential) return { ok: true, revoked: true };
@@ -313,18 +424,25 @@ export class TynnAccount implements TynnAccountPort {
             clearTimeout(timer);
             init.signal?.removeEventListener('abort', interrupt);
         };
-        const failure = () => init.signal?.aborted ? cancelled() : new Error(UNREACHABLE);
+        const failure = (named?: string) => init.signal?.aborted ? cancelled() : new Error(named ?? UNREACHABLE);
         try {
             const res = await Promise.race([this.#ports.fetch(url.href, {
                 method: init.method, headers, credentials: credential ? 'omit' : 'include', redirect: 'error', signal: controller.signal,
                 ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
             }), interrupted]);
+            this.#noteRoute(null);
             // Return headers promptly for auth handling; the body retains the same deadline and cancellation.
             const body = Promise.race([res.text(), interrupted]).catch(() => { throw failure(); }).finally(cleanup);
             // A status-only caller need not read json(), but its failed/aborted body must still be handled.
             void body.catch(() => {});
             return { ok: res.ok, status: res.status, json: async () => { const text = await body; return text === '' ? null : JSON.parse(text) as unknown; } };
-        } catch { cleanup(); throw failure(); }
+        } catch (error) {
+            cleanup();
+            const proxy = (error as { proxy?: unknown } | null)?.proxy;
+            if (typeof proxy !== 'string') throw failure();
+            this.#noteRoute(proxy);
+            throw failure((error as Error).message);
+        }
     }
 
     /** The person's projects — Genie 1's GET /api/v1/projects. Signed out is refused before any request. */

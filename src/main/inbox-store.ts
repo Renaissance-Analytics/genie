@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { InvolvingCache, cursorOf, hasWrittenIn, mailAfter, receiptsOf, unreadOf } from '../core/inbox-read.js';
 import { constants as fsConstants } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
@@ -197,16 +198,9 @@ export class InboxStore {
         // READ ONCE PER CHANGE (genie#1200): the estate snapshot asks for every agent's mail twenty times a second while
         // agents work; filtering the whole mailbox each time cost main agents × messages per snapshot. Every change to
         // the mail either grows the array (send) or replaces it (read, delete, import), so array + length says "unchanged".
-        const messages = this.#mail.messages;
-        const key = `${participant}|${limit}`;
-        const hit = this.#involving.get(key);
-        if (hit && hit.messages === messages && hit.length === messages.length) return hit.result;
-        const result = messages.filter((m) => m.from === participant || m.to === participant).slice(-Math.max(limit, 1));
-        if (this.#involving.size > 2000) this.#involving.clear();
-        this.#involving.set(key, { messages, length: messages.length, result });
-        return result;
+        return this.#involving.read(this.#mail.messages, participant, limit);
     }
-    readonly #involving = new Map<string, { messages: readonly InboxMessage[]; length: number; result: InboxMessage[] }>();
+    readonly #involving = new InvolvingCache<InboxMessage>();
 
     /** Every message, oldest first — what the AgentInbox flyout's threads are read from (core/inbox-threads.ts). */
     all(): InboxMessage[] {
@@ -245,7 +239,7 @@ export class InboxStore {
 
     /** Whether `from` authored mail to `to`; generated status is not consent to open a conversation. Durable across restarts. */
     hasWritten(from: Participant, to: Participant): boolean {
-        return this.#mail.messages.some((m) => m.from === from && m.to === to && m.automaticReply === undefined);
+        return hasWrittenIn(this.#mail, from, to);
     }
 
     async send(input: SendInput): Promise<InboxMessage & { readonly pauseNotice?: string }> {
@@ -347,16 +341,12 @@ export class InboxStore {
      * chat flyout read. Only the participant's own `receive` marks it read.
      */
     unread(participant: Participant): InboxMessage[] {
-        return this.#after(participant, this.#cursorOf(participant));
+        return unreadOf(this.#mail, participant);
     }
 
     /** What `from` sent, newest first, with whether each was read. */
     receipts(from: Participant, limit = 20): Receipt[] {
-        return this.#mail.messages
-            .filter((m) => m.from === from)
-            .slice(-Math.min(Math.max(limit, 1), 100))
-            .reverse()
-            .map((message) => ({ message, readAt: message.readAt }));
+        return receiptsOf(this.#mail, from, limit);
     }
 
     /**
@@ -455,12 +445,11 @@ export class InboxStore {
     }
 
     #cursorOf(participant: Participant): number {
-        return this.#mail.cursors[participant] ?? 0;
+        return cursorOf(this.#mail, participant);
     }
 
     #after(participant: Participant, cursor: number, limit?: number): InboxMessage[] {
-        const page = this.#mail.messages.filter((m) => m.to === participant && m.seq > cursor);
-        return limit === undefined ? page : page.slice(0, Math.max(limit, 1));
+        return mailAfter(this.#mail, participant, cursor, limit);
     }
 
     /** Until mail for `participant`, the timeout, or `signal` aborting — whichever is first. Only this waiter ends. */
@@ -557,6 +546,23 @@ export class InboxStore {
 
     async #flush(): Promise<void> {
         await writeJsonAtomic(this.mailFile, this.#mail);
+        for (const l of this.#changeListeners) l();
+    }
+
+    readonly #changeListeners = new Set<() => void>();
+
+    /**
+     * Every change that reached the disk (the host split, P3.1): what genie-host sends the window's replica, before the
+     * `onSend`/`onRead` of the same change, so a listener there reads the state the event describes.
+     */
+    onChanged(listener: () => void): () => void {
+        this.#changeListeners.add(listener);
+        return () => { this.#changeListeners.delete(listener); };
+    }
+
+    /** The mail as it is: oldest first, and each participant's committed cursor. Read-only: never written through. */
+    snapshot(): { readonly messages: readonly InboxMessage[]; readonly cursors: Readonly<Record<string, number>> } {
+        return { messages: this.#mail.messages, cursors: this.#mail.cursors };
     }
 }
 

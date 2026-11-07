@@ -23,32 +23,59 @@ function ports(over: { probe?: { running: boolean } | null; refusal?: string | n
 }
 
 describe('startForWork', () => {
-    it('never started (no session): started, in its folder — once', () => {
+    it('never started (no session): started, in its folder — once', async () => {
         const { p, calls } = ports();
-        expect(startForWork(p, record)).toEqual({ ok: true, started: true });
+        expect(await startForWork(p, record)).toEqual({ ok: true, started: true });
         expect(calls).toEqual(['start:agent_a:/w/pa']);
     });
 
-    it('running: used as it is — nothing started, nothing restarted (the control: the same counter that saw the start above)', () => {
+    it('running: used as it is — nothing started, nothing restarted (the control: the same counter that saw the start above)', async () => {
         const { p, calls } = ports({ probe: { running: true } });
-        expect(startForWork(p, record)).toEqual({ ok: true, started: false });
+        expect(await startForWork(p, record)).toEqual({ ok: true, started: false });
         expect(calls).toEqual([]);
     });
 
-    it('a session that ended on its own (Broken) is left to be read: no silent restart — the chat offers Restart', () => {
+    it('a session that ended on its own (Broken) is left to be read: no silent restart — the chat offers Restart', async () => {
         const { p, calls } = ports({ probe: { running: false } });
-        expect(startForWork(p, record)).toEqual({ ok: true, started: false });
+        expect(await startForWork(p, record)).toEqual({ ok: true, started: false });
         expect(calls).toEqual([]);
     });
 
-    it('an asleep workspace or the agent cap refuses by name, and nothing is started', () => {
+    it('an asleep workspace or the agent cap refuses by name, and nothing is started', async () => {
         const { p, calls } = ports({ refusal: 'Particle Academy Operations is hibernated' });
-        expect(startForWork(p, record)).toEqual({ ok: false, reason: 'Particle Academy Operations is hibernated' });
+        expect(await startForWork(p, record)).toEqual({ ok: false, reason: 'Particle Academy Operations is hibernated' });
         expect(calls).toEqual([]);
     });
 
-    it('a start the host refuses is the refusal, with its reason', () => {
+    it('a start the host refuses is the refusal, with its reason', async () => {
         const { p } = ports({ start: { ok: false, reason: 'claude is not installed' } });
-        expect(startForWork(p, record)).toEqual({ ok: false, reason: 'claude is not installed' });
+        expect(await startForWork(p, record)).toEqual({ ok: false, reason: 'claude is not installed' });
+    });
+
+    /*
+     * THE AGENT ENGINE IN genie-host (the host split): the window's engine is a replica, and its `start` ANSWERS LATER
+     * (a Promise from the host). The answer is the host's, awaited — a refusal there is the refusal here, never a
+     * Promise object read as "started".
+     */
+    it('an engine whose start answers later (genie-host): its answer is awaited — a refusal is the refusal', async () => {
+        const p: StartOnDemandPorts = {
+            probe: () => null,
+            start: () => Promise.resolve({ ok: false as const, reason: 'claude is not installed' }),
+            cwdFor: () => '/w/pa',
+            startRefusal: () => null,
+        };
+        expect(await startForWork(p, record)).toEqual({ ok: false, reason: 'claude is not installed' });
+    });
+
+    it('an engine whose start answers later (genie-host): started once it says so', async () => {
+        let said = false;
+        const p: StartOnDemandPorts = {
+            probe: () => null,
+            start: () => new Promise((r) => setTimeout(() => { said = true; r({ ok: true }); }, 5)),
+            cwdFor: () => '/w/pa',
+            startRefusal: () => null,
+        };
+        expect(await startForWork(p, record)).toEqual({ ok: true, started: true });
+        expect(said).toBe(true); // not before the host answered
     });
 });

@@ -258,13 +258,14 @@ describe('Dismiss in the window', () => {
 describe('what the window shows', () => {
     const view = { item: q('a', 10, 'kai'), waiting: 2 };
     const html = renderToStaticMarkup(<QuestionApp view={view} sending={false} refusal={null} onAnswer={() => {}} onLater={() => {}} onDismiss={() => {}} />);
-    it('who asks, from where (the workspace NAME, not its id), how many more; the question as Markdown; each option with its description; Answer, Later and Dismiss', () => {
+    it('who asks, from where (the workspace NAME, not its id); the question as Markdown; each option with its description; Answer, Later and Dismiss', () => {
         expect(html).toContain('kai asks you');
         expect(html).toMatch(/data-question-workspace="ws_01HTYNN"[^>]*>Tynn\.ai</);
         // The id is an attribute for tests, never text a person reads.
         expect(html).not.toContain('>ws_01HTYNN<');
         expect(control(html, 'data-action="question-dismiss"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
-        expect(html).toContain('data-question-waiting="2"');
+        // How many more wait is the queue's tabs now (Tynn story #378): no count in the header that changes as they come.
+        expect(html).not.toContain('data-question-waiting');
         expect(html).toMatch(/<strong>one<\/strong>/);
         expect(html).toContain('the first');
         expect(control(html, 'data-action="deck-submit"')).toMatchObject({ tag: 'button', fancy: true, text: 'Answer' });

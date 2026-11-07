@@ -13,10 +13,16 @@ import type { AgentRecord } from '../core/identity.js';
  *
  * A message sent to a session still coming up waits for its `ready` in the session's own queue and goes the moment it is
  * up; the chat shows it waiting for the start (core/chat-view.ts `queuedForStart`).
+ *
+ * The agent engine may answer LATER: in the host split the window's engine is a replica of genie-host's
+ * (main/session-engine-client.ts), whose `start` is the host's answer, a Promise. So the rule is asynchronous, and the
+ * answer awaited is the host's own: a refusal there is the refusal here.
  */
+type StartAnswer = { ok: true } | { ok: false; reason: string };
+
 export interface StartOnDemandPorts {
     probe(agentId: AgentRecord['id']): { readonly running: boolean } | null;
-    start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
+    start(record: AgentRecord, cwd: string): StartAnswer | Promise<StartAnswer>;
     cwdFor(record: AgentRecord): string;
     /** An asleep workspace or the agent cap (workspace-ops-host `startRefusal`); `null` = may start. */
     startRefusal(record: AgentRecord): string | null;
@@ -24,11 +30,11 @@ export interface StartOnDemandPorts {
 
 export type StartForWork = { ok: true; started: boolean } | { ok: false; reason: string };
 
-export function startForWork(ports: StartOnDemandPorts, record: AgentRecord): StartForWork {
+export async function startForWork(ports: StartOnDemandPorts, record: AgentRecord): Promise<StartForWork> {
     if (ports.probe(record.id) !== null) return { ok: true, started: false };
     const refused = ports.startRefusal(record);
     if (refused !== null) return { ok: false, reason: refused };
-    const started = ports.start(record, ports.cwdFor(record));
+    const started = await ports.start(record, ports.cwdFor(record));
     return started.ok ? { ok: true, started: true } : started;
 }
 
@@ -38,13 +44,13 @@ export const NEW_DRIVER_NOTICE = 'The last Stop could not be confirmed, so that 
 /** THE PERSON'S MESSAGE: what `startForWork` does, and a new driver when the run's own stopped itself. */
 export interface StartForYourMessagePorts {
     /** The rule every sender of work shares (`startForWork` with main's ports: `startOnDemand`). */
-    startForWork(record: AgentRecord): StartForWork;
+    startForWork(record: AgentRecord): StartForWork | Promise<StartForWork>;
     /** The run's driver stopped itself and must be replaced before it takes work (`SessionHost.needsNewDriver`). */
     needsNewDriver(agentId: AgentRecord['id']): boolean;
     /** THE ONE RESTART (genie#1238, `restartAgent(…, 'graceful')`): the same conversation, what is owed delivered. */
     restart(agentId: AgentRecord['id']): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** A warning in the agent's chat (`SessionHost.notice`). */
-    notice(agentId: AgentRecord['id'], message: string): boolean;
+    notice(agentId: AgentRecord['id'], message: string): boolean | Promise<boolean>;
 }
 
 /**

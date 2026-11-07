@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { McpServer } from '@particle-academy/prism-acp';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { Caller } from './mcp-tools.js';
-import { OS_WORKSPACE } from './registry.js';
+import { OS_WORKSPACE } from '../core/os-agent.js';
 
 /**
  * WHO IS CALLING GENIE'S MCP, for an agent SESSION. A Take Over window passes its terminal's id as `terminalId`; an

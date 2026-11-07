@@ -81,7 +81,13 @@ describe('the capability table', () => {
         // owner-only on a host (they act as the host's Tynn person), scoped to their workspace.
         // 85 since the phone's files (genie#1346): `files.children`, `files.open`, `files.readMedia` (reads) and `files.upload`
         // (a write) — workspace-scoped, through the panel's confined files host.
-        expect(REMOTE_METHODS.length).toBe(85);
+        // 88 with P4's local-only notes, headroom and account retry; activity interests are connection controls.
+        // 100 with family5's twelve owner operations; every one starts local.
+        // 115 with local Files; 120 with drafts; 122 with the two explicitly local ArtBoard operations;
+        // 123 with agents.toolOutput, a tool row's whole output when a person opens it (Tynn story #386).
+        expect(REMOTE_METHODS.length).toBe(123);
+        for (const method of ['artboard.read', 'artboard.review'] as const) expect(capabilityOf(method)).toBe('local');
+        for (const method of ['chatDrafts.load', 'chatDrafts.save', 'chatDrafts.putFile', 'chatDrafts.readFile', 'chatDrafts.release'] as const) expect(capabilityOf(method)).toBe('local');
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');

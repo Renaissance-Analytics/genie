@@ -1,9 +1,11 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { draftRefs, isDraftRef, isEmptyDraft, parseChatDrafts, pruneChatDrafts, readChatDraft, type ChatDraft, type ChatDrafts } from '../core/chat-drafts.js';
 import { runtimeDir } from './paths.js';
 import { writeJsonAtomic } from './store.js';
+import { BLOB_READ_BYTES, type BlobSource } from '../core/local-blobs.js';
 
 /**
  * EVERY CHAT'S UNSENT DRAFT, ON DISK (genie#1261, the persistence half) — so a half-typed message survives a Genie
@@ -24,7 +26,7 @@ import { writeJsonAtomic } from './store.js';
  * ## Cleanup
  *
  * - **A send** releases exactly the files it sent (`release`), once the message holds their bytes.
- * - **A deleted agent** takes its draft and its files with it (`prune`, on every registry change).
+ * - **A deleted agent** takes its draft and its files with it (`prune`, when the roster changes: core/chat-drafts.ts rosterPruner).
  * - **At open**, files no draft points at — a chip removed, a quit before the ref was saved — are swept.
  */
 /** Larger than this is not kept with a draft: its chip restores, without its bytes. */
@@ -89,6 +91,46 @@ export class ChatDraftStore {
         } catch {
             return null;
         }
+    }
+
+    /** Host-only stable read handle. Hash and bytes stay bounded, including a file not yet saved in a draft. */
+    async openFile(ref: unknown, options: { signal?: AbortSignal } = {}): Promise<BlobSource | null> {
+        if (!isDraftRef(ref)) throw new Error('a draft file needs a host-minted UUID ref');
+        options.signal?.throwIfAborted();
+        const path = join(this.filesDir, ref); let file: Awaited<ReturnType<typeof open>> | null = null;
+        try {
+            const entry = await lstat(path);
+            if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('the draft ref is not a regular file in this store');
+            file = await open(path, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW));
+            const stat = await file.stat();
+            if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 0 || stat.size > MAX_DRAFT_FILE_BYTES) throw new Error('the draft file is outside its 100 MiB limit');
+            const hash = createHash('sha256'), buffer = Buffer.alloc(Math.min(BLOB_READ_BYTES, stat.size));
+            for (let at = 0; at < stat.size;) {
+                options.signal?.throwIfAborted();
+                const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, stat.size - at), at);
+                if (!bytesRead) throw new Error('the draft file changed while its hash was read');
+                hash.update(buffer.subarray(0, bytesRead)); at += bytesRead;
+            }
+            options.signal?.throwIfAborted();
+            const held = file; file = null; let closed = false;
+            return {
+                size: stat.size, sha256: hash.digest('hex'),
+                read: async (offset, length) => {
+                    if (closed) throw new Error('the kept draft source is closed');
+                    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || length > BLOB_READ_BYTES || offset > stat.size || length > stat.size - offset) throw new Error('the draft read is outside its bounded size');
+                    const bytes = Buffer.alloc(length);
+                    for (let at = 0; at < length;) {
+                        const { bytesRead } = await held.read(bytes, at, length - at, offset + at);
+                        if (!bytesRead) throw new Error('the draft file ended before its declared size'); at += bytesRead;
+                    }
+                    if (closed) throw new Error('the kept draft source closed during its read'); return bytes;
+                },
+                close: async () => { if (closed) return; closed = true; await held.close(); },
+            };
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw error;
+        } finally { await file?.close(); }
     }
 
     /** Remove these files (a send, once the message holds their bytes). Anything that is not one of ours is ignored. */

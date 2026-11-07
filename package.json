@@ -1,14 +1,17 @@
 {
   "name": "genie",
-  "version": "2.0.0-beta.59",
+  "version": "2.0.0-beta.60",
   "private": true,
   "type": "module",
   "description": "Genie 2 — an agent is a session, never a terminal.",
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:renderer": "vite build",
-    "build:main": "vite build -c vite.main.config.ts",
+    "build:main": "node scripts/build-win-launcher.mjs && vite build -c vite.main.config.ts",
     "build:preload": "vite build -c vite.preload.config.ts",
     "build": "npm run build:renderer && npm run build:main && npm run build:preload",
     "verify": "npm run typecheck && npm test && npm run build",
@@ -18,9 +21,11 @@
     "verify:terminal": "tsx test/live/terminal.live.ts",
     "verify:leak": "tsx test/live/terminal-leak.live.ts",
     "verify:flows": "vitest run -c vitest.flows.config.mts",
+    "verify:zip64": "vitest run -c vitest.zip64.config.mts",
     "verify:app-inbox": "tsx test/live/app-inbox.live.ts"
   },
   "dependencies": {
+    "@napi-rs/keyring": "2.1.2",
     "@particle-academy/agent-integrations": "0.47.1",
     "@particle-academy/dark-slide": "0.19.0",
     "@particle-academy/fancy-brand-icons": "0.4.0",
@@ -45,6 +50,7 @@
     "electron-updater": "^6.8.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "ws": "^8.22.1",
     "yazl": "3.3.1"
   },
   "devDependencies": {
@@ -52,6 +58,7 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
     "@types/yauzl": "3.4.0",
     "@types/yazl": "3.3.1",
     "electron": "^45.0.0",

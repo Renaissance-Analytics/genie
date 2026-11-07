@@ -3,6 +3,10 @@
  * SEED A REAL v1 DATABASE with one workspace and two agents — for the upgrade proof in the test VM.
  *
  *   node scripts/seed-v1-db.mjs <path-to-v1-genie.db> <workspace-folder>
+ *   node scripts/seed-v1-db.mjs <path-to-v1-genie.db> --github <token-sealed> <refresh-sealed> <login>
+ *
+ * The second form (plan §13, S10) makes a database holding only Genie 1's GitHub login, in the rows v1 kept it in
+ * (`v1:main/github/storage.ts`). Each sealed value is base64 of `safeStorage.encryptString`, by the caller's Electron. None is printed.
  *
  * The installed v1 (0.7.0-beta.342 / 2.0.0-beta.4) creates `%APPDATA%\genie\genie.db` with its own
  * migrations on first launch; this inserts rows the way v1 would have, using only the columns v1's
@@ -13,6 +17,20 @@ import { DatabaseSync } from 'node:sqlite';
 
 const [file, folder] = process.argv.slice(2);
 if (!file || !folder) { console.error('usage: seed-v1-db.mjs <genie.db> <workspace-folder>'); process.exit(2); }
+
+if (folder === '--github') {
+    const [tokenEnc, refreshEnc, login] = process.argv.slice(4);
+    if (!tokenEnc || !refreshEnc || !login) { console.error('usage: seed-v1-db.mjs <genie.db> --github <token-sealed> <refresh-sealed> <login>'); process.exit(2); }
+    const db = new DatabaseSync(file);
+    db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)');
+    const put = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+    put.run('github_token_enc', tokenEnc);
+    put.run('github_refresh_enc', refreshEnc);
+    put.run('github_user', login);
+    db.close();
+    console.log(`seeded v1 db: a GitHub login for ${login}`);
+    process.exit(0);
+}
 
 export const SEED_WORKSPACE_ID = '01seedv1workspace00000000a';
 export const SEED_AGENTS = [

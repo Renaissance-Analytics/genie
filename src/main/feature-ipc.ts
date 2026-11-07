@@ -7,7 +7,7 @@ import { classifyNavigation } from '../core/browser-policy.js';
 import { isAlertSoundKey } from '../core/alerts.js';
 import { MAX_SOUND_BYTES, soundFileMime } from '../core/custom-sound.js';
 import { tynnGate, type SyncResult } from '../core/integrations.js';
-import type { TynnAccountPort } from './tynn-account.js';
+import { unreachableThroughMessage, type TynnAccountPort } from './tynn-account.js';
 import type { GithubAccountPort } from './github-account.js';
 import { signedOutGithubView } from '../core/github.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
@@ -38,7 +38,7 @@ import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
 import type { NodeInstallOutcome, NodeRemoveOutcome, NodeVersionsView } from './node-versions.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
-import type { ComposedServices } from './compose.js';
+import type { WindowServices as ComposedServices } from './compose.js';
 import {
     createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateService, updateSite, useService,
     type OpenInBrowser,
@@ -62,6 +62,14 @@ import type { AskedRecord } from './attention-store.js';
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /** genie-host's safe mode (Tynn #386): "Leave safe mode". Absent = no host to leave it in (refused, said). */
+    readonly safeMode?: { leave(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    /** The reopened-window notice (Tynn #386): Dismiss, and Stop all agents. Absent = no host to ask (refused, said). */
+    /** The brought-back page's notice: forget it. */
+    readonly rendererNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    readonly hangNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }>; stopAll(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    /** A part of a snapshot that took at least `ms` (genie-test-windows, job Q0: an action took 20 s with main mostly free). */
+    readonly slowPart?: { readonly ms: number; log(part: string, ms: number): void };
     /**
      * How long a snapshot waits for Docker's engine statuses before it goes out with the last read (genie#1393); absent =
      * ENGINE_STATUS_WAIT_MS. The first read ever is always waited for: there is no last one to show.
@@ -73,7 +81,7 @@ export interface FeaturePorts {
      * A message that must reach a running agent (SessionHost.deliver): an approval's note, after a Genie approval is
      * answered on the Deck or a toast (beta.33 item 16). Absent = no sessions here, and a note is refused, never dropped.
      */
-    readonly deliverToAgent?: ((agentId: string, text: string) => boolean) | undefined;
+    readonly deliverToAgent?: ((agentId: string, text: string) => boolean | Promise<boolean>) | undefined;
     /** Tailscale on this machine (main/tailscale-cli.ts, Tynn #821): its cached status, up, install. */
     readonly tailscale?: {
         status(): import('./tailscale-cli.js').TailscaleStatus | null;
@@ -94,9 +102,9 @@ export interface FeaturePorts {
      * Linux with no keyring (main/linux-keyring.ts, the owner 2026-11-01): the card's view (null = fine, or not Linux) and
      * its one button. Absent = no card (doctor mode, tests that do not wire it).
      */
-    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void> };
+    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void>; press?(): Promise<void>; cancel?(): void | Promise<void>; notice?(): string | null };
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
-    readonly processes?: ProcessBook;
+    readonly processes?: import('./processes-host.js').ProcessBookApi;
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
     readonly processScheduler?: Pick<import('./process-scheduler.js').ProcessScheduler, 'runNow'>;
     /** Open the flow editor window on a route (`genie://flow/<id>`, `genie://flow/new?workspace=<id>`, genie#1204). Absent = no windows (doctor mode). */
@@ -474,9 +482,11 @@ function tynnIntegration(services: ComposedServices, state: FeatureState, accoun
     const status = account?.status() ?? { signedIn: false as const };
 
     const host = account ? account.host() : TYNN_HOST;
+    // Out of reach through a proxy reads as that: the sign-in stands, whatever the status says for now.
+    const through = account?.unreachableThrough?.() ?? null;
     return {
         tynnSignedIn: status.signedIn,
-        tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? null },
+        tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? (through ? unreachableThroughMessage(through) : null) },
         gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: status.signedIn }),
     };
 }
@@ -521,11 +531,16 @@ let snapshotSeq = 0;
 
 export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
     const seq = ++snapshotSeq;
+    const timed = async <T>(part: string, work: () => Promise<T>): Promise<T> => {
+        if (!ports.slowPart) return work();
+        const started = Date.now();
+        try { return await work(); } finally { const ms = Date.now() - started; if (ms >= ports.slowPart.ms) ports.slowPart.log(part, ms); }
+    };
     // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
     // 108 memories and drew skeletons until a search). A query searches.
-    const hits = state.knowledgeQuery
-        ? services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' }).hits
-        : services.knowledge.list({ scopes: 'all', limit: 200 }).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class }));
+    const hits = await timed('knowledge', async () => state.knowledgeQuery
+        ? (await services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' })).hits
+        : (await services.knowledge.summaries({ scopes: 'all', limit: 200 })).hits);
     const roster = services.agentAddresses();
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
@@ -539,10 +554,10 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         trust: services.trustSteps(),
-        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
+        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems() },
         // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
         // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
-        services: { instances: await engineStatusesWithin(services, ports), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
+        services: { instances: await timed('engines', () => engineStatusesWithin(services, ports)), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: {
@@ -555,7 +570,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         // GitHub as the account read it from GitHub (beta.33 item 25) — never a value a window sent.
-        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null },
+        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null, ...(ports.keyring?.notice?.() ? { keyringNotice: ports.keyring.notice!() } : {}) },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
@@ -663,9 +678,31 @@ async function phpChoices(services: ComposedServices, ports: FeaturePorts): Prom
 
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason — except a toolchain row's, which comes back IN the snapshot, on that row (`toolchain.refusals`). */
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}, origin: FeatureOrigin = REMOTE_ORIGIN): Promise<FeatureData> {
+    // genie#1583: which half of a slow action waits, the action itself or the snapshot it answers with.
+    const actStarted = Date.now();
+    const slow = (part: string, started: number): void => { const ms = Date.now() - started; if (ports.slowPart && ms >= ports.slowPart.ms) ports.slowPart.log(part, ms); };
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
+        case 'rendererNotice.dismiss': {
+            if (!ports.rendererNotice) throw new Error('This window keeps no such notice.');
+            const done = await ports.rendererNotice.dismiss();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
+        case 'hangNotice.dismiss':
+        case 'hangNotice.stopAll': {
+            if (!ports.hangNotice) throw new Error('Genie’s host is not connected.');
+            const done = action.kind === 'hangNotice.dismiss' ? await ports.hangNotice.dismiss() : await ports.hangNotice.stopAll();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
+        case 'safeMode.leave': {
+            if (!ports.safeMode) throw new Error('Genie’s host is not connected, so safe mode cannot be left from here.');
+            const left = await ports.safeMode.leave();
+            if (!left.ok) throw new Error(left.reason);
+            break;
+        }
         case 'whatsNew.show':
             next.whatsNewShown = true;
             break;
@@ -1431,7 +1468,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                         : null;
                     if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
                     if (!services.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
-                    if (text !== null && !ports.deliverToAgent!(action.item.agentId!, text)) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
+                    if (text !== null && !(await ports.deliverToAgent!(action.item.agentId!, text))) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
                     break;
                 }
                 case 'list-done':
@@ -1457,6 +1494,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 case 'defer-trust-certificate':
                     services.deferTrustCertificate();
                     break;
+                case 'sync-hosts': {
+                    // What genie-host held for a window: the person approves it here, so the prompt is raised by this window.
+                    const r = await services.syncHosts();
+                    if ('error' in r) throw new Error(r.error);
+                    break;
+                }
                 case 'dismiss-main-error':
                     // Read, and put aside. Refused with its reason when nothing is wired or the item is already gone.
                     if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
@@ -1501,7 +1544,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 next.knowledgeAdding = { defaults: action.form, problems };
                 break;
             }
-            const added = services.knowledge.add({ title: action.form.title.trim(), body: action.form.body, class: action.form.class, scope: action.form.scope, source: 'user' });
+            const added = await services.knowledge.add({ title: action.form.title.trim(), body: action.form.body, class: action.form.class, scope: action.form.scope, source: 'user' });
             next.knowledgeAdding = null;
             // Show what was done: the search lands on the new title, and every link that did not
             // resolve is named with why — an ambiguous link resolves to nothing rather than guessing.
@@ -1510,7 +1553,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'knowledge.add': {
-            const r = services.knowledge.add({ title: action.title, body: action.body, ...(action.class ? { class: action.class } : {}), ...(action.tags ? { tags: action.tags } : {}), scope: action.scope, source: 'user' });
+            const r = await services.knowledge.add({ title: action.title, body: action.body, ...(action.class ? { class: action.class } : {}), ...(action.tags ? { tags: action.tags } : {}), scope: action.scope, source: 'user' });
             void r;
             break;
         }
@@ -1660,7 +1703,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         // THE KEYRING CARD'S ONE BUTTON: install, start, restart or check again, whichever the session needs next.
         case 'keyring.fix': {
             if (!ports.keyring) throw new Error('this Genie has no keyring to set up here');
-            await ports.keyring.fix();
+            // Answered once the step is done, or the keyring's own unlock dialog is up (it waits on the person, not on this).
+            await (ports.keyring.press ? ports.keyring.press() : ports.keyring.fix());
+            break;
+        }
+        // THE CARD'S CANCEL while the keyring's unlock dialog is up (Tynn story #388).
+        case 'keyring.cancel': {
+            await ports.keyring?.cancel?.();
             break;
         }
         case 'integrations.tynnCode': {
@@ -1721,6 +1770,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'browser.reload':
             break;
     }
-    return featureSnapshot(services, next, ports);
+    slow(`act:${action.kind}`, actStarted);
+    const snapshotStarted = Date.now();
+    try {
+        return await featureSnapshot(services, next, ports);
+    } finally {
+        slow('snapshot', snapshotStarted);
+    }
 }
 

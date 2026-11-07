@@ -87,8 +87,8 @@ describe('the stall profiler costs less than what it measures', () => {
 });
 
 describe('wired: a quit stops the profiler before its own steps', () => {
-    it('the quit’s shutdown pass stops it as its first step after starting the agents’ stops', () => {
+    it('the quit’s closeWindow stops it first', () => {
         const main = readFileSync('src/main/main.ts', 'utf8').replace(/\r\n/g, '\n');
-        expect(main).toMatch(/if \(step === 'pass'\) return;\n(\s*\/\/[^\n]*\n)*\s*event\.preventDefault\(\);\n\s*host\?\.stopAll\(\);\n(\s*\/\/[^\n]*\n)*\s*stallProfiler\?\.stop\(\);/);
+        expect(main).toMatch(/closeWindow: \(\) => \{\n(\s*\/\/[^\n]*\n)*\s*stallProfiler\?\.stop\(\);/);
     });
 });

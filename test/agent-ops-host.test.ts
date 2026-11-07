@@ -16,10 +16,9 @@ import { deleteAgent, diagnose, previewDelete, restartAgent, setBudget, switchDr
 const record = (over: Partial<AgentRecord> = {}): AgentRecord =>
     ({ id: 'agent_a', workspaceId: 'tynn', provider: 'claude', name: 'atlas', instructions: '.agents/atlas/AGENT.md', threadId: 'sess-1', createdAt: 't', lastUsedAt: 't', mode: 'manual', accessScope: 'self', ...over }) as unknown as AgentRecord;
 
-function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifest?: string | null; installed?: boolean; signedIn?: boolean; linked?: string[]; models?: Record<string, ModelChoices>; realPaths?: Record<string, string | null>; handoffLandsAfterMs?: number | null; writeFails?: string } = {}) {
+function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifest?: string | null; installed?: boolean; signedIn?: boolean; linked?: string[]; models?: Record<string, ModelChoices>; realPaths?: Record<string, string | null>; handoffLandsAfterMs?: number | null } = {}) {
     let current: AgentRecord | null = over.record ?? record();
     const calls: string[] = [];
-    const written: string[] = [];
     const asked: string[] = [];
     let clock = 1_000;
     const ports: AgentOpsPorts = {
@@ -50,7 +49,6 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
         cwdFor: () => '/w/tynn',
         workspacePathFor: () => '/w/tynn',
         readManifest: async () => over.manifest ?? null,
-        writeManifest: async (_r, text) => { calls.push('writeManifest'); if (over.writeFails) throw new Error(over.writeFails); written.push(text); },
         removeDir: async (path) => { calls.push(`rmdir:${path}`); },
         // The filesystem's own answer for where a path really is (symlinks followed); `null` = nothing there.
         realPath: async (path) => (over.realPaths && resolve(path) in over.realPaths ? over.realPaths[resolve(path)]! : resolve(path)),
@@ -68,7 +66,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
         providerInstalled: () => over.installed ?? true,
         signedIn: () => over.signedIn ?? true,
     };
-    return { ports, calls, asked, written, current: () => current, clock: () => clock };
+    return { ports, calls, asked, current: () => current, clock: () => clock };
 }
 
 describe('restart', () => {
@@ -116,40 +114,15 @@ describe('delete', () => {
     });
 });
 
-describe('switch driver', () => {
-    it('stops and switches, carrying identity, inbox, history and prompt; no AGENT.md means nothing to write', async () => {
-        const open = fakes();
-        expect(await switchDriver(open.ports, 'agent_a', 'codex')).toEqual({ ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'claude', to: 'codex', discarded: 'sess-1', droppedModel: null });
-        expect(open.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'setProvider:agent_a:codex:keepModel=false']);
-        expect(open.current()?.provider).toBe('codex');
+describe('switch provider', () => {
+    it('is never refused for an old tuis line (Tynn story #380): it stops, switches, and keeps the old session to resume', async () => {
+        const listed = fakes({ manifest: '---\nname: atlas\ntuis: [claude]\n---\n' });
+        expect(await switchDriver(listed.ports, 'agent_a', 'codex')).toEqual({ ok: true, from: 'claude', to: 'codex', carried: null, left: 'sess-1', droppedModel: null });
+        expect(listed.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'setProvider:agent_a:codex:keepModel=false']);
+        expect(listed.current()?.provider).toBe('codex');
 
         expect(await switchDriver(fakes().ports, 'agent_a', 'claude')).toMatchObject({ ok: true, noop: true });
         expect(await switchDriver(fakes().ports, 'agent_a', 'kimi')).toMatchObject({ ok: false, reason: expect.stringMatching(/cannot run a "kimi"/) });
-    });
-
-    /*
-     * THE PERSON IS NEVER LOCKED TO A PROVIDER (genie#1569; the owner, 2026-11-05: "I should never be restricted to a
-     * provider. I need to be able to switch them any time I want to."). The persona's `tuis:` used to refuse the switch.
-     */
-    it('a provider the persona’s tuis does not list: the switch HAPPENS, and AGENT.md lists it first — every other byte unchanged, CRLF kept', async () => {
-        const before = '---\r\nname: atlas\r\npurpose: Plan.\r\ntuis: [claude]\r\nmodel: opus\r\n---\r\n\r\nYou are atlas.\r\n';
-        const f = fakes({ manifest: before });
-        expect(await switchDriver(f.ports, 'agent_a', 'codex')).toEqual({ ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'claude', to: 'codex', discarded: 'sess-1', droppedModel: null, manifest: { updated: true, tuis: ['codex', 'claude'] } });
-        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'setProvider:agent_a:codex:keepModel=false', 'writeManifest']);
-        expect(f.current()?.provider).toBe('codex');
-        expect(f.written).toEqual([before.replace('tuis: [claude]', 'tuis: [codex, claude]')]);
-        // CONTROL: only the tuis line differs from what was read.
-        const a = before.split('\r\n');
-        const b = f.written[0]!.split('\r\n');
-        expect(b).toHaveLength(a.length);
-        expect(a.filter((line, i) => line !== b[i])).toEqual(['tuis: [claude]']);
-    });
-
-    it('an AGENT.md that cannot be written: the switch still happens, and the outcome says the file was not updated and why', async () => {
-        const f = fakes({ manifest: '---\nname: atlas\ntuis: [claude]\n---\n', writeFails: 'EACCES: permission denied, open \'AGENT.md\'' });
-        expect(await switchDriver(f.ports, 'agent_a', 'codex')).toMatchObject({ ok: true, to: 'codex', manifest: { updated: false, reason: 'EACCES: permission denied, open \'AGENT.md\'' } });
-        expect(f.current()?.provider).toBe('codex');
-        expect(f.calls).toContain('setProvider:agent_a:codex:keepModel=false');
     });
 
     it('a provider that is not installed, or not signed in, is still REFUSED with its reason — and nothing was stopped', async () => {
@@ -164,12 +137,12 @@ describe('switch driver', () => {
     });
 });
 
-describe('switch driver starts the new provider clean', () => {
+describe('switch provider: the new provider gets its own session and model', () => {
     const codexModels = (...ids: string[]): ModelChoices => ({ ok: true, provider: 'codex', source: 'provider', models: ids.map((modelId) => ({ modelId, name: modelId })) as never, current: null });
 
-    it('a Claude thread and a Claude model never reach Codex: the switch says the conversation it left and the model it dropped', async () => {
+    it('a Claude session and a Claude model never reach Codex: the switch says the session it keeps and the model it dropped', async () => {
         const f = fakes({ record: record({ threadId: 'claude-sess-9', model: 'opus' } as Partial<AgentRecord>), models: { codex: codexModels('gpt-5.1-codex', 'gpt-5.1') } });
-        expect(await switchDriver(f.ports, 'agent_a', 'codex')).toEqual({ ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'claude', to: 'codex', discarded: 'claude-sess-9', droppedModel: 'opus' });
+        expect(await switchDriver(f.ports, 'agent_a', 'codex')).toEqual({ ok: true, from: 'claude', to: 'codex', carried: null, left: 'claude-sess-9', droppedModel: 'opus' });
         expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'setProvider:agent_a:codex:keepModel=false']);
         expect(f.current()).toMatchObject({ provider: 'codex', threadId: null, name: 'atlas' });
         expect(f.current()?.model).toBeUndefined();
@@ -189,9 +162,9 @@ describe('switch driver starts the new provider clean', () => {
         expect(await switchDriver(none.ports, 'agent_a', 'codex')).toMatchObject({ ok: true, droppedModel: 'opus' });
     });
 
-    it('a never-run agent has no conversation to leave: discarded is null', async () => {
+    it('a never-run agent has no session to keep: left is null', async () => {
         const f = fakes({ record: record({ threadId: null }) });
-        expect(await switchDriver(f.ports, 'agent_a', 'codex')).toMatchObject({ ok: true, discarded: null, droppedModel: null });
+        expect(await switchDriver(f.ports, 'agent_a', 'codex')).toMatchObject({ ok: true, left: null, droppedModel: null });
     });
 });
 

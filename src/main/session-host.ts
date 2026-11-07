@@ -64,10 +64,16 @@ export interface SessionLifecycle {
     spawned(agentId: AgentId, run: number, processes: readonly ProcessInfo[]): void;
     ended(agentId: AgentId, run: number, verdict: StopVerdict): void;
     straggler(agentId: AgentId, run: number): void;
+    /** The machine could not be read after this run's spawn: its pids are recorded with no start time. */
+    readingFailed?(agentId: AgentId, run: number, pids: readonly number[]): void;
 }
 
 /** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
 export const HISTORY_LIMIT = 3000;
+/** The most one `historyRows` reply carries, in bytes of JSON, whatever the caller asks (Tynn story #380). */
+export const HISTORY_ROWS_MAX_BYTES = 256 * 1024;
+/** The most one `toolOutput` reply carries, in bytes, whatever the output's size (Tynn story #386): the rest is said cut. */
+export const TOOL_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
 
 export { permissionDecisionFor } from '../core/agent-ops.js';
 
@@ -76,7 +82,7 @@ export function raisesApprovals(provider: string, permissions?: AgentPermissions
     if (provider === 'codex') return CODEX_DRIVER_CAPABILITIES.permissionRequests;
     return null;
 }
-import { threadIdIsResumable, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
+import { threadIdIsResumable, threadKeyFor, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
 import { promptContent, type Attachment, type PromptAccepts } from '../core/prompt-content.js';
 import type { LiveSession } from '../core/roster.js';
 import { describeProcesses, stillRunning, systemProcessTree, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
@@ -94,7 +100,8 @@ import {
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
-import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD } from '../core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
@@ -499,6 +506,7 @@ export class SessionHost {
     /** A previous run's processes that a stop could not end: no new run starts beside them. */
     readonly #leftovers = new Map<AgentId, readonly ProcessInfo[]>();
     readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
+    readonly #onCarryOverSent: ((agentId: AgentId) => void) | undefined;
     readonly #comms: ((agentId: AgentId, since: number) => Comms | null) | undefined;
     readonly #heldElsewhere: ((record: AgentRecord) => string | null) | undefined;
 
@@ -528,6 +536,8 @@ export class SessionHost {
          * test about resume passes.
          */
         onThreadId?: (agentId: AgentId, threadId: string) => void;
+        /** A provider switch's carry-over went with a turn that replied (Tynn story #380): the record's is cleared. */
+        onCarryOverSent?: (agentId: AgentId) => void;
         /**
          * The agent's record AS IT IS NOW (the registry's), for what is decided per call rather than at start — a Claude
          * agent's tool setting (genie#1188). Absent = the record the session started with.
@@ -614,6 +624,7 @@ export class SessionHost {
         this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
         this.#lifecycle = options.lifecycle;
         this.#onThreadId = options.onThreadId;
+        this.#onCarryOverSent = options.onCarryOverSent;
         this.#currentRecord = options.currentRecord;
         this.#comms = options.comms;
         this.#heldElsewhere = options.heldElsewhere;
@@ -919,8 +930,11 @@ export class SessionHost {
             runId,
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
+            // A provider switch's carry-over, attached once to this run's first prompt that goes (Tynn story #380).
+            ...(record.carryOver ? { carryOver: record.carryOver, onCarryOverSent: () => this.#onCarryOverSent?.(record.id) } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
+            onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
@@ -1272,6 +1286,11 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.inTurn ?? false;
     }
 
+    /** Every prompt held for the agent's turn end, by id (`[]` with no session): what the agent host's window replica reads. */
+    queuedPromptIds(agentId: AgentId): readonly string[] {
+        return this.#running.get(agentId)?.session.queuedPromptIds ?? [];
+    }
+
     /** The prompt held under `id` (`deliver`'s answer) is still waiting in the agent's current run. */
     hasQueuedPrompt(agentId: AgentId, id: string): boolean {
         return this.#running.get(agentId)?.session.hasQueuedPrompt(id) ?? false;
@@ -1460,6 +1479,56 @@ export class SessionHost {
     }
 
     /**
+     * WHAT A PROVIDER SWITCH CARRIES (Tynn story #380, core/carry-over.ts): the agent's recorded rows, read from THIS host's
+     * own store once its writes have landed — the window never reads the thread log itself. The NEWEST rows, in order,
+     * until either bound is reached: `limit` rows, or `maxBytes` of JSON, held to {@link HISTORY_ROWS_MAX_BYTES} whatever
+     * the caller asks — one reply never puts megabytes on the engine link. `cut` says the byte bound left rows out. Tool
+     * input and output and thinking are left out: the carry-over never uses them, and they are the bulk of a ledger.
+     */
+    async historyRows(agentId: AgentId, options: { limit: number; maxBytes: number }): Promise<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }> {
+        await this.settled();
+        const limit = Math.max(0, Math.min(HISTORY_LIMIT, Math.floor(options.limit)));
+        const maxBytes = Math.max(0, Math.min(HISTORY_ROWS_MAX_BYTES, Math.floor(options.maxBytes)));
+        const history = await readHistory(this.#store(), agentId, { limit });
+        const slim = history.rows.flatMap((r): { event: StreamEvent; at: number | null }[] => {
+            if (r.event.kind === 'think') return [];
+            if (r.event.kind === 'tool') {
+                const { rawInput: _input, output: _output, ...tool } = r.event;
+                return [{ event: { ...tool, rawInput: null }, at: r.at }];
+            }
+            return [{ event: r.event, at: r.at }];
+        });
+        // Newest first, until the next row would pass the byte bound: `[` `]` and a comma between rows counted too.
+        const kept: { event: StreamEvent; at: number | null }[] = [];
+        let bytes = 2;
+        for (let i = slim.length - 1; i >= 0; i -= 1) {
+            const size = Buffer.byteLength(JSON.stringify(slim[i]), 'utf8') + (kept.length > 0 ? 1 : 0);
+            if (bytes + size > maxBytes) return { rows: kept.reverse(), cut: true };
+            bytes += size;
+            kept.push(slim[i]!);
+        }
+        return { rows: kept.reverse(), cut: false };
+    }
+
+    /**
+     * A TOOL ROW'S WHOLE OUTPUT, when a person opens the row (Tynn story #386). The row the window holds is a 16 KB
+     * preview; the whole is the sidecar the session wrote beside the ledger, read here from this host's own store and
+     * held to {@link TOOL_OUTPUT_MAX_BYTES}. A call with none kept (an older ledger's, or a store that keeps no files)
+     * is a refusal with its reason.
+     */
+    async toolOutput(agentId: AgentId, toolCallId: string): Promise<ToolOutputReply> {
+        await this.settled();
+        const store = this.#store();
+        if (!(store instanceof ThreadStore)) return { ok: false, reason: 'this agent’s history keeps no tool outputs' };
+        try {
+            const kept = await store.readToolOutput(threadKeyFor(agentId), toolCallId, TOOL_OUTPUT_MAX_BYTES);
+            return kept === null ? { ok: false, reason: 'the whole output of this call was not kept' } : { ok: true, ...kept };
+        } catch (error) {
+            return { ok: false, reason: `the output file could not be read (${error instanceof Error ? error.message : String(error)})` };
+        }
+    }
+
+    /**
      * WHAT THE AGENT VIEW AND THE CHAT SHOW: the agent's recorded history, then this run. Claude resumes a conversation
      * without replaying it, so this run alone showed one turn of an agent holding 740k tokens of context (the owner,
      * beta.21) — and a stopped agent showed nothing at all. The history is read from the thread the session writes,
@@ -1527,9 +1596,24 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.modelState() ?? null;
     }
 
+    /** Whether `modelState` / `switchModel` would answer (not `null`), read without asking the provider. */
+    modelCaps(agentId: AgentId): { readonly state: boolean; readonly switch: boolean } {
+        const session = this.#running.get(agentId)?.session;
+        return { state: session?.canSayModels ?? false, switch: session?.canSwitchModel ?? false };
+    }
+
     /** Switch the running agent's model without a restart, or `null`: not running here, or its driver cannot. */
     switchModel(agentId: AgentId, modelId: string): Promise<void> | null {
         return this.#running.get(agentId)?.session.switchModel(modelId) ?? null;
+    }
+
+    /**
+     * Is it running, and since when: all the Deck asks of every asker on every refresh. Never the Dashboard's comms cell
+     * (beta.59: `probe` scanned up to 2000 mails per Deck item, 1-2 s window-main stalls).
+     */
+    liveness(agentId: AgentId): EngineLiveness | null {
+        const entry = this.#running.get(agentId);
+        return entry ? { running: entry.session.running, startedAt: entry.startedAt } : null;
     }
 
     probe(agentId: AgentId): LiveSession | null {
@@ -1693,6 +1777,12 @@ function rowReplaced(entry: Running, before: StreamEvent): void {
 }
 
 /** A measured comms reading as the row fields; `null` (not measured) leaves all three `null`, never `0`. */
-function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
+/** An agent's liveness, as the engine knows it: whether its session runs, and when that session started. */
+export interface EngineLiveness {
+    readonly running: boolean;
+    readonly startedAt: number | null;
+}
+
+export function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
     return { collaborators: c?.collaborators ?? null, commsAgeSeconds: c?.commsAgeSeconds ?? null, links: c?.links ?? null };
 }

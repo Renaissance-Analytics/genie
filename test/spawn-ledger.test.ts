@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { leftoverProviders } from '../src/core/leftover-providers.js';
-import type { ProcessInfo } from '../src/core/process-tree.js';
+import { START_UNKNOWN, type ProcessInfo } from '../src/core/process-tree.js';
 import { leftoversToEnd, type LedgerRecord } from '../src/core/spawn-ledger.js';
 import { SpawnLedger } from '../src/main/spawn-ledger.js';
 import { processTable } from './support/process-table.js';
@@ -121,6 +121,55 @@ describe('SpawnLedger — the file, and the sweep that reads it', () => {
         expect(t.alive(left.pid) || t.alive(child.pid)).toBe(false);
         expect(lines.join('\n')).toMatch(/sweep .*agent_01.*965001/);
         expect((JSON.parse(readFileSync(file, 'utf8')) as { records: unknown[] }).records).toEqual([]);
+    });
+
+    describe('a provider recorded with its start time unknown', () => {
+        const unknown = (pid: number): ProcessInfo => ({ pid, ppid: GONE_GENIE, started: START_UNKNOWN, name: 'start time unknown' });
+
+        it('still running: never ended, said on every boot, and kept', async () => {
+            const dir = tempDir();
+            const file = join(dir, 'children.json');
+            const t = processTable(NOW_GENIE);
+            const running = t.spawn(967_001, GONE_GENIE, 'codex.exe');
+            const under = t.spawn(967_002, running.pid, 'node.exe');
+            writeFileSync(file, JSON.stringify({ records: [agentRecordOf([unknown(running.pid)])] }));
+            const lines: string[] = [];
+            const ledger = SpawnLedger.open(file, 'boot-e');
+            expect(ledger.sweep(t.tree, (line) => lines.push(line))).toEqual([]);
+            await ledger.flushed();
+            expect(t.alive(running.pid) && t.alive(under.pid), 'nothing is reaped on a pid alone').toBe(true);
+            expect(lines.join('\n')).toMatch(/967001/);
+            expect(lines.join('\n')).toMatch(/start time/i);
+            expect((JSON.parse(readFileSync(file, 'utf8')) as { records: unknown[] }).records).toHaveLength(1);
+        });
+
+        it('the pid gone: the record goes, with nothing to say', async () => {
+            const dir = tempDir();
+            const file = join(dir, 'children.json');
+            const t = processTable(NOW_GENIE);
+            writeFileSync(file, JSON.stringify({ records: [agentRecordOf([unknown(967_099)])] }));
+            const lines: string[] = [];
+            const ledger = SpawnLedger.open(file, 'boot-f');
+            ledger.sweep(t.tree, (line) => lines.push(line));
+            await ledger.flushed();
+            expect(lines).toEqual([]);
+            expect((JSON.parse(readFileSync(file, 'utf8')) as { records: unknown[] }).records).toEqual([]);
+        });
+
+        it('CONTROL: a record with its start time, beside it, is still swept', async () => {
+            const dir = tempDir();
+            const file = join(dir, 'children.json');
+            const t = processTable(NOW_GENIE);
+            const known = t.spawn(967_201, GONE_GENIE, 'cmd.exe');
+            const running = t.spawn(967_202, GONE_GENIE, 'codex.exe');
+            writeFileSync(file, JSON.stringify({ records: [agentRecordOf([known]), agentRecordOf([unknown(running.pid)], 'boot-previous', 'agent_02')] }));
+            const ledger = SpawnLedger.open(file, 'boot-g');
+            const ended = ledger.sweep(t.tree, () => {});
+            await ledger.flushed();
+            expect(ended.map((p) => p.pid)).toEqual([known.pid]);
+            expect(t.alive(known.pid)).toBe(false);
+            expect(t.alive(running.pid)).toBe(true);
+        });
     });
 
     it('a sweep that cannot read the machine ends nothing and KEEPS the records for the next boot', async () => {

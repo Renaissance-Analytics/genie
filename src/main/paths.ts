@@ -43,11 +43,32 @@ export function genieHome(home: string = homedir()): string {
 }
 
 /**
- * The Genie OSA's home: `~/.genie/osa`. The OSA belongs to the whole workstation, not a workspace; Genie writes its
- * baked-in instructions and skills here (core/osa-home.ts) and runs it here.
+ * THE ONE DATA ROOT (the host split, P7): `GENIE_HOME` when it is set, `~/.genie` when it is not. The host, the browser
+ * process and the updater helper read it here and only here (a source guard, test/p7-one-data-root.test.ts); every path
+ * of theirs derives from it. The window does not read GENIE_HOME: its root is `genieHome()`, and it passes that to the
+ * host as GENIE_HOME (engine-launch.ts).
  */
-export function osaHomeDir(home: string = homedir()): string {
-    return join(genieHome(home), 'osa');
+export function genieRoot(env: Readonly<Record<string, string | undefined>> = process.env, home: string = homedir()): string {
+    const set = env['GENIE_HOME'];
+    return set !== undefined && set.length > 0 ? set : genieHome(home);
+}
+
+/**
+ * The Genie OSA's home: `<root>/osa`. The OSA belongs to the whole workstation, not a workspace; Genie writes its
+ * baked-in instructions and skills here (core/osa-home.ts) and runs it here. Always given the root (P7): a default here
+ * was `homedir()/.genie` whatever GENIE_HOME said.
+ */
+export function osaHomeDir(root: string): string {
+    return join(root, 'osa');
+}
+
+/**
+ * Genie's scratch: `<root>/cache/tmp`, never the OS temp folder. One folder per process under it (main/scratch-area.ts),
+ * the folders of processes that are gone swept after start. A login's throwaway folder and an Import from Git's clone wait
+ * here.
+ */
+export function scratchDir(root: string): string {
+    return join(root, 'cache', 'tmp');
 }
 
 /** The directory the installer owns. Read-only at runtime, as far as Genie is concerned. */

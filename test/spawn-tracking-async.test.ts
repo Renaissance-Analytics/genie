@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
-import { makeProcessTree, systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
+import { makeProcessTree, sameProcess, START_UNKNOWN, systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
 import { AgentSession, type DriverEvents, type SessionDriver, type SessionDriverFactory } from '../src/core/session.js';
 import { openDurableStore } from '../src/core/thread-store.js';
 
@@ -34,11 +34,17 @@ function asyncTable() {
     let capturing: number[] | null = null;
     let syncReads = 0;
     let asyncReads = 0;
+    let readsToFail = 0;
     const kills: number[] = [];
     const tree = makeProcessTree({
         snapshot: () => { syncReads += 1; return [...rows.values()]; },
         killOne: (pid) => { kills.push(pid); rows.delete(pid); },
-        snapshotAsync: async () => { asyncReads += 1; await new Promise((r) => setTimeout(r, 5)); return [...rows.values()]; },
+        snapshotAsync: async () => {
+            asyncReads += 1;
+            await new Promise((r) => setTimeout(r, 5));
+            if (readsToFail > 0) { readsToFail -= 1; throw new Error('the machine could not be read'); }
+            return [...rows.values()];
+        },
         killOneAsync: async (pid) => { kills.push(pid); rows.delete(pid); },
         captureSpawns: (fn, sink) => {
             const outer = capturing;
@@ -56,6 +62,7 @@ function asyncTable() {
         alive: (pid: number) => rows.has(pid),
         syncReads: () => syncReads,
         asyncReads: () => asyncReads,
+        failNextReads: (n: number) => { readsToFail = n; },
         kills: () => [...kills],
     };
 }
@@ -83,6 +90,62 @@ function session(t: ReturnType<typeof asyncTable>, factory: SessionDriverFactory
     dirs.push(dir);
     return new AgentSession({ agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: factory, processTree: t.tree, ...(onSpawned ? { onSpawned } : {}) });
 }
+
+describe('A READING THAT FAILS: nothing started goes unrecorded', () => {
+    const until = async (what: string, done: () => boolean) => {
+        const deadline = Date.now() + 10_000;
+        while (!done()) {
+            if (Date.now() > deadline) throw new Error(`not within 10 s: ${what}`);
+            await new Promise((r) => setTimeout(r, 5));
+        }
+    };
+    function started(failures: number) {
+        const t = asyncTable();
+        t.failNextReads(failures);
+        const spawned: Array<readonly ProcessInfo[]> = [];
+        const failed: Array<readonly number[]> = [];
+        const dir = mkdtempSync(join(tmpdir(), 'genie-spawn-async-'));
+        dirs.push(dir);
+        const s = new AgentSession({
+            agentId: mintAgentId(), cwd: dir, store: openDurableStore(dir), driverFactory: claudeLike(t, 960_000, []).factory, processTree: t.tree,
+            onSpawned: (m) => spawned.push(m), onReadingFailed: (pids) => failed.push(pids),
+        });
+        s.start();
+        return { t, s, spawned, failed };
+    }
+
+    it('one failure is tried again, and the record is the real one, with nothing said', async () => {
+        const r = started(1);
+        await until('the record', () => r.spawned.length > 0);
+        expect(r.t.asyncReads()).toBeGreaterThanOrEqual(2);
+        expect(r.spawned.at(-1)?.map((p) => p.pid).sort()).toEqual([960_000, 960_001]);
+        expect(r.spawned.at(-1)?.every((p) => p.started !== START_UNKNOWN)).toBe(true);
+        expect(r.failed).toEqual([]);
+    });
+
+    it('still no reading: the pid the spawn made is recorded, marked start time unknown, and it is said', async () => {
+        const r = started(2);
+        await until('the mark', () => r.spawned.length > 0);
+        expect(r.spawned.at(-1)).toEqual([expect.objectContaining({ pid: 960_000, started: START_UNKNOWN })]);
+        expect(r.failed).toEqual([[960_000]]);
+    });
+
+    it('the mark can match no process: not even the real one with that pid', async () => {
+        const r = started(2);
+        await until('the mark', () => r.spawned.length > 0);
+        const table = await r.t.tree.read!();
+        const real = table!.find((p) => p.pid === 960_000)!;
+        expect(sameProcess(r.spawned.at(-1)![0]!, real)).toBe(false);
+    });
+
+    it('its stop cannot verify, says so, and kills only through the driver: a pid with no start time is not reaped', async () => {
+        const r = started(2);
+        await until('the mark', () => r.spawned.length > 0);
+        const verdict = await r.s.stop('SIGTERM', { graceMs: 0 });
+        expect(verdict).toMatchObject({ verified: false });
+        expect(r.t.kills(), 'the reap took nothing it could not name').toEqual([]);
+    });
+});
 
 describe('a start on the real tree: no synchronous reading; the spawn’s own processes, exactly', () => {
     it('start reads nothing on the loop; the reading after names the spawn’s child and its tree, and not a sibling started just after', async () => {

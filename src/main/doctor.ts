@@ -12,7 +12,7 @@ import { doctorPrompt } from './doctor-prompt.js';
 import { genieRunningNow } from './genie-running-file.js';
 import { askAndWait, doctorTools, type DoctorOsa } from './doctor-mcp.js';
 import { genieMcpServer } from './mcp-server.js';
-import { genieHome, installDir } from './paths.js';
+import { genieRoot, installDir } from './paths.js';
 import { genieWindowIcon } from './app-identity.js';
 import { SessionHost } from './session-host.js';
 import { forwardRendererConsole } from '../core/render-error.js';
@@ -52,7 +52,7 @@ export async function runDoctor(): Promise<void> {
     }
     await app.whenReady();
 
-    const facts: OsaFacts = { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieHome(), userData: genieUserData, omarchy: await omarchyFacts() };
+    const facts: OsaFacts = { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieRoot(), userData: genieUserData, omarchy: await omarchyFacts() };
     const osaDir = join(doctorDir, 'osa');
     await writeOsaHome({
         dir: osaDir,
@@ -67,13 +67,13 @@ export async function runDoctor(): Promise<void> {
     // time, read only (doctor-data.ts). Nothing under ~/.genie is opened until genie calls one of them.
     // …and ONE of them started, on its real thread with Genie's real tools — never while normal Genie runs (doctor-run.ts).
     const run = new DoctorRun({
-        genieHome: genieHome(),
+        genieHome: genieRoot(),
         // Doctor's own copies of Genie's stores when it runs beside a running Genie — in doctor's own folder, never Genie's.
         besideHome: join(doctorDir, 'beside'),
-        genieRunning: () => genieRunningNow(genieHome()),
+        genieRunning: () => genieRunningNow(genieRoot()),
         // genie's NORMAL home (~/.genie/osa), exactly as normal Genie's boot writes it — it runs here as itself.
         prepareOsaHome: () => writeOsaHome({
-            dir: join(genieHome(), 'osa'),
+            dir: join(genieRoot(), 'osa'),
             files: osaHomeFiles('normal', facts),
             fs: {
                 read: async (p) => { try { return await readFile(p, 'utf8'); } catch { return null; } },
@@ -81,7 +81,7 @@ export async function runDoctor(): Promise<void> {
             },
         }).then(() => undefined),
     });
-    const dataServer = genieMcpServer({ registrations: [...doctorDataTools({ genieHome: genieHome() }), ...run.tools()], port: 0 });
+    const dataServer = genieMcpServer({ registrations: [...doctorDataTools({ genieHome: genieRoot() }), ...run.tools()], port: 0 });
     const data = await dataServer.start();
     const host = new SessionHost({
         userData: doctorDir,

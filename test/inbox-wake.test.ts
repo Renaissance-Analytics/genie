@@ -344,8 +344,11 @@ describe('main wires it', () => {
         // genie#1411: the mail notice counts everything unread, so a newer one covers the one before it. IssueWatch's names
         // only what is new, so its push must not say so.
         expect(call).toContain('cumulative: true');
-        const issueWatch = code.indexOf('wireInboxPush({\n        inbox: { onSend: (listener) => issueWatchDelivery');
+        // IssueWatch's push is its own module now (P5c: issue-watch-push.ts, wired by genie-host's mail wake).
+        const push = readFileSync(join(__dirname, '../src/main/issue-watch-push.ts'), 'utf8')
+            .split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+        const issueWatch = push.indexOf('wireInboxPush({\n        inbox: { onSend: (listener) => p.delivery.onQueued(listener) }');
         expect(issueWatch).toBeGreaterThan(-1);
-        expect(code.slice(issueWatch, code.indexOf('\n    });', issueWatch))).not.toContain('cumulative');
+        expect(push.slice(issueWatch, push.indexOf('\n    });', issueWatch))).not.toContain('cumulative');
     });
 });

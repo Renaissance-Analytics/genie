@@ -26,11 +26,19 @@ import { genCertificateVerifier, type PresentedCertificate } from './browser-tru
  */
 
 export interface BrowserViewOptions {
-    /** The in-app front door's loopback port (compose `frontDoorPort`). */
-    readonly frontDoorPort: number;
-    /** Genie's CA, PEM — or `null` (no CA): then every `.gen` certificate is refused and nothing else changes. */
-    readonly caPem: string | null;
+    /** The in-app front door's loopback port NOW (compose `frontDoorPort`): read again when the front door moves (P5a.2). */
+    readonly frontDoorPort: () => number;
+    /** Genie's CA NOW, PEM — or `null` (no CA): then every `.gen` certificate is refused and nothing else changes. */
+    readonly caPem: () => string | null;
     readonly log?: (line: string) => void;
+}
+
+/** Every pane's re-route, for a front door that moved (P5a.2). */
+const following = new Set<() => void>();
+
+/** The front door's port or CA changed: every pane routes to it again (the CA is read at each check). */
+export function followFrontDoorInPanes(): void {
+    for (const follow of following) follow();
 }
 
 /** The pane's port on this window — created lazily (see `lazyViewPort`), so no second page target exists at boot. */
@@ -42,20 +50,28 @@ function createElectronView(window: BrowserWindow, options: BrowserViewOptions):
     const log = options.log ?? ((line: string) => console.log(line));
     const ses = session.fromPartition('persist:genie-browser');
 
-    const verify = options.caPem !== null
-        ? genCertificateVerifier(options.caPem)
-        : (presented: PresentedCertificate) => certificateVerdict(presented.hostname, null);
+    // The verifier for the CA as it is NOW: made again only when the CA changed (a host that came back with another).
+    let made: { pem: string | null; check: (presented: PresentedCertificate) => number } | null = null;
+    const verify = (presented: PresentedCertificate): number => {
+        const pem = options.caPem();
+        if (made === null || made.pem !== pem) made = { pem, check: pem !== null ? genCertificateVerifier(pem) : (p: PresentedCertificate) => certificateVerdict(p.hostname, null) };
+        return made.check(presented);
+    };
     ses.setCertificateVerifyProc((request, callback) => {
         callback(verify({ hostname: request.hostname, certificatePem: request.certificate.data }));
     });
     // The first page waits for the proxy: a `.gen` load before it would go to DNS, not to the front door.
-    const routed = ses.setProxy(genProxyConfig(options.frontDoorPort)).then(async () => {
+    const route = (port: number): Promise<void> => ses.setProxy(genProxyConfig(port)).then(async () => {
         // Measured, not assumed: Chromium's own answer for a `.gen` URL and for a web URL under the new config.
         const gen = await ses.resolveProxy('https://example.gen/');
         const web = await ses.resolveProxy('https://example.com/');
         log(`[browser] .gen → ${gen}; web → ${web}`);
-        if (gen !== `PROXY 127.0.0.1:${options.frontDoorPort}`) log(`[browser] .gen sites are NOT routed to the front door (Chromium answered ${JSON.stringify(gen)})`);
+        if (gen !== `PROXY 127.0.0.1:${port}`) log(`[browser] .gen sites are NOT routed to the front door (Chromium answered ${JSON.stringify(gen)})`);
     });
+    let routedPort = options.frontDoorPort();
+    let routed = route(routedPort);
+    // The front door moved (genie-host came back on another port): routed again; the next load waits for it.
+    following.add(() => { const port = options.frontDoorPort(); if (port !== routedPort) { routedPort = port; routed = route(port); } });
 
     const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } });
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

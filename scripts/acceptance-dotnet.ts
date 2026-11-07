@@ -18,7 +18,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DOTNET_RECIPES, dotnetBinaryName } from '../src/core/dotnet-versions.js';
 import { installDotnetVersion, listDotnetVersions, managedDotnet, removeDotnetVersion, type DotnetVersionsPorts } from '../src/main/dotnet-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
@@ -35,13 +36,13 @@ async function main(): Promise<void> {
     const platform = process.platform as DotnetVersionsPorts['platform'];
     const ports: DotnetVersionsPorts = {
         platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run,
-        fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = DOTNET_RECIPES[0]!.version;
     const quiet = { DOTNET_CLI_TELEMETRY_OPTOUT: '1', DOTNET_NOLOGO: '1', DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1' };
 
     console.log('1. a tampered release list');
-    const tampered = await installDotnetVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"hash":\s*"[0-9a-f]{128}"/g, `"hash": "${'f'.repeat(128)}"`) } : r; } });
+    const tampered = await installDotnetVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"hash":\s*"[0-9a-f]{128}"/g, `"hash": "${'f'.repeat(128)}"`) } : r; } });
     check(tampered.kind === 'not-installed' && /does not match the sha512 Microsoft publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : JSON.stringify(tampered));
     check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 

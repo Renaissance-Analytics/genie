@@ -586,7 +586,7 @@ export interface InstallPorts {
     readonly launch: (file: string) => void;
 }
 
-export async function installTailscale(over: Partial<InstallPorts> = {}): Promise<{
+export async function installTailscale(over: Partial<InstallPorts> & Pick<InstallPorts, 'download'>): Promise<{
     started: boolean;
     url?: string;
     message?: string;
@@ -599,7 +599,7 @@ export async function installTailscale(over: Partial<InstallPorts> = {}): Promis
         return { started: false, url: TAILSCALE_DOWNLOAD_PAGE };
     }
     try {
-        const res = await (over.download ?? fetch)(WIN_INSTALLER_URL);
+        const res = await over.download(WIN_INSTALLER_URL);
         if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
         const buf = Buffer.from(await res.arrayBuffer());
         const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'tailscale-setup-'));

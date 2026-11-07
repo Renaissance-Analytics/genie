@@ -8,8 +8,11 @@ vi.mock('node:child_process', async () => {
     const { promisify } = await import('node:util');
     return { execFile: Object.assign(() => { throw new Error('Unexpected callback invocation'); }, { [promisify.custom]: native }) };
 });
-import { preparePrivateCredential } from '../src/main/private-credentials.js';
+import { preparePrivateCredential, useAclHelper } from '../src/main/private-credentials.js';
 import * as credentials from '../src/main/private-credentials.js';
+
+// These mock the launch.
+useAclHelper(null);
 import { openLifecycleLog } from '../src/main/lifecycle-log.js';
 
 const roots: string[] = [];

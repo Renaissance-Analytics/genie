@@ -1,5 +1,4 @@
 import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
     knowledgeTargetFor,
@@ -170,20 +169,23 @@ export async function analyseFolder(root: string): Promise<SourceAnalysis> {
 }
 
 export interface EnvelopeFsOptions {
-    /** Where Import from Git clones wait; the OS temp folder unless a test says otherwise. */
-    stagingBase?: string | undefined;
+    /** Where Import from Git clones wait: the window's scratch under Genie's root (scratch-area.ts, P7), never the OS temp. */
+    stagingBase: string | (() => string);
 }
 
 const STAGE_PREFIX = 'genie-import-';
 
-export function nodeEnvelopePorts(options: EnvelopeFsOptions = {}): EnvelopePorts {
-    const base = resolve(options.stagingBase ?? tmpdir());
+export function nodeEnvelopePorts(options: EnvelopeFsOptions): EnvelopePorts {
+    const given = options.stagingBase;
+    const baseNow = (): string => resolve(typeof given === 'function' ? given() : given);
     /**
      * The stage folder a path is in: `<base>/genie-import-XXXXXX` itself or anything under it — a folder `mkdtemp` made for
-     * an import, recognised by where it is, so a restarted Genie still knows its own. Anything else is `null`, and is never
-     * removed: a person's folder can only ever be read here.
+     * an import, recognised by where it is. A previous run's stages are in that run's scratch folder, which the scratch
+     * sweep removes (scratch-area.ts). Anything else is `null`, and is never removed: a person's folder can only ever be
+     * read here.
      */
     const stageOf = (path: string): string | null => {
+        const base = baseNow();
         let p = resolve(path);
         while (dirname(p) !== p) {
             if (dirname(p) === base) return basename(p).startsWith(STAGE_PREFIX) ? p : null;
@@ -209,7 +211,7 @@ export function nodeEnvelopePorts(options: EnvelopeFsOptions = {}): EnvelopePort
             } catch { /* not a readable folder: nothing to restore */ }
         },
         staging: {
-            make: async () => { await mkdir(base, { recursive: true }); return mkdtemp(join(base, STAGE_PREFIX)); },
+            make: async () => { const base = baseNow(); await mkdir(base, { recursive: true }); return mkdtemp(join(base, STAGE_PREFIX)); },
             owns: (path) => stageOf(path) !== null,
             remove: async (path) => { const stage = stageOf(path); if (stage) await rm(stage, { recursive: true, force: true }); },
         },

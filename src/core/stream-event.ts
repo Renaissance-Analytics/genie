@@ -88,10 +88,21 @@ export type StreamEvent =
           toolKind: ToolKind | null;
           rawInput: unknown;
           /**
-           * What the tool answered (ACP `rawOutput`, else its text `content` blocks), capped at 4000 characters; ABSENT
-           * when the update carries none. The Dashboard reads a commit's sha from git's own output here (core/delivery.ts).
+           * What the tool answered (ACP `rawOutput`, else its text `content` blocks); ABSENT when the update carries none.
+           * The Dashboard reads a commit's sha from git's own output here (core/delivery.ts). As mapped it is whole; the
+           * session keeps at most a 16 KB preview of it in the row (core/tool-row-bound.ts, Tynn story #386), and an
+           * `in_progress` row none at all.
            */
           output?: string;
+          /** `output` is a PREVIEW: the whole answer's size in bytes. ABSENT when `output` is the whole answer. */
+          outputBytes?: number;
+          /**
+           * Where the whole answer is kept: a file in the ledger's own folder (`<ledger>/tool-<id>.out`), read only when a
+           * person opens the row (`agents.toolOutput`). ABSENT when it was not kept (a row of an older ledger).
+           */
+          outputFile?: string;
+          /** `rawInput` is a PREVIEW (long fields cut): the whole input's size in bytes of JSON. ABSENT when it is whole. */
+          inputBytes?: number;
           /**
            * A SUBAGENT's call: the call that spawned it (prism-acp's {@link PARENT_TOOL_CALL_META}). ABSENT on the agent's own,
            * and on every row recorded before genie#1473. The session marks every row of such a call, even one that came
@@ -163,6 +174,11 @@ export type StreamEvent =
           tasks?: BackgroundTask[];
           /** One background task's event — started, updated, ended; absent when the notice is not one. */
           task?: TaskEvent;
+          /**
+           * A PROVIDER SWITCH'S CARRY-OVER went with this turn (Tynn story #380, core/carry-over.ts): where it came from, how
+           * many turns, and the exact text sent. Minted by the session, never read off the wire, never carried again.
+           */
+          carried?: { from: string; turns: number; text: string };
       }
     /**
      * A DECISION on a permission request — minted by the session when the human answers (or the session stops with
@@ -284,7 +300,8 @@ function outputField(update: Record<string, unknown>): { output?: string } {
         });
         if (parts.length > 0) text = parts.join('\n');
     }
-    return text === null ? {} : { output: text.slice(0, 4000) };
+    // Whole here: the session bounds the row it keeps and shows, and keeps the rest beside the ledger (Tynn story #386).
+    return text === null ? {} : { output: text };
 }
 
 export function toStreamEvent(update: Record<string, unknown>): StreamEvent | null {

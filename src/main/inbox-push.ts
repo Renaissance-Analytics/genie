@@ -67,8 +67,9 @@ export interface InboxPushPorts {
         /**
          * The typed-input path (SessionHost.handOff → AgentSession.deliver): `{ queued: null }` = the provider has it now;
          * `{ queued: id }` = held for the turn's end; `null` = no session. Throws when the provider refuses it outright.
+         * In-process it answers now; through the agent host (the host split) it answers with a promise of the same.
          */
-        handOff(agentId: AgentId, text: string, by?: string | null, context?: PromptContext): { queued: string | null } | null;
+        handOff(agentId: AgentId, text: string, by?: string | null, context?: PromptContext): { queued: string | null } | null | Promise<{ queued: string | null } | null>;
     };
     /**
      * The notices due (compose's `inboxReminders`): decides and marks them sending; never sends. `mail`: the messages a
@@ -82,7 +83,7 @@ export interface InboxPushPorts {
      * Start the session of an agent that has none — main's `wakeAgent` (opening an agent no longer starts it, q_04ce323c), refusing by name for an asleep workspace or
      * the agent cap. Answers whether it started; its start event then delivers the notice. Absent = mail waits.
      */
-    readonly wake?: ((agentId: AgentId) => boolean) | undefined;
+    readonly wake?: ((agentId: AgentId) => boolean | Promise<boolean>) | undefined;
     /**
      * APP MAIL (genie#1345; genie#1379): whether a STOPPED agent is started for a message an APP sent — `push` (started,
      * as mail does) or `push-no-wake` (not: a manual agent, or the app wake cap is spent; its mail waits). Either way an
@@ -196,21 +197,27 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             // Out BEFORE the prompt: the prompt itself announces a change, and that re-entry must see it in flight.
             const sent = { run, endedBefore: host.turnsEndedThisRun(id), queued: null as string | null };
             out.set(id, sent);
-            let handed: { queued: string | null } | null = null;
+            // What the hand-off answered: nothing took it = settled untold; taken = the turn it opens is spent.
+            const handedOff = (handed: { queued: string | null } | null): void => {
+                if (handed === null) {
+                    if (out.get(id) === sent) out.delete(id);
+                    settled(id, false);
+                    return;
+                }
+                sent.queued = handed.queued;
+                // It opens a turn when the agent was idle, or when it is held for a turn of its own.
+                if (appCaused && (!midTurn || handed.queued !== null)) ports.appBudget!.spend(id);
+            };
+            let handed: { queued: string | null } | null | Promise<{ queued: string | null } | null>;
             try {
                 // `retold`: held and then dropped, it is not kept as a draft a Restart owes — this book tells it again.
                 handed = host.handOff(id, r.text, 'genie', { ...(r.mail ? { mail: r.mail } : {}), retold: true });
             } catch {
                 handed = null;
             }
-            if (handed === null) {
-                if (out.get(id) === sent) out.delete(id);
-                settled(id, false);
-                continue;
-            }
-            sent.queued = handed.queued;
-            // It opens a turn when the agent was idle, or when it is held for a turn of its own.
-            if (appCaused && (!midTurn || handed.queued !== null)) ports.appBudget!.spend(id);
+            // In-process the answer is here now; the agent host's (the host split) arrives as a promise of the same.
+            if (handed instanceof Promise) void handed.then(handedOff, () => handedOff(null));
+            else handedOff(handed);
         }
     };
     /** Mail arrived for an agent with a session: told when the coalescing window closes (at once without one). */
@@ -226,9 +233,11 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
         const app = message ? ports.appMail?.(to as AgentId, message) ?? null : null;
         // Only WHETHER a stopped agent is started differs for an app's message; one with a session is told as for any.
         if (host.runOf(to as AgentId) === null && ports.wake && app !== 'push-no-wake') {
-            let started = false;
+            let started: boolean | Promise<boolean> = false;
             try { started = ports.wake(to as AgentId); } catch { started = false; }
-            if (started) return; // its start announces itself, and that event delivers the notice
+            if (started === true) return; // its start announces itself, and that event delivers the notice
+            // The agent host's answer (the host split): not started means the mail is told as for any arrival.
+            if (started !== false) { void started.then((ok) => { if (!ok) arrived(to); }, () => arrived(to)); return; }
         }
         arrived(to);
     });

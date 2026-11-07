@@ -37,7 +37,7 @@ describe('every Tynn identity this machine holds is left out', () => {
 describe('wired: main asks with every identity it holds, not the one this launch registered', () => {
     const strip = (text: string): string => text.split(/\r?\n/).map((l) => l.replace(/(^|[^:])\/\/.*$/, '$1')).join('\n');
     const main = strip(readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8'));
-    const handler = /ipcMain\.handle\('genie:tynn-workstations'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
+    const handler = /workstations: async \(\) => \{([^]*?)\n {20}\},/.exec(main)?.[1] ?? '';
 
     it('the list handler takes this machine’s ids from thisMachineIds, never from the registration result alone', () => {
         expect(handler).toContain('connectableWorkstations(');
@@ -47,7 +47,7 @@ describe('wired: main asks with every identity it holds, not the one this launch
 
     it('thisMachineIds reads the stored Genie 2 identity and Genie 1’s workstation_id', () => {
         const wiring = /thisMachineIds = \(\)[^]*?;\n/.exec(main)?.[0] ?? '';
-        expect(wiring).toContain('identities.read(');
+        expect(wiring).toContain('machineIdentity.identity(');
         expect(wiring).toContain('readV1Settings(v1DatabaseFile())');
     });
 });

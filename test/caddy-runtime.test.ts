@@ -115,7 +115,7 @@ describe('main runs the per-user copy (main.ts is Electron, so its lines are rea
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
     it('the bundled Caddy is copied under ~/.genie/runtime/caddy-bin — once — and composeServices is handed THAT path, not the install’s', () => {
-        expect(main.match(/await userCaddyCopy\(bundledCaddy, join\(runtimeDir\(genieHome\(\)\), 'caddy-bin'\)\)/g) ?? []).toHaveLength(1);
+        expect(main.match(/await userCaddyCopy\(bundledCaddy, join\(runtimeDir\(genieRoot\(\)\), 'caddy-bin'\)\)/g) ?? []).toHaveLength(1);
         expect(main.match(/caddyBin: caddyCopy\?\.path \?\? null,/g) ?? []).toHaveLength(1);
         expect(main).not.toMatch(/caddyBin: caddyBinPath\(/);
     });

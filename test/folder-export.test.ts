@@ -3,49 +3,23 @@ import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { open as openZip, type Entry } from 'yauzl';
 import { FILE_SIZE_CAP } from '../src/core/files-panel.js';
 import { fileExporter, type SaveDialog } from '../src/main/file-export.js';
 import { FilesHost, IGNORED_NAMES } from '../src/main/files-host.js';
+import { readZip, type ZipEntry } from './helpers/read-zip.js';
 
 /**
  * EXPORT A FOLDER AS A .ZIP (genie#1288; the owner approved it 2026-10-27 for the next build, on top of #1264's file export).
  *
  * - MAIN streams the zip straight to the path the OS save dialog answered; nothing crosses into the renderer but a path or a
  *   reason, and no file is held in memory whole.
- * - Large trees work: past 65,535 entries a zip needs ZIP64 records, and the archive still opens with every entry in it.
+ * - Large trees work: past 65,535 entries a zip needs ZIP64 records (`npm run verify:zip64`, test/zip64-acceptance/).
  * - What the tree never shows, the zip never holds: the Files tree's own rule (`IGNORED_NAMES`, at every depth), and
  *   symlinks are leaves, never followed — stored as links, so nothing outside the workspace rides along.
  * - The same confinement as file export, and only a person starts it (the dialog; see file-export.test.ts).
  *
  * Genie 1 had no export at all, so there is nothing to port.
  */
-
-type ZipEntry = { readonly dir: boolean; readonly link: boolean; readonly data: Buffer };
-
-/** Every entry in a zip, by name — read with yauzl, an independent reader (the writer is yazl). */
-function readZip(path: string): Promise<Map<string, ZipEntry>> {
-    return new Promise((resolve, reject) => {
-        openZip(path, { lazyEntries: true, strictFileNames: true }, (error, zip) => {
-            if (error || !zip) return reject(error ?? new Error('no zip'));
-            const out = new Map<string, ZipEntry>();
-            zip.on('error', reject);
-            zip.on('end', () => resolve(out));
-            zip.on('entry', (entry: Entry) => {
-                const type = (entry.externalFileAttributes >>> 16) & 0o170000;
-                if (entry.fileName.endsWith('/')) { out.set(entry.fileName, { dir: true, link: false, data: Buffer.alloc(0) }); zip.readEntry(); return; }
-                zip.openReadStream(entry, (e, stream) => {
-                    if (e || !stream) return reject(e ?? new Error('no stream'));
-                    const chunks: Buffer[] = [];
-                    stream.on('data', (c: Buffer) => chunks.push(c));
-                    stream.on('error', reject);
-                    stream.on('end', () => { out.set(entry.fileName, { dir: false, link: type === 0o120000, data: Buffer.concat(chunks) }); zip.readEntry(); });
-                });
-            });
-            zip.readEntry();
-        });
-    });
-}
 
 describe('fileExporter — a folder exports as a .zip, streamed by main', () => {
     let root: string;
@@ -140,24 +114,6 @@ describe('fileExporter — a folder exports as a .zip, streamed by main', () => 
         await walk('src');
         expect(files(await readZip(dest))).toEqual(treeFiles.sort());
     });
-
-    // Not on Windows: making 66,000 files there took 5 minutes on genie-test-windows (6.5 s on omarchy-test), and what this
-    // proves — ZIP64 records past 65,535 entries — does not depend on the platform. The Windows run covers the paths.
-    it.skipIf(process.platform === 'win32')('a large tree — past the 65,535 entries a plain zip can count — exports every file (ZIP64)', async () => {
-        const perDir = 1000;
-        const dirs = 66;
-        for (let d = 0; d < dirs; d += 1) {
-            const dir = join(root, 'src', 'many', `d${d}`);
-            await mkdir(dir, { recursive: true });
-            await Promise.all(Array.from({ length: perDir }, (_, i) => writeFile(join(dir, `f${i}.txt`), `${d}/${i}`)));
-        }
-        const dest = join(elsewhere, 'many.zip');
-        answer = async () => ({ canceled: false, filePath: dest });
-        expect((await make().export('tynn', 'src/many')).ok).toBe(true);
-        const zip = await readZip(dest);
-        expect(files(zip)).toHaveLength(dirs * perDir);
-        expect(zip.get('many/d65/f999.txt')!.data.toString('utf8')).toBe('65/999');
-    }, 600_000);
 
     it('a symlink is stored as a link, never followed: nothing outside the workspace rides along', async () => {
         await writeFile(join(elsewhere, 'secret.txt'), 'outside');

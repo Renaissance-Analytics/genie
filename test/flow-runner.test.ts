@@ -265,6 +265,23 @@ describe('genie/agent_prompt on a live agent — held back while it is busy, nev
         expect(await replied).toBe('queue is empty');
     });
 
+    it('a prompt that answers LATER (genie-host): a turn that began AND ended before the answer is still its turn, and its reply comes back', async () => {
+        const s = fakeSessions({ agent_atlas: { running: true, turnState: 'idle', pendingApproval: null } });
+        const listeners = new Set<(id: string) => void>();
+        const port: AgentSessionsPort = {
+            ...s.port,
+            subscribe: (l) => { const off = s.port.subscribe(l); listeners.add(l); return () => { off(); listeners.delete(l); }; },
+            // The host's order (RULE 1, effect then answer): the turn begins, is announced, ends, and only then the answer.
+            prompt: (id, text, by) => new Promise<boolean>((r) => setTimeout(() => {
+                s.port.prompt(id, text, by);
+                for (const l of listeners) l(id);
+                s.finishTurn(id, 'done before the answer');
+                r(true);
+            }, 5)),
+        };
+        expect(await prompter(port)('claude:atlas', 'check the queue')).toBe('done before the answer');
+    });
+
     it('a BUSY agent (mid-turn, or parked on an approval) is HELD back and never prompted', async () => {
         const working = fakeSessions({ agent_atlas: { running: true, turnState: 'working', pendingApproval: null } });
         await expect(prompter(working.port)('claude:atlas', 'check the queue')).rejects.toBeInstanceOf(HeldBack);

@@ -50,7 +50,7 @@ describe('the install', () => {
     let launched: string[];
     let seen: string[];
     const bytes = () => new Response('the-installer');
-    const ports = (over: Partial<InstallPorts>): Partial<InstallPorts> => ({
+    const ports = (over: Partial<InstallPorts>): Partial<InstallPorts> & Pick<InstallPorts, 'download'> => ({
         platform: 'win32',
         installed: () => null,
         download: async () => bytes(),

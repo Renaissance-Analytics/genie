@@ -86,6 +86,16 @@ export interface InspectorSessionLike {
  * Sample main's stack from now on, and answer `capture(ms)` — called by the watchdog on a block of `ms` — with the line
  * to log (or null). Never throws: a profiler that cannot start is said once and the watchdog runs without stacks.
  */
+/**
+ * MAIN'S STACK SAMPLING IS ASKED FOR, NEVER ON BY DEFAULT (genie#1606). On the Windows VM a capture's restart held the
+ * window's main 1,487.5 ms in one Profiler.start (the first start at boot: 39.6 ms). A start's cost grows as the app warms
+ * and is known only once paid, so no check before it can bound it. The watchdog's stall lines are always on; the stacks
+ * are for a diagnostic run, with GENIE_STALL_STACKS=1.
+ */
+export function stallStacksWanted(env: Readonly<Record<string, string | undefined>>): boolean {
+    return env.GENIE_STALL_STACKS === '1';
+}
+
 export function startStallProfiler(
     session: InspectorSessionLike,
     log: (line: string) => void,
@@ -111,9 +121,18 @@ export function startStallProfiler(
     const restart = (then?: (profile: CpuProfile | null) => void): void => {
         if (off) { then?.(null); return; }
         if (!running) { then?.(null); begin(); return; }
+        const stopping = now();
         session.post('Profiler.stop', {}, (error, result) => {
             running = false;
             then?.(error === null ? result?.profile ?? null : null);
+            // A stop that already held main past the bound is not followed by a start (genie#1606): the start after a warm
+            // stop is the costlier of the two, and would hold main again.
+            const held = now() - stopping;
+            if (held >= MAX_START_MS) {
+                off = true;
+                log(`stall profiler off: its own stop held main ${held} ms (bound ${MAX_START_MS} ms), so it would cause the stalls it reads`);
+                return;
+            }
             begin();
         });
     };

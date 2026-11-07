@@ -46,7 +46,29 @@ function launch() {
     const args = ['.', `--remote-debugging-port=${PORT}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])];
     return spawn(electron, args, { env, stdio: ['ignore', out, out], detached: process.platform !== 'win32', windowsHide: false });
 }
+/** This run's genie-host, by its own record (`<genieHome>/runtime/host.json`): its pid, or null. */
+function hostPid() {
+    try {
+        const raw = JSON.parse(readFileSync(join(home, '.genie', 'runtime', 'host.json'), 'utf8'));
+        return typeof raw.pid === 'number' ? raw.pid : null;
+    } catch { return null; }
+}
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
+/**
+ * genie-host is detached: it outlives the window by design. The relaunch must boot a NEW host on both systems (the verdicts
+ * then come from its first pass, the path a restart takes), so the host this run started is stopped by the pid in its own
+ * record — never by a pattern. Windows' taskkill /T already reaches it (its parent pid is the window); Linux's group signal
+ * does not (it is in its own session).
+ */
+async function stopHost(pid) {
+    if (pid === null || !alive(pid)) return;
+    try { process.kill(pid, 'SIGTERM'); } catch { /* it has gone */ }
+    for (const end = Date.now() + 15_000; alive(pid) && Date.now() < end;) await sleep(100);
+    if (alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* it has gone */ } }
+    for (const end = Date.now() + 5_000; alive(pid) && Date.now() < end;) await sleep(100);
+}
 async function stop(app) {
+    const host = hostPid();
     const gone = new Promise((r) => { if (app.exitCode !== null) r(); else app.once('exit', r); });
     if (process.platform === 'win32') {
         try { execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* it has gone */ }
@@ -57,9 +79,13 @@ async function stop(app) {
     if (app.exitCode === null && process.platform !== 'win32') {
         try { process.kill(-app.pid, 'SIGKILL'); } catch { /* it has gone */ }
     }
+    await stopHost(host);
+    stopped.push({ host, gone: host === null ? null : !alive(host) });
     // The debugger port and the single-instance lock are free before the next launch.
     await sleep(2000);
 }
+/** Each stop's host and whether it went: the relaunch rows read them. */
+const stopped = [];
 
 class Cdp {
     #ws; #id = 1; #pending = new Map();
@@ -126,10 +152,64 @@ const word = (id) => {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`not a workspace id: ${String(id)}`);
     return id;
 };
-const open = (cdp, id) => cdp.evaluate(`window.location.hash = '#genie://workspace/${word(id)}'; true`);
+/*
+ * Go to a workspace, and stay there: just after a launch the app lands on its own route (the Dashboard, and after a host
+ * that did not end cleanly, the safe-mode notice with it), which can replace an address set a moment before. So the
+ * address is set again until the workspace's page is what shows (15 s).
+ */
+const open = async (cdp, id) => {
+    const there = `window.location.hash.includes('workspace/${word(id)}') && Boolean(document.querySelector('[data-surface="workspace"]'))`;
+    for (const end = Date.now() + 15_000; Date.now() < end;) {
+        await cdp.evaluate(`window.location.hash = '#genie://workspace/${word(id)}'; true`);
+        if (await waitFor(cdp, there, 1_000)) return true;
+    }
+    return false;
+};
 const stepFor = (id) => `document.querySelector('[data-trust-step="${word(id)}"]')`;
-const add = (cdp, path) => cdp.call('function (path) { return window.genie.workspaces.confirmAdd(path).then((r) => JSON.stringify(r)); }', path);
-const idOf = async (cdp, path) => cdp.call('function (path) { return window.genie.snapshot().then((s) => s.workspaces.find((w) => w.path === path)?.id ?? null); }', path);
+/*
+ * Adding a folder is the window's call over its local door (the host split: genie-host keeps the workspaces). A call of
+ * this run's own replaces the app's connection for its length, so the app's own Retry brings that back afterwards.
+ */
+const addAll = (cdp, paths) => cdp.evaluate(`(async () => {
+    const door = window.genieLocalProtocol;
+    if (!door) return JSON.stringify({ refused: 'no local door in this window' });
+    const handle = 'trust_step_' + Date.now();
+    const frames = [];
+    door.onFrame((action, h, text) => { if (h !== handle || action !== 'frame') return; try { frames.push(JSON.parse(text)); } catch { /* not a frame of ours */ } });
+    const wait = async (match) => {
+        const end = Date.now() + 15000;
+        while (Date.now() < end) { const found = frames.find(match); if (found) return found; await new Promise((r) => setTimeout(r, 25)); }
+        throw new Error('the local door did not answer');
+    };
+    door.send('open', handle, '');
+    door.send('frame', handle, JSON.stringify({ kind: 'hello', auth: { kind: 'local' }, label: 'trust step' }));
+    const hello = await wait((f) => f.kind === 'welcome' || f.kind === 'refused');
+    if (hello.kind !== 'welcome') return JSON.stringify([hello]);
+    const out = [];
+    let id = 1;
+    for (const path of ${JSON.stringify(paths)}) {
+        const n = id++;
+        door.send('frame', handle, JSON.stringify({ kind: 'call', id: n, method: 'workspaces.confirmAdd', args: [path] }));
+        out.push(await wait((f) => f.kind === 'result' && f.id === n));
+    }
+    door.send('close', handle, '');
+    return JSON.stringify(out);
+})()`);
+/** The app's own connection, back through its own Retry (it was replaced by this run's call). */
+const reconnect = async (cdp) => {
+    const retry = `Array.from(document.querySelectorAll('[role="alert"] button')).find((b) => b.textContent.trim() === 'Retry')`;
+    if (await waitFor(cdp, `Boolean(${retry})`, 15_000)) await cdp.evaluate(`${retry}.click(); true`);
+    return waitFor(cdp, `Boolean(document.querySelector('[data-route]')) && !(${retry})`, 30_000);
+};
+/** The id the window's registry gives a folder: it reaches the window from the host, so it is waited for (10 s). */
+const idOf = async (cdp, path) => {
+    for (const end = Date.now() + 10_000; ;) {
+        const id = await idOnce(cdp, path);
+        if (id !== null || Date.now() > end) return id;
+        await new Promise((r) => setTimeout(r, 200));
+    }
+};
+const idOnce = async (cdp, path) => cdp.call('function (path) { return window.genie.snapshot().then((s) => s.workspaces.find((w) => w.path === path)?.id ?? null); }', path);
 
 console.log('\nTHE TRUST STEP — what a person sees, in the real app\n');
 const record = join(home, '.genie', 'runtime', 'workspace-trust.json');
@@ -143,8 +223,8 @@ try {
     await cdp.evaluate('document.readyState');
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-route]'))`, 60_000), '0. the app is up, on a home of its own');
 
-    console.log(`  add: ${String(await add(cdp, acme)).slice(0, 160)}`);
-    console.log(`  add: ${String(await add(cdp, other)).slice(0, 160)}`);
+    console.log(`  add: ${String(await addAll(cdp, [acme, other])).slice(0, 320)}`);
+    check(await reconnect(cdp), '0b. the app has its own connection back');
     const acmeId = await idOf(cdp, acme);
     const otherId = await idOf(cdp, other);
     check(typeof acmeId === 'string' && typeof otherId === 'string', '1. two workspaces added', `${acmeId}, ${otherId}`);
@@ -191,8 +271,23 @@ try {
     app = launch();
     cdp = await Cdp.connect();
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-route]'))`, 60_000), '13. relaunched');
+    // The relaunch is against a NEW genie-host: the one before it is gone, and the record names another.
+    const before = stopped.at(-1) ?? { host: null, gone: null };
+    let after = hostPid();
+    for (const end = Date.now() + 20_000; (after === null || after === before.host) && Date.now() < end;) { await sleep(200); after = hostPid(); }
+    check(before.host !== null && before.gone === true && after !== null && after !== before.host, '13b. on a new genie-host (the old one stopped)', `${before.host} -> ${after}`);
     await open(cdp, otherId);
-    check(await waitFor(cdp, `Boolean(${stepFor(otherId)})`), '14. CONTROL: after the relaunch that one still asks, so a missing step below means something');
+    const stillAsks = await waitFor(cdp, `Boolean(${stepFor(otherId)})`);
+    if (!stillAsks) {
+        // What the page and main say, on the way to a failure: the first thing wanted when this row goes red.
+        const seen = await cdp.evaluate(`window.genie.features.snapshot().then((data) => JSON.stringify({ hash: window.location.hash, trust: (data?.trust ?? []).map((s) => s.workspaceId ?? s.id ?? '?'), surface: (document.querySelector('[data-surface]')?.getAttribute('data-surface') ?? 'none'), text: (document.body?.innerText ?? '').slice(0, 200) }))`);
+        console.log(`  at the failure: ${String(seen).slice(0, 600)}`);
+        // genie-host's own words: it keeps the verdicts, and a relaunch may have started a new one.
+        const hostLog = join(home, '.genie', 'logs', 'genie-host.log');
+        const lines = existsSync(hostLog) ? readFileSync(hostLog, 'utf8').split(/\r?\n/).filter((l) => /trust|host|ready|workspace/i.test(l)).slice(-25) : ['no host log at ' + hostLog];
+        console.log(`  genie-host.log (filtered):\n    ${lines.map((l) => l.slice(0, 220)).join('\n    ')}`);
+    }
+    check(stillAsks, '14. CONTROL: after the relaunch that one still asks, so a missing step below means something');
     await open(cdp, acmeId);
     check(await waitFor(cdp, `document.querySelector('[data-surface="workspace"]')?.getAttribute('data-workspace') === '${word(acmeId)}'`), '15. the trusted workspace opens');
     // Long enough for a step that was coming to have come: the control above came in this run.

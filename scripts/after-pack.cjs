@@ -24,4 +24,7 @@ module.exports = async function afterPack(context) {
     if (!result.ok) {
         throw new Error(`node-pty packaging fix failed (${result.action}): ${result.detail ?? 'no detail'}`);
     }
+    if (context.electronPlatformName === 'win32' && context.packager.platformSpecificBuildOptions.signExecutable !== false) {
+        require('./retain-signed-uninstaller.cjs')(context);
+    }
 };

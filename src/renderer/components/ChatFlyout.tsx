@@ -50,7 +50,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'promptId' | 'draftProblem'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'promptId' | 'draftProblem' | 'carried'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -722,6 +722,7 @@ function ChatFlyoutBody({
                     }
                     if (who === 'mail') return <ChatMailRow key={m.id} m={m} onOpenMail={onOpenMail} />;
                     if (who === 'delivery') return <ChatDeliveryRow key={m.id} m={m} onOpenMail={onOpenMail} />;
+                    if (who === 'system' && m.carried !== undefined) return <ChatCarriedRow key={m.id} m={m} />;
                     if (who === 'system') {
                         return (
                             <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
@@ -950,3 +951,19 @@ const KeptDraft = memo(
     },
     (prev, next) => prev.chat === next.chat && !next.shown,
 );
+
+/**
+ * WHAT A PROVIDER SWITCH CARRIED INTO A TURN (Tynn story #380): "Context carried from <provider> (N turns)", closed until
+ * opened, then the exact text the provider was given above the person's words. Never drawn as the person's message.
+ */
+export function ChatCarriedRow({ m }: { m: ChatThreadMessage }) {
+    return (
+        <details data-chat-message={m.id} data-who="system" data-chat-carried="" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
+            <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
+                <Icon name="arrow-right-left" size="xs" />
+                <span className="group-hover:underline">{m.text}</span>
+            </summary>
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{m.carried}</pre>
+        </details>
+    );
+}

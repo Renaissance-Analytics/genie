@@ -70,6 +70,7 @@ jobs:
           test -f dist/renderer/index.html
           test -f dist/main/entry.js
           test -f dist/main/main.js
+          test -f dist/main/staging-acl-worker.js
           test -f dist/main/doctor.js
           test -f dist/main/preload.cjs
           test -f dist/main/doctor-preload.cjs
@@ -91,6 +92,32 @@ jobs:
           grep -q "150px_minmax" "$css"
           grep -q "280px" "$css"
           grep -q "30px" "$css"
+
+  # GENIE-HOST ON PLAIN NODE (the host split, P10.1b). genie-cloud runs `node dist/main/host.js` in a container with
+  # Node 22 and no Electron (P10.3), so the host bundle has to boot and serve there. Node 22.16.0 exactly: the oldest
+  # Node whose `node:sqlite` has FTS5, which the knowledge store needs (measured: 22.13.1, 22.14.0 and 22.15.0 answer
+  # "no such module: fts5"; 22.16.0 and later create the table). No Electron binary is downloaded, so anything in
+  # the host that reached for Electron fails here instead of finding one. The script says which step failed and why.
+  host-plain-node:
+    name: genie-host on plain Node
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+          cache: npm
+
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - run: npm run build:main
+
+      - name: boot genie-host on plain Node and drive it
+        run: timeout 300 node scripts/host-plain-node-boot.mjs
 
   # THE FLOWS ACCEPTANCE SUITE (`npm run verify:flows`, test/flows-acceptance/): every trigger and every node kind the
   # canvas offers, end to end through the real scheduler and runner. Not in `npm test` — the owner (2026-10-27): "only when
@@ -172,15 +199,91 @@ jobs:
           cache: npm
 
       - run: npm ci
+      # Native staging tests exercise the same built worker that the packaged app loads.
+      - run: npm run build:main
       # A 30 s budget per test HERE ONLY (test/ci-windows-test-budget.test.ts holds it): windows-latest runs the real-I/O
       # suites five to ten times slower than Linux, and one day's PRs timed out on six different ones at the 5 s default,
       # none touched by the PR (2026-10-22). A hang still fails; a slow runner no longer does. Linux keeps 5 s.
-      - run: npm test -- --testTimeout=30000
+      # A PROCESS AND DISK SAMPLER BESIDE IT, observe only (scripts/ci/proc-sampler.ps1): the suite stalls now and then on
+      # this runner (a beforeEach of ~100 ms over 10 s, EBUSY on a temp file) with nothing to say what the machine was doing.
+      # It changes no test and no budget; its samples go up as an artifact, and only a failed suite prints a short summary.
+      # It is stopped when the suite ends, and ends itself in any case before the job could.
+      - name: npm test, with the sampler beside it
+        shell: pwsh
+        run: |
+          $samples = Join-Path $env:RUNNER_TEMP "proc-samples.log"
+          $results = Join-Path $env:RUNNER_TEMP "vitest-results.json"
+          $sampler = Start-Process pwsh -ArgumentList '-NoProfile', '-File', 'scripts/ci/proc-sampler.ps1', '-Out', $samples -PassThru -WindowStyle Hidden
+          try {
+            npm test -- --testTimeout=30000 --reporter=default --reporter=json "--outputFile.json=$results"
+            $code = $LASTEXITCODE
+          } finally {
+            Stop-Process -Id $sampler.Id -Force -ErrorAction SilentlyContinue
+          }
+          if ($code -ne 0) { node scripts/ci/proc-sampler-summary.mjs $samples $results }
+          exit $code
+      - name: the sampler's samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-windows-proc-samples
+          path: ${{ runner.temp }}/proc-samples.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+
+  # THE ZIP64 CHECK (`npm run verify:zip64`, test/zip64-acceptance/): a tree past 65,535 entries exported and read back. Not in
+  # `npm test`: it took 172-320 s of a 208-350 s Linux suite, and what it proves changes only with the zip writer. It also runs
+  # in the release (release.yml). As with `flows acceptance`, the job always reports and decides for itself; a required check
+  # filtered out by `on.paths` never reports. test/zip64-acceptance-ci.test.ts holds the rules. Nothing is piped into grep.
+  zip64:
+    name: zip64 acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Before the decision: node makes it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: did this change touch the zip writer?
+        id: changed
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # A push that created the branch, or a base this checkout cannot see: run it rather than guess.
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "no base to compare with; running the check"
+            echo "zip64=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed.txt"
+          zip64=false
+          node scripts/zip64-paths.mjs --touched "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/touched.txt"
+          if [ -s "$RUNNER_TEMP/touched.txt" ]; then echo "Touches the writer:"; cat "$RUNNER_TEMP/touched.txt"; zip64=true; fi
+          git diff "$BASE" HEAD -- package.json > "$RUNNER_TEMP/package.diff"
+          if grep -qE '^[+-].*"yazl"' "$RUNNER_TEMP/package.diff"; then zip64=true; fi
+          git diff "$BASE" HEAD -- package-lock.json > "$RUNNER_TEMP/package-lock.diff"
+          if grep -qE '^[+-].*/(yazl|buffer-crc32)-[0-9]' "$RUNNER_TEMP/package-lock.diff"; then zip64=true; fi
+          echo "zip64=$zip64" >> "$GITHUB_OUTPUT"
+          echo "Zip writer changed: $zip64"
+
+      - run: npm ci
+        if: steps.changed.outputs.zip64 == 'true'
+
+      - run: npm run verify:zip64
+        if: steps.changed.outputs.zip64 == 'true'
 
   smoke:
     name: a real window
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -231,7 +334,7 @@ jobs:
       # Four releases shipped on green unit suites and every one was broken the moment a human
       # opened it, because nobody ever opened the built app. This opens it: a real Electron
       # window on a virtual display, driven over the Chrome DevTools Protocol — no third-party
-      # test framework and no test-only code in the product.
+      # test framework, using the app's same bridge through GENIE_PAGE_PROBE.
       - name: open the app and drive it
         run: |
           # Point codex at the stub, exactly as `smoke-linux-inner.sh` does. Ordinary provider
@@ -239,6 +342,7 @@ jobs:
           # lets a REAL parked approval reach the screen in an environment with no codex.
           chmod +x scripts/stub-codex.mjs
           export GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs"
+          export GENIE_PAGE_PROBE=1
 
           xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24'             npx electron . --no-sandbox --remote-debugging-port=9222 > electron.log 2>&1 &
           # `timeout` on each script, and it is not a formality. This step HUNG for 15 minutes
@@ -251,6 +355,83 @@ jobs:
           timeout 300 node scripts/smoke-cdp.mjs
           timeout 300 node scripts/layout-sweep.mjs
 
+      - name: native local door, including an admission break control
+        id: local-door
+        continue-on-error: true
+        run: |
+          # On a test keyring, as the site panel rows: row 4 opens a real site panel, and its store opens only with the key (P2b store guard).
+          # This step runs before the site panel step, so it installs the keyring itself (apt is idempotent).
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11
+          set +e
+          timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
+          probe=$?
+          cat local-door-break.log
+          if [ "$probe" -ne 1 ] || ! grep -q 'FAIL 1:' local-door-break.log || ! grep -q 'actual refusal:.*not an admitted' local-door-break.log; then
+            echo 'code=1' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs > local-door.log 2>&1
+          code=$?
+          cat local-door.log
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: record the native door result without treating unavailable rows as passed
+        if: always()
+        run: |
+          code='${{ steps.local-door.outputs.code }}'
+          if [ "$code" = 2 ]; then
+            echo '::warning::Native local door coverage is INCOMPLETE; see UNMEASURED rows in local-door.log.'
+            echo 'Native local door: **INCOMPLETE (exit 2)**. Unavailable rows remain a coordinator VM/review gate.' >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$code" != 0 ]; then
+            echo 'Native local door: **FAILED**.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          else
+            echo 'Native local door: **all rows measured and passed**; admission break control failed as expected.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: local-door-linux
+          path: |
+            local-door*.log
+            smoke-out/local-door*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Files view watches and oversized cached refetch
+        run: timeout 180 node scripts/files-watch-cdp.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: files-watch-linux
+          path: smoke-out/files-watch*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Chat drafts with large attachments, paste and paged load-all
+        run: timeout 360 node scripts/chat-drafts-cdp.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chat-drafts-linux
+          path: smoke-out/chat-drafts*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: ArtBoard images, paged posts and the native image-post path
+        run: timeout 360 node scripts/artboard-cdp.mjs --trace-main
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artboard-linux
+          path: smoke-out/artboard*
+          if-no-files-found: warn
+          retention-days: 7
       # THE TRUST STEP, AS A PERSON SEES IT. It starts the app itself, on a home and a port of its own.
       - name: the trust step in the real app
         run: timeout 300 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/trust-step-cdp.mjs
@@ -258,11 +439,39 @@ jobs:
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397): main creates no processes on its own thread; the child it
       # forks at boot does. A child that could not start falls back to in-process silently for the person, so it is
       # checked here, in the lifecycle log the app itself writes.
+      # A SITE PANEL IN GENIE'S OWN WINDOW (P2b): its real CSP, its real preload, a real <webview>, main's guard.
+      # Its own launch, home and profile. No Caddy here, so the page itself is the VM's to show.
+      - name: a site panel in the real window
+        run: |
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11
+          # An unlocked keyring on its own session bus: no store opens without one (core/browser-store.ts).
+          timeout 280 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/site-panel-cdp.mjs
+
+      - name: a site panel with no key opens no store
+        run: SITE_PANEL_LOCKED=1 CDP_PORT=9336 timeout 120 node scripts/site-panel-cdp.mjs
+
+      # THE GENIE BROWSER AS ITS OWN PROCESS (P2b): started by the host, outliving the window, ended with the host.
+      - name: the Genie browser's own process
+        run: timeout 260 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/browser-process-cdp.mjs
+
       - name: the spawn host started in the real app
         run: |
           grep -h "spawn host" ~/.genie/runtime/lifecycle.log | tail -5 || true
           grep -q "spawn host ready pid=" ~/.genie/runtime/lifecycle.log
           if grep -q "spawn host could not start" ~/.genie/runtime/lifecycle.log; then exit 1; fi
+
+      # SAFE MODE AND A HUNG WINDOW, AS A PERSON MEETS THEM (Tynn #386). Each starts the app itself, on a home and ports of
+      # its own: a clean quit as the control, then the window and genie-host killed by pid; a window main held 40 s.
+      - name: safe mode after Genie did not end cleanly
+        if: ${{ !cancelled() }}
+        run: timeout 540 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/safe-mode-cdp.mjs
+      - name: a hung window is ended and opened again
+        if: ${{ !cancelled() }}
+        run: timeout 540 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/hang-cdp.mjs
+      # A WINDOW'S PAGE THAT ENDS IS BROUGHT BACK (Tynn #386; the owner's black window of 2026-11-06, an oom).
+      - name: a window's page that ends is brought back
+        if: ${{ !cancelled() }}
+        run: timeout 420 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/renderer-crash-cdp.mjs
 
       - name: electron's own output
         # `always()`, not `failure()`: a timeout-cancelled job is neither success nor failure
@@ -316,7 +525,43 @@ jobs:
         run: npx tsx scripts/fetch-caddy.ts
 
       - name: build the installers
-        run: npx electron-builder --publish never
+        # Ordinary CI has no signing identity. Keep icon/resource editing; protected jobs sign.
+        run: npx electron-builder --publish never ${{ runner.os == 'Windows' && '--config.win.signExecutable=false' || '' }}
+
+      - name: prove the packaged Windows updater metadata and asset names
+        if: runner.os == 'Windows'
+        run: node scripts/verify-windows-update.cjs release test/fixtures/windows-update-beta59.json
+
+      # The fuse as the built binary has it, not as the config asks.
+      - name: the cookie fuse is on in what was packaged
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then app=$(ls release/win-unpacked/*.exe | head -1); else app=$(ls -d release/linux-unpacked/[gG]enie* | head -1); fi
+          npx --yes @electron/fuses read --app "$app" | tee fuses.txt
+          grep -q "EnableCookieEncryption is Enabled" fuses.txt
+      # genie-launch.exe IN WHAT WAS PACKAGED, AND USED (#1628). A silent fall back to Node's spawn in the shipped app would
+      # bring both of its bugs back quietly (the window's handles in genie-host; a git read's children outliving it). So the
+      # packaged app is started on a home of its own, and its own log must say the host was started through the launcher.
+      - name: the packaged app starts genie-host through genie-launch.exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $launcher = "release\win-unpacked\resources\bin\genie-launch.exe"
+          if (-not (Test-Path $launcher)) { throw "genie-launch.exe is not in the packaged app ($launcher)" }
+          Write-Output "packaged: $launcher ($((Get-Item $launcher).Length) bytes)"
+          $h = Join-Path $env:RUNNER_TEMP "packaged-home"
+          foreach ($d in @("$h\AppData\Roaming", "$h\AppData\Local")) { New-Item -ItemType Directory -Force $d | Out-Null }
+          $env:USERPROFILE = $h; $env:HOME = $h; $env:APPDATA = "$h\AppData\Roaming"; $env:LOCALAPPDATA = "$h\AppData\Local"
+          $app = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
+          $log = "$h\.genie\runtime\lifecycle.log"
+          $line = $null
+          for ($i = 0; $i -lt 90 -and -not $line; $i++) { Start-Sleep -Seconds 1; if (Test-Path $log) { $line = Select-String -Path $log -Pattern "host spawn via=" | Select-Object -Last 1 } }
+          $hostJson = "$h\.genie\runtime\host.json"
+          if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
+          if (-not $app.HasExited) { taskkill /PID $app.Id /T /F *> $null }
+          if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
+          Write-Output "the packaged app: $($line.Line)"
+          if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
 
       # The artifacts, so somebody can actually install one and find out. A build that produced
       # a file nobody can reach proves only that the command exited zero.
@@ -328,6 +573,7 @@ jobs:
             release/*.exe
             release/*.AppImage
             release/*.yml
+            release/signature-evidence/
           if-no-files-found: error
           retention-days: 7
 
@@ -337,7 +583,7 @@ jobs:
     # shows right after merge, and every release builds and tests on Windows itself before anything is published.
     if: github.event_name == 'push'
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -390,6 +636,7 @@ jobs:
           # shim (a real npm-installed codex IS one, and is accepted). The stub is the .mjs itself: Genie runs a
           # configured script as its own runtime + the script (session-host `providerLaunchOptions`).
           $env:GENIE2_CODEX_BINARY = "$PWD\scripts\stub-codex.mjs"
+          $env:GENIE_PAGE_PROBE = '1'
 
           $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
@@ -425,6 +672,84 @@ jobs:
           # already thrown, so reaching here means the step passed.
           exit 0
 
+      - name: native local door, including an admission break control
+        id: local-door
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          node scripts/local-door-cdp.mjs --break-admission *> local-door-break.log
+          $probe = $LASTEXITCODE
+          Get-Content local-door-break.log
+          if ($probe -ne 1 -or -not (Select-String -Path local-door-break.log -Pattern 'FAIL 1:' -Quiet) -or -not (Select-String -Path local-door-break.log -Pattern 'actual refusal:.*not an admitted' -Quiet)) {
+            'code=1' >> $env:GITHUB_OUTPUT
+            exit 1
+          }
+          node scripts/local-door-cdp.mjs *> local-door.log
+          $code = $LASTEXITCODE
+          Get-Content local-door.log
+          "code=$code" >> $env:GITHUB_OUTPUT
+          exit $code
+
+      - name: record the native door result without treating unavailable rows as passed
+        if: always()
+        shell: pwsh
+        run: |
+          $code = '${{ steps.local-door.outputs.code }}'
+          if ($code -eq '2') {
+            Write-Output '::warning::Native local door coverage is INCOMPLETE; see UNMEASURED rows in local-door.log.'
+            'Native local door: **INCOMPLETE (exit 2)**. Unavailable rows remain a coordinator VM/review gate.' >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($code -ne '0') {
+            'Native local door: **FAILED**.' >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          } else {
+            'Native local door: **all rows measured and passed**; admission break control failed as expected.' >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: local-door-windows
+          path: |
+            local-door*.log
+            smoke-out/local-door*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Files view watches and oversized cached refetch
+        shell: pwsh
+        run: node scripts/files-watch-cdp.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: files-watch-windows
+          path: smoke-out/files-watch*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Chat drafts with large attachments, paste and paged load-all
+        shell: pwsh
+        run: node scripts/chat-drafts-cdp.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chat-drafts-windows
+          path: smoke-out/chat-drafts*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: ArtBoard images, paged posts and the native image-post path
+        shell: pwsh
+        run: node scripts/artboard-cdp.mjs --trace-main
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: artboard-windows
+          path: smoke-out/artboard*
+          if-no-files-found: warn
+          retention-days: 7
       # THE TRUST STEP, AS A PERSON SEES IT, as on Linux above.
       - name: the trust step in the real app
         shell: pwsh
@@ -440,6 +765,29 @@ jobs:
           Select-String -Path $log -Pattern "spawn host" | Select-Object -Last 5 | ForEach-Object { $_.Line }
           if (-not (Select-String -Path $log -Pattern "spawn host ready pid=" -Quiet)) { exit 1 }
           if (Select-String -Path $log -Pattern "spawn host could not start" -Quiet) { exit 1 }
+
+      # SAFE MODE AND A HUNG WINDOW, as on Linux above.
+      - name: safe mode after Genie did not end cleanly
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          node scripts/safe-mode-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "safe-mode-cdp failed (exit $LASTEXITCODE)" }
+      # genie-host is started through genie-launch.exe (#1628), inheriting nothing of the window's: a hung window's debugger
+      # port is free for the window the host opens again. A gate on Windows as on Linux.
+      - name: a hung window is ended and opened again
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          node scripts/hang-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "hang-cdp failed (exit $LASTEXITCODE)" }
+      # A WINDOW'S PAGE THAT ENDS IS BROUGHT BACK, as on Linux above.
+      - name: a window's page that ends is brought back
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          node scripts/renderer-crash-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "renderer-crash-cdp failed (exit $LASTEXITCODE)" }
 
       - name: the app's own output, on failure
         if: failure()

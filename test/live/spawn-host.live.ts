@@ -22,7 +22,8 @@ import { availableParallelism, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PHP_RECIPES, type PhpPlatform } from '../../src/core/php-versions.js';
-import { httpFetch, installPhpVersion, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
+import { httpFetchOver, installPhpVersion, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { execFileRunner, lineStreamRunner } from '../../src/main/toolchain-runner.js';
 import { composeServices } from '../../src/main/compose.js';
 import { realFancyTermPort } from '../../src/main/fancy-term-port.js';
@@ -52,7 +53,7 @@ async function main(): Promise<void> {
     const base = mkdtempSync(join(tmpdir(), 'genie-spawnhost-'));
     const version = PHP_RECIPES.find((r) => r.version === '8.4.27')?.version ?? PHP_RECIPES[0]!.version;
     const outcome = await installPhpVersion(version, true, {
-        platform, root: phpVersionsRoot(join(base, 'toolchain')), fs: nodePhpVersionsFs(), run: (b, a, o) => execFileRunner(b, a, { timeoutMs: 45 * 60_000, ...(o?.env ? { env: o.env } : {}) }), fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, cpus: availableParallelism(), progress: () => {},
+        platform, root: phpVersionsRoot(join(base, 'toolchain')), fs: nodePhpVersionsFs(), run: (b, a, o) => execFileRunner(b, a, { timeoutMs: 45 * 60_000, ...(o?.env ? { env: o.env } : {}) }), fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, cpus: availableParallelism(), progress: () => {},
     } as Parameters<typeof installPhpVersion>[2]);
     check(outcome.kind === 'installed', `0b. CONTROL: PHP ${version} installs`, outcome.kind === 'installed' ? outcome.dir : JSON.stringify(outcome).slice(0, 300));
     if (outcome.kind !== 'installed') return;
@@ -66,8 +67,7 @@ async function main(): Promise<void> {
     const ws = join(base, 'acme');
     mkdirSync(ws, { recursive: true });
     writeFileSync(join(ws, 'project.json'), `${JSON.stringify({ name: 'acme', repos: [] }, null, 2)}\n`);
-    const encryptor = { isAvailable: () => true, encrypt: (b: Buffer) => b, decrypt: (b: Buffer) => b };
-    const mainPty = realFancyTermPort(userData, encryptor as never);
+    const mainPty = realFancyTermPort();
     const composed = await composeServices({
         userData, pty: mainPty, processPty: host.ptyPort(mainPty), v1Settings: () => null, caddyBin, frontDoorPort: 0,
         portFree: async () => true, workspaces: () => [{ id: 'acme', path: ws }],

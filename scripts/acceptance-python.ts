@@ -24,7 +24,8 @@ import { join } from 'node:path';
 import { PYTHON_RECIPES } from '../src/core/python-versions.js';
 import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
 import { installPythonVersion, listPythonVersions, managedPython, removePythonVersion, type PythonVersionsPorts } from '../src/main/python-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
 const results: boolean[] = [];
@@ -41,7 +42,7 @@ async function main(): Promise<void> {
     let downloads = 0;
     const ports: PythonVersionsPorts = {
         platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run, cpus: availableParallelism(),
-        fetchBytes: async (u) => { downloads += 1; return httpFetch.bytes(u); }, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: async (u) => { downloads += 1; return liveFetch.bytes(u); }, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = PYTHON_RECIPES[0]!.version;
 
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
         check((await listPythonVersions(ports)).available.length === 0, 'nothing is offered');
     } else if (platform === 'linux') {
         console.log("1. a tampered release-files API");
-        const tampered = await installPythonVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256_sum":\s*"[0-9a-f]{64}"/g, `"sha256_sum":"${'f'.repeat(64)}"`) } : r; } });
+        const tampered = await installPythonVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256_sum":\s*"[0-9a-f]{64}"/g, `"sha256_sum":"${'f'.repeat(64)}"`) } : r; } });
         check(tampered.kind === 'not-installed' && /does not match the sha256 python\.org publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : tampered.kind);
         check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 
@@ -92,7 +93,7 @@ async function main(): Promise<void> {
         check(removePythonVersion(V, ports).kind === 'removed' && !(await listPythonVersions(ports)).managed.some((m) => m.version === V), 'removed, and no longer listed');
     } else {
         console.log('1. a tampered index');
-        const tampered = await installPythonVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256":\s*"[0-9a-f]{64}"/g, `"sha256": "${'f'.repeat(64)}"`) } : r; } });
+        const tampered = await installPythonVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256":\s*"[0-9a-f]{64}"/g, `"sha256": "${'f'.repeat(64)}"`) } : r; } });
         check(tampered.kind === 'not-installed' && /does not match the sha256 python\.org publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : tampered.kind);
         check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 

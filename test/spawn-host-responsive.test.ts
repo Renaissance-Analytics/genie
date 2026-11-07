@@ -1,7 +1,3 @@
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -31,39 +27,29 @@ const SLOW_MS = 5_000;
 /** Main held for longer than this was held FOR the spawn (a fifth of it); under it is the machine's scheduling. */
 const HELD_BAR_MS = SLOW_MS / 5;
 
-/** What a hold reads: the time, and how much of a span the machine was stopped (the gauge's witness saw it too). */
+/** What a hold reads: the wall clock, and the CPU this process has spent. */
 interface HoldClocks {
     now(): number;
-    stalled(from: number, to: number): number;
+    spent(): number;
 }
-
-/** How much of [from, to] the machine was stopped: the gauge's witness gaps, while a gauge runs; none otherwise. */
-let processStalled: (from: number, to: number) => number = () => 0;
 
 /** Hold this thread `ms`, the way a synchronous CreateProcess does. */
 function hold(ms: number): void {
-    holdFor(ms, { now: () => Date.now(), stalled: (from, to) => processStalled(from, to) });
+    holdFor(ms, { now: () => Date.now(), spent: () => cpuNow() });
 }
 
 /**
- * The hold itself, over the clocks it is given: until main has been held `ms` WHILE THE REST OF THE PROCESS RAN. Time the
- * machine was stopped (the gauge's witness stopped too) is not main held by a spawn — the gauge does not count it,
- * so neither does the hold. Capped at twice `ms` of wall time (well inside the 30 s test timeout), should the witness never
- * run again.
+ * The hold itself, over the clocks it is given: until main has SPENT `ms`, so time the machine did not run it does not count, and a stopped or starved process cannot make the hold shorter
+ * than the gauge expects. Capped at three times `ms` of wall time (well inside the 30 s test timeout), should the machine never give it the CPU.
  */
 function holdFor(ms: number, clocks: HoldClocks): void {
-    const start = clocks.now();
-    const cap = start + 2 * ms;
-    for (;;) {
-        const now = clocks.now();
-        if (now >= cap || now - start - clocks.stalled(start, now) >= ms) return;
-    }
+    const cap = clocks.now() + 3 * ms;
+    const from = clocks.spent();
+    while (clocks.spent() - from < ms && clocks.now() < cap) { /* held */ }
 }
 
 /**
- * How much of [from, to] the machine was stopped, as the GAUGE counts it: the longest witness gap overlapping the
- * span (witness gaps as [end, gap] pairs). The hold and the gauge both use this, so they cannot disagree — a hold that
- * summed every short gap of a witness merely preempted by the spinning main stretched far past what the gauge subtracts.
+ * The longest worker gap overlapping [from, to] (worker gaps as [end, gap] pairs).
  */
 function overlapWith(gaps: ReadonlyArray<readonly [number, number]>, from: number, to: number): number {
     let longest = 0;
@@ -86,144 +72,84 @@ vi.mock('node:child_process', async (original) => {
 });
 
 /**
- * How long MAIN'S THREAD was held during `run`, beyond what the machine was stopped at the same moment: a 10 ms heartbeat on main, and one in a PROCESS OF ITS OWN. Every gap of main's is reduced by the
- * witness's gap that overlaps it. A held main thread reads its full length; a machine that stopped (the witness stopped too) reads about 0. It used to be a worker thread of this process, and that thread could stop for nearly a whole hold with
- * the process running (measured: waiting for no CPU, and in about 1 run in 12), which subtracted a real 5 s hold down to 65 ms. Nothing inside this process can hold a witness outside it. What stopped that thread was not named.
- * The worst remainder is returned.
+ * ONE OF MAIN'S GAPS, READ. A worker's gap says the worker did not run, and that alone cannot say why: the whole process stopped, or only the worker was kept off a loaded CPU while main
+ * spun. CPU can: a stopped process spent none. So a gap counts as held by the larger of what is left once the worker's gap is off it (main blocked in the kernel spends no CPU, and the
+ * worker ran) and the CPU spent during it (main spinning, whatever the worker did). A stopped process has neither, and main merely descheduled has no CPU to show.
  */
-interface GaugeForcing {
-    /** Another thread of this process stops for the whole of `run`: nothing in this process may hide a hold. */
-    readonly stallAThread?: boolean;
-    /** The witness itself is stopped for the whole of `run`, as a frozen machine would stop it: that much is not a hold. */
-    readonly stopTheWitness?: boolean;
+function heldOf(reading: { gap: number; cpu: number; stalled: number }): number {
+    return Math.max(reading.gap - reading.stalled, reading.cpu);
 }
+
+/** CPU this process has spent, in ms. The gauge's worker is a timer's worth of it. */
+const cpuNow = (): number => { const used = process.cpuUsage(); return (used.user + used.system) / 1000; };
+
+/** While a gauge runs: stop the gauge's worker for `ms`, with main still running, as a loaded machine can. */
+let starveWorker: (ms: number) => void = () => {};
 
 /**
- * The witness: a process of its own that SPINS on the clock, and writes each gap over 20 ms as `<end> <gap>`. It writes `ready` first. A witness that sleeps between beats reads false stops: on omarchy-test a plain C sleeper woke hundreds of ms late, up to 1.9 s,
- * on an idle guest, while a spinner beside it saw no gap at all. So a gap here means this process or its CPU really stopped, which is what the gauge subtracts. It costs a CPU for the gauge's few seconds. It ends if the test's process goes, and in any case within a limit.
+ * How long MAIN'S THREAD was held during `run`, beyond what this whole process was held at the same moment: a 10 ms
+ * heartbeat on main, and one on a worker thread of the same process. Every gap of main's is reduced by the worker's gap
+ * that overlaps it. A held main thread (a synchronous spawn) reads its full length; a process the machine did not
+ * schedule (the full suite saturating every CPU: measured 76 and 304 ms on omarchy-test) reads about 0, because the
+ * worker was not run either. The worst remainder is returned.
  */
-const BEAT_MS = 25;
-const WITNESS = `
-    const BEAT = ${BEAT_MS};
-    const { appendFileSync } = require('node:fs');
-    const file = process.argv[1];
-    const parent = process.ppid;
-    appendFileSync(file, 'ready ' + Date.now() + '\\n');
-    let last = Date.now();
-    let sent = 0;
-    const limit = last + 120000;
-    let turn = 0;
-    const beat = () => {
-        const now = Date.now();
-        const gap = now - last;
-        last = now;
-        if (gap > 20) appendFileSync(file, now + ' ' + gap + '\\n');
-        if (now > limit) process.exit(0);
-        if (turn++ % 4096 === 0 && process.ppid !== parent) process.exit(0);
-        if (now - sent >= BEAT) { sent = now; process.send(now); }
-        setImmediate(beat);
-    };
-    beat();
-`;
-
-const witnessGaps = (file: string): Array<[number, number]> => {
-    let text = '';
-    try { text = readFileSync(file, 'utf8'); } catch { return []; }
-    const out: Array<[number, number]> = [];
-    for (const line of text.split('\n')) {
-        const [end, gap] = line.split(' ').map(Number);
-        if (Number.isFinite(end) && Number.isFinite(gap)) out.push([end!, gap!]);
-    }
-    return out;
-};
-
-async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcing = {}): Promise<number> {
-    const dir = mkdtempSync(join(tmpdir(), 'gauge-witness-'));
-    const file = join(dir, 'gaps.txt');
-    const witness = spawn(process.execPath, ['-e', WITNESS, '--', file], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
-    const stopped = new Promise<void>((r) => { witness.once('exit', () => r()); witness.once('error', () => r()); });
-    // Another thread of this process, stopped on request: what the old in-process witness read as the whole process stopping.
-    const stall = new Int32Array(new SharedArrayBuffer(4));
-    const stalledThread = forcing.stallAThread ? new Worker(`
+async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
+    // The worker's gaps over 20 ms, as [end, gap] pairs in a shared ring (slot 0 is the count).
+    const shared = new Float64Array(new SharedArrayBuffer(8 * (1 + 2 * 4096)));
+    const control = new Int32Array(new SharedArrayBuffer(8));
+    const worker = new Worker(`
         const { workerData } = require('node:worker_threads');
-        const stall = new Int32Array(workerData);
-        Atomics.store(stall, 0, 1);
-        Atomics.notify(stall, 0);
-        Atomics.wait(stall, 0, 1);
-    `, { eval: true, workerData: stall.buffer }) : null;
-    try {
-        // A REAL HANDSHAKE: it says it is running, or the gauge does not begin.
-        const handshakeEnd = Date.now() + 20_000;
-        while (!(existsSync(file) && readFileSync(file, 'utf8').startsWith('ready'))) {
-            if (Date.now() > handshakeEnd) throw new Error('the gauge\'s witness never beat, so nothing it says could be read');
-            await new Promise((r) => setTimeout(r, 10));
-        }
-        if (stalledThread) while (Atomics.load(stall, 0) !== 1) await new Promise((r) => setTimeout(r, 5));
-        // What the file says at the moment the gauge begins, not what the wait above assumed.
-        const witnessReady = readFileSync(file, 'utf8').startsWith('ready');
-        // A hold on main reads the witness's gaps from the file as they land: a spinning main has no event loop for a pipe.
-        let readAt = 0;
-        let cache: Array<[number, number]> = [];
-        processStalled = (from, to) => {
-            const now = Date.now();
-            if (now - readAt >= 50) { readAt = now; cache = witnessGaps(file); }
-            return overlapWith(cache, from, to);
-        };
-        const mine: Array<[number, number]> = [];
+        const ring = new Float64Array(workerData.ring);
+        const control = new Int32Array(workerData.control);
         let last = Date.now();
-        // MAIN'S HEARTBEAT IS A MESSAGE, NOT A TIMER: its gaps are between arrivals. A timer on a test VM can wait seconds with main doing nothing (measured: a plain setInterval, nothing else running, ~2 s), which reads as a hold. A message ends main's wait whatever its timers are doing; a main really held cannot take one.
-        const beats = new Set<() => void>();
-        const onBeat = () => {
+        setInterval(() => {
+            const starve = Atomics.exchange(control, 0, 0);
+            if (starve > 0) Atomics.wait(control, 1, 0, starve);
             const now = Date.now();
-            const gap = now - last - BEAT_MS;
+            const gap = now - last - 10;
             last = now;
-            if (gap > 20) mine.push([now, gap]);
-            for (const wake of beats) wake();
-        };
-        witness.on('message', onBeat);
-        // Not a timer either: until the witness has beaten this many more times, or has gone.
-        const moreBeats = (count: number) => new Promise<void>((done) => {
-            let left = count;
-            const wake = () => { left -= 1; if (left <= 0) { beats.delete(wake); done(); } };
-            beats.add(wake);
-            void stopped.then(done);
-        });
-        try {
-            if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGSTOP');
-            // Woken whatever the run did: a stopped process does not end when it's told to, and the gauge waits for it to.
-            try {
-                await run();
-            } finally {
-                if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGCONT');
-            }
-            // Long enough for a held main's queued beat to be read, and for a witness that just woke to write the gap it woke to.
-            await moreBeats(forcing.stopTheWitness ? 12 : 3);
-        } finally {
-            processStalled = () => 0;
-            witness.off('message', onBeat);
-        }
-        const theirs = witnessGaps(file);
-        let worst = 0;
-        lastReading = { gap: 0, stalled: 0, witnessReady };
-        for (const [end, gap] of mine) {
-            const start = end - gap;
-            // The same measure the hold uses (`overlapWith`): the longest witness gap overlapping this one of main's.
-            const process = overlapWith(theirs, start, end);
-            if (gap - process > worst) { worst = gap - process; lastReading = { gap, stalled: process, witnessReady }; }
-        }
-        return worst;
+            if (gap > 20) { const i = ring[0] % 4096; ring[1 + 2 * i] = now; ring[2 + 2 * i] = gap; ring[0] += 1; }
+        }, 10);
+    `, { eval: true, workerData: { ring: shared.buffer, control: control.buffer } });
+    starveWorker = (ms) => { Atomics.store(control, 0, ms); };
+    await new Promise((r) => setTimeout(r, 100));
+    const ringGaps = (): Array<[number, number]> => {
+        const out: Array<[number, number]> = [];
+        for (let i = 0; i < Math.min(shared[0]!, 4096); i += 1) out.push([shared[1 + 2 * i]!, shared[2 + 2 * i]!]);
+        return out;
+    };
+    const mine: Array<[number, number, number]> = [];
+    let last = Date.now();
+    let lastCpu = cpuNow();
+    const timer = setInterval(() => {
+        const now = Date.now();
+        const cpu = cpuNow();
+        const gap = now - last - 10;
+        if (gap > 20) mine.push([now, gap, cpu - lastCpu]);
+        last = now;
+        lastCpu = cpu;
+    }, 10);
+    try {
+        await run();
+        await new Promise((r) => setTimeout(r, 60));
     } finally {
-        Atomics.store(stall, 0, 0);
-        Atomics.notify(stall, 0);
-        await stalledThread?.terminate();
-        witness.kill();
-        await stopped;
-        rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+        starveWorker = () => {};
+        clearInterval(timer);
+        await worker.terminate();
     }
+    const theirs = ringGaps();
+    let worst = 0;
+    lastReading = { gap: 0, cpu: 0, stalled: 0 };
+    for (const [end, gap, cpu] of mine) {
+        const reading = { gap, cpu: Math.round(cpu), stalled: overlapWith(theirs, end - gap, end) };
+        const held = heldOf(reading);
+        if (held > worst) { worst = held; lastReading = reading; }
+    }
+    return worst;
 }
 
-/** The worst reading's parts: main's heartbeat gap, and how much of it the whole process was stopped (subtracted). */
-let lastReading: { gap: number; stalled: number; witnessReady?: boolean } = { gap: 0, stalled: 0 };
+/** The worst reading's parts: main's heartbeat gap, the CPU spent during it, and the longest worker gap inside it. */
+let lastReading = { gap: 0, cpu: 0, stalled: 0 };
 
 type HostModule = typeof import('../src/main/spawn-host-client.js');
 let stopHost: (() => Promise<void>) | null = null;
@@ -233,49 +159,66 @@ afterEach(async () => {
 });
 
 /*
- * THE CONTROL'S HOLD, MEASURED THE WAY THE GAUGE MEASURES (2026-11-01). genie-test-windows read the CONTROL at 141 ms for
- * a 5 s spawn made on main (batch C's full suite): the hold ran (the answer was the mock's), but it was timed by the wall
- * clock, and the gauge subtracts what the WHOLE process was stopped for — a VM descheduled on its loaded host stops main
- * and the gauge's worker alike. A hold the machine stalled through ended having held main for almost none of the time
- * the gauge can count. The hold now lasts until main has been held `ms` while the rest of the process ran.
+ * THE CONTROL'S HOLD (batch C's 141 ms, batch Z's 936 ms). A hold timed by the wall clock ended having done almost nothing if the machine did not run it. It now lasts until it has spent the
+ * time, which is what the gauge reads.
  */
 describe('the hold a spawn on main is made of', () => {
-    it('holds main for the full time WHILE THE PROCESS RUNS: a stall of the whole process does not count toward it', () => {
-        // A fake clock: 1 ms per read, and at 100 ms a 4,860 ms stall of the whole process (main and the worker both).
-        let t = 0;
-        const STALL = { from: 100, to: 4_960 };
+    it('it spends the time it was asked for: a machine that stopped it for most of the wall clock does not shorten it', () => {
+        let wall = 0;
+        let cpu = 0;
+        // A read costs 1 ms of both, and at 100 ms the machine stops it for 4,860 ms: the wall clock moves, the CPU does not.
         const clocks: HoldClocks = {
-            now: () => { t += 1; if (t === STALL.from) t = STALL.to; return t; },
-            stalled: (from, to) => Math.max(0, Math.min(to, STALL.to) - Math.max(from, STALL.from)),
+            now: () => { wall += 1; cpu += 1; if (wall === 100) wall += 4_860; return wall; },
+            spent: () => cpu,
         };
-        const start = t;
         holdFor(SLOW_MS, clocks);
-        const held = t - start - clocks.stalled(start, t);
-        // The wall-clock hold ended here holding main for 140 ms the gauge could count — the 141 ms the VM read.
-        expect(held, `main held ${held} ms the gauge can count, of ${t - start} ms`).toBeGreaterThanOrEqual(SLOW_MS);
+        expect(cpu).toBeGreaterThanOrEqual(SLOW_MS);
     });
 
-    it('without a stall, it is the time it was asked for, not more', () => {
+    it('with nothing in its way, it is the time it was asked for, not more', () => {
         let t = 0;
-        holdFor(SLOW_MS, { now: () => (t += 1), stalled: () => 0 });
+        holdFor(SLOW_MS, { now: () => t, spent: () => (t += 1) });
         expect(t).toBeLessThanOrEqual(SLOW_MS + 2);
     });
 
-    it('the stall it reads is the one the gauge subtracts: the LONGEST worker gap inside it, not their sum', () => {
-        // The gauge reduces main's gap by the longest worker gap overlapping it; a hold that summed them disagreed with it.
+    it('a machine that never gives it the CPU ends it at the cap, inside the test timeout', () => {
+        let wall = 0;
+        holdFor(SLOW_MS, { now: () => (wall += 1), spent: () => 0 });
+        expect(wall).toBeLessThanOrEqual(3 * SLOW_MS + 2);
+    });
+
+    it('the worker gap read off main is the longest overlapping, not their sum', () => {
         expect(overlapWith([[200, 150], [1_000, 100]], 0, 950)).toBe(150);
         expect(overlapWith([[200, 150]], 300, 400)).toBe(0);
     });
+});
 
-    it('a worker merely preempted by the spinning main (many short gaps) does not stretch the hold: only the longest counts', () => {
-        // Batch D: on a loaded 2-vCPU VM the worker logged a 30 ms gap every 40 ms while main spun. Summed, they stretched
-        // a 5 s hold past 8 s and the CONTROL toward its timeout; the gauge counts only the longest of them.
-        const gaps: Array<[number, number]> = [];
-        for (let end = 40; end < 30_000; end += 40) gaps.push([end, 30]);
-        let t = 0;
-        holdFor(SLOW_MS, { now: () => (t += 1), stalled: (from, to) => overlapWith(gaps, from, to) });
-        expect(t, `a ${SLOW_MS} ms hold lasted ${t} ms`).toBeLessThanOrEqual(SLOW_MS + 31);
-        expect(t).toBeGreaterThanOrEqual(SLOW_MS);
+describe('the gauge can trust its own control', () => {
+    /*
+     * BATCH Z, AND THREE BATCHES BEFORE IT: 936 ms for a 5,000 ms spawn on main, "main's gap 5032 ms, of it the whole process stopped 4096 ms". Main ran its full hold; the worker was
+     * the one not scheduled (a loaded machine, and main spinning on one of its CPUs), and its gap was taken off main's as if the process had stopped. So a real hold could read as nothing.
+     */
+    it('PROBE: the worker kept off the CPU for most of a real hold: the hold is still read', async () => {
+        const worst = await heartbeatDuring(async () => {
+            // The worker's gap lands just AFTER the hold has ended, as batch Z's must have: a gap that lands during the hold made the old hold stretch by as much, which hid this.
+            starveWorker(SLOW_MS + 100);
+            await new Promise((r) => setTimeout(r, 30));
+            hold(SLOW_MS);
+            await new Promise((r) => setTimeout(r, 300));
+        });
+        expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms hold, with the worker stopped through it`).toBeGreaterThan(SLOW_MS / 2);
+    }, 30_000);
+
+    it('main spun through its gap: held, whatever the worker did', () => {
+        expect(heldOf({ gap: 5_032, cpu: 5_000, stalled: 4_096 })).toBeGreaterThan(SLOW_MS / 2);
+    });
+
+    it('the whole process stopped: not held, because nothing ran', () => {
+        expect(heldOf({ gap: 5_000, cpu: 60, stalled: 4_900 })).toBeLessThan(HELD_BAR_MS);
+    });
+
+    it('main blocked in the kernel with the worker running: held, though it used no CPU', () => {
+        expect(heldOf({ gap: 5_000, cpu: 10, stalled: 0 })).toBeGreaterThan(SLOW_MS / 2);
     });
 });
 
@@ -313,36 +256,8 @@ describe('main never waits on a spawn (genie#1397)', () => {
         let answer: unknown = null;
         const worst = await heartbeatDuring(async () => { answer = await driver.status('genie-postgres-17'); });
         expect(answer).toEqual({ state: 'running', since: '2026-11-01T00:00:00Z' });
-        console.log(`GAUGE: main held ${worst} ms by a ${SLOW_MS} ms spawn made on main (bar ${HELD_BAR_MS} ms); main's gap ${lastReading.gap} ms, of it the whole process stopped ${lastReading.stalled} ms`);
+        console.log(`GAUGE: main held ${worst} ms by a ${SLOW_MS} ms spawn made on main (bar ${HELD_BAR_MS} ms); main's gap ${lastReading.gap} ms, CPU ${lastReading.cpu} ms, longest worker gap ${lastReading.stalled} ms`);
         expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms spawn on main`).toBeGreaterThan(SLOW_MS / 2);
-    }, 30_000);
-
-    const onMainDuring = async (forcing: GaugeForcing) => {
-        const host = (await import('../src/main/spawn-host-client.js').catch(() => null)) as HostModule | null;
-        host?.routeExecThroughSpawnHost(null);
-        const runnerModule = await import('../src/main/toolchain-runner.js');
-        const { ServiceDriver, dockerRunnerOver } = await import('../src/main/service-driver.js');
-        const driver = new ServiceDriver(dockerRunnerOver(runnerModule.execFileRunner));
-        return heartbeatDuring(async () => { await driver.status('genie-postgres-17'); }, forcing);
-    };
-
-    it('a thread of this process that stops for the whole hold hides none of it: only what is outside the process can say the process stopped', async () => {
-        const worst = await onMainDuring({ stallAThread: true });
-        expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms spawn on main, with a thread stopped: main's gap ${lastReading.gap} ms, subtracted ${lastReading.stalled} ms`).toBeGreaterThan(SLOW_MS / 2);
-    }, 30_000);
-
-    it.skipIf(process.platform === 'win32')('CONTROL: the witness stopped too, as a frozen machine stops it: that much is subtracted, so a real stop is still not a hold', async () => {
-        const worst = await onMainDuring({ stopTheWitness: true });
-        expect(worst, `main's gap ${lastReading.gap} ms, subtracted ${lastReading.stalled} ms`).toBeLessThan(HELD_BAR_MS);
-    }, 30_000);
-
-    it.skipIf(process.platform === 'win32')('a run that throws while the witness is stopped still ends: it says the error, it does not hang', async () => {
-        await expect(heartbeatDuring(async () => { throw new Error('the run failed'); }, { stopTheWitness: true })).rejects.toThrow('the run failed');
-    }, 30_000);
-
-    it('the gauge begins only once its witness has really beaten', async () => {
-        await onMainDuring({});
-        expect(lastReading.witnessReady).toBe(true);
     }, 30_000);
 
     it("a supervised process (a site's php-cgi) whose pty takes 5 s to open: main is never held for it (under a fifth of it); it runs, its pid and output arrive, a stop ends it", async () => {

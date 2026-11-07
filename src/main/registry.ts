@@ -1,11 +1,18 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
-import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
+import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
+import type { CarryOver } from '../core/carry-over.js';
 import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, type AgentPermissions, type PlanStepRecord, threadIdIsResumable } from '../core/identity.js';
 import type { IssueWatchSetting } from '../core/issue-watch.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
+
+/**
+ * Where a Registry's files are read and written (the host split, P3.2): the Store itself (genie-host, and the emergency
+ * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
+ */
+export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
@@ -45,7 +52,7 @@ export { OS_WORKSPACE };
 export type SessionProbe = (id: AgentId) => LiveSession | null;
 
 export class Registry {
-    readonly #store: Store;
+    #store: RegistryStore;
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
     #probe: SessionProbe = () => null;
@@ -55,6 +62,9 @@ export class Registry {
     #recordListeners = new Set<(agentId: AgentId) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
+    #safeMode: (() => import('../core/safe-mode.js').SafeModeView | null) | null = null;
+    #hangNotice: (() => import('../core/crash-record.js').HangNotice | null) | null = null;
+    #rendererNotice: (() => import('../core/renderer-notice.js').RendererNotice | null) | null = null;
     #deckSource: () => readonly DeckItem[] = () => [];
     #runningAtQuit: AgentId[] = [];
     #interruptedAtQuit: AgentId[] = [];
@@ -64,8 +74,32 @@ export class Registry {
     /** A workspace's colour (genie#1300: project.json `appearance.color`, main/workspace-color-host.ts); `null` = none yet. */
     #colorer: (path: string) => string | null = () => null;
 
-    constructor(store: Store) {
+    constructor(store: RegistryStore) {
         this.#store = store;
+    }
+
+    /** Read and write through `store` instead (genie-host's, P3.2). Before `load` only: a loaded model is not re-homed. */
+    useStore(store: RegistryStore): void {
+        if (this.#loaded) throw new Error('the registry is loaded; its store is not changed under it');
+        this.#store = store;
+    }
+
+    /**
+     * Read the files again — another window, or the host, wrote them (P3.2: two windows, one registry). Announced only
+     * when something changed, so a window's own write, read back, redraws nothing twice.
+     */
+    async refresh(): Promise<void> {
+        if (!this.#loaded) return;
+        const workspaces = await this.#store.readWorkspaces();
+        const agents = await this.#store.readAgents();
+        const changedAgents = agents.filter((a) => JSON.stringify(a) !== JSON.stringify(this.#agents.find((x) => x.id === a.id) ?? null)).map((a) => a.id);
+        const gone = this.#agents.filter((a) => !agents.some((x) => x.id === a.id)).map((a) => a.id);
+        const workspacesChanged = JSON.stringify(workspaces) !== JSON.stringify(this.#workspaces);
+        if (!workspacesChanged && changedAgents.length === 0 && gone.length === 0) return;
+        this.#workspaces = workspaces;
+        this.#agents = agents;
+        this.#emit();
+        for (const id of [...changedAgents, ...gone]) for (const listener of this.#recordListeners) listener(id as AgentId);
     }
 
     /** Problems found while loading, for the surface to report rather than swallow. */
@@ -141,6 +175,21 @@ export class Registry {
     }
 
     /** The Deck's signal strip, MEASURED by the composition root; honest zeros until then. */
+    /** genie-host's safe mode (Tynn #386), read into every snapshot: the banner on every window. */
+    setSafeMode(provider: () => import('../core/safe-mode.js').SafeModeView | null): void {
+        this.#safeMode = provider;
+    }
+
+    /** genie-host's reopened-window notice (Tynn #386): a hung window was ended and this one started; read into every snapshot. */
+    setHangNotice(provider: () => import('../core/crash-record.js').HangNotice | null): void {
+        this.#hangNotice = provider;
+    }
+
+    /** This window's page ended and was brought back (Tynn #386, renderer-recovery.ts); read into every snapshot. */
+    setRendererNotice(provider: () => import('../core/renderer-notice.js').RendererNotice | null): void {
+        this.#rendererNotice = provider;
+    }
+
     setSignals(provider: () => SignalState): void {
         this.#signals = provider;
     }
@@ -153,6 +202,11 @@ export class Registry {
     async markRunningAtQuit(ids: readonly AgentId[]): Promise<void> {
         this.#runningAtQuit = ids.filter((id) => this.#agents.some((a) => a.id === id));
         await this.#store.writeRunningAtQuit(this.#runningAtQuit);
+    }
+
+    /** The agents a shutdown cut off mid-turn, as recorded — read, not taken (safe mode lists them, Tynn #386). */
+    interruptedAtQuit(): readonly AgentId[] {
+        return this.#interruptedAtQuit;
     }
 
     /** The agents a shutdown cut off mid-turn (written at quit or upgrade, before the sessions end). */
@@ -272,6 +326,10 @@ export class Registry {
              */
             signals: this.#signals?.() ?? { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
             workstation: this.#workstation,
+            // Only once main has said where it comes from: a snapshot with no host to ask carries no claim about it.
+            ...(this.#safeMode ? { safeMode: this.#safeMode() } : {}),
+            ...(this.#hangNotice ? { hangNotice: this.#hangNotice() } : {}),
+            ...(this.#rendererNotice ? { rendererNotice: this.#rendererNotice() } : {}),
         };
     }
 
@@ -502,22 +560,46 @@ export class Registry {
     }
 
     /**
-     * Switch driver: identity, inbox, history and prompt stay. What belonged to the OLD provider does not: its
-     * conversation (`threadId` → `null`, "never ran on this provider" — a Claude session id handed to Codex would be a
-     * resume of nothing) and, unless the caller found it in the new provider's own list (`keepModel`), its model. The
-     * owner, 2026-10-21: "I need to be able to change provider as well as model". The same provider changes nothing.
+     * Switch provider (Tynn story #380): identity, inbox, history, plan and the conversation stay with the agent. Each
+     * provider keeps ITS OWN native session — a Claude session id means nothing to Codex — so the one it leaves is PARKED
+     * under the old provider (`threadIds`) with when it left (`leftAt`), and the new provider's is resumed when it has one
+     * (`null` = it never ran there). `carryOver` is what the next prompt carries (core/carry-over.ts); a switch always
+     * REPLACES it, never stacks. The model goes with the old provider unless the caller found it in the new provider's own
+     * list (`keepModel`). The owner, 2026-10-21: "I need to be able to change provider as well as model". The same
+     * provider changes nothing.
      */
-    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
+    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean; carryOver?: CarryOver | null; now?: string }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
         if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return { ok: false, reason: `No agent ${agentId}.` };
         if (existing.provider === provider) return { ok: true, record: existing };
-        const { model: _oldModel, ...withoutModel } = existing;
-        const record: AgentRecord = { ...(options.keepModel ? existing : withoutModel), provider, threadId: null };
+        const { model: _oldModel, carryOver: _oldCarry, ...withoutModel } = existing;
+        const { carryOver: _carry, ...keptModel } = existing;
+        const parked: Partial<Record<AcpProvider, string>> = { ...(existing.threadIds ?? {}) };
+        if (existing.threadId) parked[existing.provider] = existing.threadId;
+        else delete parked[existing.provider];
+        const resumed = parked[provider] ?? null;
+        delete parked[provider];
+        const leftAt = { ...(existing.leftAt ?? {}), [existing.provider]: options.now ?? new Date().toISOString() };
+        const record: AgentRecord = {
+            ...(options.keepModel ? keptModel : withoutModel),
+            provider,
+            threadId: resumed,
+            threadIds: parked,
+            leftAt,
+            ...(options.carryOver ? { carryOver: options.carryOver } : {}),
+        };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(record.id);
         return { ok: true, record };
+    }
+
+    /** The carry-over went with a prompt (Tynn story #380): it is not carried again. */
+    async clearCarryOver(agentId: AgentId): Promise<AgentRecord | null> {
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing || existing.carryOver === undefined) return existing ?? null;
+        return this.#update(agentId, ({ carryOver: _sent, ...rest }) => rest);
     }
 
     /** Mode is WORDING for the agent (§6.2) — automated or manual — not a permission boundary. */
