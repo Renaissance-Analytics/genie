@@ -23,8 +23,10 @@ function resolverCalls(source: string): { line: number; checked: boolean; text: 
         if (taken) {
             const name = taken[1]!;
             // The check, on the same line or the next two (a handler split over lines).
-            const near = lines.slice(i, i + 3).join('\n');
-            const checked = new RegExp(`typeof ${name} === 'function'`).test(near);
+            const near = lines.slice(i, i + 4).join('\n');
+            // Only a lookup that is CALLED needs the check; one read as data (a timing record, say) calls nothing.
+            if (!new RegExp(`\\b${name}\\(`).test(near)) return;
+            const checked = new RegExp(`typeof ${name} [!=]== 'function'`).test(near);
             out.push({ line: i + 1, checked, text: text.trim() });
         }
     });
@@ -50,5 +52,8 @@ describe('the CDP drivers call only a pending request\'s own resolver', () => {
         expect(resolverCalls("const r = c.#pending.get(f.id); if (r) { r(f); }")).toEqual([expect.objectContaining({ checked: false })]);
         expect(resolverCalls('c.pending.get(frame.id)?.(frame);')).toEqual([expect.objectContaining({ checked: false })]);
         expect(resolverCalls("const r = c.#pending.get(f.id); if (typeof r === 'function') { r(f); }")).toEqual([expect.objectContaining({ checked: true })]);
+        expect(resolverCalls("const r = c.#pending.get(f.id);\nif (typeof r !== 'function') return;\nr(f);")).toEqual([expect.objectContaining({ checked: true })]);
+        // A lookup read as data is not a call, and is not counted.
+        expect(resolverCalls('const call = pending.get(v.id);\nif (call) calls.push(call.method);')).toEqual([]);
     });
 });
