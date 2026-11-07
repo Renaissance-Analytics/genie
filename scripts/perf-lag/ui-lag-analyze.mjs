@@ -120,3 +120,20 @@ export function budgetVerdict(gaps, budgetMs) {
     const over = gaps.filter((g) => g.ms > budgetMs);
     return { ok: over.length === 0, budgetMs, over: over.length, worstMs: Math.round(Math.max(0, ...gaps.map((g) => g.ms)) * 10) / 10 };
 }
+
+/**
+ * THE FILES STATE BUDGET (Tynn #522, L2): per `files.state` call, how many metadata pages main served, in each pass's
+ * build. Within `maxPerState`, and a later pass (a longer session: more paths changed before it) no costlier than
+ * `growth`× the first plus `slack`. A pass with no `files.state` call fails: the Files panel never read, nothing measured.
+ */
+export function pagingVerdict(passes, { maxPerState = 16, growth = 1.5, slack = 2 } = {}) {
+    const rows = passes.map((p) => ({ pass: p.pass, states: p.states, pageNext: p.pageNext, perState: p.states > 0 ? Math.round((p.pageNext / p.states) * 10) / 10 : null }));
+    const first = rows[0]?.perState ?? null;
+    const reasons = [];
+    for (const r of rows) {
+        if (r.perState === null) reasons.push(`${r.pass}: no files.state call during the build`);
+        else if (r.perState > maxPerState) reasons.push(`${r.pass}: ${r.perState} pages per files.state (bound ${maxPerState})`);
+    }
+    for (const r of rows.slice(1)) if (first !== null && r.perState !== null && r.perState > first * growth + slack) reasons.push(`${r.pass}: ${r.perState} pages per files.state grew from ${first}`);
+    return { ok: reasons.length === 0, maxPerState, rows, reasons };
+}
