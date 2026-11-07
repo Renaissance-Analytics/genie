@@ -4,6 +4,7 @@ import { IssueWatchService, TynnBoardHub, type HostTynn, type TynnBoardHubEvent 
 import { wireIssueWatchPush } from './issue-watch-push.js';
 import type { InboxPushPorts } from './inbox-push.js';
 import { dialTynnSocket } from './tynn-socket.js';
+import { TYNN_ISSUES_FEED } from './tynn-issues-live.js';
 
 /**
  * ISSUEWATCH AND THE LIVE BOARD IN THE WINDOW — THE EMERGENCY NO-HOST PATH ONLY (the host split, P5c; §4.1). genie-host
@@ -15,6 +16,7 @@ import { dialTynnSocket } from './tynn-socket.js';
 export interface WindowIssueWatch {
     readonly issueWatch: IssueWatchService;
     readonly board: { watch(viewId: string, workspaceId: string): boolean; unwatch(viewId: string): void };
+    readonly issues: { watch(viewId: string, workspaceId: string): boolean; unwatch(viewId: string): void };
     stop(): void;
 }
 
@@ -29,6 +31,7 @@ export function startWindowIssueWatch(p: {
     readonly host: InboxPushPorts['host'];
     readonly wake: (agentId: string) => boolean | Promise<boolean>;
     readonly onBoard: (event: TynnBoardHubEvent) => void;
+    readonly onIssues?: (event: TynnBoardHubEvent) => void;
     readonly log: (line: string) => void;
 }): WindowIssueWatch {
     const socket = (url: string) => dialTynnSocket(url, p.account()?.host() ?? TYNN_HOST);
@@ -36,12 +39,14 @@ export function startWindowIssueWatch(p: {
     const issueWatch = new IssueWatchService({ tynn: () => p.account(), socket, schedule, projectFor: p.projectFor, delivery: p.delivery, log: p.log });
     const offPush = wireIssueWatchPush({ delivery: issueWatch.delivery, host: p.host, wake: p.wake });
     const hub = new TynnBoardHub({ tynn: () => p.account(), socket, schedule, projectFor: p.projectFor, send: (_owner, event) => { p.onBoard(event); }, log: p.log });
+    const issues = new TynnBoardHub({ tynn: () => p.account(), socket, schedule, projectFor: p.projectFor, feed: TYNN_ISSUES_FEED, send: (_owner, event) => { p.onIssues?.(event); }, log: p.log });
     issueWatch.start();
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.
     const offAccount = p.account()?.onChange(() => { issueWatch.restart(); }) ?? (() => {});
     return {
         issueWatch,
         board: { watch: (viewId, workspaceId) => hub.watch(WINDOW, viewId, workspaceId), unwatch: (viewId) => { hub.unwatch(WINDOW, viewId); } },
-        stop: () => { offAccount(); offPush(); issueWatch.stop(); hub.dropOwner(WINDOW); },
+        issues: { watch: (viewId, workspaceId) => issues.watch(WINDOW, viewId, workspaceId), unwatch: (viewId) => { issues.unwatch(WINDOW, viewId); } },
+        stop: () => { offAccount(); offPush(); issueWatch.stop(); hub.dropOwner(WINDOW); issues.dropOwner(WINDOW); },
     };
 }

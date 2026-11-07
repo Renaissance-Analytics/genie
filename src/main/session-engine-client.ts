@@ -160,6 +160,8 @@ export class SessionEngineClient {
     /** The board views this window follows in the host (P5c), sent again after a reconnect: the host dropped them with the link. */
     readonly #boardViews = new Map<string, string>();
     readonly #boardListeners = new Set<(event: TynnBoardHubEvent) => void>();
+    readonly #issuesViews = new Map<string, string>();
+    readonly #issuesListeners = new Set<(event: TynnBoardHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
     #hosting: HostingReplica | null = null;
@@ -320,6 +322,7 @@ export class SessionEngineClient {
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
         for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
         for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
+        for (const [viewId, workspaceId] of this.#issuesViews) void this.call('engine.tynnIssuesWatch', [viewId, workspaceId]);
     }
 
     #onEvent(channel: string, payload: unknown): void {
@@ -419,6 +422,9 @@ export class SessionEngineClient {
                 return;
             case 'tynnBoard.event':
                 for (const l of [...this.#boardListeners]) l(payload as TynnBoardHubEvent);
+                return;
+            case 'tynnIssues.event':
+                for (const l of [...this.#issuesListeners]) l(payload as TynnBoardHubEvent);
                 return;
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
@@ -768,6 +774,25 @@ export class SessionEngineClient {
     tynnBoardUnwatch(viewId: string): Promise<boolean> {
         this.#boardViews.delete(viewId);
         return this.#value('engine.tynnBoardUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    /** The host owns Issues subscriptions; remember the intended views across a reconnect. */
+    tynnIssuesWatch(viewId: string, workspaceId: string): Promise<boolean> {
+        this.#issuesViews.set(viewId, workspaceId);
+        return this.#value('engine.tynnIssuesWatch', [viewId, workspaceId], false).then((v) => {
+            if (v !== true) this.#issuesViews.delete(viewId);
+            return v === true;
+        });
+    }
+
+    tynnIssuesUnwatch(viewId: string): Promise<boolean> {
+        this.#issuesViews.delete(viewId);
+        return this.#value('engine.tynnIssuesUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    onTynnIssuesEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
+        this.#issuesListeners.add(listener);
+        return () => { this.#issuesListeners.delete(listener); };
     }
 
     /** The host reads the workspace's Tynn page; a disconnected or refusing host is a visible error. */

@@ -7,6 +7,7 @@ import { IssueWatchPanel } from './IssueWatchPanel.js';
 import { TynnTab } from './TynnTab.js';
 import { ErrorBoundary } from './ErrorBoundary.js';
 import type { TynnTabHost } from '../../core/tynn-pages.js';
+import type { TynnIssuesHost } from '../../core/tynn-issues.js';
 import type { IssueWatchPanelView } from '../../core/issue-watch.js';
 import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import { DesignedTab } from './DesignedTab.js';
@@ -176,6 +177,8 @@ export interface WorkspaceProps {
     onRefreshIssueWatch?: (() => void) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295): the board of THIS workspace's linked project. Absent = no Tynn tab. */
     tynnBoard?: TynnTabHost | undefined;
+    /** The Tynn tab's Issues page (genie#1295 I1); absent = the tab has no Issues page. */
+    tynnIssues?: TynnIssuesHost | undefined;
     /** A Watched repos checkbox (Tynn's switch). Absent = the switches are shown, not settable. */
     onSetIssueWatchRepo?: ((owner: string, repo: string, change: { enabled: boolean } | { includeUpstream: boolean }) => void) | undefined;
     panel?: 'files' | null | undefined;
@@ -231,7 +234,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
@@ -911,7 +914,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
             {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="GitHub" resetKeys={[workspace.id]}><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></ErrorBoundary></div> : null}
             {/* THE TYNN TAB (genie#1295): the linked project's workspace (its pages, the board among them), natively — no user menu, no project picker. */}
-            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnTab workspaceId={workspace.id} host={tynnBoard} /></ErrorBoundary></div> : null}
+            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnTab workspaceId={workspace.id} host={tynnBoard} issues={tynnIssues} /></ErrorBoundary></div> : null}
             {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
             {onScreen.startsWith('tab:') ? (() => {
                 const tab = designed.tabs.find((t) => `tab:${t.id}` === view);

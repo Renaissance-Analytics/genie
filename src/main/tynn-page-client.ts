@@ -1,5 +1,6 @@
 import { parseTynnPage, tynnPagePath, TYNN_PAGES, type TynnPage, type TynnPageView } from '../core/tynn-pages.js';
 import { bodyOf, NOT_LINKED, refusal, SIGNED_OUT, type TynnBoardPorts, type TynnBoardRefusal } from './tynn-board-client.js';
+import { readTynnIssues } from './tynn-issues-client.js';
 
 /**
  * THE TYNN TAB'S OTHER PAGES TALK TO TYNN AS AN APP, the same way the board does (genie#1295; tynn-board-client.ts):
@@ -15,6 +16,10 @@ export async function readTynnPage(
 ): Promise<({ ok: true } & TynnPageView) | TynnBoardRefusal> {
     if (typeof rawPage !== 'string' || !TYNN_PAGES.includes(rawPage as TynnPage)) return { ok: false, state: 'error', reason: 'The Tynn tab does not have that page.' };
     const page = rawPage as TynnPage;
+    if (page === 'issues') {
+        const answer = await readTynnIssues(ports, workspaceId, query);
+        return answer.ok ? { ok: true, page, view: answer.view } : answer;
+    }
     const projectId = ports.projectFor(workspaceId);
     if (projectId === null) return NOT_LINKED;
     if (!ports.signedIn()) return SIGNED_OUT;
