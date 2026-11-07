@@ -1,0 +1,39 @@
+name: Typeahead measure
+# Typing into a fresh terminal before its shell is ready (#1640): Genie's terminal against the same pty stack with nothing
+# of Genie's around it, on Windows (and Linux beside it). Measurement only; not for merge.
+on:
+  push:
+    branches: ['measure/typeahead']
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Electron's runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          for pkg in xvfb xauth libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libasound2 libpangocairo-1.0-0 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 fonts-liberation fontconfig; do
+            sudo apt-get install -y --no-install-recommends "$pkg" || sudo apt-get install -y --no-install-recommends "${pkg}t64" || { echo "could not install $pkg"; exit 1; }
+          done
+      - run: npm ci
+      - run: npm run build
+      - name: the reference (conpty / the same pty stack, nothing of Genie's)
+        shell: bash
+        run: npx tsx scripts/typeahead/typeahead-conpty.mts 2>&1 | tee conpty.log | grep -E '^TYPEAHEAD' || true
+      - name: Genie's terminal (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node scripts/typeahead/typeahead-genie-cdp.mjs *>&1 | Select-String -Pattern '^TYPEAHEAD'
+      - name: Genie's terminal (Linux)
+        if: runner.os == 'Linux'
+        run: timeout 1200 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/typeahead/typeahead-genie-cdp.mjs 2>&1 | grep -E '^TYPEAHEAD' || true
