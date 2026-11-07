@@ -188,13 +188,21 @@ probe "scheduled-task-keeps-the-host" src/core/host-idle.ts \
     "    if (holds.agents + holds.windows + holds.ptys + holds.armedFlows + holds.scheduledTasks > 0) return { lastBusy: now, exit: false };" "    if (holds.agents + holds.windows + holds.ptys + holds.armedFlows > 0) return { lastBusy: now, exit: false };" \
     test/host-idle.test.ts "alone holds the host"
 
+probe "left-running-comes-back-with-the-setting-off" src/core/logon.ts \
+    "launchAtLogin: input.leftRunning || input.setting," "launchAtLogin: input.setting," \
+    test/logon.test.ts "left running, setting off"
+
+probe "mark-is-not-genie-1s-entry" src/main/tray-residence.ts \
+    "launch_at_login !== true && leftRunning?.now() !== true && v1LoginItemPresent(port, env)" "launch_at_login !== true && v1LoginItemPresent(port, env)" \
+    test/tray-residence.test.ts "is not Genie 1"
+
 probe "tray-probe-is-gated" src/main/main.ts \
     "    if (trayProbeEnabled(process.env)) {" "    if (true) {" \
     test/quit-keeps-host-wiring.test.ts "ABSENT without GENIE_TRAY_PROBE=1"
 
 # ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first
 probe "tray-always-asks" src/main/main.ts \
-    "onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }" "onShutDown: () => { requestQuit('shut-down'); }" \
+    "onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) { leftRunning.set(false); requestQuit('shut-down'); } }); }" "onShutDown: () => { leftRunning.set(false); requestQuit('shut-down'); }" \
     test/quit-keeps-host-wiring.test.ts "offers the host"
 
 probe "only-the-confirm-button-goes-on" src/core/tray-confirm.ts \

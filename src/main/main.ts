@@ -127,6 +127,7 @@ import { raisesApprovals, realListModels, SessionHost, providerBinary } from './
 import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
+import { materializeHostRuntime } from './host-runtime.js';
 import { LoginHost } from './login-host.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
@@ -159,6 +160,7 @@ import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
 import { onTheClock, trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
 import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { panelRestart } from '../core/panel-restart.js';
+import { LeftRunningMark } from './left-running.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
@@ -470,6 +472,7 @@ function onTheClockNow(): { armedFlows: number; scheduledTasks: number } {
  * launch) builds the window again (revealMainWindow → mountMainWindow); with nothing left running, watchTrayOnly ends it.
  */
 function closeUi(reason: string): void {
+    leftRunning.set(true);
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.destroy();
     window = null;
     browserPane = null;
@@ -535,6 +538,7 @@ function watchTrayOnly(): void {
     trayQuietSince = step.quietSince;
     if (step.exit) {
         rendererErrorLog?.('tray only: nothing left running for a minute; shutting everything down');
+        leftRunning.set(false);
         requestQuit('shut-down');
     }
 }
@@ -771,6 +775,8 @@ let updates: Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refr
  * run exactly once. Its `quitting` is what turns the main window's close from a hide into a real close.
  */
 const quit = quitSequence();
+/** That the person left the host running (P6): what brings it back at logon with the setting off. */
+const leftRunning = new LeftRunningMark(runtimeDir(genieRoot()));
 
 /**
  * THE QUIT a person asks for — the tray's Quit, and `Genie --quit` from outside (core/quit-flag.ts), one entry for both.
@@ -1088,6 +1094,7 @@ const activationLedger = new ActivationLedger();
  * `attractMainWindow`. `reason` names the gesture in the focus log.
  */
 function revealMainWindow(reason: string): void {
+    leftRunning.set(false);
     // Tray-only (P1b, "Just close the UI"): the person asked for Genie — the window is built again, the same host.
     if (!window || window.isDestroyed()) { mountMainWindow(true, reason); return; }
     bringUp(window, { activation: 'user-gesture', reason, ledger: activationLedger, label: 'main' });
@@ -1525,6 +1532,11 @@ async function boot(): Promise<void> {
      * in-process engine below, said on the Deck (plan §4.1).
      */
     {
+        // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
+        // Electron copies the runtime; every failure answers the install, with the reason.
+        const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
+        const hostRuntime = await materializeHostRuntime({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog });
+        if (hostRuntime.error !== null) mainErrors.record('agent-host', new Error(hostRuntime.error));
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
@@ -1550,13 +1562,13 @@ async function boot(): Promise<void> {
                 runtimeDir: runtimeDir(genieRoot()),
                 logsDir: join(genieRoot(), 'logs'),
                 // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
-                build: hostBuild(app.getVersion(), join(here, 'host.js')),
-                hostScript: join(here, 'host.js'),
-                execPath: process.execPath,
+                build: hostBuildNow,
+                hostScript: hostRuntime.hostScript,
+                execPath: hostRuntime.execPath,
                 genieHome: genieRoot(),
                 // What only Electron knows, for the host's hosting (hosting-inputs.ts): Genie 1's folder (its database, CA and
                 // toolchain), the app data folder, and the resources folder with the bundled Caddy.
-                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath },
+                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath, GENIE_INSTALL_EXEC: process.execPath },
                 log: lifecycleLog,
             },
             records: () => registry?.listAgents() ?? [],
@@ -4022,7 +4034,7 @@ async function boot(): Promise<void> {
         execPath: process.execPath,
         appImage: process.env.APPIMAGE ?? null,
         configHome: process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0 ? process.env.XDG_CONFIG_HOME : join(homedir(), '.config'),
-    });
+    }, leftRunning);
     trayHandlers = {
         onUpdate: () => { revealMainWindow('tray: update'); },
         onTaskManager: () => { revealMainWindow('tray: Task Manager'); showToPerson({ activation: 'user-gesture', route: 'genie://hosting?tab=processes', reason: 'tray: Task Manager' }); },
@@ -4048,7 +4060,7 @@ async function boot(): Promise<void> {
         onQuit: () => { requestQuit(); },
         // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
         // ALWAYS ASK (the owner, 2026-11-02): Restart and Shut down everything confirm first, every time.
-        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
+        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) { leftRunning.set(false); requestQuit('shut-down'); } }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
