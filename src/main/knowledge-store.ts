@@ -434,12 +434,11 @@ export class KnowledgeStore {
      * and only a body whose head is nearly all whitespace is read whole, so the snippet stays the same.
      */
     summaries(input: ListInput): { hits: Hit[]; nextCursor: string | null } {
-        if (input.scopes) { const old = this.list(input); return { hits: old.nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class })), nextCursor: old.nextCursor }; } // BREAK PROBE
         const { where, params } = this.#filters(input.scopes, input.class, input.tag === undefined ? [] : [input.tag]);
         const { size, offset } = pageOf(input.limit, input.cursor);
         const rows = this.#db
             .prepare(
-                `SELECT n.id, n.title, n.class, n.tags, substr(n.body, 1, ${SNIPPET_HEAD}) AS head, length(n.body) AS body_length
+                `SELECT n.id, n.title, n.class, n.tags, n.body AS head, length(n.body) AS body_length /* BREAK PROBE 2: whole bodies */
                  FROM nodes n WHERE 1 = 1 ${where} ORDER BY n.created_at DESC, n.rowid DESC LIMIT ? OFFSET ?`,
             )
             .all(...params, size + 1, offset) as unknown as Array<Pick<Row, 'id' | 'title' | 'class' | 'tags'> & { head: string; body_length: number }>;
