@@ -23,14 +23,15 @@ export const TYNN_SECTIONS: readonly TynnSection[] = [
     { id: 'issues', icon: 'sparkles', label: 'Issues' },
     { id: 'wip', icon: 'play', label: 'WIP' },
     { id: 'board', icon: 'columns-3', label: 'Board' },
+    { id: 'releases', icon: 'rocket', label: 'Releases' },
 ];
 
 /** The page the tab opens on. */
 export const TYNN_FIRST_SECTION: TynnSectionId = 'board';
 
 /** A page of the tab that is read as one answer (the board has its own door and scope query). */
-export type TynnPage = 'wip' | 'issues';
-export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues'];
+export type TynnPage = 'wip' | 'issues' | 'releases';
+export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues', 'releases'];
 
 // ── WIP (workspace-ux 0.6.0, surface `wip`) ──────────────────────────────────────────────────────────────────────────
 
@@ -197,15 +198,83 @@ export function parseWip(json: unknown): WipView | null {
     };
 }
 
+// ── Releases (workspace-ux 0.8.0, surface `releases`, parity row R1) ─────────────────────────────────────────────────
+
+/** Read only: one GET, the project's released versions newest first (Tynn's order; Genie sorts nothing). */
+export const RELEASES_DATA_API = { method: 'GET', path: '/releases' } as const;
+export const RELEASES_QUERY = ['product'] as const;
+export const RELEASES_ANSWER = ['project_id', 'releases'] as const;
+export const RELEASES_FIELDS = {
+    release: ['id', 'number', 'title', 'description', 'why', 'released_at', 'pr_id', 'repository_id', 'story_count', 'story_done_count', 'top_stories'],
+    story: ['id', 'story_number', 'title', 'status'],
+} as const;
+/** How many stories a card lists by number; the rest are "+ n more". */
+export const RELEASES_TOP_STORIES = 5;
+export const RELEASES_TOTALS = ['releases', 'stories'] as const;
+/** Live on the board's own channel and rings: each burst is one read of Releases (as tynn.ai reloads its props). */
+export const RELEASES_LIVE = { channel: BOARD_LIVE.channel, events: BOARD_LIVE.events, refresh: 'read' } as const;
+export const RELEASES_STATES = ['loading', 'totals', 'release-card', 'more-stories', 'empty', 'live', 'reconnecting', 'not-linked', 'signed-out'] as const;
+
+export interface ReleaseStory { readonly id: string; readonly number: string | null; readonly title: string }
+export interface Release {
+    readonly id: string;
+    readonly number: string | null;
+    readonly title: string;
+    readonly description: string | null;
+    /** YYYY-MM-DD, as tynn.ai's card shows it. */
+    readonly date: string | null;
+    readonly pr: string | null;
+    readonly storyCount: number;
+    readonly storyDone: number;
+    readonly top: readonly ReleaseStory[];
+    /** How many more stories than the card lists. */
+    readonly more: number;
+}
+export interface ReleasesView { readonly releases: readonly Release[]; readonly totalStories: number }
+
+/** Tynn's Releases answer (GET /releases) as the tab draws it; null when it is not Releases. */
+export function parseReleases(json: unknown): ReleasesView | null {
+    if (!isRow(json) || !Array.isArray(json.releases)) return null;
+    const releases = rows(json.releases).flatMap((r): Release[] => {
+        const id = str(r.id);
+        if (id === null) return [];
+        const top = rows(r.top_stories).slice(0, RELEASES_TOP_STORIES).flatMap((t): ReleaseStory[] => {
+            const sid = str(t.id);
+            const n = str(t.story_number);
+            return sid === null ? [] : [{ id: sid, number: n === null ? null : `#${n}`, title: str(t.title) ?? '' }];
+        });
+        const storyCount = num(r.story_count);
+        const at = str(r.released_at);
+        return [{
+            id,
+            number: str(r.number),
+            title: str(r.title) ?? '',
+            description: str(r.description),
+            date: at === null ? null : at.slice(0, 10),
+            pr: str(r.pr_id),
+            storyCount,
+            storyDone: num(r.story_done_count),
+            top,
+            more: Math.max(0, storyCount - top.length),
+        }];
+    });
+    return { releases, totalStories: releases.reduce((n, r) => n + r.storyCount, 0) };
+}
+
 // ── Reading a page ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type TynnPageQuery = Readonly<Record<string, string | undefined>>;
-export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'issues'; readonly view: IssueQueueView };
+export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'issues'; readonly view: IssueQueueView } | { readonly page: 'releases'; readonly view: ReleasesView };
 
 /** GET a page of the workspace's project: only the query the page's contract declares, and only real values. */
 export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQuery): string {
     if (page === 'issues') return issuesQueryPath(projectId, normalizeIssueFilters(query));
     const q = new URLSearchParams();
+    if (page === 'releases') {
+        if (query.product !== undefined && query.product !== '') q.append('product', query.product);
+        const s = q.toString();
+        return `/api/v1/projects/${encodeURIComponent(projectId)}${RELEASES_DATA_API.path}${s === '' ? '' : `?${s}`}`;
+    }
     if (page === 'wip') {
         const view = query.view;
         if (view !== undefined && Object.hasOwn(WIP_LENSES, view)) q.append('view', view);
@@ -224,6 +293,10 @@ export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | nul
     }
     if (page === 'wip') {
         const view = parseWip(json);
+        return view ? { page, view } : null;
+    }
+    if (page === 'releases') {
+        const view = parseReleases(json);
         return view ? { page, view } : null;
     }
     return null;
