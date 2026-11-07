@@ -29,11 +29,12 @@ let root = '';
 let repo = '';
 const savedLimit = GIT_READ_LIMIT.ms;
 const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-/** This run's children, by the mark in their command lines. */
-const ours = (): number => {
-    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'node*' -and $_.CommandLine -and $_.CommandLine -like '*${MARK}*' }).Count`], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
-    return Number(out.trim() || 0);
+/** This run's children, by the mark in their command lines: their pids. */
+const oursPids = (): number[] => {
+    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'node*' -and $_.CommandLine -and $_.CommandLine -like '*${MARK}*' } | ForEach-Object { $_.ProcessId }`], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    return out.split(/\r?\n/).map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
 };
+const ours = (): number => oursPids().length;
 
 beforeEach(() => {
     if (!windows) return;
@@ -67,8 +68,17 @@ describe.skipIf(!windows)('a read past its limit ends its job before anything in
         // On Windows CI the launcher is built (npm run build:main): a missing one is a failure here, never a skip.
         expect(winLauncherPath(), 'genie-launch.exe is built').not.toBeNull();
         const isLauncher = (p: ProcessInfo) => /^genie-launch(\.exe)?$/i.test(p.name);
+        // The hook's children are hidden from the walk's readings, as MSYS's are from a real one (its fork parents exit at
+        // once: run 42308792264's walk found 31 of 230). Only the JOB can end them, which is the thing under test; with them
+        // visible the walk ends them by parent and the job never matters (the first version of this row passed on the
+        // unfixed code that way, run 42364937709, job 128380905347).
+        const hidden = new Set<number>();
         const launcherEndedLast: ProcessTree = {
             ...systemProcessTree,
+            async read() {
+                const table = await systemProcessTree.read!();
+                return table === null ? null : table.filter((p) => !hidden.has(p.pid));
+            },
             async reap(targets, now, limit) {
                 const launchers = targets.filter(isLauncher);
                 const rest = targets.filter((t) => !isLauncher(t));
@@ -83,6 +93,8 @@ describe.skipIf(!windows)('a read past its limit ends its job before anything in
         }), launcherEndedLast).then(() => 'answered', (error: unknown) => (error instanceof GitDidNotAnswer ? 'did not answer' : String(error)));
         // CONTROL: all 20 are running before the limit.
         await vi.waitFor(() => { expect(ours()).toBe(20); }, { timeout: 7_000, interval: 500 });
+        for (const pid of oursPids()) hidden.add(pid);
+        expect(hidden.size).toBe(20);
         expect(await reading).toBe('did not answer');
         await vi.waitFor(() => { expect(ours(), 'children of the hook still running after the limit').toBe(0); }, { timeout: 30_000, interval: 1_000 });
     }, 90_000);
