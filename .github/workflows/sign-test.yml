@@ -1,0 +1,52 @@
+name: Test Windows signing
+
+# The coordinator dispatches the exact reviewed branch and approves the protected environment.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    if: github.ref == 'refs/heads/next/release-signing'
+    runs-on: windows-latest
+    environment: sign-test
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test -- --testTimeout=30000
+      - run: npm run build
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+      - name: correct TrustedSigning switch serialization in the pinned builder
+        run: node scripts/patch-azure-signing.cjs
+      - uses: azure/login@v2
+        env:
+          AZURE_CORE_OUTPUT: none
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: build and sign without publishing
+        run: npx electron-builder --publish never
+      - name: verify every Windows signature before upload
+        shell: pwsh
+        run: ./scripts/verify-windows-signatures.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-windows-installer
+          path: |
+            release/*-setup.exe
+            release/signature-evidence/
+          if-no-files-found: error
+          retention-days: 7

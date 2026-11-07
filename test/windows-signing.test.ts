@@ -29,6 +29,18 @@ describe('Windows release signing', () => {
         expect(yaml('package-lock.json').packages['node_modules/app-builder-lib'].version).toBe('26.17.0');
     });
 
+    it('the pinned builder signs extra-resource executables and DLLs while copying them', () => {
+        const { WinPackager } = require('app-builder-lib/out/winPackager.js');
+        const packager = Object.create(WinPackager.prototype);
+        packager.platformSpecificBuildOptions = { signExts: ['.dll'] };
+        const context = { appOutDir: 'C:/out/win-unpacked' };
+        expect(packager.createTransformerForExtraFiles(context)('C:/input/genie-launch.exe')).not.toBeNull();
+        expect(packager.createTransformerForExtraFiles(context)('C:/input/ours.dll')).not.toBeNull();
+        expect(packager.createTransformerForExtraFiles(context)('C:/input/icon.png')).toBeNull();
+        packager.platformSpecificBuildOptions.signExecutable = false;
+        expect(packager.createTransformerForExtraFiles(context)).toBeNull();
+    });
+
     it('gives only the Windows release job the release environment and OIDC, and verifies before uploading', () => {
         const jobs = yaml('.github/workflows/release.yml').jobs;
         const win = jobs['publish-windows'];

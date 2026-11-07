@@ -105,7 +105,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]   # no macOS: dropped for now (owner, 2026-10-11)
+        os: [ubuntu-latest]   # Windows has its own protected signing job below; no macOS.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -142,10 +142,57 @@ jobs:
           echo "uploading v$tag into its draft"
           npx electron-builder --publish always
 
+  # Separate job: environment and id-token permission are job-scoped, so putting them on
+  # the old matrix would grant Linux the Windows signing identity as well.
+  publish-windows:
+    name: sign, verify and upload Windows into the draft
+    needs: guard
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test -- --testTimeout=30000
+      - run: npm run build
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+      - name: correct TrustedSigning switch serialization in the pinned builder
+        run: node scripts/patch-azure-signing.cjs
+      - uses: azure/login@v2
+        env:
+          AZURE_CORE_OUTPUT: none
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: build and sign without uploading
+        run: npx electron-builder --publish never
+      - name: verify every Windows signature before upload
+        shell: pwsh
+        run: ./scripts/verify-windows-signatures.ps1
+      - name: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Upload the exact verified bytes; invoking builder again would rebuild the installer.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          echo "uploading verified Windows v$tag into its draft"
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            "release/Genie-$tag-setup.exe" "release/Genie-$tag-setup.exe.blockmap" release/latest.yml --clobber
+
   verify:
     name: write the notes and verify the draft (it stays a draft)
     # Every platform leg of `publish` must succeed; a failed or cancelled leg skips this job, and the draft stays a draft.
-    needs: publish
+    needs: [publish, publish-windows]
     permissions:
       contents: write
     runs-on: ubuntu-latest

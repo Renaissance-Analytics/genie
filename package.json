@@ -62,7 +62,7 @@
     "@types/yauzl": "3.4.0",
     "@types/yazl": "3.3.1",
     "electron": "^45.0.0",
-    "electron-builder": "^26.5.0",
+    "electron-builder": "26.17.0",
     "happy-dom": "21.0.4",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
