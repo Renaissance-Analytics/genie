@@ -193,15 +193,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # DEFENDER SKIPS THE RUNNER'S TEMP FOLDERS (CI only; #1636's sampler caught Defender, the Storage Service and Windows
-      # Update servicing busy beside the suite's EBUSY on temp files and its slow read-backs). The runner's own machine,
-      # never a product change and never a person's; test/ci-windows-mitigations.test.ts holds it.
-      - name: Defender skips the runner's temp folders
-        shell: pwsh
-        run: |
-          try { Add-MpPreference -ExclusionPath $env:TEMP, $env:RUNNER_TEMP -ErrorAction Stop; Write-Output "Defender excludes: $((Get-MpPreference).ExclusionPath -join ', ')" }
-          catch { Write-Output "Defender exclusion not set: $($_.Exception.Message)" }
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -566,15 +557,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
-      # DEFENDER SKIPS THE RUNNER'S TEMP FOLDERS (CI only; #1636's sampler caught Defender, the Storage Service and Windows
-      # Update servicing busy beside the suite's EBUSY on temp files and its slow read-backs). The runner's own machine,
-      # never a product change and never a person's; test/ci-windows-mitigations.test.ts holds it.
-      - name: Defender skips the runner's temp folders
-        shell: pwsh
-        run: |
-          try { Add-MpPreference -ExclusionPath $env:TEMP, $env:RUNNER_TEMP -ErrorAction Stop; Write-Output "Defender excludes: $((Get-MpPreference).ExclusionPath -join ', ')" }
-          catch { Write-Output "Defender exclusion not set: $($_.Exception.Message)" }
 
       - uses: actions/setup-node@v4
         with:
