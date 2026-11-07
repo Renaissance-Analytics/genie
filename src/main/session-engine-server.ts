@@ -183,6 +183,12 @@ export interface EngineServerOptions {
         unwatch(owner: string, viewId: string): void;
         dropOwner(owner: string): void;
     };
+    /** Issues follows its own feed, with views owned and released by the same local connection. */
+    readonly tynnIssues?: {
+        watch(owner: string, viewId: string, workspaceId: string): boolean;
+        unwatch(owner: string, viewId: string): void;
+        dropOwner(owner: string): void;
+    };
     /** Other Tynn pages, resolved and read on the host's account. Absent = refused; local windows only. */
     readonly tynnPages?: { read(workspaceId: string, page: unknown, query: unknown): Promise<unknown> };
     readonly files?: {
@@ -394,6 +400,7 @@ export class SessionEngineServer {
             if (was) this.#options.terminals?.dropped(String(conn.id));
             if (was) this.#options.files?.dropOwner(conn.id);
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
+            if (was) this.#options.tynnIssues?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
@@ -703,6 +710,14 @@ export class SessionEngineServer {
                 if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
                 this.#options.tynnBoard?.unwatch(conn.id, str(0));
                 return true;
+            case 'engine.tynnIssuesWatch':
+                if (!conn.local) throw new Error('The Tynn Issues queue is followed from a local window only.');
+                if (!this.#options.tynnIssues) throw new Error('This host follows no Tynn Issues queue.');
+                return this.#options.tynnIssues.watch(conn.id, str(0), str(1));
+            case 'engine.tynnIssuesUnwatch':
+                if (!conn.local) throw new Error('The Tynn Issues queue is followed from a local window only.');
+                this.#options.tynnIssues?.unwatch(conn.id, str(0));
+                return true;
             case 'engine.tynnPage':
                 if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
                 if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');
@@ -780,6 +795,11 @@ export class SessionEngineServer {
     /** A board's ring or state, to the connection whose views watch that workspace, and no other (P5c). */
     tynnBoardEvent(owner: string, event: TynnBoardHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnBoard.event', event);
+    }
+
+    /** Issues rings go only to the local connection whose views follow the queue. */
+    tynnIssuesEvent(owner: string, event: TynnBoardHubEvent): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnIssues.event', event);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {

@@ -76,6 +76,9 @@ export const ENGINE_METHODS = [
     // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
     'engine.tynnBoardWatch',
     'engine.tynnBoardUnwatch',
+    // Issues uses its own host-owned feed and connection-owned views, under the same local-only boundary.
+    'engine.tynnIssuesWatch',
+    'engine.tynnIssuesUnwatch',
     // Other Tynn pages are read on this host's pairing and workspace registry, for local windows only.
     'engine.tynnPage',
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write

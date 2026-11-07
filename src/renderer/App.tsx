@@ -37,7 +37,7 @@ import { chatAgentsKey, chatSendFor, chatThreadFrom, observedMail, rememberThrea
 import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { copyToClipboard } from './clipboard.js';
-import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, tynnIssuesHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -867,6 +867,8 @@ function DesktopApp({ bridge }: AppProps) {
      * a new socket (the B4 end-to-end run on omarchy-test: 10 whole-board re-reads and 8 channel signatures for one tab).
      */
     const tynnBoardHost = useMemo(() => tynnBoardHostOf(resolvedBridge), [resolvedBridge]);
+    /** The Tynn tab's Issues host (genie#1295 I1), one per bridge for the same reason. */
+    const tynnIssuesHost = useMemo(() => tynnIssuesHostOf(resolvedBridge), [resolvedBridge]);
     /**
      * THE ONE RESTART (genie#1238): every Start and Restart in this window — the Agent view's header, the Dashboard's
      * broken row and lane, the chat — calls this, and it is main's `restartAgent(…, 'graceful')`: it works from every
@@ -1967,6 +1969,7 @@ function DesktopApp({ bridge }: AppProps) {
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
             tynnBoard={tynnBoardHost}
+            tynnIssues={tynnIssuesHost}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => {
                 if (r.ok) return r.commits;
                 // A workspace with nothing to read is an empty list. Git not answering is a failure the view shows.

@@ -2,7 +2,7 @@ import type { BoardLiveSignal } from '../core/tynn-board.js';
 import { issueWatchSoundKinds, PANEL_RECENT, type IssueWatchSummary, type IwEntry, type IwEvent, type WatchedReposView } from '../core/issue-watch.js';
 import { IssueWatchDelivery, type IssueWatchDeliveryPorts } from './issue-watch-delivery.js';
 import { IssueWatchClient, type SocketLike } from './issue-watch-client.js';
-import { TynnBoardLive } from './tynn-board-live.js';
+import { TynnBoardLive, type TynnLiveFeed } from './tynn-board-live.js';
 import type { TynnResponse } from './tynn-account.js';
 
 /**
@@ -217,6 +217,8 @@ export interface TynnBoardHubEvent {
 }
 
 export interface TynnBoardHubPorts {
+    /** A page's own channel and events; omitted for the board. */
+    readonly feed?: TynnLiveFeed;
     readonly tynn: () => HostTynn | null;
     readonly socket: (url: string) => SocketLike;
     readonly schedule: (fn: () => void, ms: number) => () => void;
@@ -235,6 +237,7 @@ export class TynnBoardHub {
     constructor(ports: TynnBoardHubPorts) {
         this.#ports = ports;
         this.#live = new TynnBoardLive({
+            ...(ports.feed ? { feed: ports.feed } : {}),
             tynn: () => {
                 const account = ports.tynn();
                 if (!account || account.userId() === null) return null;

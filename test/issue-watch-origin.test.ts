@@ -194,7 +194,11 @@ describe('Genie’s socket against that rule (real socket, real wire)', () => {
     it('the Tynn sockets dial through dialTynnSocket (COUNTED), with the account’s host: genie-host’s, and the window’s only on the emergency no-host path (P5c)', async () => {
         const host = await readFile(resolve('src/main/genie-host.ts'), 'utf8');
         expect(host.match(/dialTynnSocket\(url, hostTynn\?\.host\(\) \?\? TYNN_HOST\)/g)).toHaveLength(1);
-        expect(host.match(/socket: tynnSocket,/g)).toHaveLength(2);
+        // IssueWatch, the board, and the Issues queue: each uses the same origin-confined dialer.
+        expect(host.match(/socket: tynnSocket,/g)).toHaveLength(3);
+        const issuesHub = host.match(/const tynnIssues = new TynnBoardHub\(\{([\s\S]*?)\n    \}\);/)?.[1];
+        expect(issuesHub).toContain('socket: tynnSocket,');
+        expect(issuesHub).toContain('feed: TYNN_ISSUES_FEED,');
         const emergency = await readFile(resolve('src/main/issue-watch-emergency.ts'), 'utf8');
         expect(emergency.match(/dialTynnSocket\(url, p\.account\(\)\?\.host\(\) \?\? TYNN_HOST\)/g)).toHaveLength(1);
         const main = await readFile(resolve('src/main/main.ts'), 'utf8');
