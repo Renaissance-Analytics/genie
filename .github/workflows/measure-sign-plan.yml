@@ -1,0 +1,38 @@
+name: Measure sign plan
+# A MEASUREMENT, NOT A MERGE (measure/sign-plan). What would a signed Windows build sign, and which of those files are
+# already signed by someone else? The package is built exactly as CI's "it packages (windows-latest)" builds it:
+# UNSIGNED (--config.win.signExecutable=false), so every file still carries only the signature it shipped with. Nothing
+# is signed here; no signing secret or environment is used.
+on:
+  push:
+    branches: ['measure/sign-plan']
+permissions:
+  contents: read
+jobs:
+  plan:
+    name: sign plan (windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+      - name: package, unsigned (as CI's it packages)
+        run: npx electron-builder --dir --publish never --config.win.signExecutable=false
+      - name: the sign plan and each file's signer
+        shell: pwsh
+        run: node scripts/win-sign-plan.mjs release/win-unpacked electron-builder.yml --json "$env:RUNNER_TEMP/win-sign-plan.json"
+      - name: the plan's table
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-sign-plan
+          path: ${{ runner.temp }}/win-sign-plan.json
+          if-no-files-found: warn
+          retention-days: 7
