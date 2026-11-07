@@ -151,7 +151,7 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
     );
     const mailId = m.mailId ?? m.id;
     return (
-        <div data-chat-message={m.id} data-who="mail" className="flex max-w-[94%] flex-col gap-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-2">
+        <div data-chat-message={m.id} data-who="mail" className="flex min-w-0 max-w-[94%] flex-col gap-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-2">
             {onOpenMail ? (
                 <Button size="xs" type="button" data-open-mail={mailId} title="Open this message in the AgentInbox" onClick={() => onOpenMail(mailId)} className="flex items-center gap-1.5 self-start font-mono text-[11px] text-[var(--violet-400)]">
                     {head}
@@ -162,43 +162,17 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
             {/* A SHORT PREVIEW, not the message (the owner, 2026-10-21: "I don't need to see so much content, that is what the
                 link to open it is for"): one plain line of it, at most two lines tall; the head opens it in full. */}
             <p data-mail-preview={m.id} className="line-clamp-2 text-[13px] text-[var(--fg-2)]">{mailSubject(m.text)}</p>
+            <span data-mail-receipt={m.delivered ? 'delivered' : 'waiting'} className="font-mono text-[11px] text-[var(--fg-3)]">{m.delivered ? 'Delivered' : 'Waiting'}</span>
+            {!m.delivered && m.reason ? <p data-mail-refusal={mailId} className="text-[12px] text-[var(--warning)]">{m.reason}</p> : null}
         </div>
     );
 }
 
 /**
- * GENIE'S NOTICE TURN, WITH ITS CONTEXT: `genie → atlas · told atlas about 2 AgentInbox messages`, then one entry per
- * message — who wrote it and one line of what it says — each opening that message. The notice's own words to the agent
- * ("collect it with agentinbox receive") are an instruction to it, not something for the person to read. Hook-free.
+ * Older thread payloads can still contain a delivery row. The mail card replaces it on those clients too.
  */
-export function ChatDeliveryRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMail?: ((messageId: string) => void) | undefined }) {
-    return (
-        <div data-chat-message={m.id} data-who="delivery" className="flex flex-col gap-1 font-mono text-[11px] text-[var(--fg-3)]">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2">
-                <span className="text-[var(--violet-400)]"><Icon name="mail" size="xs" /></span>
-                <span className="min-w-0">{`${m.from} · ${m.text}`}</span>
-                {m.at !== null && m.at !== undefined ? <span className="text-[var(--fg-4)]">· <span data-chat-time={m.at}>{clock(m.at)}</span></span> : null}
-            </div>
-            <ul className="flex min-w-0 flex-col gap-0.5 pl-5">
-                {(m.mail ?? []).map((ref) => {
-                    // Two FLEX ITEMS, so each one-line clip clips: a `truncate` on an inline span keeps its nowrap and
-                    // drops its clip, and the subject ran off the column as one line (the owner, 2026-11-04, Tynn #944).
-                    const body = <><span className="max-w-[45%] shrink-0 truncate text-[var(--fg-2)]">{`from ${ref.from}`}</span><span className="min-w-0 flex-1 truncate font-sans text-[12px] text-[var(--fg-2)]">{ref.subject}</span></>;
-                    return (
-                        <li key={ref.id} data-delivery-mail={ref.id}>
-                            {onOpenMail ? (
-                                // react-fancy's Button puts its children in ONE label span with no display of its own: made a
-                                // flex row here, so the two spans are flex items inside the button's width.
-                                <Button size="xs" type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} labelClassName="flex min-w-0 flex-1 items-baseline gap-2" className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)] justify-start">{body}</Button>
-                            ) : (
-                                <div className="flex min-w-0 items-baseline gap-2 px-1">{body}</div>
-                            )}
-                        </li>
-                    );
-                })}
-            </ul>
-        </div>
-    );
+export function ChatDeliveryRow(_props: { m: ChatThreadMessage; onOpenMail?: ((messageId: string) => void) | undefined }) {
+    return null;
 }
 
 export interface ChatFlyoutProps {

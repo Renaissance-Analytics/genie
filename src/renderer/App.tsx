@@ -1648,10 +1648,11 @@ function DesktopApp({ bridge }: AppProps) {
     const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, chatAgents, Date.now, chatLines)), [chatDetail, chatSubject, chatAgents, chatLines]);
     const chatRunning = chatDetail !== null && chatBase !== null && chatDetail.agent.id === chatBase.agentId && chatDetail.session?.running === true;
     const inboxRecent = features.inbox?.recent ?? null;
+    const observedRecent = chatBase?.loaded ? chatDetail?.comms ?? inboxRecent : inboxRecent;
     // The same thread object until something it shows changed, so the chat does not draw again for nothing.
     const chatDrafts: ChatThread | null = useMemo(() => chatBase === null
         ? null
-        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(inboxRecent, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatRunning }), [chatBase, inboxRecent, drafts, chatRunning]);
+        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(observedRecent, chatBase.agentId, chatBase.name, chatAgents) } : chatBase, drafts, { running: chatRunning }), [chatBase, observedRecent, chatAgents, drafts, chatRunning]);
     const chatThread: ChatThread | null = useMemo(() => (chatDrafts === null || Object.keys(draftProblems).length === 0 ? chatDrafts : { ...chatDrafts, messages: chatDrafts.messages.map((m) => {
         const problem = draftProblems[m.id];
         return problem ? { ...m, draftProblem: problem } : m;
