@@ -1,5 +1,23 @@
 import type { AgentId, AgentRecord } from './identity.js';
+import type { LiveSession } from './roster.js';
 import { isOsAgent } from './os-agent.js';
+
+/** Metadata-only ownership cache. Its stable set is also the version for a filtered mail view. */
+export class WorkspaceMailVisibility {
+    #agents: readonly AgentRecord[] | null = null;
+    #workspaces: readonly { id: string; asleep?: boolean }[] | null = null;
+    #hidden: ReadonlySet<string> = new Set();
+
+    read(agents: readonly AgentRecord[], workspaces: readonly { id: string; asleep?: boolean }[]): ReadonlySet<string> {
+        if (agents !== this.#agents || workspaces !== this.#workspaces) {
+            const asleep = new Set(workspaces.filter((w) => w.asleep === true).map((w) => w.id));
+            this.#hidden = new Set(agents.filter((a) => asleep.has(a.workspaceId)).map((a) => a.id as string));
+            this.#agents = agents;
+            this.#workspaces = workspaces;
+        }
+        return this.#hidden;
+    }
+}
 
 /**
  * AGENTINBOX — the pure half (§6.4). Addressing, reachability, attachment rules.
@@ -22,6 +40,22 @@ export type Participant = AgentId | typeof HUMAN | `app:${string}`;
  * their mail without a lookup.
  */
 export const HUMAN = 'human' as const;
+
+/** Read-only availability, late-bound so a provider pause or recovery applies to the next message. */
+export type InboxSessionProbe = (agentId: AgentId) => Pick<LiveSession, 'limit' | 'accountPaused'> | null;
+
+/** A reported provider pause, never inferred from being idle, busy, stopped or signed out. */
+export function inboxAgentPaused(session: ReturnType<InboxSessionProbe>): boolean {
+    const state = session?.limit?.state;
+    return session?.accountPaused != null || state === 'paused' || state === 'retrying' || state === 'needs-person';
+}
+
+/** Only public availability is reported; provider and account diagnostics stay out of the reply. */
+export function pausedAgentReply(session: ReturnType<InboxSessionProbe>): string | null {
+    if (!inboxAgentPaused(session)) return null;
+    return 'Automatic reply from Genie: this agent is paused and cannot respond right now. '
+        + 'Your message has been saved for them. If you are blocked, ask your user for guidance.';
+}
 
 export interface Address {
     /** The workspace as written: its slug, its id, `system` for the OS agent — or `null` when only a name was given. */
@@ -70,6 +104,17 @@ export type Resolution =
     /** Two agents share a bare name (or an old short form). Every `name@workspace` is named so the sender can pick. */
     | { kind: 'ambiguous'; forms: readonly string[] }
     | { kind: 'none' };
+
+/** A known hibernated target is refused, without advertising it in the reachable roster. No folder reads. */
+export function hibernatedRecipientRefusal(text: string, records: readonly AgentRecord[], asleep: ReadonlySet<string>, slugs: ReadonlyMap<string, string>, workspaceScope?: string): string | null {
+    const scoped = records.filter((r) => workspaceScope === undefined || r.workspaceId === workspaceScope);
+    if (resolveAddress(text, scoped.filter((r) => !asleep.has(r.workspaceId)), slugs).kind !== 'none') return null;
+    const hidden = scoped.filter((r) => asleep.has(r.workspaceId));
+    const target = resolveAddress(text, hidden, slugs);
+    if (target.kind === 'one') return `${hidden.find((r) => r.id === target.id)!.name}'s workspace is hibernated; redock it first`;
+    if (target.kind === 'ambiguous') return `${parseAddress(text)!.name}'s workspace is hibernated; redock it first`;
+    return null;
+}
 
 /**
  * Resolve an address against the roster.

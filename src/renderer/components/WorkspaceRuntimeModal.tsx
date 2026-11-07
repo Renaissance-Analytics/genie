@@ -1,7 +1,7 @@
-import { Modal } from '@particle-academy/react-fancy';
+import { Button, Modal } from '@particle-academy/react-fancy';
 import type { FeatureAction, FeatureData } from '../features.js';
 import { AddSiteForm } from './AddForms.js';
-import { ProcessesPanel, SiteRow } from './FeatureSurfaces.js';
+import { ProcessesPanel, SiteList } from './FeatureSurfaces.js';
 
 /**
  * A WORKSPACE'S PROCESSES OR SITES, IN A MODAL — Genie 1's Processes and Site Manager modals (the owner, 2026-10-19:
@@ -12,6 +12,7 @@ export function WorkspaceRuntimeModal({ kind, workspace, data, onAction, onClose
     kind: 'processes' | 'sites';
     workspace: { id: string; path: string; name?: string | undefined };
     data: FeatureData;
+    /** App.tsx's answers with its outcome (see FeatureSurfaces' SurfaceProps), which SiteList reads. */
     onAction: (action: FeatureAction) => void;
     onClose: () => void;
 }) {
@@ -32,7 +33,7 @@ export function WorkspaceRuntimeModal({ kind, workspace, data, onAction, onClose
                         <>
                             <div className="flex items-center gap-3 px-5 py-2 text-sm">
                                 {sites.length === 0 ? <span className="text-[var(--fg-3)]">No sites in {name} yet.</span> : null}
-                                <button type="button" data-action="add-site" className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'hosting.addSite', workspaceId: workspace.id, repoPath: workspace.path })}>Add a site</button>
+                                <Button size="xs" type="button" data-action="add-site" className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'hosting.addSite', workspaceId: workspace.id, repoPath: workspace.path })}>Add a site</Button>
                             </div>
                             {adding ? (
                                 <AddSiteForm
@@ -51,9 +52,7 @@ export function WorkspaceRuntimeModal({ kind, workspace, data, onAction, onClose
                                 />
                             ) : null}
                             {sites.length > 0 ? (
-                                <ul className="divide-y divide-[var(--border-1)]">
-                                    {sites.map((s) => <SiteRow key={s.id} site={s} editing={hosting?.editing?.siteId === s.id ? hosting.editing : null} onAction={onAction} />)}
-                                </ul>
+                                <SiteList sites={sites} editing={hosting?.editing ?? null} onAction={onAction} />
                             ) : null}
                         </>
                     )}

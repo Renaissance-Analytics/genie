@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { relayConnectView, type RelayConnect } from '../../core/relay-connect.js';
 
 const STEP_ICON = { done: 'check', working: 'loader', failed: 'circle-alert', waiting: 'circle' } as const;
@@ -26,14 +26,14 @@ export function RelayConnecting({ name, state, onRetry }: { name: string | null;
             {view.problem !== null ? (
                 <div data-problem="connect" className="flex w-full flex-col items-center gap-3 rounded-xl bg-[var(--bg-2)] px-4 py-3 text-center">
                     <p className="text-sm text-[var(--fg-1)]">{view.problem}</p>
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         type="button"
                         data-action="retry-connect"
                         onClick={onRetry}
                         className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3.5 py-1.5 text-sm font-medium text-[var(--primary-fg)] hover:bg-[var(--primary-hover)]"
                     >
                         <Icon name="refresh-cw" size="sm" />Retry
-                    </button>
+                    </Button>
                 </div>
             ) : null}
         </div>

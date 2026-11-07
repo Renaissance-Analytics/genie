@@ -95,12 +95,10 @@ describe('the surfaces draw names', () => {
         noIdsShown(html);
     });
 
-    it('Settings → Remote access: share rows, a shared connection, and the mint picker', () => {
+    it('Settings → Remote access: a shared connection names its workspace', () => {
         const remote: NonNullable<FeatureData['remote']> = {
             host: 'alphar', url: 'wss://alphar.tailnet.invalid:7421', unavailable: null, locked: false, pin: null, devices: [],
-            shares: [{ id: 'share_s', workspaceId: ID, grantedTo: 'wren', expiresAt: 10, served: true, revoked: false }],
             connections: [{ id: 'conn_2', label: 'wren’s laptop', isOwner: false, workspaceId: ID, driving: false }],
-            servedLink: null,
             // The switch is on (Tynn #820): these describe a host that listens or tries to.
             enabled: true,
             firewall: false,
@@ -109,7 +107,6 @@ describe('the surfaces draw names', () => {
         // The page only: the Settings sidebar has its own "Tynn" link, which must not satisfy this.
         const page = html.slice(html.indexOf('data-settings-page='));
         expect(textOf(page)).toMatch(/shared: Tynn/);
-        expect(page).toContain('>Tynn<');
         noIdsShown(html);
     });
 });

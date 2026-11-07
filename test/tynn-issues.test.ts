@@ -84,6 +84,11 @@ describe('the queue, as the tab reads it', () => {
 });
 
 describe('each action, where the contract says', () => {
+    it('refuses inherited object names as actions, rather than treating them as issue APIs', () => {
+        for (const action of ['constructor', 'toString', '__proto__']) {
+            expect(issueActionRequest('p1', action, 'i1')).toBeNull();
+        }
+    });
     it('reaches the door with the method and path the contract names', () => {
         expect(issueActionRequest('p1', 'issue.create', null)).toEqual({ method: 'POST', path: '/api/v1/projects/p1/issues' });
         expect(issueActionRequest('p1', 'issue.update', 'i 1')).toEqual({ method: 'PATCH', path: '/api/v1/projects/p1/issues/i%201' });

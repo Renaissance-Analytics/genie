@@ -19,6 +19,7 @@ import { TitleBar } from '../src/renderer/components/TitleBar.js';
 import { WorkspaceColorPicker } from '../src/renderer/components/WorkspaceColorPicker.js';
 import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
 import { WorkspaceColorsContext, workspaceColorMap, type WorkspaceColorMap } from '../src/renderer/workspace-colors.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * A WORKSPACE'S COLOUR, WHEREVER YOU COULD MISTAKE WHO YOU ARE ADDRESSING (genie#1300). The owner: "We need workspace
@@ -83,7 +84,9 @@ describe('the workspace tab strip and its agent tabs', () => {
     it('the strip is edged in the colour, and the agent tab on screen is underlined in it', () => {
         const html = tabs(TEAL);
         expect(marked(html)).toBe(true);
-        expect(html).toMatch(/data-workspace-tab="agent:a1"[^>]*data-current="true"[^>]*class="[^"]*border-\[var\(--ws\)\]/);
+        const tab = control(html, 'data-workspace-tab="agent:a1"');
+        expect(tab!.open).toContain('aria-selected="true"');
+        expect(tab!.open).toMatch(/\sclass="[^"]*border-\[var\(--ws\)\]/);
         expect(html).toContain('kai');
     });
 
@@ -174,11 +177,11 @@ describe('the Dashboard\'s workspace rows', () => {
         ask: null, reason: null, fixes: [], step: null, target: null, activity: null, delivery: null,
         collaborators: null, commsAgeSeconds: null, contextUsed: null, contextSize: null,
     });
-    it('each workspace\'s header is edged in its colour, beside its name', () => {
+    it('each Workspace cell shows its workspace colour beside its name', () => {
         const html = renderToStaticMarkup(<Dashboard rows={[row('kai', 'tynn'), row('wren', 'fancy')]} genie={null} onOpenAgent={noop} onAddAgent={noop}
             workspaces={[{ id: 'tynn', name: 'Tynn', path: '/w/tynn', color: TEAL }, { id: 'fancy', name: 'Fancy', path: '/w/fancy', color: PINK }]} />);
-        expect(html).toMatch(/data-workspace-head="tynn"[^>]*data-workspace-color="#0891b2"[\s\S]*Tynn/);
-        expect(html).toMatch(/data-workspace-head="fancy"[^>]*data-workspace-color="#db2777"[\s\S]*Fancy/);
+        expect(html).toMatch(/data-column="workspace" data-workspace="tynn"[\s\S]*?data-workspace-color="#0891b2"[\s\S]*?Tynn/);
+        expect(html).toMatch(/data-column="workspace" data-workspace="fancy"[\s\S]*?data-workspace-color="#db2777"[\s\S]*?Fancy/);
     });
 });
 

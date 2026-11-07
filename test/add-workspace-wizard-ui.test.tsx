@@ -12,6 +12,7 @@ import {
     WizardStepper,
     WorkspaceStepView,
 } from '../src/renderer/components/AddWorkspaceWizard.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * OPEN EXISTING FOLDER / IMPORT FROM GIT ON SCREEN (Add workspace parity item 7) — Genie 1's four steps, Source → Repos →
@@ -206,7 +207,7 @@ describe('Import from Git form', () => {
 
     it('while cloning, its button is disabled and says so', () => {
         const html = renderToStaticMarkup(<AddFromGitForm onPreview={noop} onCancel={noop} busy />);
-        expect(html).toMatch(/data-action="clone-and-read" disabled=""/);
+        expect(control(html, 'data-action="clone-and-read"')!.open).toMatch(/\sdisabled=""/);
         expect(html).toMatch(/Cloning…/);
     });
 });

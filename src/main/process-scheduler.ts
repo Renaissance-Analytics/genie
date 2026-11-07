@@ -33,14 +33,18 @@ export interface ProcessSchedulerDeps {
     readonly appEnv?: (process: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => Readonly<Record<string, string>>;
     readonly asleep: (workspaceId: string) => boolean;
     /** Deliver `text` to the agent at `address`, from the task named `from` — now, or when its turn ends. False = nowhere to deliver. */
-    readonly nudge: (address: string, text: string, from: string) => boolean;
+    readonly nudge: (address: string, text: string, from: string) => boolean | Promise<boolean>;
     readonly now: () => number;
     readonly schedule: (fn: () => void, ms: number) => () => void;
+    /** SAFE MODE (Tynn #386): while on, no scheduled task is armed or fired; Run now is the person's and still runs. */
+    readonly safeMode?: () => boolean;
 }
 
 export class ProcessScheduler {
     readonly #deps: ProcessSchedulerDeps;
     #cancel: (() => void) | null = null;
+    /** Stopped for good ("Shut down everything", P5a.3): nothing is armed, fired or run from here. */
+    #stopped = false;
     /** Command runs in flight: the task id → its run's start, settled when the supervisor reports its exit. */
     readonly #inFlight = new Map<string, { at: number; done: Promise<void>; finish: () => void }>();
     /** Outcome writes not yet on disk (and not yet told to the book's listeners) — `settled()` waits for these too. */
@@ -56,6 +60,9 @@ export class ProcessScheduler {
     plan(): void {
         this.#cancel?.();
         this.#cancel = null;
+        if (this.#stopped) return;
+        // SAFE MODE (Tynn #386): no scheduled task is armed; leaving plans again (genie-host). Run now is the person's.
+        if (this.#deps.safeMode?.() === true) return; // safe mode holds
         const now = this.#deps.now();
         let at: number | null = null;
         let due: string[] = [];
@@ -75,6 +82,7 @@ export class ProcessScheduler {
     async runNow(id: string): Promise<RunNowResult> {
         const p = this.#deps.book.scheduledTasks().find((x) => x.id === id);
         if (!p) throw new Error(`no scheduled task ${id}`);
+        if (this.#stopped) return 'held';
         return this.#run(p);
     }
 
@@ -92,8 +100,16 @@ export class ProcessScheduler {
         }
     }
 
+    /** Stop for good — "Shut down everything" (host-shutdown.ts): the timer cancelled, and a fire already due runs nothing. */
+    stop(): void {
+        this.#stopped = true;
+        this.#cancel?.();
+        this.#cancel = null;
+    }
+
     #fire(ids: readonly string[]): void {
         this.#cancel = null;
+        if (this.#stopped || this.#deps.safeMode?.() === true) return;
         const tasks = this.#deps.book.scheduledTasks().filter((p) => ids.includes(p.id) && p.wanted);
         // Re-plan FIRST, so the next due is held whatever the runs do.
         this.plan();
@@ -110,10 +126,20 @@ export class ProcessScheduler {
             return 'skipped';
         }
         if (schedule.kind === 'agent-nudge') {
-            let ok = false;
-            try { ok = this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); } catch { ok = false; }
-            await this.#record(p.id, at, ok ? 'ok' : 'failed');
-            return ok ? 'ok' : 'failed';
+            // In flight from the moment it fires: the nudge may answer later (the agent host's promise, the host split),
+            // and `settled()` must still cover the run and its write (genie#1250).
+            let finishNudge!: () => void;
+            const nudged = new Promise<void>((r) => { finishNudge = r; });
+            this.#inFlight.set(p.id, { at, done: nudged, finish: finishNudge });
+            try {
+                let ok = false;
+                try { ok = await this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); } catch { ok = false; }
+                await this.#record(p.id, at, ok ? 'ok' : 'failed');
+                return ok ? 'ok' : 'failed';
+            } finally {
+                this.#inFlight.delete(p.id);
+                finishNudge();
+            }
         }
         let finish!: () => void;
         const done = new Promise<void>((r) => { finish = r; });

@@ -5,6 +5,7 @@ import { startDraft, type SourceAnalysis } from '../src/core/envelope-plan.js';
 import { NewWorkspaceForm } from '../src/renderer/components/AddWorkspaceModal.js';
 import { WorkspaceStepView } from '../src/renderer/components/AddWorkspaceWizard.js';
 import { CreateTynnProjectView, TynnProjectLink, TynnProjectPickerView } from '../src/renderer/components/TynnProjectLink.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE OPTIONAL TYNN PROJECT ON SCREEN (Add workspace parity item 5) — Genie 1's ProjectPicker ("Project (optional)", "— No
@@ -71,15 +72,17 @@ describe('Create new project — Genie 1’s form, without GApps', () => {
         expect(html).toMatch(/data-field="tynn-project-slug"[^>]*value="acme-app"|value="acme-app"[^>]*data-field="tynn-project-slug"/);
         expect(html).toContain('URL slug, auto-derived from the name. Editable.');
         expect(html).not.toMatch(/GApp/i);
-        expect(html).not.toMatch(/data-action="create-tynn-project"[^>]*disabled=""/);
-        expect(renderToStaticMarkup(<CreateTynnProjectView {...base} name="   " />)).toMatch(/data-action="create-tynn-project"[^>]*disabled=""/);
+        expect(control(html, 'data-action="create-tynn-project"')!.open).not.toMatch(/\sdisabled=""/);
+        expect(control(renderToStaticMarkup(<CreateTynnProjectView {...base} name="   " />), 'data-action="create-tynn-project"')!.open).toMatch(/\sdisabled=""/);
         // One owner (personal only): nothing to choose, so no Owner field.
         expect(renderToStaticMarkup(<CreateTynnProjectView {...base} owners={[owners[0]!]} name="x" />)).not.toContain('data-field="tynn-project-owner"');
     });
 
     it('busy says so and holds the button; Tynn’s refusal is shown', () => {
         const html = renderToStaticMarkup(<CreateTynnProjectView {...base} name="Acme" busy error="The slug has already been taken." />);
-        expect(html).toMatch(/data-action="create-tynn-project"[^>]*disabled=""[^>]*>[\s\S]*?Creating…/);
+        const create = control(html, 'data-action="create-tynn-project"');
+        expect(create!.open).toMatch(/\sdisabled=""/);
+        expect(create!.text).toContain('Creating…');
         expect(html).toContain('The slug has already been taken.');
     });
 

@@ -1,6 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
 import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
     knowledgeTargetFor,
@@ -19,6 +17,8 @@ import {
     type SubmoduleEntry,
 } from '../core/envelope-plan.js';
 import type { EnvelopePorts } from './envelope-wizard-host.js';
+import { withinGitLimit } from './git-ports.js';
+import { gitMayRun } from './git-read-policy.js';
 
 /**
  * THE REAL DISK AND GIT THE ENVELOPE BUILD RUNS ON (Add workspace parity item 7). main.ts hands these to
@@ -32,24 +32,22 @@ import type { EnvelopePorts } from './envelope-wizard-host.js';
 const isDir = async (p: string) => { try { return (await stat(p)).isDirectory(); } catch { return false; } };
 const exists = async (p: string) => { try { await stat(p); return true; } catch { return false; } };
 
-/** One read-only git command; `null` when it fails (not a repo, no such config, no git). */
-function gitRead(cwd: string, args: readonly string[]): Promise<string | null> {
-    return new Promise((done) => {
-        execFile('git', [...args], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => done(error ? null : String(stdout)));
-    });
+/** One read-only git command; `null` when it fails (not a repo, no such config, no git). Past the limit it rejects: the wizard says so, rather than showing no remote. */
+async function gitRead(cwd: string, args: readonly string[]): Promise<string | null> {
+    if (!(await gitMayRun(cwd))) return null;
+    return withinGitLimit((limit) => new Promise((done) => {
+        limit.git(args, { cwd, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => done(error ? null : String(stdout)));
+    }));
 }
 
 /** git with input on stdin (Genie 1's runGitWithStdin): `check-ignore` exits 1 for "none matched", which is an answer. */
-function gitWithStdin(cwd: string, args: readonly string[], input: string): Promise<string> {
-    return new Promise((done) => {
-        const child = spawn('git', [...args], { cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
-        let out = '';
-        child.stdout.setEncoding('utf8');
-        child.stdout.on('data', (d: string) => { out += d; });
-        child.on('error', () => done(''));
-        child.on('close', () => done(out));
-        child.stdin.end(input);
-    });
+async function gitWithStdin(cwd: string, args: readonly string[], input: string): Promise<string> {
+    if (!(await gitMayRun(cwd))) return '';
+    return withinGitLimit((limit) => new Promise((done) => {
+        // The exit code is not read: 1 is "none matched", and what it printed is the answer either way.
+        const child = limit.git(args, { cwd, maxBuffer: 32 * 1024 * 1024 }, (_error, stdout) => done(String(stdout)));
+        child?.stdin?.end(input);
+    }));
 }
 
 async function gitInfo(cwd: string): Promise<{ origin: string | null; head: string | null }> {
@@ -171,20 +169,23 @@ export async function analyseFolder(root: string): Promise<SourceAnalysis> {
 }
 
 export interface EnvelopeFsOptions {
-    /** Where Import from Git clones wait; the OS temp folder unless a test says otherwise. */
-    stagingBase?: string | undefined;
+    /** Where Import from Git clones wait: the window's scratch under Genie's root (scratch-area.ts, P7), never the OS temp. */
+    stagingBase: string | (() => string);
 }
 
 const STAGE_PREFIX = 'genie-import-';
 
-export function nodeEnvelopePorts(options: EnvelopeFsOptions = {}): EnvelopePorts {
-    const base = resolve(options.stagingBase ?? tmpdir());
+export function nodeEnvelopePorts(options: EnvelopeFsOptions): EnvelopePorts {
+    const given = options.stagingBase;
+    const baseNow = (): string => resolve(typeof given === 'function' ? given() : given);
     /**
      * The stage folder a path is in: `<base>/genie-import-XXXXXX` itself or anything under it — a folder `mkdtemp` made for
-     * an import, recognised by where it is, so a restarted Genie still knows its own. Anything else is `null`, and is never
-     * removed: a person's folder can only ever be read here.
+     * an import, recognised by where it is. A previous run's stages are in that run's scratch folder, which the scratch
+     * sweep removes (scratch-area.ts). Anything else is `null`, and is never removed: a person's folder can only ever be
+     * read here.
      */
     const stageOf = (path: string): string | null => {
+        const base = baseNow();
         let p = resolve(path);
         while (dirname(p) !== p) {
             if (dirname(p) === base) return basename(p).startsWith(STAGE_PREFIX) ? p : null;
@@ -210,7 +211,7 @@ export function nodeEnvelopePorts(options: EnvelopeFsOptions = {}): EnvelopePort
             } catch { /* not a readable folder: nothing to restore */ }
         },
         staging: {
-            make: async () => { await mkdir(base, { recursive: true }); return mkdtemp(join(base, STAGE_PREFIX)); },
+            make: async () => { const base = baseNow(); await mkdir(base, { recursive: true }); return mkdtemp(join(base, STAGE_PREFIX)); },
             owns: (path) => stageOf(path) !== null,
             remove: async (path) => { const stage = stageOf(path); if (stage) await rm(stage, { recursive: true, force: true }); },
         },

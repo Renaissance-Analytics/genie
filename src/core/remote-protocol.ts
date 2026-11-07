@@ -1,3 +1,11 @@
+import { BLOB_METHODS } from './local-blobs.js';
+import { LOCAL_TERMINAL_METHODS, type LocalTerminalMethod } from './local-terminals.js';
+import { LOCAL_CONTENT_METHODS } from './local-content.js';
+import { FILES_WATCH_METHODS } from './local-files-watch.js';
+import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
+import { LOCAL_DRAFT_METHODS, type LocalDraftMethod } from './local-drafts.js';
+import { LOCAL_ARTBOARD_METHODS, type LocalArtboardMethod } from './local-artboard.js';
+
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie.
  *
@@ -5,8 +13,15 @@
  * `event` pushed host → client. Parsed defensively: a bad frame is a refusal with a reason, never a
  * throw. ONE table says what every bridge method is — a READ (never gated on the baton), a WRITE
  * (gated on the baton), an UPGRADE (gated on ownership of the host), or HOST-ONLY (a window or a
- * picker on the host, refused remotely with where to do it). Everything else derives from it.
+ * picker on the host, refused remotely with where to do it), or LOCAL (only the admitted window door).
+ * Everything else derives from it.
  */
+
+/**
+ * The remote wire's version, said in `welcome` with the host's build (P10.1e): a client sees what it is talking to. Raised
+ * only for a change an older client cannot read; a new field an old client ignores is not one.
+ */
+export const REMOTE_PROTOCOL = 1;
 
 export const REMOTE_METHODS = [
     'snapshot',
@@ -32,11 +47,15 @@ export const REMOTE_METHODS = [
     'agents.setManageTabs',
     'agents.setDrivePages',
     'activity',
+    'accountRetry',
+    'headroom',
     'agents.setIssueWatch',
     'agents.setPermissions',
     'agents.setModel',
     'agents.models',
     'agents.diagnose',
+    // A tool row's whole output, read when a person opens the row (Tynn story #386).
+    'agents.toolOutput',
     'workspaces.previewAdd',
     'workspaces.confirmAdd',
     'workspaces.create',
@@ -92,6 +111,19 @@ export const REMOTE_METHODS = [
     'updates.check',
     'updates.download',
     'updates.install',
+    'updates.notes',
+    'appInbox.state',
+    'appInbox.createKey',
+    'appInbox.revokeKey',
+    'appInbox.source',
+    'deviceLink.hosts',
+    'deviceLink.forget',
+    'deviceLink.adopt',
+    'tynnNetwork.workstations',
+    'tynnNetwork.setRole',
+    'tynnNetwork.shares.list',
+    'tynnNetwork.shares.mint',
+    'tynnNetwork.shares.revoke',
     /** A phone's upload (§6.8): bytes over the socket → the inbox's byte copy; never a path from the device. */
     'inbox.sendFile',
     /*
@@ -102,6 +134,10 @@ export const REMOTE_METHODS = [
     'files.open',
     'files.readMedia',
     'files.upload',
+    ...LOCAL_FILES_METHODS,
+    ...LOCAL_DRAFT_METHODS,
+    ...LOCAL_ARTBOARD_METHODS,
+    ...LOCAL_TERMINAL_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -110,11 +146,15 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `agent.watch` / `agent.unwatch` (genie#1346): a phone's window on ONE agent's ledger, then patches (core/mobile-wire.ts).
  * `upload.begin` / `upload.chunk` / `upload.abort`: bytes staged on the connection under the 1 MiB frame cap, taken by
  * `files.upload` or a prompt's attachments.
+ * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
-export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only';
+/** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
+
+export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
 const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     snapshot: 'read',
@@ -147,12 +187,15 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.setDrivePages': 'write',
     // The Dashboard's lanes (beta.33 item 10): every agent's activity feed in one workspace — a read, workspace-scoped.
     activity: 'read',
+    accountRetry: 'local',
+    headroom: 'local',
     'agents.setIssueWatch': 'write',
     'agents.setPermissions': 'write',
     'agents.setModel': 'write',
     // The provider's own model list for an agent's picker (the owner, 2026-10-21): a read, agent-scoped.
     'agents.models': 'read',
     'agents.diagnose': 'read',
+    'agents.toolOutput': 'read',
     // Tynn #835: the folder is picked IN THE WINDOW (a FileBrowser over the host's own disk); the preview reads a path.
     'workspaces.previewAdd': 'read',
     // One folder of the host, for every file and folder picker (main/host-fs.ts); a guest only inside its workspace(s).
@@ -215,6 +258,19 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'updates.check': 'upgrade',
     'updates.download': 'upgrade',
     'updates.install': 'upgrade',
+    'updates.notes': 'local',
+    'appInbox.state': 'local',
+    'appInbox.createKey': 'local',
+    'appInbox.revokeKey': 'local',
+    'appInbox.source': 'local',
+    'deviceLink.hosts': 'local',
+    'deviceLink.forget': 'local',
+    'deviceLink.adopt': 'local',
+    'tynnNetwork.workstations': 'local',
+    'tynnNetwork.setRole': 'local',
+    'tynnNetwork.shares.list': 'local',
+    'tynnNetwork.shares.mint': 'local',
+    'tynnNetwork.shares.revoke': 'local',
     // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
     'inbox.sendFile': 'write',
     // The phone's files (genie#1346): reading a workspace's files is a read; an upload writes into it.
@@ -222,6 +278,10 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'files.open': 'read',
     'files.readMedia': 'read',
     'files.upload': 'write',
+    ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
+    ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
+    ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
+    ...Object.fromEntries(LOCAL_TERMINAL_METHODS.map(method => [method, 'local'])) as Record<LocalTerminalMethod, 'local'>,
     addWorkspace: 'host-only',
     takeOver: 'host-only',
     // A provider's login opens a window on the host, for the person at it: like Take Over.
@@ -234,20 +294,25 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.toolOutput', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
 export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
     | { kind: 'token'; token: string; label?: string }
-    | { kind: 'share'; id: string; secret: string; label?: string }
+    /** Only the local window door may supply the corresponding transport proof. Never a device credential. */
+    | { kind: 'local'; label?: string }
     /** Already authenticated by the TRANSPORT (the Tynn relay checked a grant and its key, Tynn #838): refused on any
      *  connection that carries no {@link PreAuth}, so a tailnet socket cannot claim it. */
-    | { kind: 'relay'; label?: string };
+    | { kind: 'relay'; label?: string }
+    /** Only between a desktop window and its own host, which writes the token in (main/device-link-service.ts). Never reaches another machine. */
+    | { kind: 'saved'; label?: string };
 
-/** Who a transport already proved a connection to be (the Tynn relay's grant, main/relay-grant.ts). */
+/** Who the admitting transport proved a connection to be: a relay grant or this host's own window door. */
 export interface PreAuth {
+    /** Omitted by existing relay transports. Only the local window door issues `local`. */
+    readonly kind?: 'relay' | 'local';
     readonly label: string;
     readonly isOwner: boolean;
     /** The one workspace a guest may reach; `null` = the whole host. */
@@ -264,7 +329,7 @@ export type ClientProfile = 'mobile';
 
 export type WireMessage =
     | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile }
-    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string }
+    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
     /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
     | { kind: 'pairing'; host: string; expiresAt: number }
@@ -278,6 +343,20 @@ const isMethod = (m: unknown): m is RemoteMethod | ControlMethod =>
     typeof m === 'string' && ((REMOTE_METHODS as readonly string[]).includes(m) || (CONTROL_METHODS as readonly string[]).includes(m));
 
 export function parseMessage(text: string): { ok: true; message: WireMessage } | { ok: false; reason: string } {
+    return parseFrame(text, isMethod);
+}
+
+/** One frame of the envelope over a method table `M`. `WireMessage` is `Frame` over the remote bridge's table. */
+export type Frame<M extends string> =
+    | Exclude<WireMessage, { kind: 'call' }>
+    | { kind: 'call'; id: number; method: M; args: unknown[] };
+
+/**
+ * THE FRAME PARSER, for any method table (the host split, 2026-10-31): the remote bridge's table above, and the local
+ * host's `engine.*` table (core/engine-protocol.ts). One envelope — hello, welcome, call, result, event — so the window's
+ * link to its own host and a remote window's link to another Genie are the same protocol, validated the same way.
+ */
+export function parseFrame<M extends string>(text: string, isMethodOf: (m: unknown) => m is M): { ok: true; message: Frame<M> } | { ok: false; reason: string } {
     let raw: unknown;
     try {
         raw = JSON.parse(text);
@@ -293,18 +372,17 @@ export function parseMessage(text: string): { ok: true; message: WireMessage } |
             const okAuth =
                 (auth.kind === 'pin' && typeof auth.code === 'string') ||
                 (auth.kind === 'token' && typeof auth.token === 'string') ||
-                (auth.kind === 'share' && typeof auth.id === 'string' && typeof auth.secret === 'string') ||
-                auth.kind === 'relay';
-            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, a share {id, secret} or relay' };
+                auth.kind === 'relay' || auth.kind === 'local';
+            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, relay or local' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
             if (raw.profile !== undefined && raw.profile !== 'mobile') return { ok: false, reason: 'hello profile must be "mobile" when given' };
-            return { ok: true, message: raw as unknown as WireMessage };
+            return { ok: true, message: raw as unknown as Frame<M> };
         }
         case 'call': {
             if (typeof raw.id !== 'number' || typeof raw.method !== 'string' || !Array.isArray(raw.args)) {
                 return { ok: false, reason: 'a call needs a numeric id, a method and an args array' };
             }
-            if (!isMethod(raw.method)) return { ok: false, reason: `"${raw.method}" is not a bridge method` };
+            if (!isMethodOf(raw.method)) return { ok: false, reason: `"${raw.method}" is not a bridge method` };
             return { ok: true, message: { kind: 'call', id: raw.id, method: raw.method, args: raw.args } };
         }
         case 'result': {
@@ -317,7 +395,7 @@ export function parseMessage(text: string): { ok: true; message: WireMessage } |
             return { ok: true, message: { kind: 'event', channel: raw.channel, payload: raw.payload } };
         case 'welcome':
             if (typeof raw.connectionId !== 'string' || typeof raw.host !== 'string' || typeof raw.isOwner !== 'boolean') return { ok: false, reason: 'a welcome needs connectionId, host and isOwner' };
-            return { ok: true, message: raw as unknown as WireMessage };
+            return { ok: true, message: raw as unknown as Frame<M> };
         case 'refused':
             return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
         case 'pairing':
@@ -334,11 +412,12 @@ export function remoteBadge(host: string): string {
 }
 
 /** What a guest with a share link to one workspace sees of the estate. */
-export function filterSnapshotForWorkspace<T extends { agents?: readonly { workspaceId: string }[]; workspaces?: readonly { id: string }[] | null; deckItems?: readonly { workspaceId: string | null }[] | null }>(snapshot: T, workspaceId: string): T {
+export function filterSnapshotForWorkspace<T extends { agents?: readonly { workspaceId: string }[]; workspaces?: readonly { id: string }[] | null; hibernatedWorkspaces?: readonly { id: string }[]; deckItems?: readonly { workspaceId: string | null }[] | null }>(snapshot: T, workspaceId: string): T {
     return {
         ...snapshot,
         ...(snapshot.agents ? { agents: snapshot.agents.filter((a) => a.workspaceId === workspaceId) } : {}),
         ...(snapshot.workspaces ? { workspaces: snapshot.workspaces.filter((w) => w.id === workspaceId) } : {}),
+        ...(snapshot.hibernatedWorkspaces ? { hibernatedWorkspaces: snapshot.hibernatedWorkspaces.filter((w) => w.id === workspaceId) } : {}),
         ...(snapshot.deckItems ? { deckItems: snapshot.deckItems.filter((d) => d.workspaceId === workspaceId) } : {}),
     };
 }
@@ -353,7 +432,7 @@ export interface ClientTransport {
 
 export interface ServerConnection extends ClientTransport {
     readonly remoteAddress: string;
-    /** Set by a transport that authenticated the connection itself (the Tynn relay); a `relay` hello takes it. */
+    /** Set by the admitting transport. A local proof accepts only `local`; a relay proof accepts only `relay`. */
     readonly preAuth?: PreAuth;
 }
 

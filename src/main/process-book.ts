@@ -110,6 +110,8 @@ export interface ProcessBookDeps {
     readonly asleep: (workspaceId: string) => boolean;
     /** The workspace's background-process limit (core/shell-limits.ts), read live; absent = no limit. */
     readonly limit?: (workspaceId: string) => number;
+    /** SAFE MODE (Tynn #386): while on, the launch restore starts no kept process; each is held back, saying why. */
+    readonly safeMode?: () => boolean;
     readonly now?: () => number;
     /** Genie 1's database and Genie 2's workspaces: the book imports v1's background processes ONCE when it opens. */
     readonly v1?: {
@@ -158,6 +160,8 @@ interface BookFile {
 
 const RESTART_POLICIES: readonly RestartPolicy[] = ['never', 'on-failure', 'always'];
 const ASLEEP_REASON = 'its workspace is hibernated; nothing starts there until it is woken';
+/** Held back by safe mode (Tynn #386): the last run did not end cleanly, so nothing started by itself. */
+export const SAFE_MODE_REASON = 'Genie is in safe mode: the last run did not end cleanly, so nothing was started';
 
 export class ProcessBook {
     readonly #file: string;
@@ -338,8 +342,11 @@ export class ProcessBook {
     }
 
     kept(): readonly KeptProcess[] {
-        return this.#data.processes;
+        return this.#data.processes.filter((p) => !this.#deps.asleep(p.workspaceId));
     }
+
+    /** Refresh connected views after hibernation metadata changes, without touching kept specs. */
+    visibilityChanged(): void { for (const listener of this.#listeners) listener(); }
 
     /**
      * Every supervised process, with the kept ones marked; a kept process the supervisor is not
@@ -372,16 +379,22 @@ export class ProcessBook {
                 ...withSchedule(p),
             });
         }
-        return rows;
+        return rows.filter((p) => !this.#deps.asleep(p.workspaceId));
     }
 
-    /** At launch: start every process the person wants, except in a hibernated workspace. */
+    /** At launch: start every process the person wants, except in a hibernated workspace — or in safe mode. */
     restore(): { started: string[]; heldBack: string[] } {
         const started: string[] = [];
         const heldBack: string[] = [];
         for (const p of this.#data.processes) {
             // A scheduled task is never brought back as a running process: its schedule fires it (process-scheduler.ts).
             if (!p.wanted || p.schedule) continue;
+            // SAFE MODE (Tynn #386): held back, saying why; the person's Start (or the banner's) runs it. safe mode holds
+            if (this.#deps.safeMode?.() === true) {
+                this.#heldBack.set(p.id, SAFE_MODE_REASON);
+                heldBack.push(p.id);
+                continue;
+            }
             if (this.#deps.asleep(p.workspaceId)) {
                 this.#heldBack.set(p.id, ASLEEP_REASON);
                 heldBack.push(p.id);

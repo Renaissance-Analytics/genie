@@ -1,4 +1,7 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
+export type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
+import { localSession, type LocalProtocolControl, type WorkspaceProtocolKey } from './local-session.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { TynnPage, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
 import type { IssueActionInput, IssueFilters, TynnIssuesHost } from '../core/tynn-issues.js';
@@ -16,14 +19,21 @@ import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import type { TynnNetworkBridge } from './relay-transport.js';
+import type { DeviceLinkBridge } from './remote-session.js';
 import type { AppInboxCardState } from './components/AppInboxCard.js';
 
-/** The workspace card's door to the host's app keys (main.ts `genie:app-inbox-*`). */
+/** The workspace card's local-only door to the host's app keys. */
 export interface AppInboxBridge {
     state(workspaceId: string): Promise<{ ok: true; state: AppInboxCardState } | { ok: false; reason: string }>;
     createKey(workspaceId: string, name: string): Promise<{ ok: true; id: string; name: string; token: string; state: AppInboxCardState } | { ok: false; reason: string }>;
     revokeKey(workspaceId: string, keyId: string): Promise<{ ok: true; state: AppInboxCardState } | { ok: false; reason: string }>;
     source(workspaceId: string, op: 'rotate' | 'revoke' | 'allow', kind: 'site' | 'process', id: string): Promise<{ ok: true; text: string; state: AppInboxCardState } | { ok: false; reason: string }>;
+}
+/** The migrated owner operations; outgoing channel and window capabilities remain native until P5. */
+export interface LocalOwnerBridge {
+    appInbox: AppInboxBridge;
+    deviceLink: Pick<DeviceLinkBridge, 'hosts' | 'forget' | 'adopt'>;
+    tynnNetwork: Pick<TynnNetworkBridge, 'workstations' | 'setRole' | 'shares'>;
 }
 import type { LiveSession } from '../core/roster.js';
 import type { TakeOverProbe } from '../core/observed.js';
@@ -38,6 +48,7 @@ import type { RepoCommit } from '../core/commits.js';
 import type { EnvelopePlan } from '../core/envelope-plan.js';
 import type { Published, RemoteChoice } from '../core/agi-remote.js';
 import type { RepoListing } from '../core/github.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
 
 /**
@@ -77,6 +88,8 @@ export interface GenieSnapshot {
      * answered — a confident claim about a machine nobody had asked. An older test caught it.
      */
     workspaces: readonly RailWorkspace[] | null;
+    /** Known folders only: consumed exclusively by the sidebar's explicit Show hibernated control. */
+    hibernatedWorkspaces?: readonly { id: string; path: string; name: string; asleep: true }[];
     /**
      * The attention band, or `null` until the queue has been read.
      *
@@ -88,6 +101,12 @@ export interface GenieSnapshot {
     signals: SignalState;
     /** `null` until the workstation has been read — never a default `healthy: false`. */
     workstation: { name: string; healthy: boolean } | null;
+    /** genie-host's safe mode (Tynn #386): the banner on every window. Absent/`null` = not known (no host, an older one). */
+    safeMode?: import('../core/safe-mode.js').SafeModeView | null;
+    /** genie-host ended a hung window and started this one (Tynn #386): the notice, not safe mode. Absent/`null` = none. */
+    hangNotice?: import('../core/crash-record.js').HangNotice | null;
+    /** This window's page ended and was brought back (Tynn #386): when, why, its last memory. */
+    rendererNotice?: import('../core/renderer-notice.js').RendererNotice | null;
 }
 
 /**
@@ -138,6 +157,8 @@ export interface ActivityBridge {
 }
 
 export interface GenieBridge {
+    /** This window's local connection status; absent when connected to another host. */
+    localProtocol?: LocalProtocolControl;
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
     remoteWindows?: { open(url: string, name?: string | null): Promise<void>; onReconnectAsked?(listener: () => void): () => void };
     /**
@@ -153,10 +174,14 @@ export interface GenieBridge {
      */
     activity?: ActivityBridge;
     sitePanels?: {
-        show(panelKey: string, host: string, bounds: { x: number; y: number; width: number; height: number }): Promise<{ ok: true } | { ok: false; error: string }>;
-        hide(panelKey: string): Promise<void>;
-        reload(panelKey: string): Promise<void>;
+        /** May this site load, with its store routed? The page itself is a <webview> the window holds (site-webview-layer.ts). */
+        prepare(host: string): Promise<{ ok: true } | { ok: false; error: string; locked?: boolean }>;
+        restart(): Promise<void>;
         openWindow(host: string): Promise<void>;
+        popOut(panelKey: string, host: string): Promise<void>;
+        popBack(panelKey: string): Promise<void>;
+        popped(): Promise<ReadonlyArray<{ readonly panelKey: string; readonly host: string }>>;
+        onPoppedBack(listener: (panelKey: string) => void): () => void;
     };
     /** The Genie browser window (beta.35 item 36): this machine's Genie sites. Host-only: absent on a remote bridge. */
     /** `hosts`: the `.gen` names of the workstation a remote window is driving (main decides which browser by the window). */
@@ -164,6 +189,8 @@ export interface GenieBridge {
     /** One folder of the HOST this window drives (Tynn #835) — what every file and folder picker reads. */
     host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The folder picker's New folder: `name` made inside `parent` on the host. */ mkdir?(parent: string, name: string): Promise<import('../main/host-fs.js').HostMade>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
+    /** Other machines, dialled by the host (P3.4 cut e). A window holds a channel and addresses, and never a token. */
+    deviceLink?: DeviceLinkBridge;
     tynnNetwork?: TynnNetworkBridge;
     /** A workspace's Apps and scripts (genie#1345): keys are this host's, so a remote bridge has none. */
     appInbox?: AppInboxBridge;
@@ -209,7 +236,7 @@ export interface GenieBridge {
     /** Each provider's rate limit for the Dashboard header, buffered in main; the current ones at once, then each change. */
     onHeadroom?(onHeadroom: (limits: Readonly<Record<string, Headroom>>) => void): () => void;
 
-    /** Start or REATTACH a session. Never creates a second for the same agent. */
+    /** OPEN (show) the agent: starts nothing (q_04ce323c) — its first message or Start does. */
     openAgent(agentId: string): void;
     /** "Stop agent" — END the session: the provider tree goes, and the capacity slot frees. Not the turn's Stop. */
     stopAgent(agentId: string): void;
@@ -267,6 +294,18 @@ export interface GenieBridge {
      * watches. The answer says whether it opened and which terminal, or why not.
      */
     takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+
+    /** The safe-mode banner's crash report (Tynn #386 part 4): never sent until the person presses Send. Absent = remote. */
+    crashReport?: {
+        draft(): Promise<{ text: string }>;
+        send(text: string, notes: string): Promise<import('./components/SafeModeBanner.js').CrashReportAnswer>;
+    };
+
+    /**
+     * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
+     * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
+     */
+    scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
 
     /** WORKSPACE OPERATIONS (§6.1). Add is preview-then-confirm: nothing is written before the plan was shown. */
     workspaces: {
@@ -337,7 +376,7 @@ export interface GenieBridge {
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
         locateRepo(workspaceId: string, slug: string, path: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
         /** The commits in the workspace's repos since a moment, newest first — git's own account (an observed agent's index). */
-        commitsSince(workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: readonly RepoCommit[] } | { ok: false; reason: string }>;
+        commitsSince(workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: readonly RepoCommit[] } | { ok: false; reason: string; gitDidNotAnswer?: boolean }>;
         /** "Remove stale lock" on a red repo chip: unlinks `index.lock` only when it is stale; refuses with the reason otherwise. */
         removeRepoLock(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** This workspace's effective values for the workspace-scoped settings and which keys it overrides (§6.1). */
@@ -365,6 +404,11 @@ export interface GenieBridge {
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+        /**
+         * A tool row's WHOLE output (Tynn story #386): the window holds a 16 KB preview; the host keeps the rest beside the
+         * ledger and answers it, bounded, when a person opens the row. A call with none kept is a refusal with a reason.
+         */
+        toolOutput(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
         /** Mode is wording for the agent (§6.2), not a permission boundary. */
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */
@@ -402,9 +446,9 @@ export interface GenieBridge {
             workspaceId: string,
             options: { cols: number; rows: number; command?: string },
         ): Promise<{ id: string; pid: number; shell: string; scrollback: string }>;
-        write(id: string, data: string): void;
-        resize(id: string, cols: number, rows: number): void;
-        close(id: string): void;
+        write(id: string, data: string): void | Promise<void>;
+        resize(id: string, cols: number, rows: number): void | Promise<void>;
+        close(id: string): void | Promise<void>;
         /** Open terminals in one workspace — so a window that reloads can re-attach (§6.5). */
         list(workspaceId: string): Promise<readonly { id: string; pid: number; shell: string }[]>;
         /**
@@ -413,8 +457,6 @@ export interface GenieBridge {
          * connection always names the workspace, because that is what its scope is checked against.
          */
         attach(workspaceId: string | null, id: string): Promise<{ id: string; pid: number; shell: string; scrollback: string } | null>;
-        /** The previous session's scrollback for this workspace, ONCE (§6.5); `null` when there is none. */
-        previousSession(workspaceId: string): Promise<string | null>;
         onData(listener: (id: string, data: string) => void): () => void;
         onExit(listener: (id: string, exitCode: number) => void): () => void;
     };
@@ -434,8 +476,15 @@ export interface GenieBridge {
         /** The file as of the last commit — `Show diff` on a change nobody reported. Absent on a bridge with no host files. */
         lastCommitted?(workspaceId: string, path: string): Promise<string | null>;
         state(workspaceId: string): Promise<FilesState | null>;
-        watch(workspaceId: string): Promise<void>;
-        /** Once per batch of changes on disk (genie#921), with the paths that changed — absent from a host before batching. */
+        /**
+         * A VIEW'S SUBSCRIPTION to a workspace's disk changes (the host split, P2.2): held while the view is shown, let go
+         * with the returned function. The host watches a workspace only while some view holds one. `want` asks for git too —
+         * the tree's colours (`git`) or repos' status (`repos`) — computed once per batch on the host and pushed here, so a
+         * view never runs git per batch itself. Absent on a bridge with no host files.
+         */
+        subscribe?(workspaceId: string, want: FilesViewWant, listener: (event: FilesViewEvent) => void): () => void;
+        /** Once per batch of changes on disk (genie#921), with the paths that changed — absent from a host before batching.
+         *  LISTEN only: a view that needs changes holds a `subscribe` too, or nothing watches for it. */
         onChange(listener: (workspaceId: string, paths?: readonly string[]) => void): () => void;
         /** Write against the sha that was read; a changed file comes back as a conflict, never overwritten (§4.3). */
         write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult>;
@@ -566,7 +615,6 @@ export const NO_FILES: GenieBridge['files'] = {
     children: () => Promise.resolve(null),
     open: (_w, path) => Promise.resolve({ ok: false as const, path, error: 'no files host is attached' }),
     state: () => Promise.resolve(null),
-    watch: () => Promise.resolve(),
     onChange: () => () => {},
     write: async () => ({ ok: false as const, reason: 'no files host is attached' }),
 };
@@ -578,18 +626,21 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
     close: () => {},
     list: () => Promise.resolve([]),
     attach: () => Promise.resolve(null),
-    previousSession: () => Promise.resolve(null),
     onData: () => () => {},
     onExit: () => () => {},
 };
 
 /**
- * WHAT THE PRELOAD EXPOSES: the bridge, except an agent's live detail, which crosses as main's PATCH
+ * WHAT THE PRELOAD EXPOSES: unmoved bridge families and an agent's live detail as main's PATCH
  * (`subscribeAgentWire`) and is rebuilt on the page's side by {@link pageBridge}. Whatever crosses `contextBridge` is
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals'> & {
+    files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
+    deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
+    tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
+    workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
     subscribeAgentWire: AgentWireSubscribe<Omit<AgentDetail, 'rows'>, TimedEvent>;
 };
 
@@ -645,14 +696,27 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const known = pageBridges.get(preload);
     if (known !== undefined) return known;
     const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(preload.subscribeAgentWire);
+    const local = localSession(typeof window === 'undefined' ? undefined : window.genieLocalProtocol);
     const { subscribeAgentWire: _wire, ...rest } = preload;
-    const bridge: GenieBridge = { ...rest, subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
+    const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
+        updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
+        appInbox: local.owner.appInbox,
+        deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
+        tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
+        files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
+        terminals: local.terminals,
+        subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
+    if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;
     return bridge;
 }
 
 declare global {
     interface Window {
+        /** Immutable preload value supplied by main's GENIE_PAGE_PROBE flag. */
+        readonly genieTestMode?: boolean;
+        /** The app's same local bridge, exposed only for a main-enabled native probe. */
+        genieTest?: GenieBridge;
         /**
          * Present only in the real app. It is optional on purpose: a renderer that assumes a
          * bridge cannot be rendered in a test, and the surfaces are then only ever checked by

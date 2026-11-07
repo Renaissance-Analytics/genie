@@ -1,10 +1,15 @@
-import type { Baton, PairingPins, ShareLinks, ShareLink } from '../core/remote.js';
+import type { Baton, PairingPins } from '../core/remote.js';
+import { isLocalTerminalMethod } from '../core/local-terminals.js';
+import { LocalTerminalServer } from './local-terminal-server.js';
+import type { NativeTerminalPort } from './local-terminal-native.js';
 import {
     AGENT_SCOPED_METHODS,
     WORKSPACE_SCOPED_METHODS,
+    LOCAL_EVENTS as LOCAL_EVENT_CHANNELS,
     capabilityOf,
     filterSnapshotForWorkspace,
     parseMessage,
+    REMOTE_PROTOCOL,
     type ControlMethod,
     type RemoteMethod,
     type ServerConnection,
@@ -15,19 +20,36 @@ import type { Device, DeviceStore } from './remote-devices.js';
 import { pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
 import { DEVICE_EXPIRY_DAYS } from '../core/device-expiry.js';
 import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowState, type WireRow } from '../core/mobile-wire.js';
+import type { BlobOpener } from '../core/local-blobs.js';
+import { LocalBlobs } from './local-blobs.js';
+import type { PageOpener } from '../core/local-content.js';
+import { LocalUploads } from './local-uploads.js';
+import { LocalPages } from './local-pages.js';
+import { LocalFilesContent } from './local-files-content.js';
+import { isLocalFilesMethod } from '../core/local-files.js';
+import { localFilesArguments } from './local-files-arguments.js';
+import { isLocalDraftMethod } from '../core/local-drafts.js';
+import { localDraftArguments } from './local-drafts-api.js';
+import { isLocalArtboardMethod } from '../core/local-artboard.js';
+import { localArtboardArguments } from './local-artboard-api.js';
+import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
+import type { FilesHubEvent } from './files-watch-hub.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
  *
  * A connection says hello with a PIN read off this screen (pairs a device of the OWNER's and mints
- * a durable token), a token from an earlier pairing, or a share link (admits a GUEST to one
- * workspace). Then every call is gated by the one table in core/remote-protocol.ts: a read is never
+ * a durable token), a token from an earlier pairing, or — on the Tynn relay only — the relay's own proof (the
+ * owner, or a GUEST a Tynn share link admitted, scoped as its grant says).
+ * Then every call is gated by the one table in core/remote-protocol.ts: a read is never
  * gated, a write needs the baton, an upgrade needs ownership, a host-only method is refused with
  * where to do it. Events reach every connection; a guest's are filtered to its workspace. The
  * transport is a port — fancy-ws on a real socket, an in-memory pair in tests.
  */
 
 export interface HostApi {
+    readonly filesWatch?: FilesWatchPort;
+    readonly localTerminals?: NativeTerminalPort;
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
     invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
     /**
@@ -80,12 +102,25 @@ interface Connection {
     pendingPair: string | null;
     /** `mobile`: a phone (genie#1346) — the snapshot and its watched agents only, no terminals. */
     profile: 'mobile' | null;
+    /** Only the local frame door proves this; a hello alone never does. */
+    local: boolean;
     /** A phone's windows on the agents it watches (core/mobile-wire.ts). */
     readonly watching: Map<string, WindowState<WireRow>>;
+    /** Independent activity views belonging to this admitted local window. */
+    readonly activityViews: Set<string>;
+    filesViews: LocalFilesWatches | null;
+    blobs: LocalBlobs | null;
+    uploads: LocalUploads | null;
+    uploadOpening: Promise<LocalUploads> | null;
+    pages: LocalPages | null;
+    content: LocalFilesContent | null;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
 const PHONE_REFUSES = (method: string): boolean => method.startsWith('terminals.');
+
+/** Extended only when a family moves. Unmoved local views retain their existing subscriptions. */
+const LOCAL_EVENTS = new Set<string>(['workspace-settings-changed', ...Object.values(LOCAL_EVENT_CHANNELS)]);
 
 /** A push a connection does not receive. */
 const NOT_SENT = Symbol('not sent');
@@ -95,7 +130,7 @@ function withoutRemoteSecrets(value: unknown): unknown {
     if (typeof value !== 'object' || value === null || !('remote' in value)) return value;
     const remote = (value as { remote: unknown }).remote;
     if (typeof remote !== 'object' || remote === null) return value;
-    return { ...value, remote: { ...remote, pin: null, devices: [], shares: [], connections: [], servedLink: null, pairRequests: [] } };
+    return { ...value, remote: { ...remote, pin: null, devices: [], connections: [], pairRequests: [] } };
 }
 
 /**
@@ -113,16 +148,21 @@ const isAnswerPair = (args: unknown[]): boolean => typeof args[0] === 'object' &
 
 export class RemoteHost {
     readonly #api: HostApi;
+    readonly #openBlob: BlobOpener | undefined;
+    readonly #openPage: PageOpener | undefined;
+    readonly #createLocalUploads: (() => LocalUploads | Promise<LocalUploads>) | undefined;
     readonly #hostName: string;
+    /** This Genie's build, said in `welcome` with the wire's protocol (P10.1e). */
+    readonly #build: string;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
-    readonly #shares: ShareLinks;
     readonly #devices: DeviceStore;
     readonly #confirm: PairConfirm;
     readonly #changeListeners = new Set<() => void>();
     /** Re-pair: the device the PIN on screen was issued to replace, if any. */
     #pinReplaces: string | null = null;
     readonly #connections = new Map<string, Connection>();
+    #localTerminals: LocalTerminalServer | null = null;
     readonly #transport: ServerTransport;
     readonly #now: () => number;
     /** Bytes a connection sent ahead of the call that uses them (genie#1346). */
@@ -141,29 +181,33 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; shares: ShareLinks; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads> }) {
         this.#api = deps.api;
+        this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
+        this.#build = deps.build ?? 'dev';
         this.#baton = deps.baton;
         this.#pins = deps.pins;
-        this.#shares = deps.shares;
         this.#devices = deps.devices;
         this.#confirm = deps.confirm;
         this.#transport = deps.transport;
         this.#now = deps.now ?? Date.now;
+        this.#openPage = deps.openPage;
+        this.#createLocalUploads = deps.createLocalUploads;
         this.#staging = new UploadStaging({ now: this.#now });
         deps.transport.onConnection((socket) => this.#accept(socket));
     }
 
     /** Someone is connected and known: hear the host API (once, however many connect). */
     #listen(): void {
+        if (![...this.#connections.values()].some((connection) => connection.auth !== null)) return;
         this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), { wantsAgent: (agentId) => this.#wantsAgent(agentId) });
     }
 
     /** Someone wants this agent's detail: a window that is not a phone (it hears every agent), or a phone watching it. */
     #wantsAgent(agentId: string): boolean {
         for (const c of this.#connections.values()) {
-            if (c.auth === null) continue;
+            if (c.auth === null || c.local) continue;
             if (c.profile !== 'mobile' || c.watching.has(agentId)) return true;
         }
         return false;
@@ -171,12 +215,20 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        this.#localTerminals?.dropOwner(connection.id);
+        connection.filesViews?.dispose();
+        connection.content?.dispose();
+        connection.blobs?.dispose();
+        connection.pages?.dispose();
+        // Disposal marks the connection closed synchronously, then drains any pending disk operation.
+        if (connection.uploads) void connection.uploads.dispose().catch(() => console.warn('[genie] a local upload area could not be released'));
+        connection.activityViews.clear();
         if (connection.pendingPair !== null) {
             this.#confirm.cancel(connection.pendingPair);
             connection.pendingPair = null;
         }
         const was = this.#connections.delete(connection.id);
-        if (was && connection.auth !== null) this.#changed();
+        if (was && connection.auth !== null && !connection.local) this.#changed();
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
         this.#stopListening?.();
         this.#stopListening = null;
@@ -243,26 +295,10 @@ export class RemoteHost {
         return true;
     }
 
-    shares(): ShareLink[] {
-        return this.#shares.roster();
-    }
-
-    /** Mint AND serve in one step: the URL leaves here exactly once. */
-    mintShare(input: { workspaceId: string; grantedTo: string; expiresInMs: number }): { link: ShareLink; url: string } {
-        const link = this.#shares.mint(input);
-        const served = this.#shares.serve(link.id);
-        if (!served.ok) throw new Error(served.reason);
-        return { link: this.#shares.roster().find((l) => l.id === link.id) ?? link, url: served.url };
-    }
-
-    revokeShare(id: string): boolean {
-        return this.#shares.revoke(id);
-    }
-
     connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }> {
         const driver = this.#baton.holder()?.connectionId ?? null;
         return [...this.#connections.values()]
-            .filter((c) => c.auth !== null)
+            .filter((c) => c.auth !== null && !c.local)
             .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver }));
     }
 
@@ -278,7 +314,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, watching: new Map() };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -286,6 +322,26 @@ export class RemoteHost {
             this.#staging.dropOwner(connection.id);
             this.#drop(connection);
         });
+    }
+
+    /** One first-use preparation per connection; a registry that arrives after close never gets to stage bytes. */
+    async #uploads(connection: Connection): Promise<LocalUploads> {
+        if (connection.uploads) return connection.uploads;
+        if (connection.uploadOpening) return connection.uploadOpening;
+        const create = this.#createLocalUploads;
+        if (!create) throw new Error('local staging is not configured on this host');
+        const opening = (async () => {
+            const uploads = await create();
+            if (this.#connections.get(connection.id) !== connection) {
+                await uploads.dispose();
+                throw new Error('the local upload connection closed');
+            }
+            connection.uploads = uploads;
+            return uploads;
+        })();
+        connection.uploadOpening = opening;
+        try { return await opening; }
+        finally { if (connection.uploadOpening === opening) connection.uploadOpening = null; }
     }
 
     #send(connection: Connection, message: WireMessage): void {
@@ -315,6 +371,7 @@ export class RemoteHost {
             await this.#hello(connection, message);
             return;
         }
+        if (message.kind === 'hello') return this.#refuse(connection, 'this connection has already said hello', false);
         if (message.kind !== 'call') return; // A client sends calls; anything else is noise, not an error worth a frame.
         this.#send(connection, await this.#call(connection, message.id, message.method, message.args));
     }
@@ -324,7 +381,20 @@ export class RemoteHost {
         const label = auth.label ?? message.label ?? 'a device';
         let token: string | undefined;
         if (connection.pendingPair !== null) return this.#refuse(connection, `this device is already waiting for Allow on ${this.#hostName}`, false);
-        if (auth.kind === 'pin') {
+        const pre = connection.socket.preAuth;
+        if (auth.kind === 'local' && pre?.kind !== 'local') return this.#refuse(connection, 'local authentication is available only on this Genie window’s protocol door', true);
+        if (pre?.kind === 'local' && auth.kind !== 'local') return this.#refuse(connection, 'this local window connection accepts only local authentication', true);
+        /*
+         * SECURITY (pairing vs share link, H1): a connection the Tynn relay admitted is already somebody, proved by its Tynn
+         * grant; that grant is its only way in. A PIN or a device token are tailnet hellos: said over the relay they would
+         * let a guest admitted by a link pair as the owner. Refused before anything is redeemed, so a
+         * refused hello spends no PIN try and raises no "Pair this device?".
+         */
+        if (pre && pre.kind !== 'local' && auth.kind !== 'relay') return this.#refuse(connection, `this connection came through the Tynn relay: its Tynn grant admits it, never a PIN or a device token`, true);
+        if (auth.kind === 'local') {
+            connection.local = true;
+            connection.auth = { label: pre!.label, isOwner: true, workspaceId: null, readonly: false };
+        } else if (auth.kind === 'pin') {
             const r = this.#pins.redeem(auth.code);
             if (!r.ok) return this.#refuse(connection, r.reason, true);
             // THE CONFIRM (q_8c07b142; Genie 1's confirmPair): the right PIN only raises "Pair this device?" on this screen.
@@ -353,17 +423,13 @@ export class RemoteHost {
             const device = checked.device;
             connection.deviceId = device.id;
             connection.auth = { label: auth.label ?? message.label ?? device.label, isOwner: true, workspaceId: null, readonly: false };
-        } else if (auth.kind === 'relay') {
+        } else {
             // The transport proved who this is (a Tynn grant and its key); without that proof there is nothing to take.
             const pre = connection.socket.preAuth;
             if (!pre) return this.#refuse(connection, 'this connection did not come through the Tynn relay', true);
             connection.auth = { label: pre.label, isOwner: pre.isOwner, workspaceId: pre.workspaceId, readonly: pre.readonly };
-        } else {
-            const r = this.#shares.redeem(auth.id, auth.secret);
-            if (!r.ok) return this.#refuse(connection, r.reason, true);
-            connection.auth = { label: auth.label ?? message.label ?? r.grantedTo, isOwner: false, workspaceId: r.workspaceId, readonly: false };
         }
-        if (message.profile === 'mobile') connection.profile = 'mobile';
+        if (!connection.local && message.profile === 'mobile') connection.profile = 'mobile';
         this.#send(connection, {
             kind: 'welcome',
             connectionId: connection.id,
@@ -371,9 +437,12 @@ export class RemoteHost {
             isOwner: connection.auth.isOwner,
             workspaceId: connection.auth.workspaceId,
             ...(token ? { token } : {}),
+            // The version handshake (P10.1e), additive: an old client reads the fields above as it always has.
+            protocol: REMOTE_PROTOCOL,
+            build: this.#build,
         });
         this.#listen();
-        this.#changed();
+        if (!connection.local) this.#changed();
     }
 
     async #call(connection: Connection, id: number, method: RemoteMethod | ControlMethod, args: unknown[]): Promise<WireMessage> {
@@ -381,7 +450,62 @@ export class RemoteHost {
         const ok = (value: unknown): WireMessage => ({ kind: 'result', id, ok: true, value });
         const refuse = (reason: string): WireMessage => ({ kind: 'result', id, ok: false, reason });
 
+        if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
+
         switch (method) {
+            case 'files.watch':
+            case 'files.unwatch':
+            case 'files.watchState': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the Files watch connection closed');
+                const views = connection.filesViews ??= new LocalFilesWatches(this.#api.filesWatch);
+                try {
+                    if (method === 'files.watch') return ok(await views.watch(args[0], args[1], args[2]));
+                    if (method === 'files.unwatch') return ok(views.unwatch(args[0]));
+                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree'));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
+            case 'content.release': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                return ok(await connection.content?.releaseAndWait(args[0]) ?? { released: false });
+            }
+            case 'localUpload.begin':
+            case 'localUpload.chunk':
+            case 'localUpload.abort': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the local upload connection closed');
+                if (!this.#createLocalUploads) return refuse('local staging is not configured on this host');
+                try {
+                    const uploads = await this.#uploads(connection);
+                    if (method === 'localUpload.begin') return ok(await uploads.begin(args[0]));
+                    if (method === 'localUpload.chunk') return ok(await uploads.chunk(args[0], args[1], args[2]));
+                    return ok(await uploads.abort(args[0]));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
+            case 'page.open':
+            case 'page.next':
+            case 'page.close': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the list connection closed');
+                const pages = connection.pages ??= this.#content(connection).pages;
+                try {
+                    if (method === 'page.open') return ok(await pages.open(args[0], args[1]));
+                    if (method === 'page.next') return ok(await pages.next(args[0]));
+                    return ok(await pages.close(args[0]));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
+            case 'blob.open':
+            case 'blob.read':
+            case 'blob.close': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the blob connection closed');
+                const blobs = connection.blobs ??= this.#content(connection).blobs;
+                try {
+                    if (method === 'blob.open') return ok(await blobs.open(args[0], args[1]));
+                    if (method === 'blob.read') return ok(await blobs.read(args[0], args[1], args[2]));
+                    return ok(await blobs.close(args[0]));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
             case 'baton.take': {
                 // Holding the baton would keep everyone who CAN change things from doing so.
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
@@ -406,6 +530,15 @@ export class RemoteHost {
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
             case 'agent.unwatch':
                 return ok({ unwatched: connection.watching.delete(String(args[0] ?? '')) });
+            case 'activity.watch':
+            case 'activity.unwatch': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                const viewId = args[0];
+                if (typeof viewId !== 'string' || viewId.length === 0) return refuse('An activity view id is required.');
+                if (method === 'activity.unwatch') return ok({ unwatched: connection.activityViews.delete(viewId) });
+                connection.activityViews.add(viewId);
+                return ok({ watching: true });
+            }
             case 'upload.begin': {
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
                 const input = (args[0] ?? {}) as { name?: unknown; size?: unknown };
@@ -420,13 +553,15 @@ export class RemoteHost {
                 return ok({ aborted: this.#staging.abort(connection.id, String(args[0] ?? '')) });
         }
 
+        const capability = capabilityOf(method);
+        if (capability === 'local' && !connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+
         // Allow is pressed on THIS machine's screen, never sent from another device — not even the owner's (q_8c07b142).
         if (method === 'features.act' && isAnswerPair(args)) return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
 
         // A phone has no terminals (genie#1346): refused here, before anything on the host is asked.
         if (connection.profile === 'mobile' && PHONE_REFUSES(method)) return refuse(`${method}: a phone has no terminals; open one on ${this.#hostName}`);
 
-        const capability = capabilityOf(method);
         // A read-only grant (Tynn #838): reads, nothing else.
         if (auth.readonly && capability !== 'read') return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
         // Only the owner changes the host itself — a guest of the whole host included.
@@ -444,7 +579,7 @@ export class RemoteHost {
             if (method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; do it there`);
             return refuse(`${method} places a view on ${this.#hostName}'s own window; there is nothing to do remotely`);
         }
-        if (capability !== 'read') {
+        if (!connection.local && (capability === 'write' || capability === 'upgrade')) {
             const may = this.#baton.may(connection.id, capability, { isOwner: auth.isOwner });
             if (!may.ok) return refuse(may.reason);
             if (capability === 'write' && this.#baton.holder() === null) return refuse(`nobody is driving ${this.#hostName}; take the baton to make changes`);
@@ -455,20 +590,56 @@ export class RemoteHost {
         }
 
         // Staged bytes are taken only now, after every gate passed (genie#1346): never a path, never bytes inline.
+        if (isLocalTerminalMethod(method)) {
+            if (!connection.local || !this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
+            if (!this.#api.localTerminals) return refuse('the local terminal service is not available');
+            const terminals = this.#localTerminals ??= new LocalTerminalServer(this.#api.localTerminals);
+            try {
+                const value = await terminals.call(connection.id, method, args, (channel, payload) => this.#send(connection, { kind: 'event', channel, payload }));
+                if (!this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
+                return ok(this.#content(connection).terminalResult(value));
+            } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
         const materialized = this.#materialize(connection, method, args);
         if (!materialized.ok) return refuse(materialized.reason);
 
+        let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, artboard: Awaited<ReturnType<typeof localArtboardArguments>> | null = null, response: string | null = null;
         try {
-            const value = await this.#api.invoke(method, materialized.args);
+            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(); }
+            if (isLocalDraftMethod(method)) {
+                drafts = await localDraftArguments(method, materialized.args, connection.uploads);
+                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin();
+            }
+            if (isLocalArtboardMethod(method)) {
+                artboard = await localArtboardArguments(method, materialized.args, connection.uploads);
+                if (method === 'artboard.read') response = this.#content(connection).begin();
+            }
+            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args);
+            if (files) { await files.close(); files = null; }
+            if (drafts) { await drafts.close(); drafts = null; }
+            if (artboard) { await artboard.close(); artboard = null; }
+            if (isLocalFilesMethod(method)) return ok(this.#content(connection).result(response!, value, method === 'files.localChildren' ? 'folder-children' : 'workspace-tree', method === 'files.localReadMedia' || method === 'files.readBytes'));
+            if (isLocalDraftMethod(method) && response !== null) return ok(await connection.content!.draftResult(response, method, value));
+            if (method === 'artboard.read') return ok(connection.content!.artboardResult(response!, value));
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
-            // paired devices, the share links (their URLs carry the secret) and the connections. Only an owner sees them.
+            // paired devices and the connections. Only an owner sees them.
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             return ok(value);
         } catch (error) {
+            if (response !== null) connection.content?.release(response);
             return refuse(error instanceof Error ? error.message : String(error));
+        } finally {
+            if (files) { try { await files.close(); } catch { console.warn('[genie] a consumed Files stage could not be released'); } }
+            if (drafts) { try { await drafts.close(); } catch { console.warn('[genie] a consumed draft stage could not be released'); } }
+            if (artboard) { try { await artboard.close(); } catch { console.warn('[genie] a consumed ArtBoard stage could not be released'); } }
         }
+    }
+
+    #content(connection: Connection): LocalFilesContent {
+        if (!this.#connections.has(connection.id)) throw new Error('the local content connection closed');
+        return connection.content ??= new LocalFilesContent({ now: this.#now, ...(this.#openBlob ? { openBlob: this.#openBlob } : {}), ...(this.#openPage ? { openPage: this.#openPage } : {}) });
     }
 
     /**
@@ -504,6 +675,7 @@ export class RemoteHost {
         const auth = connection.auth!;
         if (auth.workspaceId !== null && this.#api.workspaceOfAgent(agentId) !== auth.workspaceId) throw new Error(`${agentId} is not in the workspace this link shares`);
         const detail = (await this.#api.invoke('agentDetail', [agentId])) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
+        if (!this.#connections.has(connection.id)) throw new Error('the connection closed before its agent watch was ready');
         if (detail === null || detail === undefined) {
             connection.watching.delete(agentId);
             return { seq: 0, detail: null, rows: { base: null, keep: 0, append: [] } };
@@ -546,11 +718,33 @@ export class RemoteHost {
     #broadcast(channel: string, payload: unknown): void {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
+            if (c.local ? !LOCAL_EVENTS.has(channel) : LOCAL_EVENTS.has(channel)) continue;
+            if (channel === LOCAL_EVENT_CHANNELS.files) {
+                const push = c.filesViews?.event(payload as FilesHubEvent);
+                if (push) this.#send(c, { kind: 'event', channel, payload: push });
+                continue;
+            }
+            if (channel === LOCAL_EVENT_CHANNELS.activity && c.activityViews.size === 0) continue;
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
-            if (c.auth.workspaceId !== null) out = this.#forGuest(channel, out, c.auth.workspaceId);
+            // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
+            if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);
             if (out !== NOT_SENT && c.profile === 'mobile') out = this.#forPhone(c, channel, out);
             if (out !== NOT_SENT) this.#send(c, { kind: 'event', channel, payload: out });
         }
+    }
+
+    /**
+     * WHAT A NON-OWNER RECEIVES (SECURITY, pairing vs share link H2). A guest of one workspace: #forGuest. A guest of the
+     * whole workstation (a Tynn link with `host:all`) hears every workspace — the snapshot, agents, activity, terminals —
+     * and the host's features WITHOUT the remote section's secrets (the live PIN, paired devices, local links,
+     * connections), exactly as its `features.snapshot` call is answered (genie#872). It may not act on updates, so it
+     * does not hear them; any channel not classified here is not sent.
+     */
+    #forNonOwner(channel: string, payload: unknown, workspaceId: string | null): unknown {
+        if (workspaceId !== null) return this.#forGuest(channel, payload, workspaceId);
+        if (channel === 'features') return withoutRemoteSecrets(payload);
+        if (channel === 'snapshot' || channel === 'activity' || channel === 'terminal-data' || channel === 'terminal-exit' || channel.startsWith('agent:')) return payload;
+        return NOT_SENT;
     }
 
     /**

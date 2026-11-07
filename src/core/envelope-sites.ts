@@ -200,6 +200,71 @@ export function readEnvelopeSites(manifest: unknown): EnvelopeSite[] {
         isRecord(entry) ? mapEntry(manifest, key, entry) : { key, ok: false as const, name: key, enabled: false, host: `${key}.gen`, repoDir: null, reason: 'its entry is not an object' });
 }
 
+/**
+ * What a site RUNS, as one value: its folder, how it is served, its dev server, the env it is given and the port it opens.
+ * Its name, `enabled` and every other field are not part of it. This is what a person's first start on a machine is
+ * recorded against: when the value changes, the row asks again.
+ */
+export function siteRunFingerprint(site: ServableSite): string {
+    const serve = site.serve.mode === 'proxy'
+        ? ['proxy']
+        : site.serve.mode === 'static'
+            ? ['static', site.serve.root, site.serve.spa]
+            : ['php', site.serve.root, site.serve.version ?? null];
+    const env = Object.entries(site.portEnv ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return createHash('sha256').update(JSON.stringify([site.repoDir, serve, site.devServer?.command ?? null, env, site.hostPort ?? null])).digest('hex');
+}
+
+const UNSEEN: readonly (readonly [number, number])[] = [
+    [0x00, 0x1f], [0x7f, 0x9f], [0xad, 0xad], [0x61c, 0x61c], [0x180e, 0x180e], [0x200b, 0x200f], [0x2028, 0x202e], [0x2060, 0x206f], [0xfeff, 0xfeff], [0xfff9, 0xfffb], [0xe0000, 0xe007f],
+];
+
+/** Text with every character a person could not see written out as its code point. */
+function allVisible(text: string): string {
+    return [...text].map((ch) => {
+        const code = ch.codePointAt(0)!;
+        return UNSEEN.some(([from, to]) => code >= from && code <= to) ? `<U+${code.toString(16).toUpperCase().padStart(4, '0')}>` : ch;
+    }).join('');
+}
+
+/** What a site's row says its Start will do, and in which folder: exactly the command, or what stands for one. */
+export function firstStartWords(site: ServableSite): { runs: string; folder: string } {
+    const runs = site.hostPort !== undefined
+        ? `Opens the server already on port ${site.hostPort}`
+        : site.serve.mode === 'php'
+            ? `Runs PHP on the files in ${site.serve.root}`
+            : site.serve.mode === 'static'
+                ? `Serves the files in ${site.serve.root}`
+                : site.devServer?.command ?? '';
+    return { runs: allVisible(runs), folder: allVisible(site.repoDir) };
+}
+
+/**
+ * The record on this machine of what a person has let run here. Never in a repo. `carried` is every workspace already
+ * registered when the record was first written, and is fixed from then on; `pendingCarry` is those whose project.json has
+ * not been read yet (a drive that is away); `sites` is `<workspaceId>/<key>` to {@link siteRunFingerprint}.
+ */
+export interface TrustBook {
+    readonly version: 1;
+    readonly carried: readonly string[];
+    pendingCarry: string[];
+    sites: Record<string, string>;
+    /** A workspace id to the hash of the list the person said yes to, or that it carried over with (core/workspace-trust.ts). */
+    workspaces: Record<string, string>;
+}
+
+/** The record as stored, or `null` when it is not one: every field checked, because what it says decides what runs. */
+export function parseTrustBook(value: unknown): TrustBook | null {
+    if (!isRecord(value) || value.version !== 1) return null;
+    const texts = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === 'string');
+    if (!texts(value.carried) || !texts(value.pendingCarry) || !isRecord(value.sites)) return null;
+    if (!Object.values(value.sites).every((s) => typeof s === 'string')) return null;
+    // A record written before workspaces were kept has none, and its `carried` still stands.
+    const workspaces = value.workspaces ?? {};
+    if (!isRecord(workspaces) || !Object.values(workspaces).every((s) => typeof s === 'string')) return null;
+    return { version: 1, carried: value.carried, pendingCarry: value.pendingCarry, sites: value.sites as Record<string, string>, workspaces: workspaces as Record<string, string> };
+}
+
 /** The key Genie 1 gives a site: sha256(workspace \0 name), 16 hex — so either Genie reads what the other wrote. */
 export function siteKeyFor(workspaceId: string, name: string): string {
     return createHash('sha256').update(`${workspaceId}\0${name.toLowerCase()}`).digest('hex').slice(0, 16);

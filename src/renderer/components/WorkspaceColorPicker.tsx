@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { WORKSPACE_PALETTE, isWorkspaceColor, lowContrastThemes } from '../../core/workspace-color.js';
 import { wsStyle } from '../workspace-colors.js';
 
@@ -24,7 +25,7 @@ export function WorkspaceColorPicker({ current, onSet }: WorkspaceColorPickerPro
             {WORKSPACE_PALETTE.map((color) => {
                 const on = now === color;
                 return (
-                    <button
+                    <Button size="xs"
                         key={color}
                         type="button"
                         data-ws-color-option={color}

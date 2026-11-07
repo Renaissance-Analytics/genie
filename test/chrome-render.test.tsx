@@ -240,7 +240,7 @@ describe('the rail', () => {
 
         expect(html).not.toContain('data-nav="genie://deck"');
         expect(html).not.toContain('data-nav="genie://agent/genie"');
-        expect(html).not.toContain('disabled');
+        expect(html).not.toMatch(/\sdisabled=""/);
         // No orphan badge either: the Deck's count has nowhere to live without the Deck.
         expect(html).not.toContain('data-deck-badge');
 

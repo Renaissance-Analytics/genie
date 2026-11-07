@@ -1,8 +1,9 @@
 import { limitTitle, limitWords } from './limit-words.js';
+import { isSleeping } from './agent-status.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import { repeatsCompaction, type TimedEvent } from './stream-view.js';
-import type { StreamEvent } from './stream-event.js';
+import type { StreamEvent, ToolKind } from './stream-event.js';
 import type { Attachment } from './prompt-content.js';
 import { promptDeliveries } from './prompt-delivery.js';
 import { messageLines } from './chat-window.js';
@@ -33,7 +34,7 @@ import { messageLines } from './chat-window.js';
  * `system`: one line Genie says about the thread (`Compacted the context`).
  * `mail`: a piece of the agent's AgentInbox mail — with the person or another agent, either way — `you → atlas`, its
  * whole text, opening that message in the AgentInbox (beta.33 items 7 + 18: an FTQ answer is one).
- * `delivery`: Genie's notice turn — the messages it told the agent about, each by who wrote it and what it says.
+ * `delivery`: a legacy thread payload; its row is ignored now that the mail card is the notification.
  * `stopped`: a turn that was stopped — one line where its reply ends, `Stopped by you`, so a reply cut short reads as
  * stopped and not as the agent's last word.
  */
@@ -57,6 +58,8 @@ export interface ChatMessage {
     queued?: boolean;
     /** The turn has ended, but the provider is still paused. */
     queuedForProvider?: boolean;
+    /** The agent is still starting (q_04ce323c: its first message started it); it goes the moment it is up. */
+    queuedForStart?: boolean;
     /** Its durable queue id, for restarting/sending or discarding an unsent draft. */
     promptId?: string;
     /** A failed Send/Discard press, kept beside the draft so it can be tried again. */
@@ -64,10 +67,14 @@ export interface ChatMessage {
     /** Epoch ms, or `null` when the event carried none — never synthesised. */
     at: number | null;
     /**
-     * Your inbox mail to an observed agent only: when it read it (epoch ms), or `null` = not read yet. Absent on
-     * every other message — a session prompt has no read receipt, and claiming one would be a guess.
+     * Legacy observed-chat bubble receipt. Current mail cards use `delivered`, from the existing inbox readAt.
      */
     read?: number | null;
+    /**
+     * A PROVIDER SWITCH'S CARRY-OVER (Tynn story #380): the exact text the turn carried above the person's words, drawn
+     * as a collapsed marker that opens to it. Absent on every other message.
+     */
+    carried?: string;
     /** The names of the files sent with it (your message only); absent when there were none. */
     attachments?: readonly string[];
     /** Why an undelivered draft was not sent, when the host said; absent = the agent is not running. */
@@ -79,22 +86,41 @@ export interface ChatMessage {
     /** A `delivery` row: the messages Genie told the agent about. */
     mail?: readonly ChatMailRef[];
     /**
-     * Your message, sent while the agent was in a step that has not ended (beta.33 item 21): the step it waits behind and
-     * when that step started. Claude reads a message at its next tool boundary; absent = not waiting.
+     * Your message, sent while the agent was in a step of its own that has not ended (beta.33 item 21): the step it waits
+     * behind and when that step started. Claude reads a message at its next tool boundary; absent = not waiting
+     * ({@link waitingMessages}).
      */
     waiting?: ChatWaitingOn;
 }
 
-/** The step a message waits behind: its title (the command, or the tool), and when it started. */
+/** The step a message waits behind: its title (the command, or the tool), when it started, and its kind (the Stream's icon). */
 export interface ChatWaitingOn {
     readonly step: string;
     readonly since: number | null;
+    readonly kind: ToolKind | null;
+}
+
+/**
+ * THE STEP, IN WORDS A PERSON READS (the owner, 2026-11-01: "I know the agent is busy, why is it showing me the tool call
+ * like that"). Claude titles an MCP call with its raw id, `mcp__<server>__<tool>`; that reads as its server — the name the
+ * server was configured under (`playwright`, `tynn`, `genie`), with a plugin's `plugin_<plugin>_` prefix and claude.ai's
+ * `claude_ai_` dropped. Anything else (a shell command's description, a tool's name) is kept as the provider titled it.
+ * The raw step stays in the queued message's hover, for debugging.
+ */
+export function waitingStepLabel(step: string): string {
+    const mcp = /^mcp__(.+?)__.+$/.exec(step);
+    if (!mcp) return step;
+    let server = mcp[1]!;
+    const plugin = /^plugin_[^_]+_(.+)$/.exec(server);
+    if (plugin) server = plugin[1]!;
+    else if (server.startsWith('claude_ai_')) server = server.slice('claude_ai_'.length);
+    return server.replace(/_/g, ' ');
 }
 
 
 export interface ChatContext {
     text: string;
-    tone: 'ok' | 'warn' | 'bad' | 'muted';
+    tone: 'ok' | 'warn' | 'bad' | 'muted' | 'cool';
     /** The hover: the full date and time a rate-limit hold resumes. Absent = no hover. */
     title?: string;
 }
@@ -135,6 +161,8 @@ export function chatContext(detail: ChatDetail): ChatContext {
     const held = limitWords(s.limit);
     if (held) { const title = limitTitle(s.limit); return { text: `Paused · ${held}`, tone: 'warn', ...(title ? { title } : {}) }; }
     if (s.failure !== null) return { text: `Broken · ${s.failure.reason}`, tone: 'bad' };
+    // COMING UP (q_04ce323c): its first message waits for the start, and the line says why.
+    if (s.running && s.starting === true && s.turnState !== 'working') return { text: 'Starting', tone: 'muted' };
     if (s.running && s.turnState === 'working') {
         return { text: s.plan ? `Working · Plan ${s.plan.step}/${s.plan.of} · ${s.plan.doing}` : 'Working', tone: 'ok' };
     }
@@ -142,10 +170,21 @@ export function chatContext(detail: ChatDetail): ChatContext {
     if (s.designLogin) return { text: 'Claude Design login needed', tone: 'warn' };
     // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21).
     if (s.running && (s.background ?? 0) > 0) return { text: `Working · ${s.background} in the background`, tone: 'ok' };
+    // COOLING (core/session.ts COOLING_MS): the 15 s after a turn that replied.
+    if (s.running && s.cooling === true) return { text: 'Cooling', tone: 'cool' };
+    if (isSleeping(s, Date.now())) return { text: 'Sleeping', tone: 'muted' };
     return { text: 'Idle', tone: 'muted' };
 }
 
-export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = []): ChatMessage[] {
+/** Provider bookkeeping is not another chat message: the actual mail card is the notification. */
+function inboxNotice(event: StreamEvent): boolean {
+    return event.kind === 'message' && event.speaker === 'peer' && (
+        (event.mail?.length ?? 0) > 0
+        || (event.peerName === 'genie' && /^You have \d+ unread AgentInbox messages?; collect (?:it|them) with agentinbox receive\.$/.test(event.text))
+    );
+}
+
+export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []): ChatMessage[] {
     const out: ChatMessage[] = [];
     const waiting = waitingMessages(detail.rows);
     const deliveries = promptDeliveries(detail.rows);
@@ -160,6 +199,11 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         if (e.kind === 'stopped') {
             const text = e.by === null ? 'Stopped' : `Stopped by ${e.by}`;
             out.push({ id: row.id, who: 'stopped', from: e.by ?? '', text, delivered: true, at: row.at });
+            continue;
+        }
+        // What a provider switch carried into this turn: a marker, never the person's words (Tynn story #380).
+        if (e.kind === 'notice' && e.carried) {
+            out.push({ id: row.id, who: 'system', from: '', text: e.message, delivered: true, at: row.at, carried: e.carried.text });
             continue;
         }
         if (e.kind === 'divider' && e.variant === 'compaction') {
@@ -183,19 +227,7 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         if (e.kind !== 'message') continue;
         const delivery = e.pending ? deliveries.get(e.pending.id) : undefined;
         if (delivery === 'discarded') continue;
-        // GENIE'S NOTICE, WITH ITS CONTEXT (beta.33 item 18): not its instruction to the agent ("collect it with
-        // agentinbox receive") but the messages it told about — who wrote each and what it says. A notice recorded
-        // before notices carried their mail has nothing to list, and stays Genie's message as it was.
-        if (e.speaker === 'peer' && e.mail && e.mail.length > 0) {
-            const n = e.mail.length;
-            out.push({
-                id: row.id, who: 'delivery', from: `${e.peerName ?? 'genie'} → ${detail.agent.name}`,
-                text: `told ${detail.agent.name} about ${n} AgentInbox message${n === 1 ? '' : 's'}`,
-                delivered: true, at: row.at,
-                mail: e.mail.map((m) => ({ id: m.id, from: m.from === 'human' ? 'you' : rows.find((r) => r.id === m.from)?.name ?? m.fromName ?? m.from, subject: mailSubject(m.text) })),
-            });
-            continue;
-        }
+        if (inboxNotice(e)) continue;
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
         const delivered = delivery === undefined || delivery === 'sent';
@@ -203,7 +235,8 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
-            ...(queued && detail.session?.turnState === 'idle' ? { queuedForProvider: true } : {}),
+            ...(queued && detail.session?.starting === true ? { queuedForStart: true }
+                : queued && detail.session?.turnState === 'idle' ? { queuedForProvider: true } : {}),
             ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;
@@ -211,12 +244,20 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
 
 /**
  * WHICH OF YOUR MESSAGES WAIT, and behind what (beta.33 item 21; the owner's moic, inside one shell command from 14:31,
- * three messages unanswered and nothing saying why). Read from the ledger: a message of yours sent while a step of the
- * running turn had started and not ended waits behind that step, until it completes or fails (the boundary Claude reads
- * queued messages at), or the turn ends or is stopped. A message sent between steps does not wait.
+ * three messages unanswered and nothing saying why). Read from the ledger: a message of yours sent while a step OF THE
+ * AGENT'S OWN had started and not ended waits, until the agent can read it or has shown it did (genie#1473, measured in the
+ * ledgers; test/waiting-answered-1473.test.tsx has the rows):
+ *  - its own steps have all ended: the boundary Claude reads queued messages at. One ending while another of the batch runs
+ *    leaves the message waiting, behind that one;
+ *  - it says something, a reply or a thought: it is past those steps, so whatever still reads open is a step whose end was
+ *    never recorded, and holds nothing, this message or a later one. A later step of its own proves nothing: Claude starts
+ *    a batch's calls while still writing them;
+ *  - the turn ends or is stopped.
+ * A SUBAGENT's steps are neither: the agent runs beside them and reads your message straight away, and their rows say
+ * nothing about it having read anything. A message sent between steps does not wait.
  */
 export function waitingMessages(ledger: readonly TimedEvent[]): Map<string, ChatWaitingOn> {
-    /** Steps started and not ended, in the turn now running: id → what it is and when it started. */
+    /** The agent's own steps started and not ended, in the turn now running: id → what it is and when it started. */
     const open = new Map<string, ChatWaitingOn>();
     /** Messages waiting, and the step each waits behind. */
     const waits = new Map<string, { on: string; waiting: ChatWaitingOn }>();
@@ -226,16 +267,27 @@ export function waitingMessages(ledger: readonly TimedEvent[]): Map<string, Chat
             waits.clear();
             continue;
         }
+        if ((e.kind === 'think' || (e.kind === 'message' && e.speaker === 'agent')) && e.text.trim() !== '') {
+            open.clear();
+            waits.clear();
+            continue;
+        }
         if (e.kind === 'tool') {
-            if (e.toolCallId === '') continue;
+            if (e.toolCallId === '' || e.parentToolCallId !== undefined) continue;
             if (e.status === 'completed' || e.status === 'failed') {
                 open.delete(e.toolCallId);
-                for (const [m, w] of waits) if (w.on === e.toolCallId) waits.delete(m);
+                const running = [...open.entries()].at(-1);
+                for (const [m, w] of waits) {
+                    if (w.on !== e.toolCallId) continue;
+                    if (running) waits.set(m, { on: running[0], waiting: running[1] });
+                    else waits.delete(m);
+                }
                 continue;
             }
             const known = open.get(e.toolCallId);
-            const step = e.title ?? e.name ?? known?.step ?? 'a step';
-            open.set(e.toolCallId, { step: known && (e.title === null || e.title === '') ? known.step : step, since: known?.since ?? at });
+            // A row of a call often has no title: the name it started under stands, and one that started before the agent last spoke has none to stand on.
+            const step = (known && !e.title ? known.step : e.title || e.name) || 'a step';
+            open.set(e.toolCallId, { step, since: known?.since ?? at, kind: e.toolKind ?? known?.kind ?? null });
             continue;
         }
         if (e.kind === 'message' && e.speaker === 'you' && open.size > 0) {
@@ -274,6 +326,7 @@ export function chatTailStart(ledger: readonly TimedEvent[], lines: number): num
     let i = ledger.length - 1;
     for (; i >= 0; i -= 1) {
         const e = ledger[i]!.event;
+        if (inboxNotice(e)) continue;
         if (e.kind === 'message' || e.kind === 'think') seen += messageLines(e);
         else if (e.kind === 'stopped' || e.kind === 'divider') seen += 1;
         if (seen >= lines) break;
@@ -353,7 +406,7 @@ export function rememberThread(opened: readonly string[], id: string): string[] 
 const SUBJECT_CHARS = 160;
 
 /**
- * ONE LINE OF WHAT A MESSAGE SAYS — a delivery's entry. The whole message, not its first line: an FTQ answer's first line
+ * ONE LINE OF WHAT A MESSAGE SAYS — a mail card's preview. The whole message, not its first line: an FTQ answer's first line
  * is `Answer to your question q_…:`, which says nothing, and what matters (the question's header, the option chosen, the
  * note) is on the lines under it. Markdown marks and list bullets go, lines join, a `Note:` is set off with `·`; capped.
  */
@@ -373,7 +426,9 @@ export function mailSubject(text: string): string {
  * at all (the owner, beta.33: "I did not see the msg post from answering the FTQ appear").
  */
 export function chatCommsOf(messages: readonly MailLike[]): MailLike[] {
-    return messages.map((m) => ({ id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt }));
+    return messages.map((m) => ({ id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt,
+        ...(m.deliveryRefusal ? { deliveryRefusal: m.deliveryRefusal } : {}),
+    }));
 }
 
 /**
@@ -382,14 +437,20 @@ export function chatCommsOf(messages: readonly MailLike[]): MailLike[] {
  * agents is not this agent's.
  */
 function commsRows(detail: ChatDetail, rows: readonly AgentRow[]): ChatMessage[] {
-    if (!detail.comms) return [];
-    const self = detail.agent.id;
-    const name = (id: string): string => (id === 'human' ? 'you' : id === self ? detail.agent.name : rows.find((r) => r.id === id)?.name ?? id);
-    return detail.comms
+    return mailRows(detail.comms ?? [], detail.agent.id, detail.agent.name, rows);
+}
+
+/** One mail record and receipt in declared and observed chats, on either side of the conversation. */
+function mailRows(messages: readonly MailLike[], self: string, selfName: string, rows: readonly AgentRow[]): ChatMessage[] {
+    const name = (id: string): string => (id === 'human' ? 'you' : id === self ? selfName : rows.find((r) => r.id === id)?.name ?? id);
+    return messages
         .filter((m) => m.from === self || m.to === self)
         .map((m) => {
             const at = Date.parse(m.sentAt);
-            return { id: m.id, who: 'mail' as const, from: `${name(m.from)} → ${name(m.to)}`, text: m.text, delivered: true, at: Number.isNaN(at) ? null : at, mailId: m.id };
+            const delivered = m.readAt != null;
+            return { id: m.id, who: 'mail' as const, from: `${name(m.from)} → ${name(m.to)}`, text: m.text, delivered, at: Number.isNaN(at) ? null : at, mailId: m.id,
+                ...(!delivered && m.deliveryRefusal ? { reason: m.deliveryRefusal.reason } : {}),
+            };
         });
 }
 
@@ -434,27 +495,18 @@ export interface MailLike {
     readonly text: string;
     readonly sentAt: string;
     readonly readAt: string | null;
+    readonly deliveryRefusal?: { readonly attempts: number; readonly reason: string; readonly at: string };
 }
 
 /**
- * AN OBSERVED AGENT'S CHAT IS ITS INBOX THREAD (§4.4). Your mail to it, with whether it has read each one, and its
- * mail to you by name, oldest first; `unread` counts its mail you have not read. A Take Over window's replies in its
+ * AN OBSERVED AGENT'S CHAT IS ITS INBOX THREAD (§4.4). Shared mail cards include its peer conversations and receipts;
+ * `unread` still counts its mail to the person that the person has not read. A Take Over window's replies in its
  * terminal are not here — that TUI does not report them. `recent === null` (the inbox not read yet) gives `unread:
  * null`, never `0`, which would claim you are up to date.
  */
-export function observedMail(recent: readonly MailLike[] | null, agentId: string, name: string): { messages: ChatMessage[]; unread: number | null } {
+export function observedMail(recent: readonly MailLike[] | null, agentId: string, name: string, rows: readonly AgentRow[] = []): { messages: ChatMessage[]; unread: number | null } {
     if (recent === null) return { messages: [], unread: null };
-    const messages: ChatMessage[] = [];
-    let unread = 0;
-    for (const m of recent) {
-        if (m.from === 'human' && m.to === agentId) {
-            messages.push({ id: m.id, who: 'you', from: 'you', text: m.text, delivered: true, at: Date.parse(m.sentAt), read: m.readAt === null ? null : Date.parse(m.readAt) });
-        } else if (m.from === agentId && m.to === 'human') {
-            messages.push({ id: m.id, who: 'agent', from: name, text: m.text, delivered: true, at: Date.parse(m.sentAt) });
-            if (m.readAt === null) unread++;
-        }
-    }
-    return { messages, unread };
+    return { messages: mailRows(recent, agentId, name, rows), unread: recent.filter(m => m.from === agentId && m.to === 'human' && m.readAt === null).length };
 }
 
 /**

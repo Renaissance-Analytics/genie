@@ -1,4 +1,4 @@
-import { Icon, Input, Select } from '@particle-academy/react-fancy';
+import { Button, Icon, Input, Select } from '@particle-academy/react-fancy';
 import type { CSSProperties, RefObject } from 'react';
 import type { BrowserSnapshot } from '../../main/genie-browser-window.js';
 
@@ -23,6 +23,7 @@ export interface GenieBrowserChromeProps {
     readonly onForward: () => void;
     readonly onReload: () => void;
     readonly onPreset: (id: string) => void;
+    readonly onRestart?: () => void;
     /** The page box — its bounds are reported to main, which places the view over it. */
     readonly pageRef?: RefObject<HTMLDivElement | null>;
     readonly isMac?: boolean;
@@ -57,31 +58,31 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
                     const on = t.id === s.active;
                     return (
                         <div key={t.id} className={`flex max-w-[220px] shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs ${on ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-1)]'}`}>
-                            <button type="button" data-browser-tab={t.id} {...(on ? { 'data-current': 'true' } : {})} className="truncate" title={t.url} onClick={() => p.onActivate(t.id)}>
+                            <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-browser-tab={t.id} {...(on ? { 'data-current': 'true' } : {})} className="truncate" title={t.url} onClick={() => p.onActivate(t.id)}>
                                 {t.loading ? <Icon name="loader" size="xs" className="mr-1 inline animate-spin" /> : null}
                                 {t.title || t.url}
-                            </button>
-                            <button type="button" data-browser-close={t.id} aria-label={`Close ${t.title || t.url}`} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]" onClick={() => p.onClose(t.id)}>
+                            </Button>
+                            <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-browser-close={t.id} aria-label={`Close ${t.title || t.url}`} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]" onClick={() => p.onClose(t.id)}>
                                 <Icon name="x" size="xs" />
-                            </button>
+                            </Button>
                         </div>
                     );
                 })}
-                <button type="button" data-browser-new-tab="" aria-label="New tab" title="New tab" className={chromeButton} onClick={p.onNewTab}>
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-browser-new-tab="" aria-label="New tab" title="New tab" className={chromeButton} onClick={p.onNewTab}>
                     <Icon name="plus" size="xs" />
-                </button>
+                </Button>
             </div>
 
             <div data-browser-toolbar="" className="flex shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1.5" style={noDrag}>
-                <button type="button" data-browser-nav="back" aria-label="Back" title="Back" disabled={!active?.canGoBack} onClick={p.onBack} className={chromeButton}>
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-browser-nav="back" aria-label="Back" title="Back" disabled={!active?.canGoBack} onClick={p.onBack} className={chromeButton}>
                     <Icon name="chevron-left" size="xs" />
-                </button>
-                <button type="button" data-browser-nav="forward" aria-label="Forward" title="Forward" disabled={!active?.canGoForward} onClick={p.onForward} className={chromeButton}>
+                </Button>
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-browser-nav="forward" aria-label="Forward" title="Forward" disabled={!active?.canGoForward} onClick={p.onForward} className={chromeButton}>
                     <Icon name="chevron-right" size="xs" />
-                </button>
-                <button type="button" data-browser-nav="reload" aria-label="Reload" title="Reload" disabled={active === null} onClick={p.onReload} className={chromeButton}>
+                </Button>
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-browser-nav="reload" aria-label="Reload" title="Reload" disabled={active === null} onClick={p.onReload} className={chromeButton}>
                     <Icon name="rotate-cw" size="xs" />
-                </button>
+                </Button>
                 {/* Keyed by the page: the field shows where the view IS (a link, a redirect, back), never a stale entry. */}
                 <form
                     key={`${active?.id ?? ''}:${active?.url ?? ''}`}
@@ -107,7 +108,7 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
             {s.sites.length > 0 ? (
                 <div data-browser-sites="" className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--border-1)] px-2 py-1">
                     {s.sites.map((host) => (
-                        <button
+                        <Button variant="ghost" size="xs"
                             key={host}
                             type="button"
                             data-browser-site={host}
@@ -116,11 +117,14 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
                             className={`rounded-md px-2 py-0.5 font-mono text-[11px] hover:bg-[var(--bg-2)] ${onScreenHost === host ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}
                         >
                             {host}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
 
+            {s.notice ? (
+                <div data-browser-notice="" className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-1 text-[11px] text-[var(--fg-2)]">{s.notice}{s.noticeRestart ? <Button size="xs" type="button" data-browser-restart="" className="ml-2" onClick={p.onRestart}>Restart</Button> : null}</div>
+            ) : null}
             {error ? (
                 <div data-browser-error="" className="shrink-0 border-b border-[var(--danger)] bg-[var(--bg-1)] px-3 py-1 text-xs text-[var(--danger)]">{error}</div>
             ) : null}

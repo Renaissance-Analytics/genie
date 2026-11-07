@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { tynnProjectSlug, type TynnOwner, type TynnProject } from '../../core/tynn.js';
 
@@ -35,7 +35,7 @@ export function TynnProjectPickerView({ tynn, projectId, onProject, onNew }: Tyn
             <div className="flex items-baseline justify-between">
                 <span className="text-xs font-semibold">Project (optional)</span>
                 {onNew && tynn?.ok ? (
-                    <button type="button" data-action="new-tynn-project" onClick={onNew} className={`${button} flex items-center gap-1`}><Icon name="plus" size="xs" />New project</button>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="new-tynn-project" onClick={onNew} className={`${button} flex items-center gap-1`}><Icon name="plus" size="xs" />New project</Button>
                 ) : null}
             </div>
             {tynn === null ? (
@@ -77,7 +77,7 @@ export function CreateTynnProjectView({ name, slug, ownerKey, owners, busy, erro
         <div data-create-tynn-project="" className="flex flex-col gap-2.5 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-3">
             <div className="flex items-baseline justify-between">
                 <span className="text-sm font-semibold">Create new project</span>
-                <button type="button" data-action="select-existing-tynn-project" disabled={busy} onClick={onCancel} className={`${button} flex items-center gap-1`}><Icon name="arrow-left" size="xs" />Select existing</button>
+                <Button size="xs" labelClassName="contents" type="button" data-action="select-existing-tynn-project" disabled={busy} onClick={onCancel} className={`${button} flex items-center gap-1`}><Icon name="arrow-left" size="xs" />Select existing</Button>
             </div>
             <label className="flex flex-col gap-1">
                 <span className="text-xs font-semibold">Name</span>
@@ -99,7 +99,7 @@ export function CreateTynnProjectView({ name, slug, ownerKey, owners, busy, erro
             </label>
             {error ? <p data-tynn-project-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
             <div className="flex items-center justify-end gap-2">
-                <button type="button" data-action="create-tynn-project" disabled={busy || name.trim() === ''} onClick={onCreate} className={primary}><Icon name="check" size="xs" />{busy ? 'Creating…' : 'Create project'}</button>
+                <Button size="xs" labelClassName="contents" type="button" data-action="create-tynn-project" disabled={busy || name.trim() === ''} onClick={onCreate} className={primary}><Icon name="check" size="xs" />{busy ? 'Creating…' : 'Create project'}</Button>
             </div>
         </div>
     );

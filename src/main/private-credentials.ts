@@ -1,8 +1,10 @@
-import { execFile, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmod, lstat, mkdir, open, readdir, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { HelperLost, WindowsHelper, type HelperChild, type WindowsHelperOptions } from './windows-helper.js';
 
 const run = promisify(execFile);
 const REFUSED = 'Private Tynn credential permissions could not be secured.';
@@ -71,6 +73,16 @@ async function inspect(target: Target) {
     }
 }
 
+/**
+ * THE OWNER-ONLY READ-BACK: the ACL is protected, owned by this user, and holds one rule, this user's full control, not inherited. `$actual`, `$sid`,
+ * `$path` and `$inheritance` are set before it. One text, used where an ACL is set (below) and where one is only read (isOwnerOnlyFile).
+ */
+const OWNER_ONLY_READ_BACK = `        $rules=@($actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+        if (-not $actual.AreAccessRulesProtected -or $actual.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $rules.Count -ne 1) { throw 'Unsafe ACL' }
+        $rule=$rules[0]
+        if ($rule.IsInherited -or $rule.IdentityReference.Value -ne $sid.Value -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or $rule.InheritanceFlags -ne $inheritance -or $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) { throw 'Unsafe rule' }
+        if (([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Reparse point' }`;
+
 function windowsAcl(targets: readonly Target[]): string {
     // A fresh protected DACL replaces explicit foreign grants as well as inherited ones.
     // Never /reset an existing credential directory: that would temporarily restore parent grants.
@@ -97,12 +109,29 @@ function windowsAcl(targets: readonly Target[]): string {
             [IO.File]::SetAccessControl($path,$acl)
             $actual=[IO.File]::GetAccessControl($path)
         }
-        $rules=@($actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
-        if (-not $actual.AreAccessRulesProtected -or $actual.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $rules.Count -ne 1) { throw 'Unsafe ACL' }
-        $rule=$rules[0]
-        if ($rule.IsInherited -or $rule.IdentityReference.Value -ne $sid.Value -or $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or $rule.InheritanceFlags -ne $inheritance -or $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) { throw 'Unsafe rule' }
-        if (([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Reparse point' }
+${OWNER_ONLY_READ_BACK}
     }
+`;
+}
+
+/**
+ * The read-back alone, on one file: nothing is set. It answers in words on its output, so a file that is not owner-only is a no and never a failed script (which
+ * would read as an ACL failure). A link, a directory or a file not there is a no.
+ */
+const OWNER_ONLY = 'OWNER_ONLY';
+function windowsOwnerOnlyCheck(file: string): string {
+    return `
+    try {
+    $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+    $path=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(file, 'utf16le').toString('base64')}'))
+    $attributes=[IO.File]::GetAttributes($path)
+    if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Reparse point' }
+    if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) { throw 'Wrong kind' }
+    $inheritance=[Security.AccessControl.InheritanceFlags]::None
+    $actual=[IO.File]::GetAccessControl($path)
+${OWNER_ONLY_READ_BACK}
+    '${OWNER_ONLY}'
+    } catch { 'NOT_OWNER_ONLY' }
 `;
 }
 
@@ -115,14 +144,93 @@ interface NativeAcl {
     readonly completed: Promise<{ stdout: string | Buffer; stderr: string | Buffer }>;
 }
 
-function startWindowsAcl(script: string): NativeAcl {
+/**
+ * THE HELPER (windows-helper.ts): the same script, the same read-back, with no launch. One per process, started on first need, and never on Electron main, which keeps a launch per write: main never
+ * holds a process of its own for this, and a window with a host writes none of these. `undefined` is that default, a test can name its own, and `null` is a launch per write, which is what the
+ * launch-count test's fault injection drives.
+ */
+let helper: WindowsHelper | null | undefined;
+export function useAclHelper(chosen: WindowsHelper | null | undefined): void { helper = chosen; }
+export function windowsHelper(options: Partial<Pick<WindowsHelperOptions, 'deadlineMs' | 'log'>> & { onStart?: (pid: number | null) => void } = {}): WindowsHelper {
+    return new WindowsHelper({
+        ...options,
+        // Its reasons are a host's log line: paths and secrets never reach these words.
+        log: options.log ?? ((line) => sayDiagnostic(line)),
+        spawn: (file, args, env) => {
+            const child = spawn(file, [...args], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+            try { options.onStart?.(child.pid ?? null); } catch { /* An observer cannot change private verification. */ }
+            // Idle, it must not hold its owner open. While a request runs, the helper refs it again.
+            child.unref();
+            for (const pipe of [child.stdin, child.stdout] as Array<{ unref?: () => void } | null>) pipe?.unref?.();
+            return child as unknown as HelperChild;
+        },
+    });
+}
+export function sharedWindowsHelper(): WindowsHelper | null {
+    if (helper === undefined) helper = (process as { type?: string }).type === 'browser' ? null : windowsHelper();
+    return helper;
+}
+// Its own clock, held from load: these timings must not take readings from anything a failure's diagnostic reads.
+const timingClock = performance.now.bind(performance);
+const SLOW_WRITE_MS = 5_000;
+const HELD_THREAD_MS = 1_000;
+/** A write a person would feel, said with which way it went. No path and no value. A window's or a host's stderr is its log. */
+export function slowWriteLine(ms: number, way: string, why: string | null): string | null {
+    return ms < SLOW_WRITE_MS ? null : `PRIVATE_FILE_SLOW_WRITE ${Math.round(ms)} ms through the ${way}${why ? `: ${why}` : ''}`;
+}
+const sayDiagnostic = (line: string | null): void => { if (line === null) return; try { console.error(line); failureLog?.(line); } catch { /* A diagnostic cannot change a write. */ } };
+
+/** This attempt's: whether to skip the helper, and whether the helper was lost under it. */
+const attempt = new AsyncLocalStorage<{ oneShot: boolean; lost: boolean; why?: string | null }>();
+
+/**
+ * THE VERIFICATION IS NEVER SKIPPED. A helper dead, hung or unstartable loses its request, and the whole attempt runs again by a launch, with the same script and the same read-back. A script that
+ * refused is a refusal, and is not tried again: that is the answer, not a failure to get one. If the launch fails too, so does the write.
+ */
+async function withHelperOrALaunch<T>(work: () => Promise<T>): Promise<T> {
+    const state: { oneShot: boolean; lost: boolean; why?: string | null } = { oneShot: false, lost: false };
+    const began = timingClock();
+    const way = () => (process.platform === 'win32' && sharedWindowsHelper() ? 'helper' : 'launch');
+    try {
+        const done = await attempt.run(state, work);
+        sayDiagnostic(slowWriteLine(timingClock() - began, way(), null));
+        return done;
+    } catch (error) {
+        if (!state.lost) { sayDiagnostic(slowWriteLine(timingClock() - began, way(), 'refused')); throw error; }
+        try {
+            return await attempt.run({ oneShot: true, lost: false }, work);
+        } finally {
+            sayDiagnostic(slowWriteLine(timingClock() - began, 'helper, then a launch', state.why ?? null));
+        }
+    }
+}
+
+function startWindowsAcl(body: string): NativeAcl {
+    const state = attempt.getStore();
+    const through = state?.oneShot ? null : sharedWindowsHelper();
+    if (through) {
+        const began = performance.now();
+        const request = through.run(body);
+        return {
+            child: { stdin: request.stdin, stdout: request.stdout, kill: () => request.kill() } as unknown as ChildProcess,
+            completed: request.completed.catch((error: unknown) => {
+                if (error instanceof HelperLost) { if (state) { state.lost = true; state.why = error.message; } }
+                else recordNativeFailure(error, began);
+                throw new Error(REFUSED);
+            }),
+        };
+    }
+    const script = windowsScript(body);
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
     const began = performance.now();
     try {
+        const held = timingClock();
         const work = run(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
             '-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
         ], { env, windowsHide: true, timeout: NATIVE_ACL_TIMEOUT_MS, maxBuffer: 65_536 });
+        // CreateProcess runs on this thread, and no timer can fire while it does.
+        if (timingClock() - held >= HELD_THREAD_MS) sayDiagnostic(`PRIVATE_FILE_LAUNCH starting it held this thread ${Math.round(timingClock() - held)} ms`);
         return { child: work.child, completed: work.catch((error: unknown) => {
             recordNativeFailure(error, began);
             throw new Error(REFUSED);
@@ -143,7 +251,7 @@ async function restrict(targets: readonly Target[]): Promise<void> {
         }
         return;
     }
-    await startWindowsAcl(windowsScript(windowsAcl(targets))).completed;
+    await startWindowsAcl(windowsAcl(targets)).completed;
 }
 
 const PREPARED = 'PRIVATE_CREDENTIAL_PREPARED\n';
@@ -152,7 +260,7 @@ const STAGED = 'PRIVATE_CREDENTIAL_STAGED';
 
 /** Keep the native verifier alive across Node's exclusive staging, without sending it credential bytes. */
 async function restrictStagedWrite(targets: readonly Target[], temp: string, stage: () => Promise<void>, cleanup: () => Promise<void>): Promise<void> {
-    const native = startWindowsAcl(windowsScript(`
+    const native = startWindowsAcl(`
         $pipe=[Console]::OpenStandardOutput()
         function Send-PrivateSignal([string]$message) {
             $bytes=[Text.Encoding]::UTF8.GetBytes($message+[Environment]::NewLine)
@@ -168,7 +276,7 @@ async function restrictStagedWrite(targets: readonly Target[], temp: string, sta
             ${windowsAcl([{ path: temp, directory: false }])}
             Send-PrivateSignal ('PRIVATE_CREDENTIAL_VERIFIED:'+$stageId)
         } finally { $reader.Dispose() }
-    `));
+    `);
     const input = native.child.stdin;
     const output = native.child.stdout;
     const stop = () => { try { native.child.kill(); } catch { /* The bounded native call still owns its deadline. */ } };
@@ -246,9 +354,52 @@ async function preparePrivateStorage(file: string, staged?: { temp: string; writ
     }
 }
 
+/**
+ * A FILE THAT IS NOT A CREDENTIAL'S, BUT HOLDS A SECRET (services.json, host.token). On Windows a mode means nothing: such a file inherited SYSTEM and Administrators from the folder. It gets the same
+ * owner-only ACL and the same read-back. A file that is not there is a refusal: the caller knows which files it means.
+ */
+export async function restrictPrivateFile(file: string): Promise<void> {
+    if (process.platform !== 'win32') return;
+    const target = { path: resolve(file), directory: false };
+    if (!await inspect(target)) throw new Error(REFUSED);
+    await withHelperOrALaunch(() => restrict([target]));
+}
+
+/**
+ * IS THIS FILE ITS OWNER'S ONLY? Read, never changed: on Windows the same read-back a restricted file must pass (a protected ACL, this user the owner and the
+ * one rule), on POSIX no group or other bit. For a file Genie is handed and must not repair, such as a key an operator provides. A file it cannot read the
+ * permissions of is not owner-only: the answer is never assumed.
+ */
+export async function isOwnerOnlyFile(file: string): Promise<boolean> {
+    const path = resolve(file);
+    if (process.platform !== 'win32') {
+        try { const entry = await lstat(path); return entry.isFile() && (entry.mode & 0o077) === 0; } catch { return false; }
+    }
+    try {
+        const { stdout } = await withHelperOrALaunch(() => startWindowsAcl(windowsOwnerOnlyCheck(path)).completed);
+        return stdout.toString().replace(/\r/g, '').trim() === OWNER_ONLY;
+    } catch { return false; }
+}
+
+/** Dedicated host-owned directories, using the same owner-only ACL and read-back as private files. */
+export async function restrictPrivateDirectories(directories: readonly string[]): Promise<void> {
+    const targets = directories.map(directory => ({ path: resolve(directory), directory: true }));
+    for (const target of targets) if (!await inspect(target)) throw new Error(REFUSED);
+    await withHelperOrALaunch(() => restrict(targets));
+}
+
+/** Staging's worker keeps this exact owner/DACL read-back, without the credential path's launch fallback. */
+export async function restrictPrivateStagingTargets(targets: readonly Target[], through: WindowsHelper): Promise<void> {
+    for (const target of targets) if (!await inspect(target)) throw new Error(REFUSED);
+    if (process.platform !== 'win32') { await restrict(targets); return; }
+    const began = performance.now();
+    try { await through.run(windowsAcl(targets)).completed; }
+    catch (error) { recordNativeFailure(error, began); throw new Error(REFUSED); }
+}
+
 /** Restrict existing storage before reading it or issuing a credential. Final links are refused. */
 export async function preparePrivateCredential(file: string): Promise<void> {
-    await preparePrivateStorage(file);
+    await withHelperOrALaunch(() => preparePrivateStorage(file));
 }
 
 /** Secure only the legacy FILE, never its shared parent, before moving into a private leaf. */
@@ -267,8 +418,26 @@ export async function migratePrivateCredential(legacyFile: string, file: string)
     } catch (error) { throw error instanceof SharedCredentialDirectoryError ? error : new Error(REFUSED); }
 }
 
+/** Where a private credential is kept: prepared before it is read, migrated from a legacy file, written in place. */
+export interface PrivateCredentialStore {
+    prepare(file: string): Promise<void>;
+    migrate(legacyFile: string, file: string): Promise<void>;
+    write(file: string, text: string): Promise<void>;
+}
+
+/** Genie's private store: an owner-only ACL on Windows (PowerShell), 0700/0600 elsewhere. */
+export const PRIVATE_CREDENTIAL_STORE: PrivateCredentialStore = {
+    prepare: (file) => preparePrivateCredential(file),
+    migrate: (legacyFile, file) => migratePrivateCredential(legacyFile, file),
+    write: (file, text) => writePrivateCredential(file, text),
+};
+
 /** Encrypted JSON is staged exclusively inside its private parent and restricted before replacement. */
 export async function writePrivateCredential(file: string, text: string): Promise<void> {
+    await withHelperOrALaunch(() => writePrivateCredentialOnce(file, text));
+}
+
+async function writePrivateCredentialOnce(file: string, text: string): Promise<void> {
     const temp = `${resolve(file)}.${randomUUID()}.tmp`;
     let created = false;
     const cleanup = async () => {

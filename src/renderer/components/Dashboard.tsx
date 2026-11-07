@@ -1,21 +1,21 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
-import { ActivityLight, Icon, Tooltip } from '@particle-academy/react-fancy';
-import { Fragment, useEffect, useState } from 'react';
-import { windowDetail, type Headroom } from '../../core/headroom.js';
+import { ActivityLight, Button, Icon, Popover } from '@particle-academy/react-fancy';
+import { Fragment, useEffect, useState, type CSSProperties } from 'react';
+import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
+import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
-import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
+import { WorkspaceSwatch } from '../workspace-colors.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
-import type { DashboardGroup } from '../../core/route.js';
 import {
     commsOf,
     contextOf,
     fixRoute,
-    groupByStatus,
-    groupByWorkspace,
+    dashboardRows,
+    shownState,
     statusOf,
     type FixRoute,
     summaryChips,
@@ -25,7 +25,6 @@ import {
     type Delivery,
     type Fidelity,
     type WorkspaceFault,
-    type WorkspaceGroup,
 } from '../../core/dashboard-view.js';
 
 /**
@@ -67,24 +66,25 @@ import {
  * anywhere: a census that hides members is not a census.
  */
 
-/** The board's column template, verbatim. Agent · Status · Target · Delivery · Comms · Context. */
+/** One shared template: Agent · Workspace · Status · Target · Delivery · Comms · Context. */
 const GRID =
-    'grid grid-cols-[150px_minmax(190px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px] gap-4 pl-7 pr-5';
+    'grid grid-cols-[150px_120px_minmax(160px,1.15fr)_minmax(0,1.1fr)_minmax(0,1.45fr)_60px_84px] gap-4 pl-7 pr-5';
 
 /** Dot colour carries STATE. Shape (below) carries what Genie can see. */
-const STATE_DOT: Record<AgentState, string> = {
-    working: 'text-[var(--success)]',
-    waiting: 'text-[var(--warning)]',
-    broken: 'text-[var(--danger)]',
-    idle: 'text-[var(--zinc-400)]',
-    remote: 'text-[var(--fg-4)]',
+/** One status colour for the whole row, fidelity dot and census chip. */
+const STATE_COLOR: Record<AgentState, string> = {
+    working: 'var(--success)', cooling: 'var(--sky-400)', waiting: 'var(--warning)', broken: 'var(--danger)',
+    idle: 'var(--zinc-400)', sleeping: 'var(--fg-4)', stopped: 'var(--danger)', remote: 'var(--fg-4)',
 };
+const stateStyle = (state: AgentState): CSSProperties => ({ '--agent-status': STATE_COLOR[state] } as CSSProperties);
 
 const STATUS_TONE = {
     ok: 'text-[var(--success)]',
     warn: 'text-[var(--warning)]',
     bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
+    // Cooling (core/session.ts COOLING_MS): its own colour, not Working's green nor Idle's grey.
+    cool: 'text-[var(--sky-400)]',
 } as const;
 
 /**
@@ -96,14 +96,14 @@ const STATUS_TONE = {
  * board that flatters itself.
  */
 export function FidelityDot({ fidelity, state }: { fidelity: Fidelity; state: AgentState }) {
-    const colour = STATE_DOT[state];
+    const colour = 'text-[var(--agent-status)]';
     if (fidelity === 'declared') {
-        return <span data-fidelity="declared" className={`size-2 shrink-0 rounded-full bg-current ${colour}`} />;
+        return <span data-fidelity="declared" style={stateStyle(state)} className={`size-2 shrink-0 rounded-full bg-current ${colour}`} />;
     }
     const border = fidelity === 'observed' ? 'border-solid' : 'border-dashed';
     return (
         <span
-            data-fidelity={fidelity}
+            data-fidelity={fidelity} style={stateStyle(state)}
             className={`size-2 shrink-0 rounded-full border-[1.5px] border-current ${border} ${colour}`}
         />
     );
@@ -201,16 +201,21 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
             ) : null}
             <div className="flex gap-2">
                 {tray.doors.map((d) => (
-                    <button key={d.door} type="button" data-door={d.door} onClick={(e) => { e.stopPropagation(); onNavigate(d.route); }} className="rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{d.label}</button>
+                    <Button key={d.door} type="button" size="xs" data-door={d.door} onClick={(e) => { e.stopPropagation(); onNavigate(d.route); }}>{d.label}</Button>
                 ))}
             </div>
         </div>
     );
 }
 
-function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji }: {
+function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji }: {
     row: AgentRow;
-    /** What the agent just did with Genie (genie#1209), shown beside its name for a moment. */
+    workspaceName: string;
+    workspaceColor?: string | undefined;
+    workspaceFault?: WorkspaceFault | null | undefined;
+    workspacePulsed?: boolean | undefined;
+    onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
+    onOpenWorkspace?: ((workspaceId: string) => void) | undefined;    /** What the agent just did with Genie (genie#1209), shown beside its name for a moment. */
     emoji?: string | undefined;
     onOpen: (id: string) => void;
     onFix?: ((route: FixRoute) => void) | undefined;
@@ -233,22 +238,29 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
             role="row"
             tabIndex={0}
             data-agent={row.id}
-            data-state={row.state}
+            data-state={shownState(row)}
             {...(focused ? { 'data-focused': 'true' } : {})}
             {...(role ? { 'data-reveal': role } : {})}
             onClick={() => onOpen(row.id)}
-            className={`${GRID} relative h-8 items-center border-b border-[var(--border-1)] text-[13px] transition-opacity hover:bg-[var(--bg-1)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
+            className={`${GRID} relative h-8 cursor-pointer items-center border-b border-[var(--border-1)] text-[13px] transition-opacity border-l-2 border-l-[var(--agent-status)] bg-[color-mix(in_srgb,var(--agent-status)_9%,transparent)] hover:bg-[color-mix(in_srgb,var(--agent-status)_15%,transparent)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
             // The reveal: the rest dims to .32; the row and its peers carry a 2px violet left border (the board).
-            {...(role === 'dim' ? { style: { opacity: 0.32 } } : role ? { style: { boxShadow: 'inset 2px 0 0 var(--violet-400)' } } : {})}
+            style={{ ...stateStyle(shownState(row)), ...(shownState(row) === 'sleeping' ? { opacity: 0.5 } : {}), ...(role === 'dim' ? { opacity: 0.32 } : role ? { boxShadow: 'inset 2px 0 0 var(--violet-400)' } : {}) }}
         >
             <Lanes segments={lanes} />
             <div className="flex min-w-0 items-center gap-2">
-                <FidelityDot fidelity={row.fidelity} state={row.state} />
+                <FidelityDot fidelity={row.fidelity} state={shownState(row)} />
                 <span className="truncate font-medium">{row.name}</span>
                 {emoji ? <span data-row-emoji={emoji} className="shrink-0 animate-pulse" aria-label="what it just did">{emoji}</span> : null}
                 <ProviderLogo provider={row.provider} />
             </div>
 
+            <div data-column="workspace" data-workspace={row.workspaceId} {...(workspacePulsed ? { 'data-workspace-pulse': 'true' } : {})} className={`flex min-w-0 items-center gap-1.5${workspacePulsed ? ` ${WORKSPACE_PULSE}` : ''}`}>
+                {workspaceColor ? <WorkspaceSwatch color={workspaceColor} /> : null}
+                {onOpenWorkspace ? (
+                    <Button type="button" variant="ghost" size="xs" data-open-workspace={row.workspaceId} className="min-w-0 px-0 text-xs font-normal text-[var(--fg-2)]" labelClassName="truncate" onClick={(event) => { event.stopPropagation(); onOpenWorkspace(row.workspaceId); }} title={workspaceName}>{workspaceName}</Button>
+                ) : <span className="truncate text-xs text-[var(--fg-3)]">{workspaceName}</span>}
+                {workspaceFault ? <Button type="button" variant="ghost" size="xs" icon="triangle-alert" data-workspace-fault={workspaceFault.repo} data-action="locate-repo" aria-label="Locate repo" title={workspaceFault.text} className="shrink-0 px-1 text-[var(--warning)]" onClick={(event) => { event.stopPropagation(); onLocateRepo?.(row.workspaceId, workspaceFault.repo); }} /> : null}
+            </div>
             <div className="flex min-w-0 items-center gap-1.5">
                 <span className={`shrink-0 font-medium ${STATUS_TONE[status.tone]}`}>{status.word}</span>
                 {status.detail ? <span className="truncate text-xs text-[var(--fg-3)]" {...(status.title ? { title: status.title } : {})}>{status.detail}</span> : null}
@@ -281,16 +293,17 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
                 {target?.kind === 'fixes' ? (
                     <div className="flex min-w-0 gap-1.5">
                         {target.fixes.map((f) => (
-                            <button
+                            <Button
                                 key={f}
                                 type="button"
+                                size="xs"
                                 data-fix={f}
                                 data-fix-for={row.id}
                                 onClick={(e) => { e.stopPropagation(); (onFix ?? ((r) => onOpen(r.agentId)))(fixRoute(row.id, f)); }}
-                                className="shrink-0 rounded-md border border-[var(--border-2)] px-2 py-px text-xs hover:bg-[var(--bg-2)]"
+                                className="shrink-0 py-px"
                             >
                                 {f}
-                            </button>
+                            </Button>
                         ))}
                     </div>
                 ) : null}
@@ -350,82 +363,6 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
     );
 }
 
-function GroupHeader({
-    group,
-    name,
-    path,
-    onAddAgent,
-    onOpenWorkspace,
-    onLocateRepo,
-    lanes,
-    pulsed = false,
-    color = null,
-}: {
-    /** An agent acted in this workspace and the person has not been there since (genie#1265): the header pulses. */
-    pulsed?: boolean;
-    /** The workspace's colour (genie#1300): the header's left edge and a swatch beside its name. `null` = none known. */
-    color?: string | null | undefined;
-    group: WorkspaceGroup;
-    /** The envelope's name, else the folder — the rail's rule; the id only when nothing else is known. */
-    name: string;
-    path: string;
-    onAddAgent: (workspaceId: string) => void;
-    onOpenWorkspace?: ((workspaceId: string) => void) | undefined;
-    onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
-    lanes?: readonly LaneSegment[] | undefined;
-}) {
-    return (
-        <>
-            <div className={`relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs${pulsed ? ` ${WORKSPACE_PULSE}` : ''}${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`} data-workspace-head={group.workspaceId} {...(color ? { 'data-workspace-color': color } : {})} style={wsStyle(color)} {...(pulsed ? { 'data-workspace-pulse': 'true', title: 'An agent did something here — open it to see' } : {})}>
-                <Lanes segments={lanes} />
-                <WorkspaceSwatch color={color} className="mr-1.5" />
-                <span className="font-semibold">{name}</span>
-                <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
-                {group.summary ? <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">{group.summary}</span> : null}
-                {group.governedBy ? <span data-governed-by={group.governedBy} className="ml-2.5 shrink-0 text-[var(--fg-4)]">governed by {group.governedBy}</span> : null}
-                {/* THE WORKSPACE-LEVEL FAULT (the board): `⚠ repo site not found in moic.agi` and its own fix button. */}
-                {group.fault ? (
-                    <span data-workspace-fault={group.fault.repo} className="ml-2.5 flex shrink-0 items-center gap-1.5 text-[var(--warning)]">
-                        <Icon name="circle-alert" size="xs" />
-                        {group.fault.text}
-                        <button type="button" data-action="locate-repo" onClick={() => onLocateRepo?.(group.workspaceId, group.fault!.repo)} className="rounded border border-[var(--border-1)] px-1.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Locate repo</button>
-                    </span>
-                ) : null}
-                {/* A DOOR, not a label: the board's right-aligned `Open workspace →` opens the workspace's own page. */}
-                <button type="button" data-open-workspace={group.workspaceId} onClick={() => onOpenWorkspace?.(group.workspaceId)} className="ml-auto shrink-0 rounded px-1 text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]">Open workspace →</button>
-            </div>
-
-            {/*
-             * An empty workspace gets a row that OFFERS something, rather than a blank space
-             * that reads as a loading failure. "No agents" and "we have not heard yet" are
-             * different claims and must not share a rendering.
-             */}
-            {group.empty ? (
-                <div className="flex h-8 items-center gap-3 border-b border-[var(--border-1)] pl-7 pr-5 text-[13px] text-[var(--fg-3)]">
-                    <span>No agents</span>
-                    <button
-                        type="button"
-                        data-add-agent={group.workspaceId}
-                        onClick={() => onAddAgent(group.workspaceId)}
-                        className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-2 py-px text-xs hover:bg-[var(--bg-2)]"
-                    >
-                        <Icon name="plus" size="xs" />
-                        Add agent
-                    </button>
-                </div>
-            ) : null}
-        </>
-    );
-}
-
-const CHIP_DOT: Record<AgentState, string> = {
-    waiting: 'bg-[var(--warning)]',
-    broken: 'bg-[var(--danger)]',
-    working: 'bg-[var(--success)]',
-    idle: 'bg-[var(--zinc-400)]',
-    remote: 'bg-[var(--fg-4)]',
-};
-
 export interface DashboardProps {
     rows: readonly AgentRow[];
     /**
@@ -436,16 +373,15 @@ export interface DashboardProps {
      * empty machine on screen before anybody has looked.
      */
     workspaces: readonly { id: string; path: string; name?: string | undefined; governedBy?: string | null | undefined; asleep?: boolean | undefined; color?: string | undefined }[] | null;
+    /** Sidebar-only metadata exists even when there are no active workspaces. */
+    hasHibernatedWorkspaces?: boolean | undefined;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
     onAddWorkspace?: (() => void) | undefined;
     onAddWorkspaceFromGit?: (() => void) | undefined;
     /** The third source (§6.1): the envelope from the Tynn project the token belongs to. */
     onAddWorkspaceFromTynn?: (() => void) | undefined;
-    /** `By workspace | By status` — from the route's `group=`; defaults to workspace. */
-    group?: DashboardGroup | undefined;
-    onGroup?: ((group: DashboardGroup) => void) | undefined;
-    /** `Open workspace →` on a group header. */
+    /** Open the workspace named in an agent's Workspace column. */
     onOpenWorkspace?: ((workspaceId: string) => void) | undefined;
     /** Workspace-level faults by workspace id (a missing repo), from the registry each workspace lists; absent = none seen. */
     faults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
@@ -453,7 +389,7 @@ export interface DashboardProps {
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
     /** A broken row's fix button (`core/dashboard-view.ts` `fixRoute`); absent = the button opens the agent. */
     onFix?: ((route: FixRoute) => void) | undefined;
-    /** Genie's own agent's row (the design mockup's first group, `default agent · not in a workspace`); `null` = none. */
+    /** Genie's own agent's row; `null` = none. Alphabetical alongside workspace agents. */
     genie?: AgentRow | null | undefined;
     /** `Chat ⌘J` — the composer, on genie, one click from the board. */
     onChat?: (() => void) | undefined;
@@ -471,75 +407,60 @@ export interface DashboardProps {
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
     /** Mail between agents, drawn from the sender's row to the recipient's (genie#1209). */
     mailSignals?: readonly MailSignal[] | undefined;
-    /** Workspaces an agent acted in that the person has not visited since (genie#1265): their group headers pulse. */
+    /** Workspaces an agent acted in that the person has not visited since: their Workspace cells pulse. */
     pulsing?: ReadonlySet<string> | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing }: DashboardProps) {
-    // Hide known hibernated workspaces consistently; unregistered agents keep their status visibility.
+function readShown(kind: 'sleeping' | 'stopped'): boolean {
+    try { return typeof window !== 'undefined' && window.localStorage.getItem(`genie.dashboard.show.${kind}`) === '1'; }
+    catch { return false; }
+}
+
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
-    const groups = groupByWorkspace(
-        rows,
-        (workspaces ?? []).map((w) => w.id),
-        Object.fromEntries((workspaces ?? []).flatMap((w) => (w.governedBy ? [[w.id, w.governedBy]] : []))),
-        faults ?? {},
-    );
-    // THE ROW CURSOR (§4.1): `J`/`K` over the rows in document order, `↵` opens, `G` cycles the grouping. `A`/`D` are
-    // unbound here — the Dashboard resolves nothing. The keys are decided in `core/keys.ts`; letters never act while typing.
+    const all = genie ? [genie, ...rows] : rows;
+    const [showSleeping, setShowSleeping] = useState(() => readShown('sleeping'));
+    const [showStopped, setShowStopped] = useState(() => readShown('stopped'));
+    const shown = dashboardRows(all, { sleeping: showSleeping, stopped: showStopped });
+    const toggle = (kind: 'sleeping' | 'stopped') => {
+        const next = kind === 'sleeping' ? !showSleeping : !showStopped;
+        if (kind === 'sleeping') setShowSleeping(next); else setShowStopped(next);
+        try { window.localStorage.setItem(`genie.dashboard.show.${kind}`, next ? '1' : '0'); } catch { /* Applies in this window even when storage is unavailable. */ }
+    };
     const [ownFocus, setOwnFocus] = useState<string | null>(null);
     const focused = focusedId ?? ownFocus;
-    // THE COLLABORATOR REVEAL (§4.1): hover a comms cell, or `C` on the cursor row; in the table, never a popover.
     const [ownReveal, setOwnReveal] = useState<string | null>(null);
-    const reveal = revealOf(rows, revealId ?? ownReveal);
-    // THE ROW TRAY (§4.1): `Space` on the cursor row; one open at a time.
+    const reveal = revealOf(shown, revealId ?? ownReveal);
     const [ownTray, setOwnTray] = useState<string | null>(null);
     const openTray = trayId ?? ownTray;
     const go = (route: string) => { if (onNavigate) onNavigate(route); else if (route.startsWith('genie://agent/')) onOpenAgent(route.slice('genie://agent/'.length)); };
-    // EVERY ROW DRAWN — genie's own, then the workspace agents: what the census counts and the cursor walks.
-    const all = genie ? [genie, ...rows] : rows;
-    const statusGroupsForOrder = groupByStatus(all);
-    const visibleIds = group === 'status' ? statusGroupsForOrder.flatMap((g) => g.rows.map((r) => r.id)) : [...(genie ? [genie.id] : []), ...groups.flatMap((g) => g.rows.map((r) => r.id))];
+    const visibleIds = shown.map((row) => row.id);
     useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            const action = dashboardAction({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) });
+        const onKey = (event: KeyboardEvent) => {
+            if (event.defaultPrevented || (event.target instanceof Element && event.target.closest('button,a,select,summary,[role="button"],[role="menuitem"],[role="radio"]'))) return;
+            const action = dashboardAction({ key: event.key, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey, shiftKey: event.shiftKey, typing: isTypingTarget(event.target as never) });
             if (action === null) return;
-            e.preventDefault();
+            event.preventDefault();
             if (action === 'next-row') setOwnFocus(stepFocus(visibleIds, focused, 1));
             else if (action === 'prev-row') setOwnFocus(stepFocus(visibleIds, focused, -1));
             else if (action === 'open') { if (focused !== null && visibleIds.includes(focused)) onOpenAgent(focused); }
-            else if (action === 'cycle-group') onGroup?.(group === 'workspace' ? 'status' : 'workspace');
-            else if (action === 'reveal') setOwnReveal((r) => (r !== null || focused === null ? null : focused));
-            else if (action === 'tray') setOwnTray((t) => (focused === null || t === focused ? null : focused));
+            else if (action === 'reveal') setOwnReveal((value) => value !== null || focused === null ? null : focused);
+            else if (action === 'tray') setOwnTray((value) => focused === null || value === focused ? null : focused);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [visibleIds, focused, onOpenAgent, onGroup, group]);
-    const statusGroups = groupByStatus(all);
-    // The board's lines in document order (rows and group headers), for the reveal's lanes.
-    const lines = group === 'status'
-        ? statusGroups.flatMap((g) => [`head:${g.state}`, ...g.rows.map((r) => r.id)])
-        : [...(genie ? ['head:genie', genie.id] : []), ...groups.flatMap((g) => [`head:${g.workspaceId}`, ...g.rows.map((r) => r.id)])];
-    const lanes = reveal ? lanesFor(lines, reveal) : null;
-    // The census counts every row drawn, genie's included — each count has its row (the mockup's header).
+    }, [visibleIds, focused, onOpenAgent]);
+    const lanes = reveal ? lanesFor(visibleIds, reveal) : null;
     const chips = summaryChips(all);
-    const pathOf = (id: string): string => workspaces?.find((w) => w.id === id)?.path ?? '';
-    const colorOf = (id: string): string | null => workspaces?.find((w) => w.id === id)?.color ?? null;
-    // The rail's rule: the envelope's name, else the folder, never the id when a name is known.
-    const nameOf = (id: string): string => { const w = workspaces?.find((x) => x.id === id); return w?.name ?? (w?.path ? w.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? id : id); };
-    // The legend belongs to the cannot-see state: it appears when the board holds an agent Genie can only observe or
-    // only see the presence of — the one moment the dot shapes need explaining.
-    const legend = rows.some((r) => r.fidelity !== 'declared');
+    const workspaceOf = (row: AgentRow) => workspaces?.find((workspace) => workspace.id === row.workspaceId);
+    const nameOf = (row: AgentRow) => {
+        const workspace = workspaceOf(row);
+        return row.id === genie?.id ? 'Genie' : workspace?.name ?? (workspace?.path ? workspace.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? row.workspaceId : row.workspaceId);
+    };
+    const legend = rows.some((row) => row.fidelity !== 'declared');
 
-    /**
-     * FIRST PAINT, before the bridge has answered.
-     *
-     * *"First paint is skeletons, never zeros and never an empty state."* A skeleton says "we
-     * are still reading"; the first-run invitation below says "we read, and there is nothing
-     * here". Showing the second while the first is true is a confident claim about somebody's
-     * machine, made before anybody looked at it.
-     */
     if (workspaces === null) {
         return (
             <div data-dashboard="loading" data-surface="dashboard" className="flex h-full flex-col gap-2 p-7">
@@ -565,7 +486,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
      * So: no table at all, because column headers over a void read as a list that failed to
      * load. One sentence that is true, and the single action that leads anywhere.
      */
-    if (knownWorkspaces?.length === 0) {
+    if (knownWorkspaces?.length === 0 && !hasHibernatedWorkspaces) {
         return (
             <div data-dashboard="first-run" data-surface="dashboard" className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
                 <h1 className="text-lg font-semibold tracking-tight">Nothing is being worked on yet</h1>
@@ -573,25 +494,18 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                     A workspace is a folder Genie works in. Add one and its agents appear here, with
                     what each is doing and what it has produced.
                 </p>
-                <button
-                    type="button"
-                    data-add-workspace
-                    onClick={onAddWorkspace}
-                    className="flex items-center gap-1.5 rounded-lg border border-[var(--border-2)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]"
-                >
-                    <Icon name="plus" size="sm" />
+                <Button type="button" size="md" icon="plus" data-add-workspace onClick={onAddWorkspace}>
                     Add a workspace
-                </button>
+                </Button>
                 {onAddWorkspaceFromGit ? (
-                    <button type="button" data-action="add-from-git" onClick={onAddWorkspaceFromGit} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
+                    <Button type="button" size="md" icon="git-branch" data-action="add-from-git" onClick={onAddWorkspaceFromGit}>
                         From a git URL
-                    </button>
+                    </Button>
                 ) : null}
                 {onAddWorkspaceFromTynn ? (
-                    <button type="button" data-action="add-from-tynn" onClick={onAddWorkspaceFromTynn} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
-                        <Icon name="link" size="sm" />
+                    <Button type="button" size="md" icon="link" data-action="add-from-tynn" onClick={onAddWorkspaceFromTynn}>
                         From Tynn
-                    </button>
+                    </Button>
                 ) : null}
             </div>
         );
@@ -599,166 +513,138 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
 
     return (
         <div data-surface="dashboard" className="relative flex min-h-0 flex-col">
-            {/* View header, 56px. */}
-            <div data-view-header="" className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border-1)] pl-7 pr-5">
+            <div data-view-header="" className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-[var(--border-1)] px-5 py-2">
                 <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
-                <div className="flex items-center gap-3.5 text-xs text-[var(--fg-2)]">
-                    {chips.map((c) => (
-                        <span key={c.state} data-chip={c.state} className="flex items-center gap-1.5">
-                            <span className={`size-2 shrink-0 rounded-full ${CHIP_DOT[c.state]}`} />
-                            {c.label}
+                <div className="flex items-center gap-3 text-xs text-[var(--fg-2)]">
+                    {chips.filter((chip) => chip.state !== 'sleeping' && chip.state !== 'stopped').map((chip) => (
+                        <span key={chip.state} data-chip={chip.state} style={stateStyle(chip.state)} className="flex items-center gap-1.5">
+                            <span className="size-2 shrink-0 rounded-full bg-[var(--agent-status)]" />{chip.label}
                         </span>
                     ))}
                 </div>
                 <span className="flex-1" />
-                {/* The keys, discoverable: J K move, ↵ opens, G regroups. A/D are not here — the Deck resolves. */}
-                <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent · G cycles the grouping">
-                    {['J', 'K', '↵', 'G'].map((k) => <kbd key={k} className="rounded border border-[var(--border-1)] px-1 font-mono">{k}</kbd>)}
+                {(['sleeping', 'stopped'] as const).map((kind) => {
+                    const active = kind === 'sleeping' ? showSleeping : showStopped;
+                    return <Button key={kind} type="button" size="xs" data-dashboard-filter={kind} data-chip={active && all.some((row) => shownState(row) === kind) ? kind : undefined} style={stateStyle(kind)} className={active ? 'ring-1 ring-[var(--agent-status)]' : ''} aria-pressed={active} onClick={() => toggle(kind)}>
+                        {kind === 'sleeping' ? 'Sleeping' : 'Stopped'} {all.filter((row) => shownState(row) === kind).length}
+                    </Button>;
+                })}
+                <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent">
+                    {['J', 'K', '↵'].map((key) => <kbd key={key} className="rounded border border-[var(--border-1)] px-1 font-mono">{key}</kbd>)}
                 </span>
-                {/* The board's segmented control. The grouping lives in the route (`group=`), so it is linkable. */}
-                <div className="flex overflow-hidden rounded-lg border border-[var(--border-1)] text-xs">
-                    {(['workspace', 'status'] as const).map((g, i) => (
-                        <button key={g} type="button" data-group-toggle={g} {...(g === group ? { 'data-current': 'true' } : {})} onClick={() => onGroup?.(g)} className={`px-2.5 py-1 ${i > 0 ? 'border-l border-[var(--border-1)] ' : ''}${g === group ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`}>
-                            {g === 'workspace' ? 'By workspace' : 'By status'}
-                        </button>
-                    ))}
-                </div>
                 <RateLimitPills limits={rateLimits ?? {}} />
-                {/* `py-1`, not a row-height class: the row-height census counts ` h-7 ` as "28px header rows", and this is a button. */}
-                <button type="button" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie — the composer, one click from the board" className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
-                    <Icon name="message-square" className="h-3.5 w-3.5" />
-                    Chat
-                    <span className="font-mono text-[11px] text-[var(--fg-4)]">⌘J</span>
-                </button>
+                <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie">Chat <span className="ml-1.5 font-mono text-[11px] text-[var(--fg-4)]">⌘J</span></Button>
             </div>
-            {legend ? (
-                <div data-legend="" className="flex shrink-0 items-center gap-5 border-b border-[var(--border-1)] px-7 py-2 text-xs text-[var(--fg-3)]">
-                    <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full bg-[var(--fg-3)]" />Declared — reports plan, deliveries, comms, usage</span>
-                    <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-[var(--fg-3)]" />Observed — terminal activity, commits and file writes only</span>
-                    <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-dashed border-[var(--fg-3)]" />Remote — presence only</span>
-                </div>
-            ) : null}
-
-            {/*
-             * `truncate` on every header, and it is not cosmetic.
-             *
-             * The header row is a fixed 28px. A two-word label in a narrow column WRAPS, and
-             * the second line has nowhere to go — it spills out of the row and over the first
-             * agent beneath it. Seen on a 1024px-wide Windows window, where "Current target"
-             * broke across two lines; invisible at the 1440px the board is drawn at, which is
-             * the only width I had been looking at.
-             *
-             * Truncating is the right answer rather than shrinking the type: a clipped header
-             * is still readable from its neighbours and its column, and a reader who needs the
-             * full word can widen the window.
-             */}
-            <div
-                className={`${GRID} h-7 items-center border-b border-[var(--border-1)] text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]`}
-            >
-                <span className="truncate">Agent</span>
-                <span className="truncate">Status</span>
-                <span className="truncate">Current target</span>
-                <span className="truncate">Latest delivery</span>
-                <span className="truncate">Comms</span>
-                <span className="truncate">Context</span>
+            {legend ? <div data-legend="" className="flex shrink-0 flex-wrap gap-5 border-b border-[var(--border-1)] px-7 py-2 text-xs text-[var(--fg-3)]">
+                <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full bg-[var(--fg-3)]" />Declared — reports plan, deliveries, comms, usage</span>
+                <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-[var(--fg-3)]" />Observed — terminal activity, commits and file writes only</span>
+                <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-dashed border-[var(--fg-3)]" />Remote — presence only</span>
+            </div> : null}
+            <div className={`${GRID} h-7 items-center border-b border-[var(--border-1)] text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]`}>
+                {['Agent', 'Workspace', 'Status', 'Current target', 'Latest delivery', 'Comms', 'Context'].map((label) => <span key={label} className="truncate">{label}</span>)}
             </div>
-
-            {group === 'status' ? (
-                <div data-group-by="status">
-                    {statusGroups.map((g) => (
-                        <div key={g.state} data-status-group={g.state}>
-                            <div className="relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
-                                <Lanes segments={lanes?.[`head:${g.state}`]} />
-                                <span className={`mr-2 size-2 rounded-full ${CHIP_DOT[g.state]}`} />
-                                <span className="font-semibold">{g.label}</span>
-                                <span className="ml-2.5 text-[var(--fg-3)]">{g.rows.length} {g.rows.length === 1 ? 'agent' : 'agents'}</span>
-                            </div>
-                            {g.rows.map((row) => (
-                                <Fragment key={row.id}>
-                                    <AgentRowView row={row} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
-                                    {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
-                                </Fragment>
-                            ))}
-                        </div>
-                    ))}
-                </div>
-            ) : (
-            <>
-            {/* GENIE'S OWN GROUP (the design mockup): first, `genie · default agent · not in a workspace · 1 agent`. */}
-            {genie ? (
-                <div data-genie-group="">
-                    <div className="relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
-                        <Lanes segments={lanes?.['head:genie']} />
-                        <span className="font-semibold">genie</span>
-                        <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">default agent · not in a workspace</span>
-                        <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">1 agent</span>
-                    </div>
-                    <AgentRowView row={genie} emoji={rowEmoji?.[genie.id]} onOpen={onOpenAgent} onFix={onFix} focused={genie.id === focused} reveal={reveal} lanes={lanes?.[genie.id]} onReveal={setOwnReveal} />
-                    {openTray === genie.id ? <RowTrayView row={genie} onNavigate={go} /> : null}
-                </div>
-            ) : null}
-            {groups.map((group) => (
-                <div key={group.workspaceId} data-workspace={group.workspaceId}>
-                    <GroupHeader pulsed={pulsing?.has(group.workspaceId) === true} color={colorOf(group.workspaceId)} group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
-                    {group.rows.map((row) => (
-                        <Fragment key={row.id}>
-                            <AgentRowView row={row} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
-                            {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
-                        </Fragment>
-                    ))}
-                </div>
-            ))}
-            </>
-            )}
-            {workspaces.length === 0 ? (
-                <p data-dashboard-no-active-workspaces="" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">
-                    No active workspaces. Wake a hibernated workspace from the sidebar to see it here.
-                </p>
-            ) : null}
+            <div data-dashboard-list="">
+                {shown.map((row) => <Fragment key={row.id}>
+                    <AgentRowView row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                    {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
+                </Fragment>)}
+            </div>
+            {workspaces.length === 0 ? <p data-dashboard-no-active-workspaces="" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No active workspaces. Redock a hibernated workspace from the sidebar to see it here.</p>
+                : shown.length === 0 ? <p role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No agents shown. Use Sleeping or Stopped to include those agents.</p> : null}
+            {workspaces.filter((workspace) => !rows.some((row) => row.workspaceId === workspace.id)).map((workspace) => <div key={workspace.id} data-empty-workspace={workspace.id} data-workspace={workspace.id} {...(pulsing?.has(workspace.id) ? { 'data-workspace-pulse': 'true' } : {})} className={`flex items-center gap-3 border-b border-[var(--border-1)] px-7 py-3 text-xs text-[var(--fg-3)]${pulsing?.has(workspace.id) ? ` ${WORKSPACE_PULSE}` : ''}`}>
+                {workspace.color ? <WorkspaceSwatch color={workspace.color} /> : null}
+                <span>{workspace.name ?? workspace.id} has no agents yet.</span><Button type="button" size="xs" icon="plus" data-add-agent={workspace.id} onClick={() => onAddAgent(workspace.id)}>Add an agent</Button>
+                {faults?.[workspace.id] ? <><span data-workspace-fault={faults[workspace.id]!.repo} className="text-[var(--warning)]">{faults[workspace.id]!.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-repo" onClick={() => onLocateRepo?.(workspace.id, faults[workspace.id]!.repo)}>Locate repo</Button></> : null}
+            </div>)}
             <MailSignalLayer signals={mailSignals ?? []} />
         </div>
     );
 }
 
 /**
- * ONE RATE-LIMIT PILL PER PROVIDER in the Dashboard header (the owner, 2026-10-26): its share of the binding window left;
- * on hover EVERY window the provider reported, with its usage and reset (genie#1268). Buffered in main, so this redraws
- * at most once per provider per buffer.
+ * ONE RATE-LIMIT PILL PER PROVIDER in the Dashboard header (the owner, 2026-10-26): its logo and its most constrained
+ * window. A click or Enter opens a POPOVER with every window (the owner, 2026-10-31: "can we make these cleaner? this
+ * should be a popover not a tooltip"). Buffered in main, so this redraws at most once per provider per buffer.
  */
-export function RateLimitPills({ limits }: { limits: Readonly<Record<string, Headroom>> }) {
+export function RateLimitPills({ limits, now }: { limits: Readonly<Record<string, Headroom>>; now?: number }) {
     const providers = Object.keys(limits).sort();
     if (providers.length === 0) return null;
     return (
         <div data-rate-limits="" className="flex items-center gap-1.5">
-            {providers.map((p) => {
-                const h = limits[p]!;
-                const tone = h.over || h.leftPct <= 10 ? 'text-[var(--danger)]' : h.leftPct <= 30 ? 'text-[var(--warning)]' : 'text-[var(--fg-2)]';
-                return (
-                    <Tooltip key={p} content={<RateLimitDetail provider={p} limit={h} />} placement="bottom">
-                        {/* The hover's words are the pill's accessible name: a screen reader never sees a tooltip drawn on hover. */}
-                        <span data-rate-limit={p} role="group" tabIndex={0} aria-label={`${providerName(p)} rate limits: ${h.windows.map(windowDetail).join('; ')}`} className="flex items-center gap-1 rounded-lg border border-[var(--border-1)] px-2 py-1 text-xs">
-                            <ProviderLogo provider={p} size="xs" className="text-[var(--fg-3)]" />
-                            <span className={`font-mono ${tone}`}>{h.over ? 'over' : `${h.leftPct}%`}</span>
-                            <span className="font-mono text-[11px] text-[var(--fg-4)]">{h.window}</span>
-                        </span>
-                    </Tooltip>
-                );
-            })}
+            {providers.map((p) => <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} />)}
         </div>
     );
 }
 
-/** The pill's hover (genie#1268): the provider's logo and plan, then every window it reported — only reported figures. */
-export function RateLimitDetail({ provider, limit }: { provider: string; limit: Headroom }) {
+const LEVEL_TEXT: Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
+const LEVEL_FILL: Readonly<Record<LimitLevel, string>> = { ok: 'bg-[var(--success)]', warning: 'bg-[var(--warning)]', danger: 'bg-[var(--danger)]' };
+
+function RateLimitPill({ provider, limit, now }: { provider: string; limit: Headroom; now: number | undefined }) {
+    const [open, setOpen] = useState(false);
+    const tight = tightestWindow(limit);
+    const level = limitLevel(tight);
+    const name = providerName(provider);
     return (
-        <div data-rate-limit-detail={provider} className="flex flex-col gap-1 text-xs">
+        <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
+            <Popover.Trigger>
+                <Button
+                    type="button"
+                    size="xs"
+                    data-rate-limit={provider}
+                    data-level={level}
+                    aria-haspopup="dialog"
+                    aria-expanded={open}
+                    aria-label={`${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
+                    // Enter and Space toggle here and cancel the click the browser would add, so one key press is one toggle.
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
+                    className={`gap-1 hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
+                >
+                    <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
+                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{tight.over ? 'over' : `${tight.leftPct}%`}</span>
+                    <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span>
+                </Button>
+            </Popover.Trigger>
+            <Popover.Content
+                role="dialog"
+                aria-label={`${name} rate limits`}
+                data-rate-limit-popover={provider}
+                className="w-60 border-[var(--border-1)] bg-[var(--surface-raised)] p-3 text-[var(--fg-1)]"
+            >
+                <RateLimitDetail provider={provider} limit={limit} now={now ?? Date.now()} />
+            </Popover.Content>
+        </Popover>
+    );
+}
+
+/** The popover: the provider's logo (and plan, when reported), then one row per window — only reported figures. */
+export function RateLimitDetail({ provider, limit, now }: { provider: string; limit: Headroom; now: number }) {
+    return (
+        <div data-rate-limit-detail={provider} className="flex flex-col gap-3 text-xs">
             <span className="flex items-center gap-1.5">
-                <ProviderLogo provider={provider} size="sm" />
+                <ProviderLogo provider={provider} size="md" />
                 {limit.plan ? <span className="text-[var(--fg-3)]">{limit.plan}</span> : null}
             </span>
-            {limit.windows.map((w) => (
-                <span key={w.window} data-rate-limit-window={w.window} className="font-mono">{windowDetail(w)}</span>
-            ))}
+            {limitRows(limit).map((w) => ('unknown' in w ? (
+                <div key={w.window} data-rate-limit-window={w.window} data-level="unknown" className="flex items-center gap-2 text-[var(--fg-3)]">
+                    <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
+                    <Icon name="circle-help" size="xs" />
+                    <span>unknown</span>
+                </div>
+            ) : (
+                <div key={w.window} data-rate-limit-window={w.window} data-level={limitLevel(w)} className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                        <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
+                        <span role="progressbar" aria-label={`${w.window} left`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={w.leftPct} className="block h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-3)]">
+                            <span data-rate-limit-fill="" className={`block h-full rounded-full ${LEVEL_FILL[limitLevel(w)]}`} style={{ width: `${w.leftPct}%` }} />
+                        </span>
+                        <span data-rate-limit-pct="" className={`w-9 shrink-0 text-right tabular-nums ${LEVEL_TEXT[limitLevel(w)]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+                    </div>
+                    <div className="flex flex-col pl-14">
+                        <span data-rate-limit-reset="" className="text-[var(--fg-2)]">{resetsIn(w.resetsAtMs, now)}</span>
+                        <span data-rate-limit-at="" className="text-[11px] text-[var(--fg-4)]">{shortDateTime(w.resetsAtMs)}</span>
+                    </div>
+                </div>
+            )))}
         </div>
     );
 }

@@ -1,4 +1,5 @@
 import { isAbsolute, normalize, posix, sep } from 'node:path';
+import { caddyPath } from './front-door-caddy.js';
 
 /**
  * HOSTED `.gen` SITES (§6.6) — the pure half.
@@ -51,6 +52,39 @@ export type ServeSpec =
     | { readonly mode: 'static'; readonly root: string; readonly spa: boolean }
     | { readonly mode: 'php'; readonly root: string; readonly fcgiPort: number; /** Every worker's port, the first being `fcgiPort` (genie#1043). Absent = that one alone. */ readonly fcgiPorts?: readonly number[] };
 
+/**
+ * `php artisan serve` WITH GENIE'S ENV REACHING ITS REQUESTS (genie#1376; fancy, flabs.gen, 2026-10-31).
+ *
+ * `artisan serve` does not answer requests: it starts a `php -S` child. When the app has a `.env`, it gives that child
+ * every key of ITS OWN `$_ENV` set to `false` (removed), except a short passthrough list (`APP_ENV`, `PATH`, `XDEBUG_*`…
+ * Laravel `ServeCommand::startProcess`, `$passthroughVariables`). It does this so the child reads `.env` again and an
+ * edit to it takes effect. Variables that are only in the process env, and not in `$_ENV`, reach the child unchanged
+ * (Symfony Process inherits them).
+ *
+ * Genie's own php.ini says `variables_order = "EGPCS"` (core/php-versions.ts, Genie 1's genie#539), so in the artisan
+ * process `$_ENV` IS the whole process env. Every variable Genie gave the site was removed before the first request:
+ * the site's own `GENIE_INBOX_URL` / `GENIE_INBOX_TOKEN`, and the service env too. The service env only seemed to arrive
+ * because DotEnvSync writes it into `.env`, and the token must never be written there.
+ *
+ * So the ARTISAN process alone runs with `-d variables_order=GPCS`. Its `$_ENV` then holds only what Laravel loaded from
+ * `.env`, which is scrubbed and re-read exactly as Laravel intends. Genie's variables reach the child through the
+ * process env. A `-d` does not pass to the child (Laravel starts it as `PHP_BINARY -S …`), so the server that answers
+ * requests keeps Genie's ini, `E` included. The token travels in process memory only: no file, no Caddyfile, no `.env`.
+ *
+ * Only a command that IS `<php> artisan serve` is changed: any php binary (a path, `php8.4`, `php.exe`, quoted).
+ * Anything else, or a command that already says `variables_order`, is the person's and is returned as written.
+ */
+export function laravelServeCommand(command: string): string {
+    if (/variables_order/i.test(command)) return command;
+    const m = /^(\s*)("[^"]+"|\S+)(\s+artisan\s+serve)(?=\s|$)/.exec(command);
+    if (!m) return command;
+    const lead = m[1]!;
+    const binary = m[2]!;
+    const name = binary.replace(/^"|"$/g, '').split(/[/\\]/).pop() ?? '';
+    if (!/^php[\d.]*(\.exe)?$/i.test(name)) return command;
+    return `${lead}${binary} -d variables_order=GPCS${command.slice(lead.length + binary.length)}`;
+}
+
 const BUILT_DIRS = ['dist', 'build', 'out'];
 
 /**
@@ -70,6 +104,8 @@ export interface CaddyfileInput {
     readonly sitePort: number;
     /** Absolute path of the repo. Required for static and php. */
     readonly repoPath?: string;
+    /** This site's OWN Caddy storage folder (absolute). Required for static and php: see serveCaddyfile. */
+    readonly storageDir?: string;
     readonly serve: ServeSpec;
 }
 
@@ -92,13 +128,24 @@ function rootInside(repoPath: string, root: string): string {
  * Host MATCHER: `http://127.0.0.1:<port>` answered only requests whose Host was `127.0.0.1`, and the front door forwards
  * the site's own name (`Host: accepta.gen`, which apps need to build their URLs) — so every static and PHP site answered
  * the front door with Caddy's empty 200 (measured in the Windows test VM, 2026-10-14).
+ *
+ * ITS OWN STORAGE, NEVER CLEANED (the owner's Defender recording, 2026-10-31: `%AppData%\Caddy\locks\storage_clean.lock`
+ * touched 72 times in 120 s). Caddy cleans its storage when a process starts, under a file lock in that storage. With no
+ * storage named, every site's Caddy used Caddy's shared default, and Genie starts them together: on Windows they collided
+ * on the one lock file ("The process cannot access the file because it is being used by another process", a site's log
+ * at boot) and the lock was left behind, refreshed every 5 s for as long as Genie ran. A site's Caddy holds nothing in
+ * storage — `auto_https off`, no `tls` — so it names its own folder and does not clean it (`storage_clean_interval off`
+ * is the tls app's disable_storage_clean), and keeps no autosave (`persist_config off`, as Genie 1's per-site Caddyfile
+ * did: main/dev-server/serve-config.ts at v0.7.0-beta.342).
  */
 export function serveCaddyfile(input: CaddyfileInput): string | null {
     const { serve } = input;
     if (serve.mode === 'proxy') return null;
     if (!input.repoPath) throw new Error('a static or php site needs the repo path');
     const root = rootInside(input.repoPath, serve.root);
-    const lines = ['{', '\tauto_https off', '\tadmin off', '}', '', `http://:${input.sitePort} {`, '\tbind 127.0.0.1', `\troot * ${root}`];
+    if (!input.storageDir) throw new Error('a static or php site needs its own Caddy storage folder, never Caddy’s shared default');
+    const storage = caddyPath(input.storageDir, 'storage');
+    const lines = ['{', '\tauto_https off', '\tadmin off', '\tpersist_config off', `\tstorage file_system ${storage}`, '\tstorage_clean_interval off', '}', '', `http://:${input.sitePort} {`, '\tbind 127.0.0.1', `\troot * ${root}`];
     if (serve.mode === 'static') {
         if (serve.spa) lines.push('\ttry_files {path} /index.html');
         lines.push('\tfile_server');

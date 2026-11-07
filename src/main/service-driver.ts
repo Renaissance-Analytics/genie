@@ -23,6 +23,27 @@ export type ServiceImageUpdate = { kind: 'needs-consent'; image: string; note: s
  */
 export type DockerRunner = (args: readonly string[]) => Promise<{ stdout: string; exitCode: number; streams?: { readonly stdout: string; readonly stderr: string } }>;
 
+/** `docker <args>` as a long-lived stream of stdout lines (`docker events`), until it ends; `stop()` ends it. */
+export type DockerEventsPort = (args: readonly string[], onLine: (line: string) => void, onEnd: (reason: string) => void) => { stop(): void };
+
+/** The `docker events` a watch reads: every container's, one JSON object per line. */
+export const DOCKER_EVENTS_ARGS: readonly string[] = ['events', '--format', '{{json .}}', '--filter', 'type=container'];
+
+/**
+ * How long a state read under a watch is trusted (genie#1397). With the event stream up, an event re-reads the container
+ * the moment it changes, so this is only the slow fallback; with it down, nothing says a state changed, so it is short.
+ */
+export const WATCHED_STATE_TTL_MS = 60_000;
+export const UNWATCHED_STATE_TTL_MS = 5_000;
+const REWATCH_FIRST_MS = 5_000;
+const REWATCH_MAX_MS = 60_000;
+
+export interface ServiceDriverOptions {
+    readonly now?: () => number;
+    /** Run `fn` after `ms` (a watch started again after its stream ended); returns a cancel. Default: an unref'd timer. */
+    readonly schedule?: (fn: () => void, ms: number) => () => void;
+}
+
 /** How long one `docker` call may take. A pull downloads an image (postgres:17 is ~150 MB): minutes, not seconds. */
 export const DOCKER_PULL_TIMEOUT_MS = 15 * 60_000;
 /**
@@ -129,15 +150,118 @@ const DATA_DIRS: Record<string, string> = {
     seaweedfs: '/data',
 };
 
+type ContainerState = { state: 'running'; since: string } | { state: 'exited' } | { state: 'absent' };
+type Availability = { ok: true; version: string } | { ok: false; reason: string };
+
 export class ServiceDriver {
     readonly #run: DockerRunner;
     readonly #updating = new Set<string>();
+    readonly #now: () => number;
+    readonly #schedule: (fn: () => void, ms: number) => () => void;
+    /*
+     * THE WATCH (genie#1397: the owner's main spent 600 s in `docker container inspect` and 35 s in `docker version` in
+     * one session, every feature snapshot and readiness poll asking again about a state that had not changed). Under a
+     * watch, a read is kept until Docker reports an event for that container, Genie itself changes a container, or the
+     * read is older than the TTL. Without one (no events port), every look asks, as before.
+     */
+    #events: DockerEventsPort | null = null;
+    #stream: { stop(): void } | null = null;
+    #live = false;
+    #rewatchMs = REWATCH_FIRST_MS;
+    #cancelRewatch: (() => void) | null = null;
+    readonly #states = new Map<string, { at: number; value: ContainerState }>();
+    readonly #reading = new Map<string, Promise<ContainerState>>();
+    #availability: { at: number; value: Availability } | null = null;
+    #checking: Promise<Availability> | null = null;
 
-    constructor(run: DockerRunner) {
-        this.#run = run;
+    constructor(run: DockerRunner, options: ServiceDriverOptions = {}) {
+        this.#now = options.now ?? Date.now;
+        this.#schedule = options.schedule ?? ((fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); });
+        // Every change Genie makes (anything but a query) is read again at once: a start, a stop, a remove, an update.
+        this.#run = (args) => {
+            if (!DOCKER_QUERIES.has(args[0] ?? '')) {
+                this.#states.clear();
+                this.#availability = null;
+            }
+            return run(args);
+        };
     }
 
-    async available(): Promise<{ ok: true; version: string } | { ok: false; reason: string }> {
+    /** Watch `docker events` from now on: container states are read once, then again only when they change. */
+    watch(events: DockerEventsPort): void {
+        this.#events = events;
+        this.#open();
+    }
+
+    /** Stop watching (quit): every look asks again. */
+    unwatch(): void {
+        this.#events = null;
+        this.#cancelRewatch?.();
+        this.#cancelRewatch = null;
+        const s = this.#stream;
+        this.#stream = null;
+        this.#live = false;
+        s?.stop();
+        this.#states.clear();
+        this.#availability = null;
+    }
+
+    #open(): void {
+        const events = this.#events;
+        if (!events) return;
+        this.#cancelRewatch = null;
+        let mine: { stop(): void } | null = null;
+        let over = false;
+        const ended = () => {
+            if (over) return;
+            over = true;
+            if (mine !== null && this.#stream !== mine) return;
+            this.#stream = null;
+            this.#live = false;
+            // Nothing says a state changed while the stream was down: nothing read before is trusted.
+            this.#states.clear();
+            this.#availability = null;
+            if (!this.#events) return;
+            const wait = this.#rewatchMs;
+            this.#rewatchMs = Math.min(this.#rewatchMs * 2, REWATCH_MAX_MS);
+            this.#cancelRewatch = this.#schedule(() => this.#open(), wait);
+        };
+        this.#live = true;
+        mine = events(DOCKER_EVENTS_ARGS, (line) => this.#onEvent(line), ended);
+        if (!over) this.#stream = mine;
+    }
+
+    #onEvent(line: string): void {
+        this.#rewatchMs = REWATCH_FIRST_MS;
+        try {
+            const e = JSON.parse(line) as { Actor?: { Attributes?: { name?: unknown } } };
+            const name = e.Actor?.Attributes?.name;
+            if (typeof name === 'string') this.#states.delete(name);
+            else this.#states.clear();
+        } catch {
+            // A line that is not an event says nothing about any one container: read them all again.
+            this.#states.clear();
+        }
+    }
+
+    #fresh(at: number): boolean {
+        return this.#now() - at < (this.#live ? WATCHED_STATE_TTL_MS : UNWATCHED_STATE_TTL_MS);
+    }
+
+    async available(): Promise<Availability> {
+        if (!this.#events) return this.#askAvailable();
+        if (this.#availability && this.#fresh(this.#availability.at)) return this.#availability.value;
+        if (this.#checking) return this.#checking;
+        const at = this.#now();
+        const checking: Promise<Availability> = this.#askAvailable().then((value) => {
+            if (this.#checking === checking) { this.#availability = { at, value }; this.#checking = null; }
+            return value;
+        });
+        this.#checking = checking;
+        return checking;
+    }
+
+    async #askAvailable(): Promise<Availability> {
         try {
             const r = await this.#run(['version', '--format', '{{.Server.Version}}']);
             if (r.exitCode === DOCKER_NOT_INSTALLED_EXIT) return { ok: false, reason: 'Docker is not installed on this machine; service engines need it' };
@@ -289,7 +413,22 @@ export class ServiceDriver {
         if (r.exitCode !== 0) throw new Error(r.stdout.trim() || `docker stop ${name} failed`);
     }
 
-    async status(name: string): Promise<{ state: 'running'; since: string } | { state: 'exited' } | { state: 'absent' }> {
+    async status(name: string): Promise<ContainerState> {
+        if (!this.#events) return this.#inspect(name);
+        const kept = this.#states.get(name);
+        if (kept && this.#fresh(kept.at)) return kept.value;
+        const inFlight = this.#reading.get(name);
+        if (inFlight) return inFlight;
+        const at = this.#now();
+        const reading: Promise<ContainerState> = this.#inspect(name).then((value) => {
+            if (this.#reading.get(name) === reading) { this.#reading.delete(name); this.#states.set(name, { at, value }); }
+            return value;
+        }, (error: unknown) => { if (this.#reading.get(name) === reading) this.#reading.delete(name); throw error; });
+        this.#reading.set(name, reading);
+        return reading;
+    }
+
+    async #inspect(name: string): Promise<ContainerState> {
         const r = await this.#run(['container', 'inspect', name]);
         if (r.exitCode !== 0) return { state: 'absent' };
         try {

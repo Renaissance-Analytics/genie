@@ -23,7 +23,7 @@ export function agentOpsMenu(agent: { provider: string; fidelity: string }, prov
         ...(state.running ? [{ id: 'stop-agent', label: 'Stop agent', hint: 'ends its session; identity, inbox and history kept' }] : []),
         // No "Restart gracefully" here (genie#1238): Restart is the header's, one per surface. Fresh is another operation.
         { id: 'restart-fresh', label: 'Restart fresh', hint: 'discards the conversation on purpose' },
-        ...providers.filter((p) => p !== agent.provider).map((p) => ({ id: `switch:${p}`, label: `Switch driver to ${p}`, hint: 'starts a new conversation; identity, inbox, history and prompt carry across' })),
+        ...providers.filter((p) => p !== agent.provider).map((p) => ({ id: `switch:${p}`, label: `Switch provider to ${p}`, hint: 'its conversation comes with it; switching back resumes the old one' })),
         { id: 'diagnose', label: 'Diagnose', hint: 'names a cause and the repair that fits' },
         { id: 'delete-unmount', label: 'Unmount from Genie…', hint: 'keeps every .agents/* file' },
         { id: 'delete-delete', label: 'Delete…', hint: 'removes the persona folder too', danger: true },

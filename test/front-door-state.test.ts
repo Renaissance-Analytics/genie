@@ -1,5 +1,5 @@
 import { X509Certificate } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -322,6 +322,44 @@ describe('the Caddyfile serves Genie’s leaf', () => {
         const leaf = new X509Certificate(await readFile(join(dir, 'runtime', 'gen-ca', 'leaf.crt')));
         expect(leaf.subjectAltName).toBe('DNS:docs.gen, DNS:tynn.gen');
         expect(leaf.verify(new X509Certificate(await readFile(join(dir, 'runtime', 'gen-ca', 'ca.crt'))).publicKey)).toBe(true);
+    });
+
+    // Caddy's storage stays where it has been since beta.1 (XDG_DATA_HOME=runtime/caddy/data → data/caddy), now named
+    // in the Caddyfile, so nothing moves on upgrade and nothing falls back to %AppData%\Caddy.
+    it('names Genie’s own storage — runtime/caddy/data/caddy — and a clean interval', async () => {
+        services = await compose();
+        await settle();
+        const caddyfile = (await readFile(join(dir, 'runtime', 'caddy', 'Caddyfile'))).toString();
+        const storage = join(dir, 'runtime', 'caddy', 'data', 'caddy').replace(/\\/g, '/');
+        expect(caddyfile.match(/^\tstorage file_system "([^"]+)"$/gm) ?? []).toEqual([`\tstorage file_system "${storage}"`]);
+        expect(caddyfile).toMatch(/^\tstorage_clean_interval 168h$/m);
+    });
+
+    // The Caddyfile was rewritten on EVERY process status change anywhere in Genie (supervisor.onChange → render), with
+    // the same bytes. Caddy's --watch compares the adapted config and reloads only on a difference, but each write is
+    // still a file Defender scans and a reload decision Caddy makes. Genie writes it when the config CHANGED, only.
+    it('an unrelated process starting and exiting rewrites the Caddyfile ZERO times; adding a site rewrites it (control)', async () => {
+        services = await compose();
+        site(services, 'docs');
+        await settle();
+        const file = join(dir, 'runtime', 'caddy', 'Caddyfile');
+        const before = (await readFile(file)).toString();
+        const past = new Date(Date.UTC(2020, 0, 1));
+        utimesSync(file, past, past);
+        const pastMs = (await stat(file)).mtimeMs;
+
+        const other = services.supervisor.start({ id: 'unrelated', workspaceId: 'tynn', name: 'queue worker', command: 'php artisan queue:work', cwd: dir, restart: 'never' });
+        expect(other.state).toBe('running');
+        services.supervisor.stop('unrelated');
+        await settle();
+        expect((await stat(file)).mtimeMs).toBe(pastMs);
+        expect((await readFile(file)).toString()).toBe(before);
+
+        // CONTROL: the gauge can see a write — a new route changes the config, and it is written.
+        site(services, 'tynn');
+        await settle();
+        expect((await stat(file)).mtimeMs).not.toBe(pastMs);
+        expect((await readFile(file)).toString()).toContain('https://tynn.gen {');
     });
 });
 

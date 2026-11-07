@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FileEvent } from '../src/core/files-panel.js';
 import { FilesHost } from '../src/main/files-host.js';
+import { watchInto } from './helpers/watch-into.js';
 
 /**
  * THE FILES HOST (§4.3) over a REAL directory. Lists the workspace (never .git or node_modules),
@@ -73,7 +74,8 @@ describe('FilesHost', () => {
 
         const changes: string[] = [];
         host.onChange((workspaceId) => { changes.push(workspaceId); });
-        await host.watch('tynn');
+        const hub = watchInto(host, { id: 'tynn', path: root });
+        onTestFinished(() => hub.close());
         await writeFile(join(root, 'src', 'main', 'ipc.ts'), 'export const a = 2;\n');
         await writeFile(join(root, 'mystery.ts'), 'who wrote this\n');
         /*

@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
-import { Icon, PromptInput } from '@particle-academy/react-fancy';
+import { Button, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
@@ -10,7 +10,10 @@ import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth 
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
-import { chatFollowKey, mailSubject, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
+import { chatFollowKey, mailSubject, waitingStepLabel, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
+import { toolIcon } from '../../core/stream-view.js';
+import { ago } from '../../core/inbox-threads.js';
+import { useNow } from '../use-now.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
@@ -47,7 +50,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'promptId' | 'draftProblem'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'promptId' | 'draftProblem' | 'carried'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -67,7 +70,7 @@ export interface ChatThread {
     arriving?: string | null | undefined;
 }
 
-const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]' } as const;
+const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]', cool: 'text-[var(--sky-400)]' } as const;
 
 /** `13:58` from epoch ms, in the local clock — only ever called with a real time. */
 /** genie's tab mark: Genie's own gradient, the title bar's mark in small — the OS agent has no state to guess. */
@@ -92,25 +95,42 @@ function clock(at: number): string {
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+/** A step running longer than this is worth interrupting: past it, the queued message shows how long it has run. */
+export const WAITING_LONG_MS = 30_000;
+
 /**
  * YOUR MESSAGE IS WAITING BEHIND A STEP (beta.33 item 21; the owner: three messages unanswered while moic ran one shell
- * command, "with nothing on screen saying why"). Which step, running since when; and — the owner's choice, FTQ
- * q_91b3cddf — `Interrupt and send`: the current turn ends (the Stop-this-turn path) and what waits runs next, in order.
- * Without a way to stop the turn here, it still says why, with no dead button. Hook-free.
+ * command, "with nothing on screen saying why"). The owner's choice, FTQ q_91b3cddf — `Interrupt and send`: the current
+ * turn ends (the Stop-this-turn path) and what waits runs next, in order.
+ *
+ * ONE COMPACT LINE (the owner, 2026-11-01: "I know the agent is busy, why is it showing me the tool call like that"): a
+ * clock — queued — then the step as the Stream draws its kind (`toolIcon`) with a short label (`waitingStepLabel`: an MCP
+ * call reads as its server, never its raw `mcp__` id), how long it has run only once that is long (`WAITING_LONG_MS`), and
+ * the button. The sentence, the raw step and its start time are in the hover, for debugging. Without a way to stop the
+ * turn here, the message is still marked queued, with no dead button. Hook-free: `now` comes from the caller.
  */
-export function ChatWaiting({ id, agentName, waiting, onInterruptAndSend }: { id: string; agentName: string; waiting: ChatWaitingOn; onInterruptAndSend?: (() => void) | undefined }) {
+export function ChatWaiting({ id, agentName, waiting, now, onInterruptAndSend }: { id: string; agentName: string; waiting: ChatWaitingOn; now?: number | undefined; onInterruptAndSend?: (() => void) | undefined }) {
+    const elapsed = waiting.since !== null && now !== undefined && now - waiting.since > WAITING_LONG_MS ? ago(waiting.since, now) : null;
+    const hover = `Waiting — ${agentName} reads it when this step ends: ${waiting.step}${waiting.since !== null ? ` · running since ${clock(waiting.since)}` : ''}`;
     return (
-        <div data-chat-waiting={id} className="flex max-w-full flex-col items-end gap-1 text-right text-[12px] text-[var(--warning)]">
-            <span>{`Waiting — ${agentName} reads it when this step ends:`}</span>
-            <span className="font-mono text-[11px] text-[var(--fg-2)]">{waiting.step}</span>
-            {waiting.since !== null ? <span className="font-mono text-[11px] text-[var(--fg-4)]">{`running since ${clock(waiting.since)}`}</span> : null}
+        <div data-chat-waiting={id} title={hover} className="flex max-w-full items-center justify-end gap-1.5 text-[12px] text-[var(--fg-3)]">
+            <span data-chat-waiting-icon="" role="img" aria-label="Queued" className="flex shrink-0 text-[var(--warning)]"><Icon name="clock" size="xs" /></span>
+            <span className="flex shrink-0"><Icon name={toolIcon(waiting.kind)} size="xs" /></span>
+            <span className="min-w-0 truncate">{waitingStepLabel(waiting.step)}</span>
+            {elapsed !== null ? <span data-chat-waiting-elapsed="" className="shrink-0 tabular-nums">{elapsed}</span> : null}
             {onInterruptAndSend ? (
-                <button type="button" data-action="interrupt-and-send" data-message={id} title={`Stop ${agentName}'s current turn; what you sent runs next, in order`} onClick={() => onInterruptAndSend()} className="rounded-lg border border-[var(--warning)] bg-[var(--warning)]/10 px-2.5 py-1 text-[12px] font-medium text-[var(--fg-1)] hover:bg-[var(--warning)]/20">
+                <Button type="button" size="xs" color="amber" data-action="interrupt-and-send" data-message={id} title={`Stop ${agentName}'s current turn; what you sent runs next, in order`} onClick={() => onInterruptAndSend()} className="shrink-0">
                     Interrupt and send
-                </button>
+                </Button>
             ) : null}
         </div>
     );
+}
+
+/** `ChatWaiting` with the time kept current, so how long the step has run appears once it is long. */
+function ChatWaitingLive(props: Omit<Parameters<typeof ChatWaiting>[0], 'now'>) {
+    const now = useNow(true);
+    return <ChatWaiting {...props} now={now} />;
 }
 
 /**
@@ -131,50 +151,28 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
     );
     const mailId = m.mailId ?? m.id;
     return (
-        <div data-chat-message={m.id} data-who="mail" className="flex max-w-[94%] flex-col gap-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-2">
+        <div data-chat-message={m.id} data-who="mail" className="flex min-w-0 max-w-[94%] flex-col gap-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-2">
             {onOpenMail ? (
-                <button type="button" data-open-mail={mailId} title="Open this message in the AgentInbox" onClick={() => onOpenMail(mailId)} className="flex items-center gap-1.5 self-start font-mono text-[11px] text-[var(--violet-400)] hover:underline">
+                <Button size="xs" type="button" data-open-mail={mailId} title="Open this message in the AgentInbox" onClick={() => onOpenMail(mailId)} className="flex items-center gap-1.5 self-start font-mono text-[11px] text-[var(--violet-400)]">
                     {head}
-                </button>
+                </Button>
             ) : (
                 <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--violet-400)]">{head}</div>
             )}
             {/* A SHORT PREVIEW, not the message (the owner, 2026-10-21: "I don't need to see so much content, that is what the
                 link to open it is for"): one plain line of it, at most two lines tall; the head opens it in full. */}
             <p data-mail-preview={m.id} className="line-clamp-2 text-[13px] text-[var(--fg-2)]">{mailSubject(m.text)}</p>
+            <span data-mail-receipt={m.delivered ? 'delivered' : 'waiting'} className="font-mono text-[11px] text-[var(--fg-3)]">{m.delivered ? 'Delivered' : 'Waiting'}</span>
+            {!m.delivered && m.reason ? <p data-mail-refusal={mailId} className="text-[12px] text-[var(--warning)]">{m.reason}</p> : null}
         </div>
     );
 }
 
 /**
- * GENIE'S NOTICE TURN, WITH ITS CONTEXT: `genie → atlas · told atlas about 2 AgentInbox messages`, then one entry per
- * message — who wrote it and one line of what it says — each opening that message. The notice's own words to the agent
- * ("collect it with agentinbox receive") are an instruction to it, not something for the person to read. Hook-free.
+ * Older thread payloads can still contain a delivery row. The mail card replaces it on those clients too.
  */
-export function ChatDeliveryRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMail?: ((messageId: string) => void) | undefined }) {
-    return (
-        <div data-chat-message={m.id} data-who="delivery" className="flex flex-col gap-1 font-mono text-[11px] text-[var(--fg-3)]">
-            <div className="flex items-center gap-2">
-                <span className="text-[var(--violet-400)]"><Icon name="mail" size="xs" /></span>
-                <span>{`${m.from} · ${m.text}`}</span>
-                {m.at !== null && m.at !== undefined ? <span className="text-[var(--fg-4)]">· <span data-chat-time={m.at}>{clock(m.at)}</span></span> : null}
-            </div>
-            <ul className="flex flex-col gap-0.5 pl-5">
-                {(m.mail ?? []).map((ref) => {
-                    const body = <><span className="shrink-0 text-[var(--fg-2)]">{`from ${ref.from}`}</span><span className="min-w-0 truncate font-sans text-[12px] text-[var(--fg-2)]">{ref.subject}</span></>;
-                    return (
-                        <li key={ref.id} data-delivery-mail={ref.id}>
-                            {onOpenMail ? (
-                                <button type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)]">{body}</button>
-                            ) : (
-                                <div className="flex min-w-0 items-baseline gap-2 px-1">{body}</div>
-                            )}
-                        </li>
-                    );
-                })}
-            </ul>
-        </div>
-    );
+export function ChatDeliveryRow(_props: { m: ChatThreadMessage; onOpenMail?: ((messageId: string) => void) | undefined }) {
+    return null;
 }
 
 export interface ChatFlyoutProps {
@@ -404,7 +402,22 @@ function ChatFlyoutBody({
         followRef.current = false;
         setLines((n) => n + CHAT_LIVE_LINES);
     };
-    useLayoutEffect(() => { followRef.current = true; setLines(CHAT_LIVE_LINES); }, [thread?.agentId]);
+    /**
+     * JUMP TO LATEST (the owner, 2026-11-04, Tynn #944): whether the thread is at its end, for the button that is there
+     * whenever it is not. Set from the scroll position (`onScroll`), the same test that decides following; its press is
+     * the way back to Following Live — the live 500 lines, the end of the thread, following on.
+     */
+    const [atEnd, setAtEnd] = useState(true);
+    const jumpToLatest = () => {
+        anchorRef.current = null;
+        followRef.current = true;
+        setAtEnd(true);
+        // Paged into history: back to the live window; the layout effect puts the end in view once it is drawn.
+        if (lines > CHAT_LIVE_LINES) setLines(CHAT_LIVE_LINES);
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+    };
+    useLayoutEffect(() => { followRef.current = true; setAtEnd(true); setLines(CHAT_LIVE_LINES); }, [thread?.agentId]);
     useEffect(() => { onWindowLines?.(lines); }, [lines, onWindowLines]);
     /** History behind what is drawn: messages held but not drawn, or ledger rows not derived yet. */
     const behind = windowStart > 0 || thread?.earlier === true;
@@ -510,14 +523,14 @@ function ChatFlyoutBody({
                 ) : null}
 
                 {onClose ? (
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         type="button"
                         aria-label="Close chat"
                         onClick={onClose}
                         className="flex size-5 shrink-0 items-center justify-center rounded text-[var(--fg-4)] hover:bg-[var(--bg-2)]"
                     >
                         <Icon name="x" size="xs" />
-                    </button>
+                    </Button>
                 ) : null}
             </div>
 
@@ -528,7 +541,7 @@ function ChatFlyoutBody({
                     {thread?.context?.text ?? 'Working'}
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
                     {onProviderLogin ? (
-                        <button
+                        <Button size="xs" labelClassName="contents"
                             type="button"
                             data-action="provider-login"
                             title={`Open the ${providerName(onProviderLogin.provider)} login in a window of its own`}
@@ -537,10 +550,10 @@ function ChatFlyoutBody({
                         >
                             <ProviderLogo provider={onProviderLogin.provider} size="xs" className="text-[var(--fg-1)]" />
                             Log in
-                        </button>
+                        </Button>
                     ) : null}
                     {onAccountRetry ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="account-retry"
                             title="Once the account is put right with the provider: every agent it stopped comes back"
@@ -548,10 +561,10 @@ function ChatFlyoutBody({
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--danger)]/20"
                         >
                             Try again
-                        </button>
+                        </Button>
                     ) : null}
                     {onDesignLogin ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="design-login"
                             title="Open Claude Code in a window of its own to run /design-login; this agent is told to retry once it has run"
@@ -559,10 +572,10 @@ function ChatFlyoutBody({
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
                         >
                             Log in to Claude Design
-                        </button>
+                        </Button>
                     ) : null}
                     {onResumeLimit ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="resume-limit"
                             title="Resume now — every agent waiting for this provider's rate limit goes on"
@@ -570,7 +583,7 @@ function ChatFlyoutBody({
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]"
                         >
                             Resume now
-                        </button>
+                        </Button>
                     ) : null}
                 </div>
             ) : null}
@@ -581,13 +594,18 @@ function ChatFlyoutBody({
              * overflow at the start of a scroll container cannot be scrolled to — a long thread lost its top and
              * had no scrollbar. The column is at least as tall as the scroller, so a short thread still sits at the
              * bottom, and a long one grows downward, where scrolling reaches it.
+             *
+             * Both sit in a positioned frame that also holds the Jump to latest layer, so the button floats over the
+             * thread and never moves the layout.
              */}
+            <div data-chat-frame="" className="relative flex min-h-0 flex-1 flex-col">
             <div
                 ref={scrollRef}
                 data-chat-scroll=""
                 onScroll={(e) => {
                     const el = e.currentTarget;
                     followRef.current = atThreadEnd(el.scrollTop, el.scrollHeight, el.clientHeight);
+                    setAtEnd(followRef.current);
                     // Back at the end: Following Live again, so only the live 500 lines stay in the DOM.
                     if (followRef.current && lines > CHAT_LIVE_LINES) setLines(CHAT_LIVE_LINES);
                     // At the top with history behind: the next page comes in.
@@ -599,7 +617,12 @@ function ChatFlyoutBody({
             >
             <div
                 data-chat-log=""
-                className="flex min-h-full flex-col justify-end gap-3 px-3 py-3"
+                // `[overflow-wrap:anywhere]`, inherited by every row (Tynn #944): a long unbroken word, path or URL breaks
+                // inside the column's width rather than widening it, and — unlike `break-word` — it lowers the rows'
+                // min-content width, so a flex row can shrink to the column. Code blocks still scroll in their own box
+                // (react-fancy's `[&_pre]:overflow-x-auto`); `pre` does not wrap. Never an `overflow-x-hidden` here: that
+                // would cut words off unseen.
+                className="flex min-h-full min-w-0 flex-col justify-end gap-3 px-3 py-3 [overflow-wrap:anywhere]"
                 // A file link (`#file:…`) opens the file in the agent's workspace, its tree revealed — never navigates the window.
                 // An agent or workspace pill (genie#1263) opens it. Only on this click: the person's own (genie#1265).
                 onClick={canFile || canAgent || canWorkspace ? (e) => {
@@ -637,9 +660,9 @@ function ChatFlyoutBody({
                 ) : null}
                 {/* EARLIER HISTORY (core/chat-window.ts): how many messages are behind the window, and the page that brings them in. */}
                 {behind ? (
-                    <button type="button" data-chat-earlier={windowStart > 0 ? windowStart : 'more'} onClick={showEarlier} className="self-center rounded-full border border-[var(--border-1)] px-3 py-0.5 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-1)]">
+                    <Button size="xs" type="button" data-chat-earlier={windowStart > 0 ? windowStart : 'more'} onClick={showEarlier} className="self-center rounded-full border border-[var(--border-1)] px-3 py-0.5 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-1)]">
                         {windowStart > 0 ? `${windowStart.toLocaleString('en-US')} earlier ${windowStart === 1 ? 'message' : 'messages'} · show more` : 'Earlier messages · show more'}
-                    </button>
+                    </Button>
                 ) : null}
                 {shown.map((m) => {
                     const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
@@ -673,6 +696,7 @@ function ChatFlyoutBody({
                     }
                     if (who === 'mail') return <ChatMailRow key={m.id} m={m} onOpenMail={onOpenMail} />;
                     if (who === 'delivery') return <ChatDeliveryRow key={m.id} m={m} onOpenMail={onOpenMail} />;
+                    if (who === 'system' && m.carried !== undefined) return <ChatCarriedRow key={m.id} m={m} />;
                     if (who === 'system') {
                         return (
                             <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
@@ -700,22 +724,22 @@ function ChatFlyoutBody({
                              * cannot come.
                              */}
                             {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
-                            {m.waiting && m.delivered ? <ChatWaiting id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} onInterruptAndSend={onInterruptAndSend} /> : null}
+                            {m.waiting && m.delivered ? <ChatWaitingLive id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} onInterruptAndSend={onInterruptAndSend} /> : null}
                             {mailOnly && m.read !== undefined ? (
                                 <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                             ) : null}
-                            {m.queued ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForProvider ? 'Queued · waiting for the provider to resume' : 'Queued · waiting for the current turn to end'}</span> : null}
+                            {m.queued ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : m.queuedForProvider ? 'Queued · waiting for the provider to resume' : 'Queued · waiting for the current turn to end'}</span> : null}
                             {m.delivered || m.queued ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
                                     {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
                                     <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
                                     {m.draftProblem ? <span role="alert" className="text-[12px] text-[var(--danger)]">{m.draftProblem}</span> : null}
                                     <div className="flex items-center gap-1.5">
-                                        {onDiscardDraft ? <button type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</button> : null}
+                                        {onDiscardDraft ? <Button size="xs" type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</Button> : null}
                                         {m.reason ? null : m.resend === 'send'
-                                            ? <button type="button" data-action="send-draft" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Send now</button>
+                                            ? <Button size="xs" type="button" data-action="send-draft" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Send now</Button>
                                             : m.id === restartOn
-                                                ? <button type="button" data-action="restart" data-draft={m.id} title={`Restart ${thread?.name ?? 'the agent'}; every message not yet delivered to it is sent, in order, once it is up`} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart</button>
+                                                ? <Button size="xs" type="button" data-action="restart" data-draft={m.id} title={`Restart ${thread?.name ?? 'the agent'}; every message not yet delivered to it is sent, in order, once it is up`} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart</Button>
                                                 : null}
                                     </div>
                                 </div>
@@ -737,6 +761,30 @@ function ChatFlyoutBody({
                     </div>
                 ) : null}
             </div>
+            </div>
+            {/*
+             * JUMP TO LATEST: there whenever the thread is not at its end. A layer over the bottom of the thread, so it
+             * adds no height and moves nothing; the layer lets the wheel and clicks through, the button takes its own.
+             * It never takes focus (genie#1235: nothing here moves it): a press is cancelled before the browser focuses
+             * it, and it is not a tab stop, so the caret stays in the composer. From the keyboard, End scrolls the thread.
+             */}
+            {atEnd ? null : (
+                <div data-chat-jump-layer="" className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex justify-center">
+                    <Button
+                        type="button"
+                        size="xs"
+                        icon="arrow-down-to-line"
+                        data-chat-jump=""
+                        tabIndex={-1}
+                        title="Jump to the newest message and follow live"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={jumpToLatest}
+                        className="pointer-events-auto rounded-full border border-[var(--border-2)] bg-[var(--surface)] px-3 py-1 text-[11px] text-[var(--fg-2)] shadow-md hover:bg-[var(--bg-2)]"
+                    >
+                        Jump to latest
+                    </Button>
+                </div>
+            )}
             </div>
 
             {/*
@@ -877,3 +925,19 @@ const KeptDraft = memo(
     },
     (prev, next) => prev.chat === next.chat && !next.shown,
 );
+
+/**
+ * WHAT A PROVIDER SWITCH CARRIED INTO A TURN (Tynn story #380): "Context carried from <provider> (N turns)", closed until
+ * opened, then the exact text the provider was given above the person's words. Never drawn as the person's message.
+ */
+export function ChatCarriedRow({ m }: { m: ChatThreadMessage }) {
+    return (
+        <details data-chat-message={m.id} data-who="system" data-chat-carried="" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
+            <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
+                <Icon name="arrow-right-left" size="xs" />
+                <span className="group-hover:underline">{m.text}</span>
+            </summary>
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{m.carried}</pre>
+        </details>
+    );
+}

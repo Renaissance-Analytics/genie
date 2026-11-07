@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { OS_AGENT_NAME } from './os-agent.js';
 import type { AcpProvider } from './engine.js';
 import type { IssueWatchSetting } from './issue-watch.js';
+import type { CarryOver } from './carry-over.js';
 
 /**
  * ONE ID, MINTED ONCE, USED BY EVERY SUBSYSTEM.
@@ -83,6 +84,8 @@ export function threadKeyFor(id: AgentId): string {
  * `prism-acp`. It is not configuration, and it is not this record's business.
  */
 export interface AgentRecord {
+    /** A workspace was redocked: its next accepted turn must check staleness and reorient. */
+    readonly redockAt?: string;
     readonly id: AgentId;
     readonly workspaceId: string;
     readonly provider: AcpProvider;
@@ -100,8 +103,9 @@ export interface AgentRecord {
     readonly createdAt: string;
     readonly lastUsedAt: string | null;
     /**
-     * Changes how Genie WORDS its notices to this agent — and when an APP's message reaches it (genie#1345, the owner's
-     * D1): an automated agent is told at once (woken if stopped), a manual one on its next turn. Nothing else.
+     * Changes how Genie WORDS its notices to this agent — and whether an APP's message STARTS it when it is stopped
+     * (genie#1379): an automated one is started (within the app wake cap), a manual one is not. Either mode is TOLD
+     * without the person typing once it has a session. Nothing else.
      *
      * **Not a permission boundary.** It restricts nothing, is not a security control, and
      * nothing may be built on it as though it were.
@@ -154,6 +158,8 @@ export interface AgentRecord {
      * first was numbered 1 (the owner's rail, 2026-10-16). OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
      */
     readonly lastTurn?: number;
+    /** Genie's own words are in this thread: it began under them, or was handed them. Cleared with the thread. */
+    readonly genieWordsInThread?: true;
     /**
      * THE AGENT'S LATEST PLAN, every step (the owner, 2026-10-21: "The plan loaded in genie should survive a restart, how
      * else will agents know what to pick up on."). Written as each plan arrives — Genie's `plan` tool or the provider's
@@ -163,6 +169,19 @@ export interface AgentRecord {
      * of it. OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
      */
     readonly plan?: readonly PlanStepRecord[];
+    /**
+     * EACH PROVIDER'S OWN SESSION (Tynn story #380): the native session the agent left on another provider, by provider,
+     * resumed when it switches back. `threadId` stays the CURRENT provider's; a record from before this field has none
+     * parked, which is what it had. OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
+     */
+    readonly threadIds?: Readonly<Partial<Record<AcpProvider, string>>>;
+    /** When the agent last LEFT each provider (ISO): switching back carries only what happened since. OPTIONAL. */
+    readonly leftAt?: Readonly<Partial<Record<AcpProvider, string>>>;
+    /**
+     * THE CONVERSATION A SWITCH CARRIES (Tynn story #380, core/carry-over.ts): held here and attached once to the next
+     * prompt that goes; cleared when it went. Absent = nothing pending.
+     */
+    readonly carryOver?: CarryOver;
 }
 
 /** One step of a kept plan: what it is, and the status the agent (or its provider) gave it. */

@@ -16,7 +16,7 @@ import { isDraftRef, isEmptyDraft, parseChatDrafts, type ChatDraft, type ChatDra
  * - **Nothing here focuses anything.** A restore is `defaultDraft`, read at mount, which never moves focus or a caret
  *   (react-fancy 5.65.0; genie#1235).
  *
- * PURE: no DOM, no Electron. The port is main's IPC (`window.genie.chatDrafts`); the timer is injected.
+ * PURE: no DOM, no Electron. The pageBridge port uses the existing local connection; the timer is injected.
  */
 export interface ChatDraftsPort {
     load(): Promise<unknown>;

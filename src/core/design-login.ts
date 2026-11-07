@@ -33,7 +33,7 @@ export const DESIGN_LOGIN_RAN =
 export interface DesignLoginPort {
     designLoginAgents(): readonly string[];
     clearDesignLogin(agentId: string): void;
-    prompt(agentId: string, text: string, by: string | null): boolean;
+    prompt(agentId: string, text: string, by: string | null): boolean | Promise<boolean>;
 }
 
 /** Every agent waiting on the login: cleared, then told to retry, by Genie. Answers who was told. */
@@ -41,7 +41,7 @@ export function tellDesignLoginRan(port: DesignLoginPort): string[] {
     const ids = [...port.designLoginAgents()];
     for (const id of ids) {
         port.clearDesignLogin(id);
-        port.prompt(id, DESIGN_LOGIN_RAN, 'genie');
+        void port.prompt(id, DESIGN_LOGIN_RAN, 'genie');
     }
     return ids;
 }

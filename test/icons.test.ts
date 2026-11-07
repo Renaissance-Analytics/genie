@@ -100,6 +100,27 @@ describe('the icons the Tynn tab passes through props', () => {
     });
 });
 
+describe('the icons react-fancy Buttons are given (icon=, iconTrailing=, alertIcon=), anywhere in the renderer', () => {
+    it('are all registered: a Button names its icon by prop, which the <Icon name> scan cannot see', () => {
+        /**
+         * Real buttons (the owner, 2026-11-01) means react-fancy's `<Button icon="plus">` everywhere, and Button resolves
+         * that name through the same registry as `<Icon>`: an unregistered one is a blank gap beside the label, on a
+         * green suite. So every icon prop on every renderer surface is read, not only the Tynn board's.
+         */
+        const sources = import.meta.glob('../src/renderer/**/*.tsx', { query: '?raw', import: 'default', eager: true });
+        const used = new Set<string>();
+        for (const source of Object.values(sources) as string[]) {
+            for (const m of source.matchAll(/\s(?:icon|iconTrailing|alertIcon)=\{?["']([a-z0-9-]+)["']/g)) used.add(m[1] as string);
+        }
+
+        // POSITIVE CONTROL: the Dashboard's Buttons were read (its group header's trailing arrow, its Chat button's icon).
+        expect(used).toContain('arrow-right');
+        expect(used).toContain('message-square');
+
+        expect([...used].filter((name) => !ICON_NAMES.includes(name))).toEqual([]);
+    });
+});
+
 describe('the icons the ledger chooses at RUNTIME', () => {
     it('are all registered — driven by the real function, not by reading the source', () => {
         /**

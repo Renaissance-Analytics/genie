@@ -110,6 +110,17 @@ export function headroomOf(rows: readonly TimedEvent[]): Headroom | null {
     return null;
 }
 
+/** Story389: a stale window cannot warn about a limit that has already reset. No reading means no notice. */
+export function rateLimitWarning(headroom: Headroom | null, nowMs: number): string | null {
+    if (!headroom || !Number.isFinite(nowMs)) return null;
+    let left = Infinity;
+    for (const window of headroom.windows) {
+        if (!Number.isFinite(window.leftPct) || !Number.isFinite(window.resetsAtMs) || window.resetsAtMs <= nowMs) continue;
+        left = Math.min(left, window.over ? 0 : Math.max(0, window.leftPct));
+    }
+    return left <= 10 ? `You have ${Math.floor(left)}% until you hit your rate limit. Reduce the size of your work per turn to minimize loss` : null;
+}
+
 
 /** `pro · 60% of 5h window left · resets 6:30 PM`; spent past the allowance: `over the 5h window · resets 4:00 PM`. */
 export function headroomLine(h: Headroom): string {
@@ -127,16 +138,8 @@ function providerWord(provider: string): string {
     return providerLogin(provider)?.name ?? provider;
 }
 
-/**
- * One line of the hover on a provider's Dashboard pill (genie#1268): a reported window's share used, its share left, and
- * the reset as the full date with am/pm (#1191's wording).
- */
-export function windowDetail(w: LimitWindow): string {
-    return `${w.window} window: ${w.usedPct}% used · ${w.over ? 'over the limit' : `${w.leftPct}% left`} · resets ${fullDateTime(w.resetsAtMs)}`;
-}
-
 /** `7d` → `this week`; `5h` → `in the 5-hour window`; anything else → `in the 7d opus window`. */
-function windowWords(window: string): string {
+export function windowWords(window: string): string {
     if (window === '7d' || window === '1w') return 'this week';
     const hours = /^(\d+)h$/.exec(window);
     return hours ? `in the ${hours[1]}-hour window` : `in the ${window} window`;
@@ -168,4 +171,46 @@ export function rateLimitAlert(limits: Readonly<Record<string, Headroom>>): Rate
         }
     }
     return low.length === 0 ? null : { level: danger ? 'danger' : 'warning', label: low.join('; ') };
+}
+
+/** A window's tone, by the sidebar dot's rule: the warning at 30% or less left, the danger at 10% or less or spent. */
+export type LimitLevel = 'ok' | 'warning' | 'danger';
+
+export function limitLevel(w: { readonly leftPct: number; readonly over: boolean }): LimitLevel {
+    return w.over || w.leftPct <= LIMIT_DANGER_LEFT_PCT ? 'danger' : w.leftPct <= LIMIT_WARNING_LEFT_PCT ? 'warning' : 'ok';
+}
+
+/** The window with the least left — a spent one first; on a tie, the provider's order. What the pill shows. */
+export function tightestWindow(h: Headroom): LimitWindow {
+    const fallback: LimitWindow = { window: h.window, usedPct: 100 - h.leftPct, leftPct: h.leftPct, resetsAtMs: h.resetsAtMs, over: h.over };
+    return h.windows.reduce((best, w) => ((w.over ? -1 : w.leftPct) < (best.over ? -1 : best.leftPct) ? w : best), h.windows[0] ?? fallback);
+}
+
+/** A window the popover lists but the provider did not report. */
+export interface UnknownWindow {
+    readonly window: string;
+    readonly unknown: true;
+}
+
+/** The windows every provider has: listed even when unreported, so a missing one is said, not silently absent. */
+export const STANDARD_WINDOWS: readonly string[] = ['5h', '7d'];
+
+/** The popover's rows: 5h and 7d always (unknown when not reported), then every other reported window in order. */
+export function limitRows(h: Headroom): ReadonlyArray<LimitWindow | UnknownWindow> {
+    const byName = new Map(h.windows.map((w) => [w.window, w] as const));
+    const standard = STANDARD_WINDOWS.map((name): LimitWindow | UnknownWindow => byName.get(name) ?? { window: name, unknown: true });
+    return [...standard, ...h.windows.filter((w) => !STANDARD_WINDOWS.includes(w.window))];
+}
+
+/** `resets in 14m`, `resets in 2h 14m`, `resets in 3d 12h`; under a minute `resets in <1m`; past it `resets now`. */
+export function resetsIn(resetsAtMs: number, now: number): string {
+    const ms = resetsAtMs - now;
+    if (ms <= 0) return 'resets now';
+    const mins = Math.floor(ms / 60_000);
+    if (mins < 1) return 'resets in <1m';
+    const d = Math.floor(mins / 1440);
+    const h = Math.floor((mins % 1440) / 60);
+    const m = mins % 60;
+    const parts = d > 0 ? [`${d}d`, h > 0 ? `${h}h` : ''] : h > 0 ? [`${h}h`, m > 0 ? `${m}m` : ''] : [`${m}m`];
+    return `resets in ${parts.filter(Boolean).join(' ')}`;
 }

@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const observed = vi.hoisted(() => ({
     launches: [] as { args: readonly string[]; env: NodeJS.ProcessEnv | undefined }[],
@@ -14,7 +14,11 @@ const observed = vi.hoisted(() => ({
     stagingOpened: false,
     children: [] as import('node:child_process').ChildProcess[],
     elapsedMs: [] as number[],
+    /** The first bytes the native child wrote to stdout, as the writer saw them: printed only when a staging row fails. */
+    stdoutHead: '',
 }));
+/** How much of the native stdout the diagnostic keeps: the protocol's signals are well under this. */
+const STDOUT_HEAD = 400;
 vi.mock('node:child_process', async (original) => {
     const actual = await original<typeof import('node:child_process')>();
     const { promisify } = await import('node:util');
@@ -46,6 +50,11 @@ vi.mock('node:child_process', async (original) => {
                 observed.nativeFailures.push({ killed: error.killed === true, code: error.code, signal: error.signal });
             });
             observed.children.push(work.child);
+            // Its stdout's first bytes, for the staging rows' diagnostic. A listener of its own: the writer's own reading
+            // of the stream is unchanged (a second 'data' listener sees the same chunks).
+            work.child.stdout?.on('data', (chunk: Buffer | string) => {
+                if (observed.stdoutHead.length < STDOUT_HEAD) observed.stdoutHead += chunk.toString().slice(0, STDOUT_HEAD - observed.stdoutHead.length);
+            });
             const input = work.child.stdin;
             if (input) for (const method of ['write', 'end'] as const) {
                 const originalMethod = input[method];
@@ -91,7 +100,10 @@ vi.mock('node:fs/promises', async (original) => {
     } };
 });
 
-import { preparePrivateCredential, setPrivateCredentialFailureLog, writePrivateCredential } from '../src/main/private-credentials.js';
+import { preparePrivateCredential, setPrivateCredentialFailureLog, useAclHelper, writePrivateCredential } from '../src/main/private-credentials.js';
+
+// These drive a launch per write, the path a helper falls back to. Its own count is in test/windows-helper-real.test.ts.
+useAclHelper(null);
 
 const roots: string[] = [];
 function alive(pid: number): boolean {
@@ -103,9 +115,22 @@ afterEach(async () => {
     observed.fault = null;
     observed.payload = null; observed.payloadInStdin = false; observed.stagingOpened = false; observed.children.length = 0; observed.elapsedMs.length = 0;
     observed.challenges.length = 0;
-    observed.nativeFailures.length = 0; observed.nativeAliveAtEof = false;
+    observed.nativeFailures.length = 0; observed.nativeAliveAtEof = false; observed.stdoutHead = '';
     vi.restoreAllMocks();
     for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
+
+// The tests named "refuses …" break the native ACL call on purpose: bad output, a closed stdin, a helper that dies or hangs.
+// So here the failure line is expected, and is not printed. Anywhere else in this file it fails the test: a failed ACL is a question about secrets at rest.
+const aclFailures: unknown[][] = [];
+let warnSpy: ReturnType<typeof vi.spyOn> | null = null;
+beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { if (args[0] === 'PRIVATE_CREDENTIAL_ACL_FAILURE') aclFailures.push(args); });
+});
+afterEach(() => {
+    warnSpy?.mockRestore();
+    const failures = aclFailures.splice(0);
+    if (!/refuses/.test(expect.getState().currentTestName ?? '')) expect(failures, 'a failed ACL this test did not provoke').toEqual([]);
 });
 
 describe.skipIf(process.platform !== 'win32')('credential write native launch budget', () => {
@@ -142,6 +167,19 @@ describe.skipIf(process.platform !== 'win32')('credential write native launch bu
 
         await expect(writePrivateCredential(file, 'new encrypted fixture bytes')).rejects.toThrow('Private Tynn credential permissions could not be secured.');
 
+        // When the refusal came BEFORE the staging open, say why it came (1 in 26 Windows runs, job 128336429256, with
+        // nothing to read): the writer's own native-failure records, the child's exit as the mock saw it, and the first
+        // bytes of its stdout. Printed only then; the assertion below is unchanged. No path, payload or secret is in any
+        // of these: the diagnostic records carry codes and times, and the stdout is the protocol's own signals.
+        if ((fault === 'die-after-staging' || fault === 'closed-stdin') && !observed.stagingOpened) {
+            console.error('STAGING-NOT-OPENED', JSON.stringify({
+                fault, kind,
+                aclFailures: aclFailures.map((a) => { const d = (a[1] ?? {}) as Record<string, unknown>; return { reason: d.reason, code: d.code, signal: d.signal, elapsedMs: d.elapsedMs }; }),
+                nativeFailures: observed.nativeFailures,
+                elapsedMs: observed.elapsedMs,
+                stdoutHead: observed.stdoutHead,
+            }));
+        }
         if (fault === 'die-after-staging' || fault === 'closed-stdin') expect(observed.stagingOpened, 'the fault occurred after the real exclusive staging open').toBe(true);
         expect((await readdir(root, { recursive: true })).some((name) => name.endsWith('.tmp')), 'no staging file remains anywhere below the root').toBe(false);
         expect(observed.children.every((child) => child.exitCode !== null || child.signalCode !== null), 'the owned native children have exited').toBe(true);

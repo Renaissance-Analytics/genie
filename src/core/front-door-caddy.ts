@@ -20,18 +20,32 @@ export interface FrontDoorTls {
 }
 
 /** A path in the Caddyfile: quoted, `\` as `/` (Caddy reads either on Windows, and it dodges escaping), and nothing that could close the quote or open a block. */
-function caddyPath(path: string, which: string): string {
+export function caddyPath(path: string, which: string): string {
     const p = path.replace(/\\/g, '/');
     if (p.length === 0 || /["\r\n{}]/.test(p)) throw new Error(`the ${which} path ${JSON.stringify(path)} cannot be written into a Caddyfile`);
     return `"${p}"`;
 }
 
-export function frontDoorCaddyfile(routes: readonly GenRoute[], tls: FrontDoorTls | null): string {
+/**
+ * How often the front door's Caddy cleans its storage. Longer than Caddy's 24h default: the front door holds no
+ * certificate Caddy manages (it serves Genie's leaf from files), so nothing in its storage expires in a day. Caddy still
+ * cleans once when the process starts ("Storage will always be cleaned when the process first starts", Caddy's global
+ * options docs) — in the front door's OWN storage, which no other process shares.
+ */
+export const FRONT_DOOR_STORAGE_CLEAN_INTERVAL = '168h';
+
+/**
+ * `storageDir`: Caddy's storage, NAMED in the Caddyfile. It is the folder the front door has used since it first ran
+ * (XDG_DATA_HOME=<caddyDir>/data → <caddyDir>/data/caddy), so nothing moves on upgrade, and nothing can fall back to
+ * Caddy's shared default (%AppData%\Caddy), whose storage_clean lock every Caddy on the machine contends for.
+ */
+export function frontDoorCaddyfile(routes: readonly GenRoute[], tls: FrontDoorTls | null, storageDir: string): string {
     for (const r of routes) if (!LOOPBACK_TARGET.test(r.target)) throw new Error(`${r.host} → ${r.target}: the front door proxies loopback targets only`);
     if (routes.length > 0 && tls === null) throw new Error('the front door serves its routes with Genie’s certificate, and there is none');
     // skip_install_trust: Caddy installs its local root into the OS trust store on start unless told not to, which put
     // an unasked Windows certificate prompt in front of the owner (2026-10-14). Only the person's Trust installs trust.
-    const blocks: string[] = ['{\n\tdefault_bind 127.0.0.1\n\tskip_install_trust\n\tauto_https disable_redirects\n}'];
+    const storage = `\tstorage file_system ${caddyPath(storageDir, 'storage')}\n\tstorage_clean_interval ${FRONT_DOOR_STORAGE_CLEAN_INTERVAL}`;
+    const blocks: string[] = [`{\n\tdefault_bind 127.0.0.1\n\tskip_install_trust\n\tauto_https disable_redirects\n${storage}\n}`];
     if (tls !== null && routes.length > 0) {
         const line = `tls ${caddyPath(tls.certPath, 'certificate')} ${caddyPath(tls.keyPath, 'key')}`;
         for (const r of routes) blocks.push(`https://${r.host} {\n\t${line}\n\treverse_proxy ${r.target}\n}`);

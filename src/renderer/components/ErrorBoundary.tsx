@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { renderErrorDetails, renderErrorLine } from '../../core/render-error.js';
 import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
@@ -88,16 +89,16 @@ function SurfaceFailed({ surface, whole, error, componentStack, onRetry }: { sur
             {whole ? <p className="text-[13px] text-[var(--fg-3)]">Agents, terminals and sites keep running in the background. Retry draws the window again; Reload starts it fresh.</p> : <p className="text-[12px] text-[var(--fg-3)]">The rest of Genie keeps working.</p>}
             <pre data-surface-error="" className="max-h-32 w-full overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--rose-500,#f43f5e)]">{message}</pre>
             <div className="flex items-center gap-2">
-                <button type="button" data-surface-retry="" onClick={onRetry} className={BUTTON}>Retry</button>
-                {whole ? <button type="button" data-surface-reload="" onClick={() => window.location.reload()} className={BUTTON}>Reload</button> : null}
-                <button
+                <Button size="xs" type="button" data-surface-retry="" onClick={onRetry} className={BUTTON}>Retry</Button>
+                {whole ? <Button size="xs" type="button" data-surface-reload="" onClick={() => window.location.reload()} className={BUTTON}>Reload</Button> : null}
+                <Button size="xs"
                     type="button"
                     data-surface-copy=""
                     onClick={() => { void copy.copy(renderErrorDetails({ surface, error, componentStack })); }}
                     className={BUTTON}
                 >
                     {copyWords(copy.state, 'Copy details')}
-                </button>
+                </Button>
                 <CopyAnnounce state={copy.state} />
             </div>
         </div>

@@ -39,6 +39,8 @@ export default defineConfig({
         include: ['test/**/*.test.{ts,tsx}'],
         // Electron's binary is installed, completely, before any worker starts (genie#1260): see test/global-setup.ts.
         globalSetup: ['test/global-setup.ts'],
+        // A failed ACL nobody provoked fails the run (test/acl-guard.test.ts).
+        setupFiles: ['test/setup-acl-guard.ts'],
         exclude: ['**/node_modules/**', '.patch/**'],
     },
 });

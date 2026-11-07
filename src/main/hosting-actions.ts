@@ -5,8 +5,9 @@ import { siteFormDefaults, validateServiceForm, validateSiteForm, type Problem, 
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { ProcessLog } from '../core/output-tail.js';
 import type { EngineChoice, ServiceInstance } from '../core/services.js';
-import type { ComposedServices } from './compose.js';
+import type { WindowServices as ComposedServices } from './compose.js';
 import type { ProcessState, ProcessStatus } from './process-supervisor.js';
+import type { SiteActor } from './envelope-sites-host.js';
 import type { CreateSiteInput, SiteInfo } from './site-manager.js';
 
 /**
@@ -22,7 +23,7 @@ import type { CreateSiteInput, SiteInfo } from './site-manager.js';
  */
 
 /** What the actions need from the composition — the real one in Genie and in the tests. */
-export type HostingServices = Pick<ComposedServices, 'engines' | 'envelopeSites' | 'sites' | 'supervisor' | 'routes' | 'engineStatuses' | 'startEngine' | 'stopEngine' | 'removeEngine' | 'engineDependents'>;
+export type HostingServices = Pick<ComposedServices, 'engines' | 'envelopeSites' | 'sites' | 'supervisor' | 'routes' | 'engineStatuses' | 'startEngine' | 'stopEngine' | 'removeEngine' | 'engineDependents' | 'updateEngine'>;
 
 /** What the form defaults are derived from: the repo's top-level files plus one level of built dirs, and package.json scripts. */
 async function repoFacts(repoPath: string): Promise<{ files: string[]; packageScripts: Record<string, string> }> {
@@ -161,22 +162,22 @@ export type UpdateSiteOutcome ={ readonly kind: 'problems'; readonly problems: P
  * written back to its project.json entry and served as edited (core/envelope-sites.ts keeps every field the edit did
  * not touch). A folder outside the workspace is refused. `repoPath` absent = the folder it serves now.
  */
-export async function updateSite(s: HostingServices, input: { siteId: string; form: SiteForm; repoPath?: string }): Promise<UpdateSiteOutcome> {
+export async function updateSite(s: HostingServices, input: { siteId: string; form: SiteForm; repoPath?: string; person?: boolean }): Promise<UpdateSiteOutcome> {
     const target = siteEditTarget(s, input.siteId);
     const problems = siteEditProblems(s, input.siteId, input.form);
     if (problems.length > 0) return { kind: 'problems', problems };
-    const site = await s.envelopeSites.update(input.siteId, siteInputOf(s, { workspaceId: target.workspaceId, repoPath: input.repoPath ?? target.site.repoPath, form: input.form }));
+    const site = await s.envelopeSites.update(input.siteId, siteInputOf(s, { workspaceId: target.workspaceId, repoPath: input.repoPath ?? target.site.repoPath, form: input.form }), { person: input.person === true });
     return { kind: 'updated', site };
 }
 
 /** Start: serves a listed site that is not running, and lifts a remembered Stop. Throws the reason it cannot be served. */
-export async function startSite(s: HostingServices, siteId: string): Promise<SiteInfo> {
-    return s.envelopeSites.start(siteId);
+export async function startSite(s: HostingServices, siteId: string, by: SiteActor = {}): Promise<SiteInfo> {
+    return s.envelopeSites.start(siteId, by);
 }
 
 /** Restart: stopped and started again as Start starts it (its config and env read anew); a remembered Stop is lifted (it is running now). Throws why it cannot. */
-export async function restartSite(s: HostingServices, siteId: string): Promise<SiteInfo> {
-    return s.envelopeSites.restart(siteId);
+export async function restartSite(s: HostingServices, siteId: string, by: SiteActor = {}): Promise<SiteInfo> {
+    return s.envelopeSites.restart(siteId, by);
 }
 
 /** One of a site's processes and the end of its output — the dev server, or Caddy and (php) its worker. */
@@ -289,14 +290,12 @@ export function stopService(s: HostingServices, id: string): Promise<void> {
 
 /** Always previews the actual image. Consent to a download does not also confirm interrupting its dependents. */
 export async function updateService(s: HostingServices, id: string, options: { consent?: boolean; confirmed?: boolean; expectedImage?: string; approvedDependents?: readonly string[] } = {}) {
-    const preview = await s.engines.update(id, { consent: false });
+    const preview = await s.updateEngine(id, { consent: false });
     if (preview.kind !== 'needs-consent') throw new Error('the engine did not return its update preview');
     const dependents = s.engineDependents(id);
     if (!options.consent || options.expectedImage !== preview.image || (dependents.length > 0 && (!options.confirmed || dependents.some((d) => !options.approvedDependents?.includes(d))))) return { ...preview, serviceId: id, dependents };
-    const updated = await s.engines.update(id, { consent: true, beforeStop: () => {
-        const now = s.engineDependents(id);
-        if (now.some((d) => !options.approvedDependents?.includes(d))) throw new Error('The engine’s dependents changed while its image was downloading; nothing was replaced. Review them and try again.');
-    } });
+    // The host checks the LIVE dependents against these when it stops the engine (P5a.2): after the download, where it runs.
+    const updated = await s.updateEngine(id, { consent: true, approvedDependents: options.approvedDependents ?? [] });
     return updated.kind === 'needs-consent' ? { ...updated, serviceId: id, dependents } : updated;
 }
 

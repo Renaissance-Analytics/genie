@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * DRIVE AN UPDATE THROUGH THE REAL APP — check → download → install, over CDP, via the same
- * `window.genie.updates` the Deck's signal strip uses.
+ * `window.genieTest.updates` on the same page bridge the Deck's signal strip uses.
  *
  *   EXPECT_VERSION=0.0.1 node scripts/update-cdp.mjs
  *
@@ -72,7 +73,7 @@ class Cdp {
     close() { this.#ws.close(); }
 }
 
-const state = (cdp) => cdp.evaluate('window.genie.updates.state()');
+const state = (cdp) => cdp.evaluate('window.genieTest.updates.state()');
 const until = async (cdp, pred, ms, what) => {
     const end = Date.now() + ms;
     let s = await state(cdp);
@@ -86,6 +87,7 @@ const page = await findTarget();
 const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
 try {
     await cdp.evaluate('document.readyState');
+    await waitForPageProbe(cdp);
 
     const idle = await state(cdp);
     check(idle.phase === 'idle' && idle.version === null, '1. the updater starts idle, claiming nothing', JSON.stringify(idle));
@@ -95,7 +97,7 @@ try {
     const auto = process.env.AUTO_CHECK === '1';
     const checked = auto
         ? await until(cdp, (s) => s.phase === 'available' || s.phase === 'none' || s.phase === 'error', 60_000, 'the app to check the feed on its own')
-        : await cdp.evaluate('window.genie.updates.check()');
+        : await cdp.evaluate('window.genieTest.updates.check()');
     check(checked.phase === 'available', auto ? '2. the app checked the feed ON ITS OWN and found the update' : '2. a check finds the feed\'s update', `phase ${checked.phase}${checked.error ? ` error ${checked.error}` : ''}`);
     check(checked.version === EXPECT, `3. the offered version is the one the feed serves  — expected ${EXPECT}`, String(checked.version));
     check(typeof checked.checkedAt === 'number', '4. the check is timestamped', String(checked.checkedAt));
@@ -138,7 +140,9 @@ try {
     const codexId = await cdp.evaluate('window.genie.snapshot().then((s) => (s.agents.find((a) => a.provider === "codex") ?? {}).id ?? null)');
     check(typeof codexId === 'string', '11b. the seed left a codex agent to run', String(codexId));
     if (typeof codexId === 'string') {
-        await cdp.evaluate(`window.genie.openAgent(${JSON.stringify(codexId)}); true`);
+        // Start (the one restart): opening an agent starts nothing since q_04ce323c.
+        await waitForPageProbe(cdp);
+        await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
         const end = Date.now() + 30_000;
         let running = null;
         while (Date.now() < end) {
@@ -157,7 +161,7 @@ try {
     // asserts 0 helpers after the relaunch.
     const wsId = await cdp.evaluate('window.genie.snapshot().then((s) => s.workspaces?.[0]?.id ?? null)');
     if (typeof wsId === 'string') {
-        const term = await cdp.evaluate(`window.genie.terminals.open(${JSON.stringify(wsId)}, { cols: 80, rows: 24 })`);
+        const term = await cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(wsId)}, { cols: 80, rows: 24 })`);
         check(term && term.pid > 0, '11d. a Workspace terminal is open when install is asked', `pid ${term?.pid}`);
         await new Promise((r) => setTimeout(r, 1500));
         const { execFileSync } = await import('node:child_process');
@@ -178,13 +182,13 @@ try {
                 "Get-CimInstance Win32_Process | Where-Object { ($_.Name -like '*fancy*') -or ($_.CommandLine -like '*fancy-pty*') -or ($_.ExecutablePath -like \"$env:LOCALAPPDATA\\Programs\\Genie\\*\" -and $_.Name -ne 'Genie.exe') } | ForEach-Object { \"$($_.ProcessId) ppid=$($_.ParentProcessId) $($_.Name) path=$($_.ExecutablePath) cmd=$(if ($_.CommandLine) { $_.CommandLine.Substring(0, [Math]::Min(160, $_.CommandLine.Length)) })\" }"],
                 { encoding: 'utf8', timeout: 30_000 }).trim();
             console.log(`  --- processes naming fancy-pty, or under the install dir (not Genie.exe) ---\n${dump ? dump.split(/\r?\n/).map((l) => `  ${l}`).join('\n') : '  (none)'}`);
-            const term = await cdp.evaluate(`window.genie.terminals.list(${JSON.stringify(wsId)})`).catch(() => null);
+            const term = await cdp.evaluate(`window.genieTest.terminals.list(${JSON.stringify(wsId)})`).catch(() => null);
             console.log(`  --- terminals the host lists for the workspace ---\n  ${JSON.stringify(term)}`);
         }
     }
 
     // §7.2 report, through the bridge this time so the caller gets the text.
-    const result = await cdp.evaluate('window.genie.updates.install()');
+    const result = await cdp.evaluate('window.genieTest.updates.install()');
     check(result !== null && typeof result.report === 'string', '12. install answers with the teardown report', result?.report?.split('\n')[0] ?? 'null');
     console.log(`\n--- §7.2 report ---\n${result?.report ?? '(none)'}\n`);
 } catch (error) {

@@ -159,11 +159,12 @@ describe('the Electron half, from source', () => {
         expect(win).toMatch(/guardSession\(ses, \(\) => remotes\.get\(key\)\?\.ca\(\) \?\? null\)/);
         expect(win).toMatch(/if \(remote && live\.port !== remote\.port\(\)\) \{\s*live\.port = remote\.port\(\);\s*live\.routed = routeSession\(live\.ses, remote\.port\(\), log\);/);
         // CONTROL: this machine's session keeps Genie's own CA and front door.
-        expect(win).toMatch(/guardSession\(ses, \(\) => options\.caPem\)/);
-        expect(win).toMatch(/routeSession\(ses, options\.frontDoorPort, log\)/);
-        // One place each rule is written: both sessions go through it.
+        expect(win).toMatch(/guardSession\(ses, \(\) => sharedCa\)/);
+        // Routed to the front door as it is now (P5a.2): where it moved to, else its creator's port.
+        expect(win).toMatch(/routeSession\(ses, currentPort \?\? options\.frontDoorPort, log\)/);
+        // One place each rule is written: every session goes through it (this machine's, a remote's, a workspace's store).
         expect(count(win, /setCertificateVerifyProc\(/g)).toBe(1);
-        expect(count(win, /guardSession\(ses,/g)).toBe(2);
+        expect(count(win, /guardSession\(ses,/g)).toBe(3);
     });
 
     it('main decides by the window that asked: the sender’s remote URL and its relay channels, never an argument', () => {

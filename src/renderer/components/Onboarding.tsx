@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { onboardingPlan, type OnboardingState } from '../../core/settings.js';
 
 /**
@@ -37,15 +37,15 @@ export function Onboarding({ state, onAddWorkspace, onAddWorkspaceFromGit, onAdd
                         <span className="font-mono text-xs text-[var(--fg-4)]">{i + 1}</span>
                         <span className="flex-1 text-sm">{s.label}</span>
                         {s.done ? <Icon name="check" size="xs" /> : (
-                            <button type="button" disabled={!s.active} onClick={s.action} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                            <Button size="xs" type="button" disabled={!s.active} onClick={s.action} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
                                 {s.button}
-                            </button>
+                            </Button>
                         )}
                         {s.id === 'pick-folder' && !s.done && onAddWorkspaceFromTynn && state.tynnSignedIn === true ? (
-                            <button type="button" data-action="add-from-tynn" onClick={onAddWorkspaceFromTynn} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]">From Tynn</button>
+                            <Button size="xs" type="button" data-action="add-from-tynn" onClick={onAddWorkspaceFromTynn} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]">From Tynn</Button>
                         ) : null}
                         {s.id === 'pick-folder' && !s.done && onAddWorkspaceFromGit ? (
-                            <button type="button" data-action="add-from-git" onClick={onAddWorkspaceFromGit} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]">From a git URL</button>
+                            <Button size="xs" type="button" data-action="add-from-git" onClick={onAddWorkspaceFromGit} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]">From a git URL</Button>
                         ) : null}
                     </li>
                 ))}
@@ -55,7 +55,7 @@ export function Onboarding({ state, onAddWorkspace, onAddWorkspaceFromGit, onAdd
                     {plan.lines.map((l) => (
                         <li key={l.id} data-line={l.id} className="flex items-center gap-2">
                             <span className="flex-1">{l.label}</span>
-                            <button type="button" data-route={l.route} onClick={() => onNavigate(l.route)} className="text-[13px] underline-offset-2 hover:underline">Fix</button>
+                            <Button size="xs" type="button" data-route={l.route} onClick={() => onNavigate(l.route)} className="text-[13px] underline-offset-2">Fix</Button>
                         </li>
                     ))}
                 </ul>

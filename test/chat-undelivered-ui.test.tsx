@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE UNDELIVERED MESSAGE ON SCREEN (the board's `failed` shape): your bubble with a dashed red border, "Not delivered.
@@ -19,7 +20,8 @@ describe('an undelivered message', () => {
         const html = render(thread);
         expect(html).toContain('data-chat-undelivered="d1"');
         expect(html).toContain('Not delivered. lark is not running.');
-        expect(html).toMatch(/<button[^>]*data-action="restart"[^>]*data-draft="d1"[^>]*>Restart<\/button>/);
+        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
+        expect(control(html, 'data-action="restart"')!.open).toContain('data-draft="d1"');
     });
 
     it('a delivered message carries none of that (positive control)', () => {
@@ -32,6 +34,6 @@ describe('an undelivered message', () => {
         const html = render({ ...thread, messages: [{ ...thread.messages[0]!, draftProblem: 'The previous run is still stopping.' }] });
         expect(html).toContain('role="alert"');
         expect(html).toContain('The previous run is still stopping.');
-        expect(html).toMatch(/data-action="restart"[^>]*>Restart<\/button>/);
+        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
     });
 });

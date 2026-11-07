@@ -25,6 +25,7 @@ import { MobilePair } from '../src/renderer/components/MobileShell.js';
 import { PairPrompt } from '../src/renderer/components/PairPrompt.js';
 import { Sidebar } from '../src/renderer/components/Sidebar.js';
 import type { RemoteSection } from '../src/renderer/features.js';
+import { controlByText } from './helpers/control-markup.js';
 
 const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 let host: HTMLDivElement;
@@ -144,7 +145,9 @@ describe('the phone while it waits', () => {
         expect(html).toMatch(/data-mobile-waiting/);
         expect(html).toContain('Press Allow on alphar:7421 to finish pairing');
         expect(html).toContain('1:30 left');
-        expect(html).toMatch(/<button[^>]*disabled[^>]*>Waiting for Allow…<\/button>/);
+        const waiting = controlByText(html, 'Waiting for Allow…');
+        expect(waiting).toMatchObject({ tag: 'button', fancy: true });
+        expect(waiting!.open).toMatch(/\sdisabled=""/);
     });
 
     it('a denial is shown as the host said it', () => {
@@ -177,32 +180,49 @@ describe('the yellow ! on the Settings row', () => {
     const rail = (over: Partial<Parameters<typeof Sidebar>[0]> = {}) =>
         renderToStaticMarkup(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} {...over} />);
 
-    it('shows a yellow ! on the Settings row whose tooltip names the device and the date', async () => {
+    it('marks the Settings item with an amber dot whose words name the device and the date (react-fancy Sidebar dot)', () => {
         act(() => root.render(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} settingsAlert={{ label }} />));
         const settings = host.querySelector('[data-nav="genie://settings"]')!;
-        const mark = settings.querySelector('[data-settings-alert]')!;
-        expect(mark.textContent).toBe('!');
-        expect(mark.getAttribute('aria-label')).toBe(label);
-        expect(mark.className).toContain('var(--warning)');
-        await hoverTooltip(mark, label);
+        const dot = settings.querySelector('[data-react-fancy-sidebar-dot]')!;
+        expect(dot.getAttribute('data-color')).toBe('amber');
+        expect(settings.querySelector('[data-react-fancy-sidebar-dot-label]')!.textContent!.trim()).toBe(label);
+    });
+
+    // The owner's beta.53 ask, back on the dot (react-fancy 6.2.0 `dotTooltip`): the warning NAMES the phone and the date
+    // where a mouse rests and where the keyboard lands.
+    const tooltipText = () => document.querySelector('[role="tooltip"]')?.textContent ?? '';
+    it('hovering the Settings item shows the warning: the phone and the date', async () => {
+        act(() => root.render(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} settingsAlert={{ label }} />));
+        const settings = host.querySelector('[data-nav="genie://settings"]')!;
+        expect(document.querySelector('[role="tooltip"]')).toBeNull();
+        await act(async () => { settings.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); settings.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false })); await new Promise((r) => setTimeout(r, 300)); });
+        expect(tooltipText()).toContain('Pixel 7');
+        expect(tooltipText()).toContain('Nov 14, 2026');
+    });
+    it('focusing the Settings item from the keyboard shows the same warning', async () => {
+        act(() => root.render(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} settingsAlert={{ label }} />));
+        const settings = host.querySelector<HTMLElement>('[data-nav="genie://settings"]')!;
+        await act(async () => { settings.focus(); settings.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); await new Promise((r) => setTimeout(r, 300)); });
+        expect(tooltipText()).toContain('Pixel 7');
+        expect(tooltipText()).toContain('Nov 14, 2026');
     });
 
     it('no alert, no mark', () => {
-        expect(rail()).not.toMatch(/data-settings-alert/);
-        expect(rail({ settingsAlert: null })).not.toMatch(/data-settings-alert/);
+        expect(rail()).not.toMatch(/data-react-fancy-sidebar-dot=/);
+        expect(rail({ settingsAlert: null })).not.toMatch(/data-react-fancy-sidebar-dot=/);
     });
 
     it('the collapsed rail shows it too', () => {
         const store = { getItem: () => '1', setItem: () => {} };
         const html = rail({ settingsAlert: { label }, railStorage: store });
         expect(html).toMatch(/data-rail="collapsed"/);
-        expect(html).toMatch(/data-settings-alert/);
+        expect(html.match(/<button[^>]*data-nav="genie:\/\/settings"[\s\S]*?<\/button>/)?.[0] ?? '').toContain('data-react-fancy-sidebar-dot=""');
     });
 });
 
 describe('the device’s row in Settings → Remote access', () => {
     const remote = (devices: RemoteSection['devices']): RemoteSection => ({
-        host: 'alphar', url: 'wss://alphar:7421/genie', unavailable: null, locked: false, pin: null, devices, shares: [], connections: [], servedLink: null, enabled: true, firewall: false, pairRequests: [],
+        host: 'alphar', url: 'wss://alphar:7421/genie', unavailable: null, locked: false, pin: null, devices, connections: [], enabled: true, firewall: false, pairRequests: [],
     });
     const soon = { id: 'dev_soon', label: 'Pixel 7', pairedAt: new Date(NOW - 80 * DAY_MS).toISOString(), lastSeenAt: new Date(NOW - 80 * DAY_MS).toISOString(), expiresAt: new Date(NOW + 10 * DAY_MS).toISOString() };
     const fresh = { id: 'dev_fresh', label: 'iPad', pairedAt: new Date(NOW).toISOString(), lastSeenAt: new Date(NOW).toISOString(), expiresAt: new Date(NOW + 90 * DAY_MS).toISOString() };

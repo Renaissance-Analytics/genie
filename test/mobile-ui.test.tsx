@@ -4,6 +4,7 @@ import type { DeckItem } from '../src/core/deck.js';
 import type { AgentRow } from '../src/core/dashboard-view.js';
 import { MobileAgent, MobileFileView, MobileFiles, MobileShell, MobileWorkspaces, PendingAttachments } from '../src/renderer/components/MobileShell.js';
 import type { AgentDetail } from '../src/renderer/bridge.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE PHONE'S FIVE SURFACES (the owner, 2026-10-30): "the workspace selector, workstation dashboard, agent chat (with chat
@@ -27,14 +28,16 @@ const item = (over: Partial<DeckItem> = {}): DeckItem => ({
 });
 
 describe('1. the workspace selector', () => {
-    it('All, then each workspace by NAME with how many agents and how many wait on you; the selected one is marked; asleep is said', () => {
+    it('names active workspaces and their counts, hides asleep rows, and restores them on redock', () => {
         const html = renderToStaticMarkup(<MobileWorkspaces workspaces={ws} agents={agents} items={[item()]} selected="tynn" onSelect={() => {}} />);
         expect(html).toContain('data-mobile-ws="all"');
-        expect(html).toMatch(/data-mobile-ws="tynn"[^>]*data-selected="true"/);
-        expect(html).toMatch(/data-mobile-ws="fancy"[^>]*data-selected="false"/);
+        expect(control(html, 'data-mobile-ws="tynn"')).toMatchObject({ tag: 'button', tab: true });
+        expect(control(html, 'data-mobile-ws="tynn"')!.open).toContain('aria-selected="true"');
+        expect(html).not.toContain('data-mobile-ws="fancy"');
         expect(html).toContain('Tynn');
         expect(html).toMatch(/data-mobile-ws-waiting="tynn"[^>]*>1</);
-        expect(html).toMatch(/data-mobile-ws-asleep="fancy"/);
+        const redocked = renderToStaticMarkup(<MobileWorkspaces workspaces={ws.map((w) => ({ ...w, asleep: false }))} agents={agents} items={[item()]} selected="tynn" onSelect={() => {}} />);
+        expect(control(redocked, 'data-mobile-ws="fancy"')!.open).toContain('aria-selected="false"');
         expect(html).not.toContain('/w/tynn');
     });
 });
@@ -44,11 +47,12 @@ describe('2. the workstation dashboard', () => {
         renderToStaticMarkup(<MobileShell host="alphar" locked={false} refusal={null} items={[item()]} answering={null} onAnswer={() => {}} onDisconnect={() => {}} workspaces={ws} agents={{ rows: agents, onOpen: () => {} }} selectedWorkspace={null} onSelectWorkspace={() => {}} onOpenFiles={() => {}} {...over} />);
 
     it('shows every agent with its state word; picking a workspace narrows agents AND what needs you to it', () => {
-        const all = shell();
+        const active = ws.map((w) => ({ ...w, asleep: false }));
+        const all = shell({ workspaces: active });
         expect(all).toContain('data-mobile-agent="agent_a"');
         expect(all).toContain('data-mobile-agent="agent_b"');
         expect(all).toMatch(/data-mobile-agent="agent_w"[^>]*data-state="waiting"/);
-        const tynn = shell({ selectedWorkspace: 'fancy' });
+        const tynn = shell({ workspaces: active, selectedWorkspace: 'fancy' });
         expect(tynn).toContain('data-mobile-agent="agent_b"');
         expect(tynn).not.toContain('data-mobile-agent="agent_a"');
         expect(tynn).not.toContain('data-mobile-item="i1"');
@@ -134,8 +138,19 @@ describe('4. the file browser and viewer', () => {
         expect(code).toContain('const a = &lt;b&gt;;');
         const img = renderToStaticMarkup(<MobileFileView path="p.png" preview={{ kind: 'image', url: 'blob:x' }} onBack={() => {}} />);
         expect(img).toMatch(/<img[^>]*src="blob:x"/);
-        const pdf = renderToStaticMarkup(<MobileFileView path="s.pdf" preview={{ kind: 'pdf', url: 'blob:y' }} onBack={() => {}} />);
-        expect(pdf).toMatch(/<a[^>]*href="blob:y"[^>]*data-action="open-pdf"/);
+        // A real object URL (createObjectURL on the PWA's https origin), as App.tsx makes it. Button's link form (react-fancy
+        // 5.72.0+) accepts exactly that shape; a bare `blob:y` it refuses, and would draw a dead button.
+        const pdfUrl = 'blob:https://genie.example/0f9c2d4e-6b1a-4c3e-9f7d-2a5b8c1e4d60';
+        const pdf = renderToStaticMarkup(<MobileFileView path="s.pdf" preview={{ kind: 'pdf', url: pdfUrl }} onBack={() => {}} />);
+        const open = control(pdf, 'data-action="open-pdf"');
+        expect(open).toMatchObject({ tag: 'a', fancy: true });
+        expect(open!.open).toContain(`href="${pdfUrl}"`);
+        // Download (a file with no preview): the same object URL, Button's link form with `download`.
+        const other = renderToStaticMarkup(<MobileFileView path="data.bin" preview={{ kind: 'other', url: pdfUrl }} onBack={() => {}} />);
+        const download = control(other, 'data-action="download"');
+        expect(download).toMatchObject({ tag: 'a', fancy: true, text: 'Download' });
+        expect(download!.open).toContain(`href="${pdfUrl}"`);
+        expect(download!.open).toContain('download="data.bin"');
         const bad = renderToStaticMarkup(<MobileFileView path="big.log" preview={{ kind: 'error', reason: 'big.log is 12 MB; the limit is 8 MB' }} onBack={() => {}} />);
         expect(bad).toContain('the limit is 8 MB');
     });

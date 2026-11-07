@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { LiveSession } from '../src/core/roster.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE AGENT HEADER STAYS ONE LINE (the Windows VM's own screenshot, 2026-10-14: at 1024px with the chat pinned,
@@ -12,7 +13,11 @@ const agent = { id: 'a1', name: 'atlas', provider: 'claude', fidelity: 'declared
 const idle = { running: true, turnState: 'idle', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null } as LiveSession;
 const html = renderToStaticMarkup(<AgentView agent={agent} session={idle} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} onTakeOver={() => {}} workspace={{ id: 'ws', name: 'genie2-vm', path: '/w/ws' }} />);
 // The crumb is a LINK to the workspace since Tynn #805 (a button); the chip and pill are spans.
-const classOf = (attr: RegExp): string[] => (html.match(new RegExp(`<(?:span|button) ${attr.source}[^>]*class="([^"]*)"`))?.[1] ?? '').split(' ');
+// The opening tag that carries `attr`, its attributes in any order (react-fancy's Button renders its class first).
+const classOf = (attr: RegExp): string[] => {
+    const open = html.match(new RegExp(`<(?:span|button)\\b[^>]*${attr.source}[^>]*>`))?.[0] ?? '';
+    return (/\sclass="([^"]*)"/.exec(open)?.[1] ?? '').split(' ');
+};
 
 describe('the agent header', () => {
     it('the crumb never wraps — it truncates instead', () => {
@@ -42,7 +47,7 @@ describe('the agent header', () => {
 
     it('the crumb and the name truncate but never vanish', () => {
         const crumb = classOf(/data-crumb="ws"/);
-        const name = html.match(/<span data-agent-name=""[^>]*class="([^"]*)"/)?.[1]?.split(' ') ?? [];
+        const name = classOf(/data-agent-name=""/);
         for (const c of [crumb, name]) {
             expect(c).toContain('truncate');
             expect(c.some((k) => /^min-w-(?:\d|\[)/.test(k)), c.join(' ')).toBe(true);

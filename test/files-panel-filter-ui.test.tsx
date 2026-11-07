@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { FilesPanel, type FilesPanelProps } from '../src/renderer/components/FilesPanel.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE FILE PANEL'S HEADER PER THE BOARD (`Workspace Files.dc.html`): 38px — `Files` · `All | Changed N` segmented
@@ -24,15 +25,16 @@ describe('the header', () => {
     it('is 38px with Files, the All | Changed N filter (current marked), "one per workspace", and the controls', () => {
         const html = render({ filter: 'all', onFilter: () => {} });
         expect(html).toMatch(/<header[^>]*class="[^"]*h-\[38px\]/);
-        expect(html).toMatch(/data-files-filter="all"[^>]*data-current="true"/);
-        expect(html).toMatch(/data-files-filter="changed"(?![^>]*data-current)[^>]*>Changed 4</);
+        expect(html).toMatch(/<div(?=[^>]*data-files-filter="")[^>]*role="radiogroup"/);
+        expect(html).toMatch(/<button[^>]*role="radio"[^>]*aria-checked="true"[^>]*>All</);
+        expect(html).toMatch(/<button[^>]*role="radio"[^>]*aria-checked="false"[^>]*>Changed 4</);
         expect(html).toContain('one per workspace');
         expect(html).toContain('data-action="close-files"');
     });
 
     it('with nothing changed the chip reads `Changed`, not `Changed 0`', () => {
         const html = render({ state: { ...state, changed: null, unreported: [], files: [] }, filter: 'all', onFilter: () => {} });
-        expect(html).toMatch(/data-files-filter="changed"[^>]*>Changed</);
+        expect(html).toMatch(/<button[^>]*role="radio"[^>]*aria-checked="false"[^>]*>Changed</);
         expect(html).not.toContain('Changed 0');
     });
 
@@ -57,8 +59,8 @@ describe('the Changed filter', () => {
         const html = render({ filter: 'all', onFilter: () => {} });
         expect(html).not.toContain('data-changed-group');
         expect(html).not.toContain('<details data-changes');
-        // The `data-changes` marker lives on the Changed chip while there are changes (absent when quiet).
-        expect(html).toMatch(/data-files-filter="changed"[^>]*data-changes/);
+        // The `data-changes` marker lives on the All | Changed switch while there are changes (absent when quiet).
+        expect(html).toMatch(/<div(?=[^>]*data-files-filter="")[^>]*data-changes=""/);
         expect(render({ state: { ...state, changed: null, unreported: [], files: [] }, filter: 'all', onFilter: () => {} })).not.toContain('data-changes');
     });
 });

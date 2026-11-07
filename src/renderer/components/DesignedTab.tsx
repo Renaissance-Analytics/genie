@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { useState, type ReactNode } from 'react';
 import { LAYOUTS, PANEL_KINDS, type LayoutId, type Panel, type PanelKind, type WorkspaceTab } from '../../core/workspace-tabs.js';
 
@@ -40,7 +40,7 @@ export function DesignedTab({ tab, renderPanel, onLayout, onPlace, onClear, onRe
         <div data-designed-tab={tab.id} className="flex min-h-0 flex-1 flex-col">
             <div data-designer-bar="" className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 text-[12px]">
                 {naming === null ? (
-                    <button type="button" data-action="rename-tab" title="Rename this tab" onClick={() => setNaming(tab.name)} className="font-medium hover:underline">{tab.name}</button>
+                    <Button variant="ghost" size="xs" iconTrailing="pencil" type="button" data-action="rename-tab" title="Rename this tab" onClick={() => setNaming(tab.name)} className="font-medium">{tab.name}</Button>
                 ) : (
                     <input
                         autoFocus
@@ -56,7 +56,7 @@ export function DesignedTab({ tab, renderPanel, onLayout, onPlace, onClear, onRe
                 <span className="text-[var(--fg-3)]">Layout</span>
                 <div className="flex items-center gap-0.5">
                     {LAYOUTS.map((l) => (
-                        <button
+                        <Button size="xs" labelClassName="contents"
                             key={l.id}
                             type="button"
                             data-layout-option={l.id}
@@ -70,11 +70,11 @@ export function DesignedTab({ tab, renderPanel, onLayout, onPlace, onClear, onRe
                             {Array.from({ length: l.cells }, (_, i) => (
                                 <span key={i} className="rounded-[1px] bg-[var(--fg-4)]/40" style={l.areas ? { gridArea: areaNames(l.areas)[i] } : undefined} />
                             ))}
-                        </button>
+                        </Button>
                     ))}
                 </div>
                 {notice ? <span data-designer-notice="" className="text-[var(--warning)]">{notice}</span> : null}
-                <button type="button" data-action="remove-tab" onClick={onRemove} title="Remove this tab (its panels go with it; nothing they show is touched)" className="ml-auto rounded-md px-2 py-0.5 text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Remove tab</button>
+                <Button variant="ghost" size="xs" type="button" data-action="remove-tab" onClick={onRemove} title="Remove this tab (its panels go with it; nothing they show is touched)" className="ml-auto rounded-md px-2 py-0.5 text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Remove tab</Button>
             </div>
             <div
                 data-layout={tab.layout}
@@ -90,10 +90,10 @@ export function DesignedTab({ tab, renderPanel, onLayout, onPlace, onClear, onRe
                                     <span>Add a panel</span>
                                     <div className="flex flex-wrap justify-center gap-1.5">
                                         {PANEL_KINDS.map((k) => (
-                                            <button key={k} type="button" data-add-panel={k} onClick={() => onPlace(i, { kind: k, ref: null })} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 hover:bg-[var(--bg-2)]">
+                                            <Button size="xs" labelClassName="contents" key={k} type="button" data-add-panel={k} onClick={() => onPlace(i, { kind: k, ref: null })} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 hover:bg-[var(--bg-2)]">
                                                 <Icon name={KIND_ICON[k]} size="xs" />
                                                 {KIND_LABEL[k]}
-                                            </button>
+                                            </Button>
                                         ))}
                                     </div>
                                 </div>
@@ -102,7 +102,7 @@ export function DesignedTab({ tab, renderPanel, onLayout, onPlace, onClear, onRe
                                     <div className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2 text-[11px] text-[var(--fg-3)]">
                                         <Icon name={KIND_ICON[cell.kind]} size="xs" />
                                         <span>{KIND_LABEL[cell.kind]}{cell.ref ? ` · ${cell.ref}` : ''}</span>
-                                        <button type="button" data-action="clear-cell" aria-label="Remove this panel" title="Remove this panel" onClick={() => onClear(i)} className="ml-auto rounded px-1 hover:bg-[var(--bg-2)]">✕</button>
+                                        <Button variant="ghost" size="xs" type="button" data-action="clear-cell" aria-label="Remove this panel" title="Remove this panel" onClick={() => onClear(i)} className="ml-auto rounded px-1 hover:bg-[var(--bg-2)]">✕</Button>
                                     </div>
                                     <div data-panel={cell.kind} className="flex min-h-0 flex-1 flex-col overflow-auto">{renderPanel(cell)}</div>
                                 </>

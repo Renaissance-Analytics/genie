@@ -28,11 +28,12 @@ let requests = 0; let release!: () => void;
 const lookup = new Promise<void>((yes) => { release = yes; });
 // Fixture encryption exercises compose's private vault. Native safeStorage/DPAPI is a separate maintained gate.
 const encryptionKey = randomBytes(32);
+const held = new Map<string, string>();
 const composed = await composeServices({ userData: join(dir, 'home'), caddyBin: null, frontDoorPort: 0, v1Settings: () => null,
     pty: { open: () => { throw new Error('No terminal expected'); }, write: () => false, resize: () => false, kill: () => false, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} },
     workspaces: () => [{ id: 'linked', path: linked }, { id: 'unlinked', path: unlinked }],
-    tynnCipher: { isAvailable: () => true,
-        encrypt: (text) => { const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', encryptionKey, iv); const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]); return Buffer.concat([iv, cipher.getAuthTag(), encrypted]); },
+    tynnSecrets: { probe: async () => (true ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(true) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(true)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
+    tynnCipher: {
         decrypt: (bytes) => { const decipher = createDecipheriv('aes-256-gcm', encryptionKey, bytes.subarray(0, 12)); decipher.setAuthTag(bytes.subarray(12, 28)); return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8'); } },
     tynn: () => ({ status: () => ({ signedIn: true }), userId: () => 'fixture-account', request: async (path, init) => {
         requests++; await lookup;

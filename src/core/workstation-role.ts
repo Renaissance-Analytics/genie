@@ -40,3 +40,15 @@ export function droneRefusal(role: WorkstationRole | null): string | null {
         ? null
         : 'This workstation is a drone: it cannot browse or open other workstations. Its owner can make it a pilot in Tynn, with an authenticator code.';
 }
+
+/**
+ * A DRONE NEVER CONNECTS OUT (the owner, 2026-10-28; pairing vs share link audit M-b). Is `url` a dial to another
+ * workstation — a tailnet host (`ws://`, `wss://`) or a Tynn workstation (`relay:`) — that this machine's role refuses?
+ * The drone sentence, or null. Anything that is not a dial (the app's own files, a web page) is not judged here. Main
+ * asks it with the role Tynn gave this machine, never one a window sends.
+ */
+export function outboundDialRefusal(role: WorkstationRole | null, url: string): string | null {
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
+    if (scheme !== 'ws' && scheme !== 'wss' && scheme !== 'relay') return null;
+    return droneRefusal(role);
+}

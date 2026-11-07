@@ -86,13 +86,14 @@ describe('at Genie start, an engine only sleeping workspaces use stays stopped',
 
 describe('Genie wires it', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    const compose = readFileSync(new URL('../src/main/compose.ts', import.meta.url), 'utf8');
-    it('the boot reconcile is told which engines only sleeping workspaces use (compose.ts)', () => {
-        expect(compose).toMatch(/reconcileEngines\(\s*\{[\s\S]{0,1500}?asleepOnly: \(i\) => asleepOnlyEngine\(i,/);
+    // The engines are built with the rest of Genie's hosting (hosting-compose.ts, P5a): by genie-host, or the window with no host.
+    const hosting = readFileSync(new URL('../src/main/hosting-compose.ts', import.meta.url), 'utf8');
+    it('the boot reconcile is told which engines only sleeping workspaces use (hosting-compose.ts)', () => {
+        expect(hosting).toMatch(/reconcileEngines\(\s*\{[\s\S]{0,1500}?asleepOnly: \(i\) => asleepOnlyEngine\(i,/);
     });
     it('the workspace ops get the engines port from the composition (main.ts)', () => {
         const ops = main.slice(main.indexOf('const workspaceOps: WorkspaceOpsPorts = {'));
         expect(ops).toMatch(/^\s*engines: \{[\s\S]{0,800}?services\?\.hibernationEngines\.toRelease\([\s\S]{0,800}?services\?\.hibernationEngines\.toResume\(/m);
-        expect(compose).toMatch(/hibernationEngines: \{[\s\S]{0,1500}?enginesToRelease\([\s\S]{0,1500}?enginesToResume\(/);
+        expect(hosting).toMatch(/hibernationEngines: \{[\s\S]{0,1500}?enginesToRelease\([\s\S]{0,1500}?enginesToResume\(/);
     });
 });

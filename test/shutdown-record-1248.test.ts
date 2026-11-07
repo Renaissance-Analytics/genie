@@ -93,10 +93,12 @@ async function nextBoot(): Promise<Array<{ agentId: string; resume: boolean }>> 
 }
 
 describe('genie#1248: a started agent that was never prompted is not mid-turn at quit', () => {
-    it('the fixture is the bug\'s shape: the never-prompted agent READS `working` with no turn in flight', async () => {
+    // Changed 2026-11-01: the never-prompted agent read `working` here (the bug's shape); a session only started reads idle
+    // now (test/fresh-session-not-working.test.ts). The quit below must still leave it unresumed — `inTurn` decides.
+    it('the fixture: the never-prompted agent is running with no turn in flight', async () => {
         const { host, agents } = await estate();
         const seen = (k: Kind) => { const p = host.probe(agents[k].id); return p && { running: p.running, turnState: p.turnState, inTurn: p.inTurn }; };
-        expect(seen('started')).toEqual({ running: true, turnState: 'working', inTurn: false });
+        expect(seen('started')).toEqual({ running: true, turnState: 'idle', inTurn: false });
         expect(seen('working')).toEqual({ running: true, turnState: 'working', inTurn: true });
         expect(seen('idle')).toEqual({ running: true, turnState: 'idle', inTurn: false });
     });

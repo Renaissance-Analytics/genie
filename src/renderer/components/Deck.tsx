@@ -1,4 +1,4 @@
-import { Badge, Icon } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon } from '@particle-academy/react-fancy';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { QuestionForm } from './QuestionForm.js';
 import { answeringFor, type ApprovalAnswering } from '../../core/approval-answering.js';
@@ -135,7 +135,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                 <div className="ml-auto flex items-center gap-2">
                     {/* The questions nobody waits for any more: exactly the ones on screen, put aside in one go. */}
                     {onDismissStale && staleItems.length > 0 ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="deck-dismiss-stale"
                             data-deck-stale={staleItems.length}
@@ -144,11 +144,11 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             className={HEADER_BUTTON}
                         >
                             {`Dismiss all stale (${staleItems.length})`}
-                        </button>
+                        </Button>
                     ) : null}
                     {/* The questions nobody is going to answer: put aside in one go, each agent told. Only when there are such. */}
                     {onDismissOlder && old.length > 0 ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="deck-dismiss-older"
                             data-deck-older={old.length}
@@ -157,7 +157,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             className={HEADER_BUTTON}
                         >
                             {`Dismiss all older than 1 day (${old.length})`}
-                        </button>
+                        </Button>
                     ) : null}
                 </div>
             </div>
@@ -170,7 +170,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
             {strip.length > 0 ? (
                 <div data-signal-strip className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-1)] px-7 py-2">
                     {strip.map((signal) => (
-                        <button
+                        <Button size="xs"
                             key={signal.kind}
                             type="button"
                             data-signal={signal.kind}
@@ -180,7 +180,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]"
                         >
                             {signal.label}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -231,7 +231,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             <div key={item.id} data-deck-item={item.id} data-priority={item.priority} className="border-b border-[var(--border-1)] px-7 py-3">
                                 <div className="flex items-center gap-2 text-[13px]">
                                     {item.agentName ? (
-                                        <button type="button" data-deck-agent={item.agentId} onClick={() => onOpenItem(item)} className="shrink-0 font-medium hover:underline">{item.agentName}</button>
+                                        <Button size="xs" type="button" data-deck-agent={item.agentId} onClick={() => onOpenItem(item)} className="shrink-0 font-medium">{item.agentName}</Button>
                                     ) : null}
                                     <span className="min-w-0 flex-1 text-[var(--fg-2)]">{item.title}</span>
                                 </div>
@@ -304,9 +304,9 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                 {item.blocking && !stale ? <span data-blocking-dot className="size-2 shrink-0 rounded-full bg-[var(--warning)]" /> : null}
 
                 {item.agentName ? (
-                    <button type="button" data-deck-agent={item.agentId} onClick={() => onOpenItem(item)} className="shrink-0 font-medium hover:underline">
+                    <Button size="xs" type="button" data-deck-agent={item.agentId} onClick={() => onOpenItem(item)} className="shrink-0 font-medium">
                         {item.agentName}
-                    </button>
+                    </Button>
                 ) : null}
 
                 {/* An agent's question is titled by its header — short, plain — and set like a title. */}
@@ -319,9 +319,9 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                     return (
                         <span data-deck-title={item.id} className="flex min-w-0 flex-1 items-baseline gap-2">
                             {expanded ? null : (
-                                <button type="button" data-deck-preview={item.id} onClick={() => setExpanded(true)} className="min-w-0 truncate text-left text-[var(--fg-2)] hover:text-[var(--fg-1)]">{preview}</button>
+                                <Button size="xs" type="button" data-deck-preview={item.id} onClick={() => setExpanded(true)} className="min-w-0 truncate text-left text-[var(--fg-2)] hover:text-[var(--fg-1)] justify-start">{preview}</Button>
                             )}
-                            <button type="button" data-action="deck-expand" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)} className="shrink-0 text-[12px] text-[var(--accent)] hover:underline">{expanded ? 'Show less' : 'Show all'}</button>
+                            <Button size="xs" type="button" data-action="deck-expand" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)} className="shrink-0 text-[12px] text-[var(--accent)]">{expanded ? 'Show less' : 'Show all'}</Button>
                         </span>
                     );
                 })()}
@@ -337,15 +337,15 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                 ) : null}
                 {/* Open: the agent it is about — a door, for when the answer needs its context. */}
                 {item.agentId && item.source !== 'genie' ? (
-                    <button type="button" data-action="deck-open" data-deck-open={item.id} onClick={() => onOpenItem(item)} className="shrink-0 rounded px-1.5 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]">
+                    <Button size="xs" type="button" data-action="deck-open" data-deck-open={item.id} onClick={() => onOpenItem(item)} className="shrink-0 rounded px-1.5 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]">
                         Open
-                    </button>
+                    </Button>
                 ) : null}
                 {/* A stale question goes in one click (its form is folded; once opened, its own Dismiss carries the notes). */}
                 {stale && dismissable && !showForm ? (
-                    <button type="button" data-action="question-dismiss" data-deck-dismiss={item.id} onClick={() => onDismiss?.(item, [])} title="Put this question aside; the agent is told" className="shrink-0 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
+                    <Button size="xs" type="button" data-action="question-dismiss" data-deck-dismiss={item.id} onClick={() => onDismiss?.(item, [])} title="Put this question aside; the agent is told" className="shrink-0 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
                         Dismiss
-                    </button>
+                    </Button>
                 ) : null}
             </div>
 
@@ -374,9 +374,9 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
              */}
             {item.answer.kind === 'form' && questions && stale && !opened ? (
                 <div className="mt-2">
-                    <button type="button" data-action="deck-answer-anyway" data-deck-answer-anyway={item.id} onClick={() => setOpened(true)} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
+                    <Button size="xs" type="button" data-action="deck-answer-anyway" data-deck-answer-anyway={item.id} onClick={() => setOpened(true)} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
                         Answer anyway
-                    </button>
+                    </Button>
                 </div>
             ) : null}
             {showForm && questions ? (
@@ -394,7 +394,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
             ) : null}
             {item.answer.kind === 'form' && !questions ? (
                 <div className="mt-2 flex items-center gap-2">
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         type="button"
                         data-deck-expand={item.id}
                         onClick={() => onOpenItem(item)}
@@ -402,9 +402,9 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                     >
                         <Icon name="list-checks" size="xs" />
                         {item.answer.fields === 1 ? 'Answer 1 question' : `Answer ${item.answer.fields} questions`}
-                    </button>
+                    </Button>
                     {dismissable && !stale ? (
-                        <button type="button" data-action="question-dismiss" data-deck-dismiss={item.id} onClick={() => onDismiss?.(item, [])} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Dismiss</button>
+                        <Button size="xs" type="button" data-action="question-dismiss" data-deck-dismiss={item.id} onClick={() => onDismiss?.(item, [])} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Dismiss</Button>
                     ) : null}
                 </div>
             ) : null}
@@ -429,7 +429,7 @@ function InlineOptions({ options, answering, onAnswer }: { options: readonly { i
     return (
         <div className="mt-2 flex flex-wrap gap-2">
             {options.map((option) => (
-                <button
+                <Button size="xs"
                     key={option.id}
                     type="button"
                     data-approval-option={option.id}
@@ -438,7 +438,7 @@ function InlineOptions({ options, answering, onAnswer }: { options: readonly { i
                     className="rounded-md border border-[var(--border-2)] px-2.5 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-50"
                 >
                     {option.label}
-                </button>
+                </Button>
             ))}
         </div>
     );

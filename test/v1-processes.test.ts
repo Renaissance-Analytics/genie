@@ -120,11 +120,11 @@ let home: string;
 let v1File: string;
 const bookFile = () => join(runtimeDir(home), 'processes.json');
 const onDisk = (): { processes?: Array<Record<string, unknown>>; v1Import?: Record<string, unknown> } => (existsSync(bookFile()) ? JSON.parse(readFileSync(bookFile(), 'utf8')) : {});
-const open = (database: string = v1File) =>
+const open = (database: string = v1File, hibernating = true) =>
     ProcessBook.open(home, {
         supervisor,
         envFor: () => ({}),
-        asleep: (id) => id === SLEEPY.id,
+        asleep: (id) => hibernating && id === SLEEPY.id,
         now: () => Date.UTC(2026, 9, 14),
         v1: { database, workspaces: () => [WS, SLEEPY, WINDOWS] },
     } as ProcessBookDeps);
@@ -142,7 +142,7 @@ describe("Genie 1's background processes, imported once at boot", () => {
         writeV1(v1File, rows);
         const book = await open();
         // Processes kept RUNNING; a scheduled spec comes over as a scheduled task (test/v1-schedules.test.ts, genie#1204).
-        const kept = new Map(book.kept().filter((p) => p.schedule === undefined).map((p) => [p.id, p]));
+        const kept = new Map((onDisk().processes ?? []).filter((p) => p.schedule === undefined).map((p) => [p.id, p]));
         expect([...kept.keys()].sort()).toEqual(['proc_v1_p-off', 'proc_v1_p-once', 'proc_v1_p-queue', 'proc_v1_p-shell', 'proc_v1_p-sleepy', 'proc_v1_p-was', 'proc_v1_p-web', 'proc_v1_p-win']);
         expect(kept.get('proc_v1_p-web')).toEqual({ id: 'proc_v1_p-web', workspaceId: WS.id, name: 'web', command: 'npm run dev', cwd: WS.path, restart: 'always', wanted: true, changedAt: Date.UTC(2026, 9, 14) });
         expect(kept.get('proc_v1_p-queue')).toMatchObject({ cwd: `${WS.path}/repos/app`, wanted: false });
@@ -152,6 +152,9 @@ describe("Genie 1's background processes, imported once at boot", () => {
         expect(kept.get('proc_v1_p-off')).toMatchObject({ wanted: false });
         expect(kept.get('proc_v1_p-shell')).toMatchObject({ command: 'make serve', wanted: true });
         expect(kept.get('proc_v1_p-win')).toMatchObject({ workspaceId: WINDOWS.id, cwd: 'c:\\W\\Example-Win\\repos\\api', wanted: true });
+        expect(book.kept().some((p) => p.id === 'proc_v1_p-sleepy')).toBe(false);
+        const redocked = await open(v1File, false);
+        expect(redocked.kept().find((p) => p.id === 'proc_v1_p-sleepy')).toEqual(kept.get('proc_v1_p-sleepy'));
     });
 
     it('notes everything it did not import or could not carry, with why — a scheduled spec is a scheduled task, not a process kept running', async () => {
@@ -212,7 +215,8 @@ describe("Genie 1's background processes, imported once at boot", () => {
         writeV1(v1File, rows);
         const seeing = await open();
         // The 8 processes kept running; the scheduled spec comes over as a scheduled task beside them (genie#1204).
-        expect(seeing.kept().filter((p) => p.schedule === undefined)).toHaveLength(8);
+        expect(seeing.kept().filter((p) => p.schedule === undefined)).toHaveLength(7);
+        expect((onDisk().processes ?? []).filter((p) => p.schedule === undefined)).toHaveLength(8);
         expect(onDisk().v1Import).toMatchObject({ sawV1: true, imported: 8 });
     });
 
@@ -233,10 +237,19 @@ describe("Genie 1's background processes, imported once at boot", () => {
         expect(md5(v1File)).toBe(before);
     });
 
-    it('boot wires v1 into the book it opens, before the restore runs', () => {
-        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*\/\/.*$/, '')).join('\n');
-        const openAt = main.indexOf('processBook = await ProcessBook.open(');
-        const restoreAt = main.indexOf('processBook.restore()');
+    it('boot wires v1 into the book it opens, before the restore runs — in genie-host, and on a window\'s emergency path', () => {
+        const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+        // genie-host (the host split, P3.3c): the database the window names at its v1 import.
+        const host = read('../src/main/genie-host.ts');
+        const hostOpen = host.indexOf('processBook = await ProcessBook.open(');
+        const hostRestore = host.indexOf('processBook.restore()');
+        expect(hostOpen).toBeGreaterThan(0);
+        expect(hostRestore).toBeGreaterThan(hostOpen);
+        expect(host.slice(hostOpen, hostRestore)).toMatch(/v1:\s*\{\s*database:\s*databasePath/);
+        // A window with no host (its own book).
+        const main = read('../src/main/main.ts');
+        const openAt = main.indexOf('ownBook = await ProcessBook.open(');
+        const restoreAt = main.indexOf('ownBook.restore()');
         expect(openAt).toBeGreaterThan(0);
         expect(restoreAt).toBeGreaterThan(openAt);
         expect(main.slice(openAt, restoreAt)).toMatch(/v1:\s*\{\s*database:\s*v1DatabaseFile\(\)/);

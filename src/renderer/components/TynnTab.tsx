@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Icon, Sidebar } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
 import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
@@ -17,25 +17,26 @@ import type { TynnIssuesHost } from '../../core/tynn-issues.js';
 /** The page nav: an icon per page, named for a screen reader (the owner: icons over words). */
 export function TynnSectionNav({ current, onSection, offered }: { current: TynnSectionId; onSection: (id: TynnSectionId) => void; offered?: readonly TynnSectionId[] }) {
     return (
-        <nav aria-label="Tynn" className="flex items-center gap-0.5 border-b border-[var(--border-1)] px-2 py-1">
-            {TYNN_SECTIONS.filter((s) => offered === undefined || offered.includes(s.id)).map((s) => {
-                const on = s.id === current;
-                return (
-                    <button
-                        key={s.id}
-                        type="button"
-                        data-tynn-section={s.id}
-                        aria-label={s.label}
-                        title={s.label}
-                        aria-current={on ? 'page' : undefined}
-                        onClick={() => onSection(s.id)}
-                        className={`rounded-md p-1.5 ${on ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]'}`}
-                    >
-                        <Icon name={s.icon} size="sm" />
-                    </button>
-                );
-            })}
-        </nav>
+        <Sidebar embedded collapsed className="w-auto shrink-0 border-b border-[var(--border-1)]">
+            <nav aria-label="Tynn" className="flex items-center gap-0.5 px-2 py-1">
+                {TYNN_SECTIONS.filter((s) => offered === undefined || offered.includes(s.id)).map((s) => {
+                    const on = s.id === current;
+                    return (
+                        <Sidebar.Item
+                            key={s.id}
+                            data-tynn-section={s.id}
+                            aria-label={s.label}
+                            active={on}
+                            icon={<Icon name={s.icon} size="sm" />}
+                            onClick={() => onSection(s.id)}
+                            className={`size-8 shrink-0 rounded-md p-1.5 ${on ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]'}`}
+                        >
+                            {s.label}
+                        </Sidebar.Item>
+                    );
+                })}
+            </nav>
+        </Sidebar>
     );
 }
 

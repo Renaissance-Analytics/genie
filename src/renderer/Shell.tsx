@@ -41,7 +41,7 @@ import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProje
 import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, KnowledgeSurface, SettingsSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { InboxFlyout } from './components/InboxFlyout.js';
-import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
+import { EMPTY_FEATURES, type ActOutcome, type FeatureAction, type FeatureData } from './features.js';
 import { mayBrowse } from '../core/workstation-role.js';
 import type { ProviderStatus } from './components/FeatureSurfaces.js';
 import { openFileRoute } from '../core/files-panel.js';
@@ -51,12 +51,16 @@ import { answeringFor, refusalFor, type ApprovalAnswering, type ApprovalRefusal 
 import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { planStepInsert, type ChatInsert } from '../core/plan-pill.js';
 import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { SafeModeBanner } from './components/SafeModeBanner.js';
+import { HangNoticeBar } from './components/HangNoticeBar.js';
+import { RendererNoticeBar } from './components/RendererNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 
@@ -133,7 +137,7 @@ export interface ShellProps {
     /** What the feature surfaces render from; `null` sections draw skeletons. Defaults to nothing asked yet. */
     features?: FeatureData | undefined;
     /** A feature surface asking the main process for something. */
-    onFeature?: ((action: FeatureAction) => void) | undefined;
+    onFeature?: ((action: FeatureAction) => void | Promise<ActOutcome>) | undefined;
     /**
      * A feature action whose ANSWER the caller reads (the AgentInbox flyout: a thread's history, an attachment's bytes, a
      * send's refusal). Absent = no AgentInbox in this window.
@@ -181,6 +185,7 @@ export interface ShellProps {
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
+    onWakeWorkspace?: ((workspaceId: string) => void) | undefined;
     /** The rail's Browser row opens the Genie browser window (beta.35 item 36); absent = the browser surface, as before. */
     onOpenBrowser?: (() => void) | undefined;
     /** The terminal half of the bridge, handed to the Workspace surface. Keyed by workspace, never agent. */
@@ -193,6 +198,8 @@ export interface ShellProps {
     sitePanels?: GenieBridge['sitePanels'] | undefined;
     /** The commits in a workspace's repos since a moment (an observed agent's Activity tab); absent = no section. */
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
+    /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
+    loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
     tynnBoard?: TynnTabHost | undefined;
     /** The Tynn tab's Issues (genie#1295 I1); absent = the tab has no Issues page in this window. */
@@ -218,6 +225,10 @@ export interface ShellProps {
     /** The native window buttons over the title bar (their space and colours); absent in a browser or on a phone. */
     windowChrome?: GenieBridge['windowChrome'];
     onTakeOver?: ((agentId: string) => void) | undefined;
+    /** The safe-mode banner's "Send a crash report" (Tynn #386 part 4). Absent = this window cannot send one. */
+    crashReport?: import('./components/SafeModeBanner.js').CrashReportPort | undefined;
+    /** The workspace header's Terminal button (Tynn story #378): a throwaway terminal in a window. Absent = no button. */
+    onOpenScratchTerminal?: ((workspaceId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     /** A broken row's `Restart` (graceful) from the Dashboard — the same operation the Agent view's header offers. */
     onRestartAgent?: ((agentId: string) => void) | undefined;
     /** "Stop agent" — END the agent's session (§6.2 stop): the Agent view's operations menu. Not the turn's Stop. */
@@ -233,6 +244,8 @@ export interface ShellProps {
     onDesignLogin?: ((agentId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
+    /** The safe-mode banner's Start for an agent (Tynn #386): the one Restart, with its answer, so the banner says it. */
+    onSafeModeStartAgent?: ((agentId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
     onOpenPalette: () => void;
     onSelectRow: (rowId: string | null) => void;
     /** Driving another machine: the title bar's REMOTE badge. Absent on the local machine. */
@@ -309,7 +322,7 @@ export function Shell({
     featureAsk,
     pickFiles,
     onBrowserBounds,
-    agentDetail,
+    agentDetail: suppliedAgentDetail,
     agentResolved,
     selectedRowId,
     chatThread,
@@ -321,6 +334,7 @@ export function Shell({
     onChatAgent: onChatAgentProp,
     onAddAgent,
     onAddWorkspace,
+    onWakeWorkspace,
     onOpenBrowser,
     terminals = NO_TERMINALS,
     files = NO_FILES,
@@ -328,6 +342,7 @@ export function Shell({
     activity,
     filesPopped = [],
     readCommits,
+    loadToolOutput,
     tynnBoard,
     tynnIssues,
     onPopOutFiles,
@@ -340,6 +355,8 @@ export function Shell({
     updates = NO_UPDATES,
     windowChrome,
     onTakeOver,
+    crashReport,
+    onOpenScratchTerminal,
     onRestartAgent,
     onStopAgent,
     onCancelTurn,
@@ -348,6 +365,7 @@ export function Shell({
     onAccountRetry,
     onDesignLogin,
     onStartAgent,
+    onSafeModeStartAgent,
     onOpenPalette,
     onSelectRow,
     onSend,
@@ -381,6 +399,8 @@ export function Shell({
     onConfirmAdd,
     onCancelAdd,
 }: ShellProps) {
+    const hiddenWorkspaces = new Set([...(snapshot.hibernatedWorkspaces ?? []).map((w) => w.id), ...(snapshot.workspaces ?? []).filter((w) => w.asleep).map((w) => w.id)]);
+    const agentDetail = suppliedAgentDetail?.agent.workspaceId && hiddenWorkspaces.has(suppliedAgentDetail.agent.workspaceId) ? null : suppliedAgentDetail;
     // Without the window's pick (a test, a remote window) a Dashboard row opens the agent's page, as before.
     const onChatAgent = onChatAgentProp ?? onOpenAgent;
     const parsed = parseRoute(route);
@@ -536,13 +556,42 @@ export function Shell({
                 </div>
             ) : null}
 
+            {/* SAFE MODE (Tynn #386): after an unclean end nothing was started; each thing that ran has its own Start. */}
+            <SafeModeBanner
+                view={snapshot.safeMode}
+                agentName={(id) => snapshot.agents.find((a) => a.id === id)?.name ?? (snapshot.osAgent?.id === id ? snapshot.osAgent.name : id)}
+                onStart={async (kind, id) => {
+                    if (kind === 'agent') return onSafeModeStartAgent ? onSafeModeStartAgent(id) : { ok: false, reason: 'Genie is not connected.' };
+                    const done = (await onFeature(kind === 'process' ? { kind: 'hosting.restartProcess', processId: id } : { kind: 'hosting.startSite', siteId: id })) as ActOutcome | undefined;
+                    return done ?? { ok: true };
+                }}
+                onLeave={async () => ((await onFeature({ kind: 'safeMode.leave' })) as ActOutcome | undefined) ?? { ok: true }}
+                crashReport={crashReport}
+            />
+
+            {/* THE REOPENED WINDOW (Tynn #386): a hung window was ended and this one started — the agents kept running. */}
+            <HangNoticeBar
+                notice={snapshot.hangNotice}
+                onStopAll={async () => ((await onFeature({ kind: 'hangNotice.stopAll' })) as ActOutcome | undefined) ?? { ok: true }}
+                onDismiss={async () => ((await onFeature({ kind: 'hangNotice.dismiss' })) as ActOutcome | undefined) ?? { ok: true }}
+                crashReport={crashReport}
+            />
+
+            {/* THE BROUGHT-BACK PAGE (Tynn #386): this window's page ended and was reloaded — the agents kept running. */}
+            <RendererNoticeBar
+                notice={snapshot.rendererNotice}
+                onDismiss={async () => ((await onFeature({ kind: 'rendererNotice.dismiss' })) as ActOutcome | undefined) ?? { ok: true }}
+                crashReport={crashReport}
+            />
+
             <div className="relative flex min-h-0 flex-1">
                 <Sidebar
                     route={route}
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
                     deckCount={snapshot.deckItems === null ? null : needsYouCount(snapshot.deckItems)}
                     // Genie 1's row: the pulse from the agents' sessions, and the process / site indicators from Hosting.
-                    workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] })}
+                    workspaces={[...railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] }), ...(snapshot.hibernatedWorkspaces ?? []).map((workspace) => ({ ...workspace, count: null, alert: null }))]}
+                    onWakeWorkspace={onWakeWorkspace}
                     onOpenProcesses={(workspaceId) => setRuntimeModal({ kind: 'processes', workspaceId })}
                     onOpenSites={(workspaceId) => setRuntimeModal({ kind: 'sites', workspaceId })}
                     // On an agent's page its workspace stays the highlighted row (Tynn #805).
@@ -572,7 +621,7 @@ export function Shell({
                      * state a person cannot recover from without knowing a shortcut, and it is
                      * indistinguishable from a load that failed.
                      */}
-                    {canServe && parsed.surface === 'dashboard' && snapshot.workspaces !== null && snapshot.workspaces.length === 0 ? (
+                    {canServe && parsed.surface === 'dashboard' && snapshot.workspaces !== null && snapshot.workspaces.length === 0 && !snapshot.hibernatedWorkspaces?.length ? (
                         <Onboarding
                             state={{
                                 workspaces: snapshot.workspaces.length,
@@ -599,7 +648,7 @@ export function Shell({
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
                      * board audit. The skeleton (`workspaces === null`) still belongs to the Dashboard.
                      */}
-                    {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
+                    {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0 || !!snapshot.hibernatedWorkspaces?.length) ? (
                         <ErrorBoundary surface="Dashboard">
                         <Dashboard
                             pulsing={pulsingWorkspaces}
@@ -610,6 +659,7 @@ export function Shell({
                             // Genie's own row, its group first (the design mockup).
                             genie={snapshot.osAgent ?? null}
                             workspaces={snapshot.workspaces}
+                            hasHibernatedWorkspaces={!!snapshot.hibernatedWorkspaces?.length}
                             // A row click opens that agent's CHAT beside the Dashboard, which stays (genie#1209) — EVERY row,
                             // a waiting one too (the owner, 2026-10-28: "Dashboard should stay active while the chat changes
                             // to that agent chat"). A pending question no longer sends the click to the Deck: Genie 1 never let
@@ -620,8 +670,6 @@ export function Shell({
                             onAddWorkspace={onAddWorkspace}
                             onAddWorkspaceFromGit={onAddWorkspaceFromGit}
                             onAddWorkspaceFromTynn={onAddWorkspaceFromTynn}
-                            group={parsed.group}
-                            onGroup={(group) => onNavigate(formatRoute({ ...parsed, group }))}
                             // The row tray's doors (Open agent / Terminal / Files).
                             onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
@@ -708,6 +756,7 @@ export function Shell({
                                 tab={parsed.tab}
                                 lanes={parseLanes(parsed.lane)}
                                 readCommits={readCommits}
+                                loadToolOutput={loadToolOutput}
                                 at={parsed.at}
                                 layout={parsed.layout}
                                 selectedId={selectedRowId}
@@ -755,11 +804,14 @@ export function Shell({
                         <ErrorBoundary surface="Workspace" resetKeys={[parsed.workspaceId]}>
                         <Workspace
                             key={parsed.workspaceId}
+                            trustStep={features.trust?.find((row) => row.workspaceId === parsed.workspaceId) ?? null}
+                            onTrust={() => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: parsed.workspaceId, workspacePath: workspaceFor(parsed.workspaceId)!.path }))}
                             // Settings → Hosting opens the same modals as the row's indicators.
                             onOpenRuntime={(kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}
                             terminals={terminals}
                             files={files}
+                            {...(onOpenScratchTerminal ? { onOpenScratchTerminal: () => onOpenScratchTerminal(parsed.workspaceId) } : {})}
                             sitePanels={sitePanels}
                             feeds={activityFeeds}
                             onStartAgent={onStartAgent}
@@ -853,6 +905,8 @@ export function Shell({
                         inbox={features.inbox}
                         compose={inboxCompose}
                         loadThread={(req) => featureAsk({ kind: 'inbox.thread', ...req }).then((d) => d.inbox?.thread ?? null)}
+                        searchThread={(key, query) => featureAsk({ kind: 'inbox.search', key, query }).then((d) => d.inbox?.search ?? null)}
+                        loadQuestion={(questionId) => featureAsk({ kind: 'inbox.question', questionId }).then((d) => d.inbox?.question ?? null)}
                         send={(to, text, files) => featureAsk({ kind: 'inbox.send', to, text, ...(files.length > 0 ? { attachments: files } : {}) }).then(() => undefined)}
                         attachment={(attachmentId) => featureAsk({ kind: 'inbox.attachment', attachmentId }).then((d) => d.inbox?.servedAttachment ?? null)}
                         markAllRead={() => onFeature({ kind: 'inbox.markAllRead' })}

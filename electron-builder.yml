@@ -56,6 +56,11 @@ extraResources:
   - from: build/runtime
     to: runtime
     filter: ['caddy', 'caddy.exe']
+  # genie-launch.exe (Windows; #1628): built from native/win-launcher by `npm run build:main`, never checked in. Signed
+  # with the app's executables wherever the app is signed. Elsewhere the folder is empty and nothing is packed.
+  - from: build/win-launcher
+    to: bin
+    filter: ['genie-launch.exe']
   # Genie's own tray mark, read at runtime from resources/ (an asar-packed PNG cannot be handed to the tray).
   - from: build/tray-icon.png
     to: tray-icon.png
@@ -72,7 +77,15 @@ asarUnpack:
   # package — it must live on disk, outside the asar, under the install dir (§7.2 scans there).
   # Fancy: this one line is the whole packaging requirement for the fancy-pty engine.
   - "**/node_modules/@particle-academy/fancy-pty/bin/**"
+  # @napi-rs/keyring (P3.4): a .node binary in a per-platform package. It must live on disk, outside the asar.
+  - "**/node_modules/@napi-rs/keyring*/**"
 afterPack: ./scripts/after-pack.cjs
+
+# Cookies encrypted on disk, Linux's being in the clear without it (measured on omarchy-test, the host split's P2b). ONE WAY:
+# turning it off again loses what was written under it. No store opens without the key (core/browser-store.ts): with
+# this on, opening one with no keyring destroys what is in it.
+electronFuses:
+  enableCookieEncryption: true
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
 # PUBLISH — and the pairs this half belongs to.
@@ -122,6 +135,19 @@ protocols:
 
 win:
   icon: build/icon.ico
+  # Extra resources (including resources/bin/genie-launch.exe) use WinPackager's copy/sign
+  # transformer. signExts also covers DLLs at the root and in app.asar.unpacked.
+  signExts: ['.dll']
+  azureSignOptions:
+    publisherName: Renaissance Analytics
+    endpoint: https://eus.codesigning.azure.net
+    certificateProfileName: genie-public
+    codeSigningAccountName: renaissance-analytics
+    fileDigest: SHA256
+    timestampRfc3161: http://timestamp.acs.microsoft.com
+    timestampDigest: SHA256
+    # DefaultAzureCredential reaches azure/login's CLI session on the fresh hosted runner.
+    # No Exclude* switches: see docs/windows-signing.md for module/credential-chain docs.
   target:
     - nsis
   artifactName: ${productName}-${version}-setup.${ext}

@@ -1,4 +1,4 @@
-import { Icon, Tooltip } from '@particle-academy/react-fancy';
+import { Button, Icon, Sidebar as FancySidebar, type SidebarDotColor } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { useState } from 'react';
 import type { RateLimitAlert } from '../../core/headroom.js';
@@ -52,6 +52,8 @@ export interface SidebarProps {
      */
     available: readonly RailSurface[];
     onNavigate: (route: string) => void;
+    /** A ghost row requests redocking; it never navigates into hibernated data. */
+    onWakeWorkspace?: ((workspaceId: string) => void) | undefined;
     /** Add a workspace (Tynn #283): the `+` in the rail's tools, any time. Absent = no `+` (a control that does nothing is not offered). */
     onAddWorkspace?: (() => void) | undefined;
     /**
@@ -86,37 +88,9 @@ export interface SidebarProps {
     settingsAlert?: { readonly label: string } | null | undefined;
 }
 
-/**
- * The yellow ! on the Settings row: a fact with words on hover (Genie's own tooltip, as the title bar's) and for a screen
- * reader, not a colour alone.
- */
-export function SettingsAlertMark({ label, compact }: { label: string; compact: boolean }) {
-    return (
-        <Tooltip content={label} placement="right" className="max-w-sm">
-            <span
-                data-settings-alert=""
-                role="img"
-                aria-label={label}
-                className={`${compact ? 'absolute right-1 top-0.5' : 'ml-auto'} shrink-0 px-1 text-[14px] font-bold leading-none text-[var(--warning)]`}
-            >
-                !
-            </span>
-        </Tooltip>
-    );
-}
 
-/** The rate-limit dot: static (nothing to reduce for reduced motion), named for a screen reader and on hover. */
-function RateLimitDot({ alert, compact }: { alert: RateLimitAlert; compact: boolean }) {
-    return (
-        <span
-            data-rate-limit-dot={alert.level}
-            role="img"
-            aria-label={alert.label}
-            title={alert.label}
-            className={`${compact ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-2'} shrink-0 rounded-full ${alert.level === 'danger' ? 'bg-[var(--danger)]' : 'bg-[var(--warning)]'}`}
-        />
-    );
-}
+/** The rate-limit alert as a dot colour: red when the limit is nearly spent, amber before. */
+const limitDot = (alert: RateLimitAlert): SidebarDotColor => (alert.level === 'danger' ? 'red' : 'amber');
 
 /**
  * The row's pulse: a ring that breathes where motion is allowed (Tailwind `motion-safe:`), and holds still for a person who
@@ -140,9 +114,15 @@ function workingLabel(n: number): string {
     return `${n} agent${n === 1 ? '' : 's'} working`;
 }
 
-const ROW =
-    'flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-[13px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
-const ROW_ACTIVE = 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]';
+/**
+ * THE RAIL IS A MENU (the owner, 2026-11-01: "those should not be buttons, it's a menu"): its destinations are react-fancy
+ * Sidebar items — `aria-current="page"` and Sidebar's selected style on the current one, a ring on KEYBOARD focus only —
+ * in Sidebar's own `<nav aria-label="Genie">` (`navLabel`), moved through with the arrow keys (`keyboardNav`). An item's
+ * attention mark (what waits in the Deck, the rate limit, the Settings alert, a workspace that needs you) is Sidebar's
+ * item DOT, at the icon's corner in both modes, with its words for a screen reader (`dotLabel`).
+ */
+const RAIL_ITEM = 'relative h-[30px] px-2 py-0 text-[13px] font-normal';
+const RAIL_ITEM_COMPACT = 'relative size-8 p-0';
 
 function NavRow({
     route,
@@ -151,6 +131,9 @@ function NavRow({
     label,
     onNavigate,
     children,
+    dot,
+    dotLabel,
+    dotTooltip = false,
     compact = false,
 }: {
     route: string;
@@ -158,7 +141,14 @@ function NavRow({
     icon: string;
     label: string;
     onNavigate: (route: string) => void;
+    /** A count to SEE beside the label (expanded only); the dot says it in words. */
     children?: React.ReactNode;
+    /** The attention mark: react-fancy Sidebar's item dot (6.1.0), at the icon's corner in both modes. */
+    dot?: SidebarDotColor | undefined;
+    /** The dot in words, read with the item's name. */
+    dotLabel?: string | undefined;
+    /** Show the dot's words on hover and keyboard focus too (react-fancy 6.2.0 `dotTooltip`). */
+    dotTooltip?: boolean | undefined;
     /** Collapsed rail: the icon alone, the label as its tooltip and accessible name. */
     compact?: boolean;
 }) {
@@ -168,29 +158,34 @@ function NavRow({
     const active = current.split('?')[0] === route;
 
     return (
-        <button
-            type="button"
+        <FancySidebar.Item
             data-nav={route}
-            data-active={active ? 'true' : 'false'}
-            aria-current={active ? 'page' : undefined}
+            active={active}
             onClick={() => onNavigate(route)}
-            {...(compact ? { 'aria-label': label, title: label } : {})}
-            className={`${compact ? ICON_BUTTON : ROW} relative ${active ? ROW_ACTIVE : ''}`}
+            icon={<Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
+            badge={children ?? undefined}
+            {...(dot ? { dot, ...(dotLabel ? { dotLabel, dotTooltip } : {}) } : {})}
+            // Collapsed with a dot, Sidebar names the item by its label AND the dot's words; without one, name it here.
+            {...(compact && !dot ? { 'aria-label': label } : {})}
+            className={compact ? RAIL_ITEM_COMPACT : RAIL_ITEM}
         >
-            <Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />
-            {compact ? null : <span className="truncate">{label}</span>}
-            {children}
-        </button>
+            {label}
+        </FancySidebar.Item>
     );
 }
 
 /** The Browser row as a door to the Genie browser window: never "current" — the window is elsewhere. */
 function BrowserDoor({ onOpen, compact = false }: { onOpen: () => void; compact?: boolean }) {
     return (
-        <button type="button" data-open-browser-window="" onClick={onOpen} {...(compact ? { 'aria-label': 'Browser', title: 'Browser' } : { title: 'Open the Genie browser window' })} className={compact ? ICON_BUTTON : ROW}>
-            <Icon name="globe" size="sm" className="shrink-0 text-[var(--fg-4)]" />
-            {compact ? null : <span className="truncate">Browser</span>}
-        </button>
+        <FancySidebar.Item
+            data-open-browser-window=""
+            onClick={onOpen}
+            icon={<Icon name="globe" size="sm" className="shrink-0 text-[var(--fg-4)]" />}
+            {...(compact ? { 'aria-label': 'Browser' } : {})}
+            className={compact ? RAIL_ITEM_COMPACT : RAIL_ITEM}
+        >
+            Browser
+        </FancySidebar.Item>
     );
 }
 
@@ -210,7 +205,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null }: SidebarProps) {
     countRender('Sidebar');
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
@@ -233,49 +228,50 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
     // No orphan badge: the Deck's count has nowhere to live without the Deck.
     const badge = has('deck') ? deckBadge(deckCount) : null;
     const asleepCount = workspaces.filter((w) => w.asleep === true).length;
-    const shown = filterRail(workspaces.filter((w) => showAsleep || w.asleep !== true || current === `genie://workspace/${w.id}`), collapsed ? '' : query);
+    const shown = filterRail(workspaces.filter((w) => showAsleep || w.asleep !== true).map((workspace) => workspace.asleep
+        ? { id: workspace.id, path: workspace.path, ...(workspace.name ? { name: workspace.name } : {}), asleep: true, count: null, alert: null }
+        : workspace), collapsed ? '' : query);
+    const openWorkspace = (workspace: RailItem): void => {
+        if (workspace.asleep) onWakeWorkspace?.(workspace.id);
+        else onNavigate(`genie://workspace/${workspace.id}`);
+    };
     const asleepLabel = `${showAsleep ? 'Hide' : 'Show'} ${asleepCount} hibernated workspace${asleepCount === 1 ? '' : 's'}`;
     // THE HIBERNATED TOOL (Tynn #282): an eye, no words — its count and action are its name and tooltip.
     const asleepTool = asleepCount > 0 ? (
-        <button type="button" data-rail-tool="hibernated" data-toggle-asleep={showAsleep ? 'hide' : 'show'} aria-label={asleepLabel} title={asleepLabel} aria-pressed={showAsleep} onClick={toggleAsleep} className={ICON_BUTTON}>
+        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="hibernated" data-toggle-asleep={showAsleep ? 'hide' : 'show'} aria-label={asleepLabel} title={asleepLabel} aria-pressed={showAsleep} onClick={toggleAsleep} className={ICON_BUTTON}>
             <Icon name={showAsleep ? 'eye' : 'eye-off'} size="sm" />
-        </button>
+        </Button>
     ) : null;
     const addTool = onAddWorkspace ? (
-        <button type="button" data-rail-tool="add-workspace" aria-label="Add workspace" title="Add workspace" onClick={() => onAddWorkspace()} className={ICON_BUTTON}>
+        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="add-workspace" aria-label="Add workspace" title="Add workspace" onClick={() => onAddWorkspace()} className={ICON_BUTTON}>
             <Icon name="plus" size="sm" />
-        </button>
+        </Button>
     ) : null;
     // System (Genie 1's monitor-cog): the system agent — Genie's own, never in a workspace.
     const systemTool = has('genie') ? (
-        <button type="button" data-rail-tool="system" aria-label="System" title="System" onClick={() => onNavigate('genie://agent/genie')} className={ICON_BUTTON}>
+        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="system" aria-label="System" title="System" onClick={() => onNavigate('genie://agent/genie')} className={ICON_BUTTON}>
             <Icon name="monitor-cog" size="sm" />
-        </button>
+        </Button>
     ) : null;
 
     if (collapsed) {
         return (
-            <nav aria-label="Genie" data-rail="collapsed" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border-1)] bg-[var(--bg-1)] py-2.5">
-                <button type="button" data-rail-tool="expand" aria-label="Expand sidebar" title="Expand sidebar" onClick={() => setRail(false)} className={ICON_BUTTON}>
+            <div data-rail="collapsed" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border-1)] bg-[var(--bg-1)] py-2.5">
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="expand" aria-label="Expand sidebar" title="Expand sidebar" onClick={() => setRail(false)} className={ICON_BUTTON}>
                     <Icon name="panel-left-open" size="sm" />
-                </button>
+                </Button>
+                <FancySidebar embedded collapsed collapseMode="icons" navLabel="Genie" keyboardNav className="w-full items-center gap-1">
                 {has('deck') ? (
-                    <NavRow route="genie://deck" current={route} icon="inbox" label={badge !== null ? `Deck · ${badge}` : 'Deck'} onNavigate={onNavigate} compact>
-                        {badge !== null ? <span data-deck-dot="" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
-                    </NavRow>
+                    <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} compact {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})} />
                 ) : null}
                 {has('dashboard') ? (
-                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label={rateLimitAlert ? `Dashboard · ${rateLimitAlert.label}` : 'Dashboard'} onNavigate={onNavigate} compact>
-                        {rateLimitAlert ? <RateLimitDot alert={rateLimitAlert} compact /> : null}
-                    </NavRow>
+                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : {})} />
                 ) : null}
                 {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
                 {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} compact /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact />) : null}
                 {has('settings') ? (
-                    <NavRow route="genie://settings" current={route} icon="settings" label={settingsAlert ? `Settings · ${settingsAlert.label}` : 'Settings'} onNavigate={onNavigate} compact>
-                        {settingsAlert ? <SettingsAlertMark label={settingsAlert.label} compact /> : null}
-                    </NavRow>
+                    <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} compact {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label, dotTooltip: true } : {})} />
                 ) : null}
                 {has('workspace') ? <div className="my-1 h-px w-6 bg-[var(--border-1)]" /> : null}
                 {(has('workspace') ? shown : []).map((w) => {
@@ -285,48 +281,51 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     const working = (w.working ?? 0) > 0;
                     const pulsed = pulsing?.has(w.id) === true;
                     return (
-                        <button
+                        <FancySidebar.Item
                             key={w.id}
-                            type="button"
                             data-nav={route_}
                             data-workspace={w.id}
                             {...(w.asleep === true ? { 'data-asleep': 'true' } : {})}
-                            data-active={active ? 'true' : 'false'}
+                            active={active}
                             {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
-                            // THE PULSE (Genie 1's glow): its agents are mid-turn — their sessions say so, not a terminal.
+                            // THE PULSE (Genie 1's glow): its agents are working — their sessions say so, not a terminal.
                             {...(working ? { 'data-agent-active': 'true' } : {})}
                             {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
-                            onClick={() => onNavigate(route_)}
-                            title={pulsed ? `${name} · ${PULSE_TITLE}` : working ? `${name} · ${workingLabel(w.working ?? 0)}` : name}
-                            aria-label={name}
-                            className={`${ICON_BUTTON} relative font-mono text-[11px] font-semibold uppercase ${active ? ROW_ACTIVE : ''} ${working ? 'animate-pulse ring-2 ring-[var(--accent)]' : pulsed ? WORKSPACE_PULSE : ''}`}
+                            onClick={() => openWorkspace(w)}
+                            {...(w.alert === true ? { dot: 'amber' as const, dotLabel: 'needs you' } : { 'aria-label': name })}
+                            icon={
+                                <span className="font-mono text-[11px] font-semibold uppercase">
+                                    {w.asleep === true ? <Icon name="moon" size="sm" /> : name.slice(0, 2)}
+                                    {/* Its colour (genie#1300): a bar under the letters — the letters stay the cue. */}
+                                    {w.color ? <span aria-hidden="true" data-workspace-color={w.color} style={wsStyle(w.color)} className="absolute inset-x-2 bottom-0.5 h-0.5 rounded-full bg-[var(--ws)]" /> : null}
+                                </span>
+                            }
+                            className={`${RAIL_ITEM_COMPACT} ${working ? 'animate-pulse ring-2 ring-[var(--accent)]' : pulsed ? WORKSPACE_PULSE : ''}`}
                         >
-                            {w.asleep === true ? <Icon name="moon" size="sm" /> : name.slice(0, 2)}
-                            {/* Its colour (genie#1300): a bar under the letters — the letters stay the cue. */}
-                            {w.color ? <span aria-hidden="true" data-workspace-color={w.color} style={wsStyle(w.color)} className="absolute inset-x-2 bottom-0.5 h-0.5 rounded-full bg-[var(--ws)]" /> : null}
-                            {w.alert === true ? <span aria-label="needs you" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
-                        </button>
+                            {name}
+                        </FancySidebar.Item>
                     );
                 })}
+                </FancySidebar>
                 <div className="mt-auto flex flex-col items-center gap-1">
                     {asleepTool}
                     {addTool}
                 </div>
-            </nav>
+            </div>
         );
     }
 
     return (
-        <nav
-            aria-label="Genie"
+        <div
+            data-rail="expanded"
             className="flex w-52 shrink-0 flex-col gap-2 border-r border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-2.5"
         >
             {/* THE TOOLS, all at the top (Genie 1's rail header; the owner, 2026-10-19: "Move these icons to the top"): collapse,
                 System, hibernated workspaces and add. */}
             <div data-rail-tools="" className="flex items-center gap-0.5">
-                <button type="button" data-rail-tool="collapse" aria-label="Collapse sidebar" title="Collapse sidebar" onClick={() => setRail(true)} className={ICON_BUTTON}>
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="collapse" aria-label="Collapse sidebar" title="Collapse sidebar" onClick={() => setRail(true)} className={ICON_BUTTON}>
                     <Icon name="panel-left" size="sm" />
-                </button>
+                </Button>
                 {systemTool}
                 {has('workspace') ? (
                     <span className="ml-auto flex items-center gap-0.5">
@@ -335,8 +334,9 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     </span>
                 ) : null}
             </div>
+            <FancySidebar embedded navLabel="Genie" keyboardNav className="gap-0.5">
             {has('deck') ? (
-                <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate}>
+                <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})}>
                 {/*
                  * The only badge in the application. Zero renders nothing — a badge that is
                  * sometimes `0` is furniture, and furniture is what people learn not to read.
@@ -344,6 +344,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 {badge !== null ? (
                     <span
                         data-deck-badge={badge}
+                        aria-hidden="true"
                         className="ml-auto rounded-sm bg-[var(--warning)]/15 px-1.5 font-mono text-[11px] tabular-nums text-[var(--warning)]"
                     >
                         {badge}
@@ -359,9 +360,8 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     icon="layout-list"
                     label="Dashboard"
                     onNavigate={onNavigate}
-                >
-                    {rateLimitAlert ? <RateLimitDot alert={rateLimitAlert} compact={false} /> : null}
-                </NavRow>
+                    {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : {})}
+                />
             ) : null}
 
             {/*
@@ -378,9 +378,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
 
             {/* Settings, as a labelled row: the palette is an accelerator, never the only route to a surface. */}
             {has('settings') ? (
-                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate}>
-                    {settingsAlert ? <SettingsAlertMark label={settingsAlert.label} compact={false} /> : null}
-                </NavRow>
+                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label, dotTooltip: true } : {})} />
             ) : null}
 
             {/*
@@ -408,16 +406,16 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 const active = route.split('?')[0] === route_ || w.id === currentWorkspaceId;
                 const pulsed = pulsing?.has(w.id) === true;
 
+                const pills = (w.processes !== undefined ? 1 : 0) + (w.sitesTitle !== undefined ? 1 : 0);
                 return (
-                    <button
-                        key={w.id}
-                        type="button"
+                    <div key={w.id} className="relative">
+                    <FancySidebar.Item
                         data-nav={route_}
                         data-workspace={w.id}
                         {...(w.asleep === true ? { 'data-asleep': 'true' } : {})}
                         // A governed workspace (§6.1) sits indented under its ops project and says whose it is.
                         {...(w.governedBy ? { 'data-governed-by': w.governedBy, style: { paddingLeft: '1.5rem' } } : {})}
-                        data-active={active ? 'true' : 'false'}
+                        active={active}
                         // `alert` is tri-state and the attribute is OMITTED when it is unknown.
                         // Rendering `data-alert="false"` for an unread workspace would assert
                         // "nothing in here needs you", which is a claim about a thing Genie has
@@ -425,49 +423,59 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
                         {...((w.working ?? 0) > 0 ? { 'data-agent-active': 'true' } : {})}
                         {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
-                        onClick={() => onNavigate(route_)}
-                        title={pulsed ? `${w.path} · ${PULSE_TITLE}` : (w.working ?? 0) > 0 ? `${w.path} · ${workingLabel(w.working ?? 0)}` : w.path}
-                        className={`${ROW} relative ${active ? ROW_ACTIVE : ''}${pulsed ? ` ${WORKSPACE_PULSE}` : ''}`}
+                        onClick={() => openWorkspace(w)}
+                        {...(w.alert === true ? { dot: 'amber' as const, dotLabel: 'needs you' } : {})}
+                        {...(w.count !== null ? { badgeLabel: `${w.count} agent${w.count === 1 ? '' : 's'}` } : {})}
+                        icon={<Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
+                        badge={
+                            <span className="flex shrink-0 items-center gap-1.5">
+                                {/*
+                                 * The count, or nothing at all. `null` is "not read yet" and must
+                                 * not render — first paint is skeletons, never zeros. A measured
+                                 * `0` does render: Genie looked, and the workspace is empty.
+                                 */}
+                                {w.count !== null ? <span className="font-mono text-[11px] tabular-nums text-[var(--fg-4)]">{w.count}</span> : null}
+                                {/* Room for the runtime pill, which sits OVER this end of the item (below): its own buttons. */}
+                                {pills > 0 ? <span aria-hidden="true" className={pills === 2 ? 'w-[38px]' : 'w-4'} /> : null}
+                            </span>
+                        }
+                        className={`${RAIL_ITEM}${pulsed ? ` ${WORKSPACE_PULSE}` : ''}`}
                     >
-                        {/* THE PULSE (Genie 1's): lit while this workspace's agents are mid-turn — by their sessions, never terminal output. */}
+                        {/* THE PULSE (Genie 1's): lit while this workspace's agents are working — by their sessions, never terminal output. */}
                         {(w.working ?? 0) > 0 ? <span data-pulse="" aria-label={workingLabel(w.working ?? 0)} className="absolute inset-y-1 left-0 w-0.5 animate-pulse rounded-full bg-[var(--accent)]" /> : null}
-                        <Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />
-                        {/* Its colour (genie#1300), beside its name: the name stays the cue. */}
-                        <WorkspaceSwatch color={w.color} />
-                        <span className="truncate">{w.name ?? folderName(w.path)}</span>
-
-                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                            {w.alert === true ? (
-                                <span aria-label="needs you" className="size-1.5 rounded-full bg-[var(--warning)]" />
-                            ) : null}
-                            {/*
-                             * The count, or nothing at all. `null` is "not read yet" and must
-                             * not render — first paint is skeletons, never zeros. A measured
-                             * `0` does render: Genie looked, and the workspace is empty.
-                             */}
-                            {w.count !== null ? (
-                                <span className="font-mono text-[11px] tabular-nums text-[var(--fg-4)]">{w.count}</span>
-                            ) : null}
-                            {/* GENIE 1'S RUNTIME PILL: background processes and sites, always there (greyed when there is nothing);
-                                each opens this workspace's own config. Spans, not buttons: the row is the button. */}
+                        {/* Its colour (genie#1300), beside its name: the name stays the cue. Its path (or what its agents are doing) on hover. */}
+                        <span title={pulsed ? `${w.path} · ${PULSE_TITLE}` : (w.working ?? 0) > 0 ? `${w.path} · ${workingLabel(w.working ?? 0)}` : w.path} className="flex min-w-0 items-center gap-2">
+                            <WorkspaceSwatch color={w.color} />
+                            <span className="truncate">{w.name ?? folderName(w.path)}</span>
+                        </span>
+                    </FancySidebar.Item>
+                    {/*
+                     * GENIE 1'S RUNTIME PILL: background processes and sites, always there (greyed when there is nothing);
+                     * each opens this workspace's own config. REAL buttons beside the row (real buttons, 2026-11-01): they
+                     * used to be spans with role="button" INSIDE the row's button, unreachable by keyboard and nested.
+                     */}
+                    {pills > 0 ? (
+                        <span className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
                             {w.processes !== undefined ? (
-                                <span role="button" tabIndex={-1} data-ws-processes={w.id} data-tone={w.processes} title={w.processesTitle} aria-label={w.processesTitle}
-                                    onClick={(e) => { e.stopPropagation(); onOpenProcesses?.(w.id); }}
-                                    className={`inline-flex ${TONE[w.processes] ?? ''}`}>
+                                <Button type="button" variant="ghost" size="xs" data-ws-processes={w.id} data-tone={w.processes} title={w.processesTitle} aria-label={w.processesTitle}
+                                    onClick={() => onOpenProcesses?.(w.id)}
+                                    className={`size-4 p-0 ${TONE[w.processes] ?? ''}`}>
                                     <Icon name="cpu" size="xs" />
-                                </span>
+                                </Button>
                             ) : null}
                             {w.sitesTitle !== undefined ? (
-                                <span role="button" tabIndex={-1} data-ws-sites={w.id} data-tone={w.sites ?? 'none'} title={w.sitesTitle} aria-label={w.sitesTitle}
-                                    onClick={(e) => { e.stopPropagation(); onOpenSites?.(w.id); }}
-                                    className={`inline-flex ${TONE[w.sites ?? 'none'] ?? ''}`}>
+                                <Button type="button" variant="ghost" size="xs" data-ws-sites={w.id} data-tone={w.sites ?? 'none'} title={w.sitesTitle} aria-label={w.sitesTitle}
+                                    onClick={() => onOpenSites?.(w.id)}
+                                    className={`size-4 p-0 ${TONE[w.sites ?? 'none'] ?? ''}`}>
                                     <Icon name="globe" size="xs" />
-                                </span>
+                                </Button>
                             ) : null}
                         </span>
-                    </button>
+                    ) : null}
+                    </div>
                 );
             })}
-        </nav>
+            </FancySidebar>
+        </div>
     );
 }

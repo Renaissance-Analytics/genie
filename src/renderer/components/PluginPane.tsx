@@ -30,7 +30,7 @@ export interface PluginPanelView {
 export interface PanelHost {
     readonly repo?: GenieBridge['repo'];
     readonly artboard?: GenieBridge['artboard'];
-    readonly files?: Pick<GenieBridge['files'], 'watch' | 'onChange'> | undefined;
+    readonly files?: Pick<GenieBridge['files'], 'subscribe'> | undefined;
 }
 export const PanelHostContext = createContext<PanelHost>({});
 

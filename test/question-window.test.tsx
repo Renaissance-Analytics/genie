@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { deckSections, needsYouCount, type DeckItem } from '../src/core/deck.js';
 import { QuestionWindow, type QuestionView } from '../src/main/question-window.js';
 import { QuestionApp } from '../src/renderer/components/QuestionApp.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW (the owner, 2026-10-14: "the FTQ window is a window that opens on top of all other windows
@@ -257,17 +258,18 @@ describe('Dismiss in the window', () => {
 describe('what the window shows', () => {
     const view = { item: q('a', 10, 'kai'), waiting: 2 };
     const html = renderToStaticMarkup(<QuestionApp view={view} sending={false} refusal={null} onAnswer={() => {}} onLater={() => {}} onDismiss={() => {}} />);
-    it('who asks, from where (the workspace NAME, not its id), how many more; the question as Markdown; each option with its description; Answer, Later and Dismiss', () => {
+    it('who asks, from where (the workspace NAME, not its id); the question as Markdown; each option with its description; Answer, Later and Dismiss', () => {
         expect(html).toContain('kai asks you');
         expect(html).toMatch(/data-question-workspace="ws_01HTYNN"[^>]*>Tynn\.ai</);
         // The id is an attribute for tests, never text a person reads.
         expect(html).not.toContain('>ws_01HTYNN<');
-        expect(html).toMatch(/data-action="question-dismiss"[^>]*>Dismiss</);
-        expect(html).toContain('data-question-waiting="2"');
+        expect(control(html, 'data-action="question-dismiss"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
+        // How many more wait is the queue's tabs now (Tynn story #378): no count in the header that changes as they come.
+        expect(html).not.toContain('data-question-waiting');
         expect(html).toMatch(/<strong>one<\/strong>/);
         expect(html).toContain('the first');
-        expect(html).toMatch(/data-action="deck-submit"[^>]*>Answer</);
-        expect(html).toMatch(/data-action="question-cancel"[^>]*>Later</);
+        expect(control(html, 'data-action="deck-submit"')).toMatchObject({ tag: 'button', fancy: true, text: 'Answer' });
+        expect(control(html, 'data-action="question-cancel"')).toMatchObject({ tag: 'button', fancy: true, text: 'Later' });
     });
     it('a refusal is said BESIDE the Answer button (role="alert"), once — not at the top of the scrolled window', () => {
         const refused = renderToStaticMarkup(<QuestionApp view={view} sending={false} refusal="Pick needs an option or a note" onAnswer={() => {}} onLater={() => {}} onDismiss={() => {}} />);
@@ -279,7 +281,7 @@ describe('what the window shows', () => {
     });
     it('the question has its own note, and Answer waits (disabled, with the count) until it has an option or a note', () => {
         expect((html.match(/<textarea[^>]*data-deck-note="a"/g) ?? []).length).toBe(1);
-        expect(html).toMatch(/<button[^>]*data-action="deck-submit"[^>]*disabled=""/);
+        expect(control(html, 'data-action="deck-submit"')!.open).toMatch(/\sdisabled=""/);
         expect(html).toContain('1 of 1 still needs an option or a note');
     });
 });

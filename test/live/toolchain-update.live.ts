@@ -28,7 +28,8 @@ import { updateChoices, type LanguageTool } from '../../src/core/toolchain-updat
 import { versionDir, currentLinkDir } from '../../src/core/toolchain-defaults.js';
 import { installGoVersion, goVersionsRoot, managedGo } from '../../src/main/go-versions.js';
 import { installNodeVersion, managedNode, nodeVersionsRoot } from '../../src/main/node-versions.js';
-import { httpFetch, installPhpVersion, managedPhp, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
+import { httpFetchOver, installPhpVersion, managedPhp, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { installPythonVersion, managedPython, pythonVersionsRoot } from '../../src/main/python-versions.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from '../../src/main/toolchain-defaults.js';
 import { installTool, nodeToolchainFs, processEnv } from '../../src/main/toolchain-ops.js';
@@ -53,12 +54,12 @@ const linkFs = nodeLinkFs(platform);
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 
 async function bytes(url: string): Promise<Uint8Array> {
-    const r = await httpFetch.bytes(url);
+    const r = await liveFetch.bytes(url);
     if (!r.ok) throw new Error(`${url}: ${r.error}`);
     return r.body;
 }
 async function text(url: string): Promise<string> {
-    const r = await httpFetch.text(url);
+    const r = await liveFetch.text(url);
     if (!r.ok) throw new Error(`${url}: ${r.error}`);
     return r.body;
 }
@@ -115,7 +116,7 @@ async function oldVersion(lang: LanguageTool): Promise<string> {
 
 const ports = (lang: LanguageTool) => {
     const root = lang === 'php' ? phpVersionsRoot(toolchainDir) : lang === 'node' ? nodeVersionsRoot(toolchainDir) : lang === 'go' ? goVersionsRoot(toolchainDir) : pythonVersionsRoot(toolchainDir);
-    return { platform, arch, root, fs, run, fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, cpus: availableParallelism() } as const;
+    return { platform, arch, root, fs, run, fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, cpus: availableParallelism() } as const;
 };
 const steps: string[] = [];
 const languages: LanguageUpdatePorts = {

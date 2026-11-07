@@ -4,6 +4,7 @@ import type { AgentRow } from '../src/core/dashboard-view.js';
 import { fixRoute, groupByStatus } from '../src/core/dashboard-view.js';
 import { globalAction } from '../src/core/keys.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE DASHBOARD IS A BOARD YOU READ — but what it draws must be real. The board audit of 2026-10-12 found the
@@ -23,43 +24,30 @@ const rows = [row({ id: 'a1', state: 'working' }), row({ id: 'a2', name: 'wren',
 const render = (props: Partial<Parameters<typeof Dashboard>[0]> = {}) =>
     renderToStaticMarkup(<Dashboard rows={rows} workspaces={workspaces} onOpenAgent={() => {}} onAddAgent={() => {}} {...props} />);
 
-describe('group headers', () => {
-    it("name the workspace by its NAME (the envelope's), the id only when there is none — the same rule as the rail", () => {
+describe('the flat Dashboard workspace column', () => {
+    it('uses the envelope name, falling back to the workspace folder name', () => {
         const html = render();
-        expect(html).toMatch(/data-workspace="tynn"[^]*?<span class="font-semibold">Tynn\.ai</);
-        expect(html).toMatch(/data-workspace="fancy"[^]*?<span class="font-semibold">fancy</);
+        expect(html).toContain('data-column="workspace"');
+        expect(html).toContain('Tynn.ai'); expect(html).toContain('fancy');
+        expect(html).not.toContain('data-workspace-head');
     });
-
-    it('"Open workspace →" is a door: a button naming the workspace', () => {
+    it('keeps workspace navigation as a real Fancy Button in each row', () => {
+        const html = render({ onOpenWorkspace: () => {} });
+        expect(control(html, 'data-open-workspace="tynn"')).toMatchObject({ tag: 'button', fancy: true, text: 'Tynn.ai' });
+        expect(control(html, 'data-open-workspace="fancy"')).toMatchObject({ tag: 'button', fancy: true, text: 'fancy' });
+    });
+    it('draws each agent once in global alphabetical order with no grouping mode', () => {
         const html = render();
-        expect(html).toContain('data-open-workspace="tynn"');
-        expect(html).toContain('data-open-workspace="fancy"');
-        expect(html).toMatch(/<button[^>]*data-open-workspace="tynn"[^>]*>Open workspace →<\/button>/);
+        expect([...html.matchAll(/data-agent="([^"]+)"/g)].map((match) => match[1])).toEqual(['a1', 'b1', 'a3', 'a2']);
+        expect(html).not.toContain('data-group-toggle'); expect(html).not.toContain('data-status-group');
+        expect((html.match(/role="row"/g) ?? []).length).toBe(4);
     });
-});
-
-describe('By workspace | By status', () => {
-    it('the segmented control is in the header with the current grouping marked, and the status grouping draws one group per state in the board’s order', () => {
-        const byWs = render({ group: 'workspace' });
-        expect(byWs).toMatch(/data-group-toggle="workspace"[^>]*data-current="true"/);
-        expect(byWs).toMatch(/data-group-toggle="status"(?![^>]*data-current)/);
-        const byStatus = render({ group: 'status' });
-        expect(byStatus).toContain('data-group-by="status"');
-        const order = [...byStatus.matchAll(/data-status-group="([a-z]+)"/g)].map((m) => m[1]);
-        expect(order).toEqual(['waiting', 'broken', 'working', 'idle']);
-        // Every agent appears exactly once under status too — a regrouping loses nobody.
-        expect((byStatus.match(/role="row"/g) ?? []).length).toBe(4);
-    });
-
-    it('groupByStatus: states in order, each with its rows; a state with no agents gets NO group (not an empty heading)', () => {
-        const groups = groupByStatus(rows);
-        expect(groups.map((g) => [g.state, g.rows.map((r) => r.id)])).toEqual([
+    it('retains the pure status helper without exposing Dashboard grouping', () => {
+        expect(groupByStatus(rows).map((group) => [group.state, group.rows.map((row) => row.id)])).toEqual([
             ['waiting', ['a2']], ['broken', ['a3']], ['working', ['a1']], ['idle', ['b1']],
         ]);
-        expect(groups.map((g) => g.label)).toEqual(['Waiting on you', 'Broken', 'Working', 'Idle']);
     });
 });
-
 describe('the doors on a row', () => {
     it("a broken row's fix buttons act: Restart restarts, Terminal takes over, anything else opens the agent", () => {
         expect(fixRoute('a3', 'Restart')).toEqual({ kind: 'restart', agentId: 'a3' });
@@ -71,7 +59,7 @@ describe('the doors on a row', () => {
     });
 
     it('the header offers Chat ⌘J — the composer, one click away from the board — and the chord it names works everywhere', () => {
-        expect(render()).toMatch(/<button[^>]*data-action="chat-genie"/);
+        expect(control(render(), 'data-action="chat-genie"')).toMatchObject({ tag: 'button', fancy: true, text: 'Chat ⌘J' });
         const j = { key: 'j', ctrlKey: false, metaKey: true, altKey: false, shiftKey: false, typing: false };
         expect(globalAction(j)).toBe('toggle-chat');
         expect(globalAction({ ...j, metaKey: false, ctrlKey: true })).toBe('toggle-chat');

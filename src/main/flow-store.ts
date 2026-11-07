@@ -178,6 +178,7 @@ export class FlowStore {
     readonly #file: string;
     readonly #now: () => number;
     #data: FlowsFile;
+    #hiddenWorkspaces: () => readonly string[] = () => [];
     readonly #listeners = new Set<() => void>();
     readonly #runListeners = new Set<(flowId: string, run: FlowRun) => void>();
     /** The latest write issued; writes to one file land in order (store.ts), so this one lands last. */
@@ -240,11 +241,18 @@ export class FlowStore {
     }
 
     get(id: string): FlowRecord | null {
-        return this.#data.flows.find((f) => f.id === id) ?? null;
+        return this.list().find((f) => f.id === id) ?? null;
     }
 
+    /** Host-owned view policy. The stored documents and their histories stay intact. */
+    setHiddenWorkspaces(read: () => readonly string[]): void { this.#hiddenWorkspaces = read; }
+
+    /** Re-plan clocks, file triggers and connected views after metadata changes; no archive write. */
+    visibilityChanged(): void { for (const listener of this.#listeners) listener(); }
+
     list(workspaceId?: string): FlowRecord[] {
-        return this.#data.flows.filter((f) => workspaceId === undefined || f.workspaceId === workspaceId);
+        const hidden = new Set(this.#hiddenWorkspaces());
+        return this.#data.flows.filter((f) => !hidden.has(f.workspaceId) && (workspaceId === undefined || f.workspaceId === workspaceId));
     }
 
     /** The schedule triggers in a flow's document, as written. */
@@ -384,7 +392,8 @@ export class FlowStore {
     }
 
     #require(id: string): FlowRecord {
-        const flow = this.get(id);
+        // Finishing an already-running flow must still record its outcome after hibernation hides its view.
+        const flow = this.#data.flows.find((f) => f.id === id);
         if (!flow) throw new Error(`no flow ${id}`);
         return flow;
     }

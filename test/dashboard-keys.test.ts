@@ -10,12 +10,12 @@ const press = (key: string, over: Partial<{ ctrlKey: boolean; metaKey: boolean; 
     ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, typing: false, ...over });
 
 describe('dashboardAction', () => {
-    it('j/k step the cursor, Enter opens, g cycles the grouping; a/d do nothing here', () => {
+    it('j/k step the cursor, Enter opens, g has no grouping to cycle; a/d do nothing here', () => {
         expect(dashboardAction(press('j'))).toBe('next-row');
         expect(dashboardAction(press('k'))).toBe('prev-row');
         expect(dashboardAction(press('J'))).toBe('next-row');
         expect(dashboardAction(press('Enter'))).toBe('open');
-        expect(dashboardAction(press('g'))).toBe('cycle-group');
+        expect(dashboardAction(press('g'))).toBeNull();
         expect(dashboardAction(press('a'))).toBeNull();
         expect(dashboardAction(press('d'))).toBeNull();
     });

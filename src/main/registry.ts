@@ -1,14 +1,22 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
-import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
+import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
+import type { CarryOver } from '../core/carry-over.js';
 import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, type AgentPermissions, type PlanStepRecord, threadIdIsResumable } from '../core/identity.js';
 import type { IssueWatchSetting } from '../core/issue-watch.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
+
+/**
+ * Where a Registry's files are read and written (the host split, P3.2): the Store itself (genie-host, and the emergency
+ * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
+ */
+export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
+import { WorkspaceMailVisibility, hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
 
 /**
  * THE REGISTRY — the main process's single answer to "what is going on".
@@ -45,9 +53,10 @@ export { OS_WORKSPACE };
 export type SessionProbe = (id: AgentId) => LiveSession | null;
 
 export class Registry {
-    readonly #store: Store;
+    #store: RegistryStore;
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
+    readonly #mailVisibility = new WorkspaceMailVisibility();
     #probe: SessionProbe = () => null;
     #observed: (id: AgentId) => TakeOverProbe | null = () => null;
     #handoff: (id: AgentId) => { text: string; at: number } | null = () => null;
@@ -55,6 +64,9 @@ export class Registry {
     #recordListeners = new Set<(agentId: AgentId) => void>();
     #workstation: { name: string; healthy: boolean } | null = null;
     #signals: (() => SignalState) | null = null;
+    #safeMode: (() => import('../core/safe-mode.js').SafeModeView | null) | null = null;
+    #hangNotice: (() => import('../core/crash-record.js').HangNotice | null) | null = null;
+    #rendererNotice: (() => import('../core/renderer-notice.js').RendererNotice | null) | null = null;
     #deckSource: () => readonly DeckItem[] = () => [];
     #runningAtQuit: AgentId[] = [];
     #interruptedAtQuit: AgentId[] = [];
@@ -64,8 +76,32 @@ export class Registry {
     /** A workspace's colour (genie#1300: project.json `appearance.color`, main/workspace-color-host.ts); `null` = none yet. */
     #colorer: (path: string) => string | null = () => null;
 
-    constructor(store: Store) {
+    constructor(store: RegistryStore) {
         this.#store = store;
+    }
+
+    /** Read and write through `store` instead (genie-host's, P3.2). Before `load` only: a loaded model is not re-homed. */
+    useStore(store: RegistryStore): void {
+        if (this.#loaded) throw new Error('the registry is loaded; its store is not changed under it');
+        this.#store = store;
+    }
+
+    /**
+     * Read the files again — another window, or the host, wrote them (P3.2: two windows, one registry). Announced only
+     * when something changed, so a window's own write, read back, redraws nothing twice.
+     */
+    async refresh(): Promise<void> {
+        if (!this.#loaded) return;
+        const workspaces = await this.#store.readWorkspaces();
+        const agents = await this.#store.readAgents();
+        const changedAgents = agents.filter((a) => JSON.stringify(a) !== JSON.stringify(this.#agents.find((x) => x.id === a.id) ?? null)).map((a) => a.id);
+        const gone = this.#agents.filter((a) => !agents.some((x) => x.id === a.id)).map((a) => a.id);
+        const workspacesChanged = JSON.stringify(workspaces) !== JSON.stringify(this.#workspaces);
+        if (!workspacesChanged && changedAgents.length === 0 && gone.length === 0) return;
+        this.#workspaces = workspaces;
+        this.#agents = agents;
+        this.#emit();
+        for (const id of [...changedAgents, ...gone]) for (const listener of this.#recordListeners) listener(id as AgentId);
     }
 
     /** Problems found while loading, for the surface to report rather than swallow. */
@@ -141,6 +177,21 @@ export class Registry {
     }
 
     /** The Deck's signal strip, MEASURED by the composition root; honest zeros until then. */
+    /** genie-host's safe mode (Tynn #386), read into every snapshot: the banner on every window. */
+    setSafeMode(provider: () => import('../core/safe-mode.js').SafeModeView | null): void {
+        this.#safeMode = provider;
+    }
+
+    /** genie-host's reopened-window notice (Tynn #386): a hung window was ended and this one started; read into every snapshot. */
+    setHangNotice(provider: () => import('../core/crash-record.js').HangNotice | null): void {
+        this.#hangNotice = provider;
+    }
+
+    /** This window's page ended and was brought back (Tynn #386, renderer-recovery.ts); read into every snapshot. */
+    setRendererNotice(provider: () => import('../core/renderer-notice.js').RendererNotice | null): void {
+        this.#rendererNotice = provider;
+    }
+
     setSignals(provider: () => SignalState): void {
         this.#signals = provider;
     }
@@ -153,6 +204,11 @@ export class Registry {
     async markRunningAtQuit(ids: readonly AgentId[]): Promise<void> {
         this.#runningAtQuit = ids.filter((id) => this.#agents.some((a) => a.id === id));
         await this.#store.writeRunningAtQuit(this.#runningAtQuit);
+    }
+
+    /** The agents a shutdown cut off mid-turn, as recorded — read, not taken (safe mode lists them, Tynn #386). */
+    interruptedAtQuit(): readonly AgentId[] {
+        return this.#interruptedAtQuit;
     }
 
     /** The agents a shutdown cut off mid-turn (written at quit or upgrade, before the sessions end). */
@@ -193,7 +249,7 @@ export class Registry {
 
     /** Count of live sessions — the only correct source for "how many agents are running". */
     get runningCount(): number {
-        return this.#agents.filter((a) => this.#probe(a.id)?.running === true).length;
+        return this.listAgents().filter((a) => this.#probe(a.id)?.running === true).length;
     }
 
     snapshot(): GenieSnapshot {
@@ -231,7 +287,7 @@ export class Registry {
              * broke six tests that asserted exact counts, and mass fixture churn is the signal
              * to suspect the guard rather than the fixtures. It was the guard.
              */
-            agents: this.#agents
+            agents: this.listAgents()
                 .filter((record) => record.workspaceId !== OS_WORKSPACE)
                 // An agent with a live Take Over is OBSERVED: Genie sees its bytes and nothing
                 // else, and the row says so (§4.1). Otherwise the declared row as before.
@@ -255,8 +311,11 @@ export class Registry {
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
                 // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
-                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...this.#colorOf(w.path) }))
+                ? this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: false, ...(w.governs && w.governs.length > 0 ? { governs: w.governs.filter((id) => !this.#isHibernated(id)) } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...this.#colorOf(w.path) }))
                 : null,
+            ...(this.#loaded && this.#workspaces.some((workspace) => workspace.asleep) ? {
+                hibernatedWorkspaces: this.#workspaces.filter((workspace) => workspace.asleep).map((workspace) => ({ id: workspace.id, path: workspace.path, name: workspace.hibernatedName ?? folderName(workspace.path), asleep: true as const })),
+            } : {}),
             /*
              * The attention band.
              *
@@ -272,6 +331,10 @@ export class Registry {
              */
             signals: this.#signals?.() ?? { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false },
             workstation: this.#workstation,
+            // Only once main has said where it comes from: a snapshot with no host to ask carries no claim about it.
+            ...(this.#safeMode ? { safeMode: this.#safeMode() } : {}),
+            ...(this.#hangNotice ? { hangNotice: this.#hangNotice() } : {}),
+            ...(this.#rendererNotice ? { rendererNotice: this.#rendererNotice() } : {}),
         };
     }
 
@@ -283,11 +346,14 @@ export class Registry {
      */
     /** Live sessions' permission requests, then everything the composition root's Deck source holds. */
     #deckItems(): readonly DeckItem[] {
-        return [...this.#sessionApprovals(), ...this.#deckSource()];
+        return [...this.#sessionApprovals(), ...this.#deckSource()].filter((item) => {
+            const workspaceId = item.workspaceId ?? this.#agents.find((record) => record.id === item.agentId)?.workspaceId;
+            return workspaceId === undefined || !this.#isHibernated(workspaceId);
+        });
     }
 
     #sessionApprovals(): DeckItem[] {
-        return this.#agents.flatMap((record): DeckItem[] => {
+        return this.listAgents().flatMap((record): DeckItem[] => {
             const live = this.#probe(record.id);
             const approval = live?.pendingApproval;
             if (!approval) return [];
@@ -316,6 +382,17 @@ export class Registry {
     subscribe(listener: (snapshot: GenieSnapshot) => void): () => void {
         this.#listeners.add(listener);
         return () => this.#listeners.delete(listener);
+    }
+
+    /** Child windows need membership/hibernation changes, without the main window's activity-rate snapshots. */
+    subscribeWorkspaceVisibility(listener: (snapshot: GenieSnapshot) => void): () => void {
+        const key = () => JSON.stringify(this.#workspaces.map((w) => [w.id, w.asleep === true]));
+        let previous = key();
+        return this.subscribe((snapshot) => {
+            const next = key();
+            if (next === previous) return;
+            previous = next; listener(snapshot);
+        });
     }
 
     /**
@@ -416,15 +493,16 @@ export class Registry {
 
     /** The workspace that governs `childId`, or `null`. */
     governorOf(childId: string): string | null {
-        return this.#workspaces.find((w) => (w.governs ?? []).includes(childId))?.id ?? null;
+        return this.#isHibernated(childId) ? null : this.listWorkspaces().find((w) => (w.governs ?? []).includes(childId))?.id ?? null;
     }
 
     agentsOf(workspaceId: string): readonly AgentRecord[] {
-        return this.#agents.filter((a) => a.workspaceId === workspaceId);
+        return this.listAgents().filter((a) => a.workspaceId === workspaceId);
     }
 
     /** The workspace's default agent (Genie 1's), or `null` — none designated is a normal state. */
     defaultAgentOf(workspaceId: string): string | null {
+        if (this.#isHibernated(workspaceId)) return null;
         return this.#workspaces.find((w) => w.id === workspaceId)?.defaultAgentId ?? null;
     }
 
@@ -451,11 +529,33 @@ export class Registry {
 
     /** Hibernate / wake (§6.1). On disk, so it survives restarts and upgrades. */
     async setAsleep(workspaceId: string, asleep: boolean): Promise<boolean> {
-        if (!this.#workspaces.some((w) => w.id === workspaceId)) return false;
-        this.#workspaces = this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, asleep } : w));
-        await this.#store.writeWorkspaces(this.#workspaces);
+        const workspace = this.#workspaces.find((w) => w.id === workspaceId);
+        if (!workspace) return false;
+        if (workspace.asleep === true && !asleep) {
+            // Persist first, before any consumer can see the workspace as awake and start its agents.
+            const redockAt = new Date().toISOString();
+            this.#agents = this.#agents.map((record) => record.workspaceId === workspaceId ? { ...record, redockAt } : record);
+            await this.#store.writeAgents(this.#agents);
+        }
+        const hibernatedName = asleep && workspace.asleep !== true ? this.#namer(workspace.path) : workspace.hibernatedName;
+        const workspaces = this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, asleep, ...(hibernatedName ? { hibernatedName } : {}) } : w));
+        await this.#store.writeWorkspaces(workspaces);
+        this.#workspaces = workspaces;
         this.#emit();
         return true;
+    }
+
+    /** A late acknowledgement must not consume a newer redock's reorientation. */
+    async clearRedock(agentId: AgentId, at: string): Promise<void> {
+        const record = this.#agents.find((candidate) => candidate.id === agentId);
+        if (!record || record.redockAt !== at) return;
+        this.#agents = this.#agents.map((candidate) => {
+            if (candidate.id !== agentId) return candidate;
+            const { redockAt: _redockAt, ...rest } = candidate;
+            return rest;
+        });
+        await this.#store.writeAgents(this.#agents);
+        this.#changed(agentId);
     }
 
     /** Remove from Genie (§6.1): the workspace and its agent records go; the folder is not this class's to touch. */
@@ -493,7 +593,8 @@ export class Registry {
     async clearThread(agentId: AgentId): Promise<AgentRecord | null> {
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return null;
-        const cleared: AgentRecord = { ...existing, threadId: null };
+        const { genieWordsInThread: _words, ...rest } = existing;
+        const cleared: AgentRecord = { ...rest, threadId: null };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? cleared : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(cleared.id);
@@ -501,22 +602,46 @@ export class Registry {
     }
 
     /**
-     * Switch driver: identity, inbox, history and prompt stay. What belonged to the OLD provider does not: its
-     * conversation (`threadId` → `null`, "never ran on this provider" — a Claude session id handed to Codex would be a
-     * resume of nothing) and, unless the caller found it in the new provider's own list (`keepModel`), its model. The
-     * owner, 2026-10-21: "I need to be able to change provider as well as model". The same provider changes nothing.
+     * Switch provider (Tynn story #380): identity, inbox, history, plan and the conversation stay with the agent. Each
+     * provider keeps ITS OWN native session — a Claude session id means nothing to Codex — so the one it leaves is PARKED
+     * under the old provider (`threadIds`) with when it left (`leftAt`), and the new provider's is resumed when it has one
+     * (`null` = it never ran there). `carryOver` is what the next prompt carries (core/carry-over.ts); a switch always
+     * REPLACES it, never stacks. The model goes with the old provider unless the caller found it in the new provider's own
+     * list (`keepModel`). The owner, 2026-10-21: "I need to be able to change provider as well as model". The same
+     * provider changes nothing.
      */
-    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
+    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean; carryOver?: CarryOver | null; now?: string }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
         if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return { ok: false, reason: `No agent ${agentId}.` };
         if (existing.provider === provider) return { ok: true, record: existing };
-        const { model: _oldModel, ...withoutModel } = existing;
-        const record: AgentRecord = { ...(options.keepModel ? existing : withoutModel), provider, threadId: null };
+        const { model: _oldModel, carryOver: _oldCarry, ...withoutModel } = existing;
+        const { carryOver: _carry, ...keptModel } = existing;
+        const parked: Partial<Record<AcpProvider, string>> = { ...(existing.threadIds ?? {}) };
+        if (existing.threadId) parked[existing.provider] = existing.threadId;
+        else delete parked[existing.provider];
+        const resumed = parked[provider] ?? null;
+        delete parked[provider];
+        const leftAt = { ...(existing.leftAt ?? {}), [existing.provider]: options.now ?? new Date().toISOString() };
+        const record: AgentRecord = {
+            ...(options.keepModel ? keptModel : withoutModel),
+            provider,
+            threadId: resumed,
+            threadIds: parked,
+            leftAt,
+            ...(options.carryOver ? { carryOver: options.carryOver } : {}),
+        };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(record.id);
         return { ok: true, record };
+    }
+
+    /** The carry-over went with a prompt (Tynn story #380): it is not carried again. */
+    async clearCarryOver(agentId: AgentId): Promise<AgentRecord | null> {
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing || existing.carryOver === undefined) return existing ?? null;
+        return this.#update(agentId, ({ carryOver: _sent, ...rest }) => rest);
     }
 
     /** Mode is WORDING for the agent (§6.2) — automated or manual — not a permission boundary. */
@@ -525,6 +650,11 @@ export class Registry {
     }
 
     /** What a Claude agent may do: all tools, ask before shell commands, or edits only (shell refused). Read when its session starts. */
+    /** Genie's own words are in this agent's thread now. */
+    async markGenieWords(agentId: AgentId): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, genieWordsInThread: true }));
+    }
+
     async setPermissions(agentId: AgentId, permissions: AgentPermissions): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, permissions }));
     }
@@ -594,7 +724,7 @@ export class Registry {
      * is found by its id only).
      */
     find(id: AgentId): AgentRecord | null {
-        const byId = this.#agents.find((a) => a.id === id);
+        const byId = this.listAgents().find((a) => a.id === id);
         if (byId) return byId;
         if ((id as string) === OS_AGENT_NAME) return this.#agents.find((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME) ?? null;
         return null;
@@ -603,16 +733,38 @@ export class Registry {
     /** Every workspace record, for the one-time v1 import to plan against. */
     /** Each workspace's address slug (core/address.ts slugsFor) — the same names, in the same order, the window uses. */
     workspaceSlugs(): Map<string, string> {
-        return slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path) })));
+        return slugsFor(this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path) })));
     }
 
     listWorkspaces(): readonly WorkspaceRecord[] {
-        return this.#workspaces;
+        return this.#workspaces.filter((workspace) => workspace.asleep !== true);
+    }
+
+    /** Internal lifecycle metadata. Never enumerate it in a view or read an asleep folder through it. */
+    workspaceStates(): readonly WorkspaceRecord[] { return this.#workspaces; }
+
+    /** Internal ownership lookup for mail. This reads metadata only, including hidden identities. */
+    mailParticipantVisible(id: string): boolean {
+        return !this.mailVisibilityVersion().has(id);
+    }
+
+    mailVisibilityVersion(): ReadonlySet<string> { return this.#mailVisibility.read(this.#agents, this.#workspaces); }
+
+    mailRefusal(text: string, workspaceScope?: string): string | null {
+        const visible = this.listAgents().filter((r) => workspaceScope === undefined || r.workspaceId === workspaceScope);
+        if (resolveMailAddress(text, visible, this.workspaceSlugs()).kind !== 'none') return null;
+        const asleep = new Set(this.#workspaces.filter((w) => w.asleep === true).map((w) => w.id));
+        const slugs = slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: w.asleep === true ? w.hibernatedName ?? folderName(w.path) : this.#namer(w.path) })));
+        return hibernatedRecipientRefusal(text, this.#agents, asleep, slugs, workspaceScope);
     }
 
     /** Every agent record, for the same. */
     listAgents(): readonly AgentRecord[] {
-        return this.#agents;
+        return this.#agents.filter((record) => !this.#isHibernated(record.workspaceId));
+    }
+
+    #isHibernated(workspaceId: string): boolean {
+        return this.#workspaces.some((workspace) => workspace.id === workspaceId && workspace.asleep === true);
     }
 
     /** `{ color }` when the workspace has one; nothing otherwise, so every other workspace literal stays exact. */

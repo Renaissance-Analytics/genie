@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { UPLOAD_CHUNK_BYTES, UPLOAD_MAX_BYTES } from '../src/core/mobile-wire.js';
-import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
 import { FilesHost } from '../src/main/files-host.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
@@ -102,7 +102,7 @@ describe('over a real socket', () => {
             onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
             workspaceOfAgent: () => 'tynn',
         };
-        host = new RemoteHost({ confirm: allowEveryPairing, api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => 1, random: () => 0.5 }), shares: new ShareLinks({ host: 'x', now: () => 1, random: () => 's' }), devices, transport: fancyWsTransport({ attach: attachWebSocketServer, server, path: '/genie', address: () => `ws://127.0.0.1:${port}/genie` }) });
+        host = new RemoteHost({ confirm: allowEveryPairing, api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => 1, random: () => 0.5 }), devices, transport: fancyWsTransport({ attach: attachWebSocketServer, server, path: '/genie', address: () => `ws://127.0.0.1:${port}/genie` }) });
     });
     afterEach(async () => {
         await devices.flushed();

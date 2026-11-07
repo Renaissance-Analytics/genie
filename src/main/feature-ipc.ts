@@ -1,4 +1,5 @@
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { hostPathRefusal, REMOTE_ORIGIN, type FeatureOrigin } from './host-picks.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { readFile, stat } from 'node:fs/promises';
@@ -6,7 +7,7 @@ import { classifyNavigation } from '../core/browser-policy.js';
 import { isAlertSoundKey } from '../core/alerts.js';
 import { MAX_SOUND_BYTES, soundFileMime } from '../core/custom-sound.js';
 import { tynnGate, type SyncResult } from '../core/integrations.js';
-import type { TynnAccountPort } from './tynn-account.js';
+import { unreachableThroughMessage, type TynnAccountPort } from './tynn-account.js';
 import type { GithubAccountPort } from './github-account.js';
 import { signedOutGithubView } from '../core/github.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
@@ -20,7 +21,7 @@ import { flowToolDefinitions } from './flow-tools.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
-import { inboxThreads, pairOf, threadKeyOfMessage, threadOf, uncollected } from '../core/inbox-threads.js';
+import { inboxThreads, pairOf, searchThread, threadKeyOfMessage, threadWindow, uncollected } from '../core/inbox-threads.js';
 import { approvalNoteText } from '../core/approval-note.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
@@ -37,13 +38,14 @@ import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
 import type { NodeInstallOutcome, NodeRemoveOutcome, NodeVersionsView } from './node-versions.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
-import type { ComposedServices } from './compose.js';
+import type { WindowServices as ComposedServices } from './compose.js';
 import {
     createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateService, updateSite, useService,
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
-import type { FeatureAction, FeatureData, InboxThreadView, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
+import type { FeatureAction, FeatureData, InboxSearchResult, InboxThreadView, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
+import type { AskedRecord } from './attention-store.js';
 
 /**
  * THE FEATURE SURFACES' MAIN-SIDE HALF.
@@ -60,11 +62,26 @@ import type { FeatureAction, FeatureData, InboxThreadView, InstallPreview, Toolc
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /** genie-host's safe mode (Tynn #386): "Leave safe mode". Absent = no host to leave it in (refused, said). */
+    readonly safeMode?: { leave(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    /** The reopened-window notice (Tynn #386): Dismiss, and Stop all agents. Absent = no host to ask (refused, said). */
+    /** The brought-back page's notice: forget it. */
+    readonly rendererNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    readonly hangNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }>; stopAll(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    /** A part of a snapshot that took at least `ms` (genie-test-windows, job Q0: an action took 20 s with main mostly free). */
+    readonly slowPart?: { readonly ms: number; log(part: string, ms: number): void };
+    /**
+     * How long a snapshot waits for Docker's engine statuses before it goes out with the last read (genie#1393); absent =
+     * ENGINE_STATUS_WAIT_MS. The first read ever is always waited for: there is no last one to show.
+     */
+    readonly engineStatusWaitMs?: number | undefined;
+    /** Docker answered after a snapshot stopped waiting for it: push again, so the Services tab catches up (main.ts). */
+    readonly onEngineStatusesLate?: (() => void) | undefined;
     /**
      * A message that must reach a running agent (SessionHost.deliver): an approval's note, after a Genie approval is
      * answered on the Deck or a toast (beta.33 item 16). Absent = no sessions here, and a note is refused, never dropped.
      */
-    readonly deliverToAgent?: ((agentId: string, text: string) => boolean) | undefined;
+    readonly deliverToAgent?: ((agentId: string, text: string) => boolean | Promise<boolean>) | undefined;
     /** Tailscale on this machine (main/tailscale-cli.ts, Tynn #821): its cached status, up, install. */
     readonly tailscale?: {
         status(): import('./tailscale-cli.js').TailscaleStatus | null;
@@ -81,8 +98,13 @@ export interface FeaturePorts {
     readonly tynnAccount?: TynnAccountPort;
     /** This Genie's GitHub sign-in (main/github-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
     readonly githubAccount?: GithubAccountPort;
+    /**
+     * Linux with no keyring (main/linux-keyring.ts, the owner 2026-11-01): the card's view (null = fine, or not Linux) and
+     * its one button. Absent = no card (doctor mode, tests that do not wire it).
+     */
+    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void>; press?(): Promise<void>; cancel?(): void | Promise<void>; notice?(): string | null };
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
-    readonly processes?: ProcessBook;
+    readonly processes?: import('./processes-host.js').ProcessBookApi;
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
     readonly processScheduler?: Pick<import('./process-scheduler.js').ProcessScheduler, 'runNow'>;
     /** Open the flow editor window on a route (`genie://flow/<id>`, `genie://flow/new?workspace=<id>`, genie#1204). Absent = no windows (doctor mode). */
@@ -244,8 +266,6 @@ export interface FeatureState {
     serviceUpdating?: NonNullable<FeatureData['services']>['updating'];
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;
-    /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
-    servedLink?: { id: string; url: string } | null;
     /** What the last Allow through the firewall did (Tynn #820), in words. */
     firewallOutcome?: string | null;
     /** What the last Tailscale Connect or Install did (Tynn #821), in words. */
@@ -255,10 +275,16 @@ export interface FeatureState {
     inboxThread?: InboxThreadView | null;
     /** Transient: an attachment's bytes an `inbox.attachment` action asked for, served once. */
     servedAttachment?: { id: string; name: string; base64: string } | null;
+    /** Transient: a thread search an `inbox.search` action asked for, served in its answer only. */
+    inboxSearch?: InboxSearchResult | null;
+    /** Transient: a decided question's record an `inbox.question` action asked for, served once. */
+    servedQuestion?: { id: string; record: AskedRecord | null } | null;
 }
 
 /** The most of one thread an `inbox.thread` action serves at once. */
 const INBOX_THREAD_MAX = 2_000;
+/** The most hits a thread search serves; its `total` still counts every match. */
+const INBOX_SEARCH_MAX = 200;
 
 /** The Toolchain section: the scan, plus each further fact only when there is one (never an empty placeholder). */
 export function toolchainSection(state: FeatureState): ToolchainSection | null {
@@ -456,45 +482,98 @@ function tynnIntegration(services: ComposedServices, state: FeatureState, accoun
     const status = account?.status() ?? { signedIn: false as const };
 
     const host = account ? account.host() : TYNN_HOST;
+    // Out of reach through a proxy reads as that: the sign-in stands, whatever the status says for now.
+    const through = account?.unreachableThrough?.() ?? null;
     return {
         tynnSignedIn: status.signedIn,
-        tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? null },
+        tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? (through ? unreachableThroughMessage(through) : null) },
         gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: status.signedIn }),
     };
 }
 
+/**
+ * A SNAPSHOT NEVER WAITS ON A SLOW DOCKER FOR LONG (genie#1393). Every snapshot (a click's answer, every push) read the
+ * engines' statuses from Docker first: `docker version`, then one `docker container inspect` per engine, each allowed
+ * 20 s. So the Hosting tab's state, built before that read, reached the window only when Docker answered, slowest exactly
+ * when Genie has just started a dozen sites and every supervisor transition asked for another snapshot. Now: one read at
+ * a time (a snapshot asked for while one is in flight joins it), and a snapshot waits at most this long for it before it
+ * goes out with the LAST read Docker gave; when the read lands, `onEngineStatusesLate` asks for a fresh push.
+ */
+export const ENGINE_STATUS_WAIT_MS = 1_500;
+const engineReads = new WeakMap<object, { last?: EngineStatusView[]; inFlight?: Promise<EngineStatusView[]> }>();
+
+async function engineStatusesWithin(services: ComposedServices, ports: FeaturePorts): Promise<EngineStatusView[]> {
+    let entry = engineReads.get(services);
+    if (!entry) { entry = {}; engineReads.set(services, entry); }
+    const e = entry;
+    const read = e.inFlight ?? (e.inFlight = services.engineStatuses().then(
+        (views) => { e.last = views; return views; },
+    ).finally(() => { delete e.inFlight; }));
+    const prior = e.last;
+    if (prior === undefined) return read;
+    const late = Symbol('late');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const first = await Promise.race([read.catch(() => late), new Promise<typeof late>((r) => { timer = setTimeout(() => r(late), ports.engineStatusWaitMs ?? ENGINE_STATUS_WAIT_MS); })]);
+    clearTimeout(timer);
+    if (first !== late) return first as EngineStatusView[];
+    // Only when Docker's answer CHANGES what was shown: a push builds a snapshot, which reads Docker again, so a Docker
+    // that is merely slow would otherwise push forever.
+    read.then((views) => { if (JSON.stringify(views) !== JSON.stringify(prior)) ports.onEngineStatusesLate?.(); }, () => {});
+    return prior;
+}
+
+/**
+ * Every snapshot's number, taken when it STARTS (genie#1393). Snapshots race: a click's answer built while a site was
+ * `starting` could land after the push built when it answered, and the window kept whichever came last. The window keeps
+ * the higher number (renderer/features.ts `newestSnapshot`).
+ */
+let snapshotSeq = 0;
+
 export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
+    const seq = ++snapshotSeq;
+    const timed = async <T>(part: string, work: () => Promise<T>): Promise<T> => {
+        if (!ports.slowPart) return work();
+        const started = Date.now();
+        try { return await work(); } finally { const ms = Date.now() - started; if (ms >= ports.slowPart.ms) ports.slowPart.log(part, ms); }
+    };
     // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
     // 108 memories and drew skeletons until a search). A query searches.
-    const hits = state.knowledgeQuery
-        ? services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' }).hits
-        : services.knowledge.list({ scopes: 'all', limit: 200 }).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class }));
+    const hits = await timed('knowledge', async () => state.knowledgeQuery
+        ? (await services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' })).hits
+        : (await services.knowledge.summaries({ scopes: 'all', limit: 200 })).hits);
     const roster = services.agentAddresses();
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
     const mail = services.inbox.all();
+    const visibleMail = new Set(mail.map((m) => m.id));
     const nameOf = participantNamer(roster, mail);
     return {
+        seq,
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
         // Genie's tools as steps (genie#1204): their kinds go to the editor window, which registers them before its canvas mounts.
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}), toolKinds: flowToolDefinitions() },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
-        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
-        // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
-        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
+        trust: services.trustSteps(),
+        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list().filter((p) => services.workspaceVisible(p.workspaceId)) : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems() },
+        // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
+        // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
+        services: { instances: await timed('engines', () => engineStatusesWithin(services, ports)), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: {
             unread: services.inbox.unread(HUMAN), peers, recent: services.inbox.involving(HUMAN, 200),
             threads: inboxThreads(mail, nameOf), uncollected: uncollected(mail),
             // Served in the answer to the action that asked, once — never in a pushed snapshot.
-            thread: state.inboxThread ?? null, servedAttachment: state.servedAttachment ?? null,
+            thread: state.inboxThread?.messages.every((m) => visibleMail.has(m.id)) ? state.inboxThread : null,
+            servedAttachment: state.servedAttachment && mail.some((m) => m.attachments.some((a) => a.id === state.servedAttachment!.id)) ? state.servedAttachment : null,
+            search: state.inboxSearch?.hits.every((m) => visibleMail.has(m.id)) ? state.inboxSearch : null,
+            question: state.servedQuestion ?? null,
         },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         // GitHub as the account read it from GitHub (beta.33 item 25) — never a value a window sent.
-        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null },
+        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null, ...(ports.keyring?.notice?.() ? { keyringNotice: ports.keyring.notice!() } : {}) },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
@@ -507,9 +586,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             pin: services.remote.activePin(),
             devices: services.remote.devices(),
             pairRequests: services.pairing.requests(),
-            shares: services.remote.shares(),
             connections: services.remote.connections(),
-            servedLink: state.servedLink ?? null,
             enabled: services.settings.snapshot().remote_access === true,
             firewall: ports.allowFirewall !== undefined,
             firewallOutcome: state.firewallOutcome ?? null,
@@ -604,9 +681,31 @@ async function phpChoices(services: ComposedServices, ports: FeaturePorts): Prom
 
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason — except a toolchain row's, which comes back IN the snapshot, on that row (`toolchain.refusals`). */
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}, origin: FeatureOrigin = REMOTE_ORIGIN): Promise<FeatureData> {
+    // genie#1583: which half of a slow action waits, the action itself or the snapshot it answers with.
+    const actStarted = Date.now();
+    const slow = (part: string, started: number): void => { const ms = Date.now() - started; if (ports.slowPart && ms >= ports.slowPart.ms) ports.slowPart.log(part, ms); };
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
+        case 'rendererNotice.dismiss': {
+            if (!ports.rendererNotice) throw new Error('This window keeps no such notice.');
+            const done = await ports.rendererNotice.dismiss();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
+        case 'hangNotice.dismiss':
+        case 'hangNotice.stopAll': {
+            if (!ports.hangNotice) throw new Error('Genie’s host is not connected.');
+            const done = action.kind === 'hangNotice.dismiss' ? await ports.hangNotice.dismiss() : await ports.hangNotice.stopAll();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
+        case 'safeMode.leave': {
+            if (!ports.safeMode) throw new Error('Genie’s host is not connected, so safe mode cannot be left from here.');
+            const left = await ports.safeMode.leave();
+            if (!left.ok) throw new Error(left.reason);
+            break;
+        }
         case 'whatsNew.show':
             next.whatsNewShown = true;
             break;
@@ -655,7 +754,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'hosting.updateSite': {
             // The same call an agent's `sites update` makes (hosting-actions.ts): the Add form's validation, one envelope write.
-            const r = await updateSite(services, { siteId: action.siteId, form: action.form });
+            const r = await updateSite(services, { siteId: action.siteId, form: action.form, person: true });
             if (r.kind === 'problems') {
                 const open = state.siteEditing ?? { siteId: action.siteId, host: services.sites.get(action.siteId)?.host ?? action.siteId, defaults: action.form, problems: [], ...(await phpChoices(services, ports)) };
                 next.siteEditing = { ...open, defaults: action.form, problems: r.problems };
@@ -666,7 +765,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'hosting.restartSite':
             // The same call an agent's `sites restart` makes: stopped and started again, and a remembered Stop lifted.
-            await restartSite(services, action.siteId);
+            await restartSite(services, action.siteId, { person: true });
             break;
         case 'hosting.openSite': {
             // The same call an agent's `sites open` makes: checked against the front door's routes, then shown in Genie's browser.
@@ -747,7 +846,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'hosting.startSite':
             // The person's Start: serves a listed site that is not running, and lifts a remembered Stop.
-            await startSite(services, action.siteId);
+            await startSite(services, action.siteId, { person: true });
             break;
         case 'hosting.stopSite':
             // The person's Stop, remembered on this machine: the next launch leaves it down.
@@ -1372,7 +1471,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                         : null;
                     if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
                     if (!services.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
-                    if (text !== null && !ports.deliverToAgent!(action.item.agentId!, text)) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
+                    if (text !== null && !(await ports.deliverToAgent!(action.item.agentId!, text))) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
                     break;
                 }
                 case 'list-done':
@@ -1398,6 +1497,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 case 'defer-trust-certificate':
                     services.deferTrustCertificate();
                     break;
+                case 'sync-hosts': {
+                    // What genie-host held for a window: the person approves it here, so the prompt is raised by this window.
+                    const r = await services.syncHosts();
+                    if ('error' in r) throw new Error(r.error);
+                    break;
+                }
                 case 'dismiss-main-error':
                     // Read, and put aside. Refused with its reason when nothing is wired or the item is already gone.
                     if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
@@ -1442,7 +1547,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 next.knowledgeAdding = { defaults: action.form, problems };
                 break;
             }
-            const added = services.knowledge.add({ title: action.form.title.trim(), body: action.form.body, class: action.form.class, scope: action.form.scope, source: 'user' });
+            const added = await services.knowledge.add({ title: action.form.title.trim(), body: action.form.body, class: action.form.class, scope: action.form.scope, source: 'user' });
             next.knowledgeAdding = null;
             // Show what was done: the search lands on the new title, and every link that did not
             // resolve is named with why — an ambiguous link resolves to nothing rather than guessing.
@@ -1451,11 +1556,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'knowledge.add': {
-            const r = services.knowledge.add({ title: action.title, body: action.body, ...(action.class ? { class: action.class } : {}), ...(action.tags ? { tags: action.tags } : {}), scope: action.scope, source: 'user' });
+            const r = await services.knowledge.add({ title: action.title, body: action.body, ...(action.class ? { class: action.class } : {}), ...(action.tags ? { tags: action.tags } : {}), scope: action.scope, source: 'user' });
             void r;
             break;
         }
         case 'inbox.send': {
+            const hibernated = services.mailRefusal(action.to);
+            if (hibernated) throw new Error(hibernated);
             const target = services.resolveAddress(action.to);
             if (target.kind === 'none') throw new Error(`nobody at ${action.to}`);
             if (target.kind === 'ambiguous') throw new Error(`${action.to} names more than one agent — use one of: ${target.forms.join(', ')}`);
@@ -1474,10 +1581,23 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const key = action.key ?? (action.messageId ? threadKeyOfMessage(mail, action.messageId) : null);
             if (!key) throw new Error(action.messageId ? `no message ${action.messageId}` : 'which thread?');
             const limit = Math.min(Math.max(action.limit, 1), INBOX_THREAD_MAX);
-            const t = threadOf(mail, key, limit);
-            next.inboxThread = { key, messages: t.messages, more: t.more, limit, focus: action.messageId ?? null };
+            // A window by seq (the owner, 2026-11-01: sort and page): older BEFORE a seq, a live refresh FROM one.
+            const t = threadWindow(mail, key, { limit, beforeSeq: action.beforeSeq, fromSeq: action.fromSeq });
+            next.inboxThread = { key, messages: t.messages, more: t.more, newer: t.newer, limit, focus: action.messageId ?? null };
             break;
         }
+        // Search ONE thread over its stored mail (the owner, 2026-11-01): history the flyout has not loaded is found too.
+        case 'inbox.search': {
+            if (!pairOf(action.key)) throw new Error(`${action.key} is not a thread`);
+            const mail = services.inbox.all();
+            const r = searchThread(mail, action.key, action.query, participantNamer(services.agentAddresses(), mail), INBOX_SEARCH_MAX);
+            next.inboxSearch = { key: action.key, query: action.query, hits: r.hits, total: r.total };
+            break;
+        }
+        // The questions an FTQ answer answered (the owner, 2026-11-01), read from the attention store's records.
+        case 'inbox.question':
+            next.servedQuestion = { id: action.questionId, record: services.attention.asked(action.questionId) };
+            break;
         case 'inbox.markAllRead': {
             // The person's own receive, to the end: the only thing that marks mail read.
             const n = services.inbox.unread(HUMAN).length;
@@ -1575,17 +1695,26 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.firewallOutcome = r.ok ? 'Allowed: devices on your tailnet can reach this port.' : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.' : (r.error ?? 'The firewall rule could not be added.');
             break;
         }
-        case 'remote.mintShare': {
-            // Served exactly once: the URL rides this answer and no snapshot after it.
-            const m = services.remote.mintShare({ workspaceId: action.workspaceId, grantedTo: action.grantedTo, expiresInMs: action.expiresInMs });
-            next.servedLink = { id: m.link.id, url: m.url };
-            break;
-        }
         // TYNN SIGN-IN, the way Genie 1 did it: open Tynn in the browser, take the code back, Sign out revokes the key.
         case 'integrations.tynnSignIn': {
+            // NO KEYRING: no trip to Tynn for a sign-in that could not be kept. The keyring card says why, and its button
+            // is the next step (the owner, 2026-11-01).
+            if (ports.keyring?.view()) { next.tynnSignInUrl = null; next.tynnMessage = null; break; }
             const { url } = await tynnAccountOf(ports).startSignIn();
             next.tynnSignInUrl = url;
             next.tynnMessage = null;
+            break;
+        }
+        // THE KEYRING CARD'S ONE BUTTON: install, start, restart or check again, whichever the session needs next.
+        case 'keyring.fix': {
+            if (!ports.keyring) throw new Error('this Genie has no keyring to set up here');
+            // Answered once the step is done, or the keyring's own unlock dialog is up (it waits on the person, not on this).
+            await (ports.keyring.press ? ports.keyring.press() : ports.keyring.fix());
+            break;
+        }
+        // THE CARD'S CANCEL while the keyring's unlock dialog is up (Tynn story #388).
+        case 'keyring.cancel': {
+            await ports.keyring?.cancel?.();
             break;
         }
         case 'integrations.tynnCode': {
@@ -1624,9 +1753,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.syncAgentDocs(action.workspacePath, 'you');
             next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
             break;
-        case 'remote.revokeShare':
-            if (!services.remote.revokeShare(action.shareId)) throw new Error(`no share link ${action.shareId}`);
+        case 'workspace.trust': {
+            // The person's yes: recorded first, then what it now allows. Genie's files go in, by you, as Sync now does.
+            const trusted = await services.workspaceTrust.trust(action.workspaceId);
+            if (trusted === null) throw new Error(`There is no workspace "${action.workspaceId}" to trust.`);
+            await services.syncAgentDocs(action.workspacePath, 'you');
+            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
             break;
+        }
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());
             if (nav.kind === 'refused') throw new Error(nav.reason);
@@ -1641,6 +1775,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'browser.reload':
             break;
     }
-    return featureSnapshot(services, next, ports);
+    slow(`act:${action.kind}`, actStarted);
+    const snapshotStarted = Date.now();
+    try {
+        return await featureSnapshot(services, next, ports);
+    } finally {
+        slow('snapshot', snapshotStarted);
+    }
 }
 

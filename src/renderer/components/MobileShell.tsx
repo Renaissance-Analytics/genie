@@ -1,4 +1,4 @@
-import { Icon, Input } from '@particle-academy/react-fancy';
+import { Button, Icon, Input, Tabs } from '@particle-academy/react-fancy';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import { statusOf, summaryChips } from '../../core/dashboard-view.js';
@@ -63,57 +63,81 @@ export interface MobileShellProps {
     reconnecting?: boolean | undefined;
 }
 
-const TONE: Record<'ok' | 'warn' | 'bad' | 'muted', string> = {
+const TONE: Record<'ok' | 'warn' | 'bad' | 'muted' | 'cool', string> = {
     ok: 'text-[var(--success)]',
     warn: 'text-[var(--warning)]',
     bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-4)]',
+    // Cooling (core/session.ts COOLING_MS): its own colour, not Working's green nor Idle's grey.
+    cool: 'text-[var(--sky-400)]',
 };
 
 const BUTTON = 'rounded-lg border border-[var(--border-1)] px-3 py-2 text-sm font-medium active:bg-[var(--bg-2)]';
 const PRIMARY = 'rounded-lg bg-[var(--primary)] px-4 py-2.5 text-sm font-medium text-white active:opacity-80 disabled:opacity-60';
 
+/**
+ * EVERY PHONE SCREEN SCROLLS INSIDE ITSELF (the owner, 2026-11-01: "it won't scroll at all so I am stuck"). The page is
+ * the desktop's, whose DOCUMENT never scrolls (genie#1290: `html { overflow: hidden }`, `body, #root { overflow: clip }`).
+ * A screen that grew past the phone (`min-h-dvh`) was clipped with nothing to scroll. So a screen is exactly one dynamic
+ * viewport tall (`dvh`: it follows the address bar and, with `interactive-widget=resizes-content`, the keyboard), its bars
+ * keep their height, and ONE bounded flex child scrolls: `min-h-0` gives it a height, and `overscroll-contain` keeps a
+ * pull at the top from becoming the browser's pull-to-refresh or rubber-banding the page. `touch-action` stays the
+ * browser's own (`auto`): an overflow scroller gets native momentum on iOS 13+ and Android, and pinch and sideways pans
+ * (a wide table in a markdown file) keep working.
+ */
+const SCREEN = 'flex h-dvh flex-col overflow-hidden bg-[var(--bg-0)] text-[var(--fg-1)]';
+const SCROLL = 'min-h-0 flex-1 overflow-y-auto overscroll-contain';
+/** Below the last row: clear of the home indicator. */
+const SAFE_BOTTOM = 'pb-[max(0.75rem,env(safe-area-inset-bottom))]';
+/** The top bar clears the status bar and notch: the installed app draws under them (black-translucent, viewport-fit=cover). */
+const SAFE_TOP = 'pt-[max(0.75rem,env(safe-area-inset-top))]';
+
 /** The bar a dropped connection shows while the phone dials again. */
 function Reconnecting() {
     return (
-        <p data-mobile-reconnecting role="status" className="flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--warning)]/10 px-4 py-2 text-xs text-[var(--warning)]">
+        <p data-mobile-reconnecting role="status" className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--warning)]/10 px-4 py-2 text-xs text-[var(--warning)]">
             <Icon name="loader" size="xs" className="animate-spin" />
             Reconnecting…
         </p>
     );
 }
 
-export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect, agents, workspaces, selectedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+    const hibernated = new Set((registeredWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
+    const workspaces = registeredWorkspaces?.filter((workspace) => !hibernated.has(workspace.id)) ?? registeredWorkspaces;
+    const selectedWorkspace = requestedWorkspace !== null && hibernated.has(requestedWorkspace) ? null : requestedWorkspace;
+    const items = reportedItems?.filter((item) => item.workspaceId === null || !hibernated.has(item.workspaceId)) ?? reportedItems;
+    const activeRows = agents?.rows?.filter((row) => !hibernated.has(row.workspaceId)) ?? agents?.rows;
     const wsLabel = (id: string | null): string | null => (id === null ? null : workspaceLabel(workspaces, id));
     const shownItems = items === null || selectedWorkspace === null ? items : items.filter((i) => i.workspaceId === selectedWorkspace);
-    const shownRows = agents?.rows == null || selectedWorkspace === null ? agents?.rows ?? null : agents.rows.filter((r) => r.workspaceId === selectedWorkspace);
+    const shownRows = activeRows == null || selectedWorkspace === null ? activeRows ?? null : activeRows.filter((row) => row.workspaceId === selectedWorkspace);
     return (
-        <div data-mobile="shell" className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
-            <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 py-3">
+        <div data-mobile="shell" className={SCREEN}>
+            <header className={`flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 pb-3 ${SAFE_TOP}`}>
                 <span className="size-5 rounded-[5px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
                 <span data-remote-badge className="truncate rounded-md bg-[var(--warning)]/15 px-2 py-0.5 font-mono text-xs font-semibold tracking-wide text-[var(--warning)]">● REMOTE — {host}</span>
                 <span className="flex-1" />
-                <button type="button" data-action="disconnect" onClick={onDisconnect} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs">Disconnect</button>
+                <Button size="xs" type="button" data-action="disconnect" onClick={onDisconnect} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs">Disconnect</Button>
             </header>
 
             {reconnecting ? <Reconnecting /> : null}
             {locked ? (
-                <p data-locked className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--warning)]">{host} is locked: every change from here is refused until it is unlocked there. Reading still works.</p>
+                <p data-locked className="shrink-0 border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--warning)]">{host} is locked: every change from here is refused until it is unlocked there. Reading still works.</p>
             ) : null}
             {refusal ? (
-                <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{refusal}</p>
+                <p data-refusal className="shrink-0 border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{refusal}</p>
             ) : null}
 
             {onSelectWorkspace && workspaces ? (
                 <MobileWorkspaces workspaces={workspaces} agents={agents?.rows ?? []} items={items ?? []} selected={selectedWorkspace} onSelect={onSelectWorkspace} />
             ) : null}
 
-            <main className="flex flex-1 flex-col gap-3 px-4 py-3">
+            <main data-mobile-scroll className={`${SCROLL} flex flex-col gap-3 px-4 pt-3 ${SAFE_BOTTOM}`}>
                 {selectedWorkspace !== null && onOpenFiles ? (
-                    <button type="button" data-action="open-files" onClick={() => onOpenFiles(selectedWorkspace)} className={`${BUTTON} flex items-center gap-2 self-start`}>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="open-files" onClick={() => onOpenFiles(selectedWorkspace)} className={`${BUTTON} flex items-center gap-2 self-start`}>
                         <Icon name="folder-open" size="sm" />
                         Files in {wsLabel(selectedWorkspace)}
-                    </button>
+                    </Button>
                 ) : null}
                 <h1 className="text-sm font-semibold">Needs you</h1>
                 {shownItems === null ? (
@@ -175,24 +199,35 @@ export interface MobileWorkspacesProps {
     onSelect: (workspaceId: string | null) => void;
 }
 
-/** THE WORKSPACE SELECTOR: a row of chips to thumb through — All, then each workspace with its agents and what waits. */
-export function MobileWorkspaces({ workspaces, agents, items, selected, onSelect }: MobileWorkspacesProps) {
-    const chip = (on: boolean) => `flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm ${on ? 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`;
+/** The value of the All tab; workspace ids are never empty, so it cannot collide with one. */
+const ALL_WORKSPACES = '';
+
+/**
+ * THE WORKSPACE SELECTOR: a row of chips to thumb through — All, then each workspace with its agents and what waits.
+ * react-fancy Tabs in the pills variant, not Buttons (the owner, 2026-11-01: "those should not be buttons, it's a menu"):
+ * each is role="tab", the one in view aria-selected.
+ */
+export function MobileWorkspaces({ workspaces: registered, agents, items, selected: requested, onSelect }: MobileWorkspacesProps) {
+    const workspaces = registered.filter((w) => w.asleep !== true);
+    const selected = requested !== null && registered.some((w) => w.id === requested && w.asleep) ? null : requested;
     return (
-        <nav data-mobile-workspaces aria-label="Workspaces" className="flex gap-2 overflow-x-auto border-b border-[var(--border-1)] px-4 py-2">
-            <button type="button" data-mobile-ws="all" data-selected={selected === null ? 'true' : 'false'} onClick={() => onSelect(null)} className={chip(selected === null)}>All</button>
-            {workspaces.map((w) => {
-                const count = agents.filter((a) => a.workspaceId === w.id).length;
-                const waiting = items.filter((i) => i.workspaceId === w.id).length;
-                return (
-                    <button key={w.id} type="button" data-mobile-ws={w.id} data-selected={selected === w.id ? 'true' : 'false'} onClick={() => onSelect(w.id)} className={chip(selected === w.id)}>
-                        <span>{w.name ?? workspaceLabel(workspaces, w.id)}</span>
-                        <span className="font-mono text-[11px] text-[var(--fg-4)]">{count}</span>
-                        {waiting > 0 ? <span data-mobile-ws-waiting={w.id} className="rounded-full bg-[var(--warning)] px-1.5 text-[11px] font-semibold text-black">{waiting}</span> : null}
-                        {w.asleep ? <span data-mobile-ws-asleep={w.id} className="text-[11px] text-[var(--fg-4)]">asleep</span> : null}
-                    </button>
-                );
-            })}
+        <nav data-mobile-workspaces aria-label="Workspaces" className="shrink-0 overflow-x-auto overscroll-x-contain border-b border-[var(--border-1)] px-4 py-2">
+            <Tabs variant="pills" activeTab={selected ?? ALL_WORKSPACES} onTabChange={(id) => onSelect(id === ALL_WORKSPACES ? null : id)}>
+                <Tabs.List className="w-max gap-1">
+                    <Tabs.Tab value={ALL_WORKSPACES} data-mobile-ws="all" className="shrink-0 px-3 text-sm">All</Tabs.Tab>
+                    {workspaces.map((w) => {
+                        const count = agents.filter((a) => a.workspaceId === w.id).length;
+                        const waiting = items.filter((i) => i.workspaceId === w.id).length;
+                        return (
+                            <Tabs.Tab key={w.id} value={w.id} data-mobile-ws={w.id} className="flex shrink-0 items-center gap-1.5 px-3 text-sm">
+                                <span>{w.name ?? workspaceLabel(workspaces, w.id)}</span>
+                                <span className="font-mono text-[11px] text-[var(--fg-4)]">{count}</span>
+                                {waiting > 0 ? <span data-mobile-ws-waiting={w.id} className="rounded-full bg-[var(--warning)] px-1.5 text-[11px] font-semibold text-black">{waiting}</span> : null}
+                            </Tabs.Tab>
+                        );
+                    })}
+                </Tabs.List>
+            </Tabs>
         </nav>
     );
 }
@@ -219,7 +254,7 @@ function AgentsSection({ rows, onOpen, workspaces }: { rows: readonly AgentRow[]
                             const status = statusOf(r);
                             return (
                                 <li key={r.id}>
-                                    <button type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left active:bg-[var(--bg-2)]">
+                                    <Button size="xs" labelClassName="contents" type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left active:bg-[var(--bg-2)] justify-start items-stretch">
                                         <span className="flex items-center gap-2 text-[13px]">
                                             <span className="font-medium">{r.name}</span>
                                             <ProviderLogo provider={r.provider} />
@@ -229,7 +264,7 @@ function AgentsSection({ rows, onOpen, workspaces }: { rows: readonly AgentRow[]
                                             <span className={`font-medium ${TONE[status.tone]}`}>{status.word}</span>
                                             {status.detail ? <span className="truncate text-[var(--fg-3)]" {...(status.title ? { title: status.title } : {})}>{status.detail}</span> : null}
                                         </span>
-                                    </button>
+                                    </Button>
                                 </li>
                             );
                         })}
@@ -269,9 +304,9 @@ export function PendingAttachments({ files, onRemove }: { files: readonly { name
                     <Icon name="paperclip" size="xs" />
                     <span className="max-w-[10rem] truncate">{f.name}</span>
                     <span className="font-mono text-[10px] text-[var(--fg-4)]">{f.size >= 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`}</span>
-                    <button type="button" data-action="remove-attachment" aria-label={`Remove ${f.name}`} onClick={() => onRemove(i)} className="rounded-full p-1 active:bg-[var(--bg-3)]">
+                    <Button size="xs" labelClassName="contents" type="button" data-action="remove-attachment" aria-label={`Remove ${f.name}`} onClick={() => onRemove(i)} className="rounded-full p-1 active:bg-[var(--bg-3)]">
                         <Icon name="x" size="xs" />
-                    </button>
+                    </Button>
                 </li>
             ))}
         </ul>
@@ -287,9 +322,11 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     const [pending, setPending] = useState<File[]>([]);
     if (!detail) {
         return (
-            <div data-mobile-agent-view="loading" className="flex min-h-dvh flex-col bg-[var(--bg-0)] p-4" aria-busy>
-                <button type="button" data-action="back" onClick={onBack} className="self-start text-xs text-[var(--fg-3)]">← back</button>
-                <div className="mt-4 h-6 w-40 animate-pulse rounded-md bg-[var(--bg-2)]" />
+            <div data-mobile-agent-view="loading" className={SCREEN} aria-busy>
+                <div data-mobile-scroll className={`${SCROLL} flex flex-col px-4 pb-4 ${SAFE_TOP}`}>
+                    <Button size="xs" type="button" data-action="back" onClick={onBack} className="self-start text-xs text-[var(--fg-3)]">← back</Button>
+                    <div className="mt-4 h-6 w-40 animate-pulse rounded-md bg-[var(--bg-2)]" />
+                </div>
             </div>
         );
     }
@@ -311,22 +348,22 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     };
     const attach = 'flex size-10 cursor-pointer items-center justify-center rounded-full border border-[var(--border-1)] active:bg-[var(--bg-2)]';
     return (
-        <div data-mobile-agent-view={detail.agent.id} className="flex h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
-            <header className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
-                <button type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</button>
+        <div data-mobile-agent-view={detail.agent.id} className={SCREEN}>
+            <header className={`flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-4 pb-3 ${SAFE_TOP}`}>
+                <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="text-sm font-semibold">{detail.agent.name}</span>
                 <ProviderLogo provider={detail.agent.provider} />
                 <span data-running={running ? 'true' : 'false'} className={`ml-auto font-mono text-[11px] ${running ? 'text-[var(--success)]' : 'text-[var(--fg-4)]'}`}>{running ? 'running' : 'not running'}</span>
             </header>
             {reconnecting ? <Reconnecting /> : null}
-            {detail.refusal ? <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{detail.refusal}</p> : null}
+            {detail.refusal ? <p data-refusal className="shrink-0 border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{detail.refusal}</p> : null}
             {held ? (
-                <div data-mobile-limit className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-xs">
+                <div data-mobile-limit className="flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-xs">
                     <span className="text-[var(--warning)]" {...(limitTitle(detail.session?.limit) ? { title: limitTitle(detail.session?.limit)! } : {})}>Paused · {held}</span>
-                    <button type="button" data-action="resume-limit" onClick={onResumeLimit} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 font-medium">Resume now</button>
+                    <Button size="xs" type="button" data-action="resume-limit" onClick={onResumeLimit} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 font-medium">Resume now</Button>
                 </div>
             ) : null}
-            <main data-mobile-activity className="flex flex-1 flex-col gap-2 overflow-y-auto px-4 py-3">
+            <main data-mobile-activity data-mobile-scroll className={`${SCROLL} flex flex-col gap-2 px-4 py-3`}>
                 {detail.rows.length === 0 ? (
                     <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>
                 ) : (
@@ -351,7 +388,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                 )}
             </main>
             {needs.length > 0 ? (
-                <section data-mobile-waiting className="flex flex-col gap-2 border-t border-[var(--warning)]/40 bg-[var(--warning)]/5 px-4 py-3">
+                <section data-mobile-waiting className="flex max-h-[40dvh] shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain border-t border-[var(--warning)]/40 bg-[var(--warning)]/5 px-4 py-3">
                     <h2 className="text-xs font-semibold text-[var(--warning)]">Waiting on you</h2>
                     {needs.map((item) => (
                         <div key={item.id} data-mobile-item={item.id}>
@@ -360,7 +397,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                     ))}
                 </section>
             ) : null}
-            <footer className="border-t border-[var(--border-1)] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <footer className="shrink-0 border-t border-[var(--border-1)] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                 {running ? (
                     <form data-mobile-composer onSubmit={submit} className="flex flex-col gap-2">
                         {sendRefusal ? <p data-send-refusal className="text-xs text-[var(--danger)]">{sendRefusal}</p> : null}
@@ -380,11 +417,11 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                                 <input type="file" multiple data-attach="file" className="hidden" onChange={pick} />
                             </label>
                             <span className="flex-1" />
-                            <button type="submit" data-action="send-prompt" disabled={sending} className={PRIMARY}>{sending ? 'Sending…' : 'Send'}</button>
+                            <Button size="xs" type="submit" data-action="send-prompt" disabled={sending} className={PRIMARY}>{sending ? 'Sending…' : 'Send'}</Button>
                         </div>
                     </form>
                 ) : (
-                    <button type="button" data-action="start-agent" onClick={onStart} className={`w-full ${PRIMARY}`}>Start {detail.agent.name}</button>
+                    <Button size="xs" type="button" data-action="start-agent" onClick={onStart} className={`w-full ${PRIMARY}`}>Start {detail.agent.name}</Button>
                 )}
             </footer>
         </div>
@@ -416,15 +453,15 @@ export function MobileFiles({ workspaceName, path, entries, onOpen, onUp, onBack
         e.currentTarget.value = '';
     };
     return (
-        <div data-mobile-files={path} className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
-            <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 py-3">
-                <button type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</button>
+        <div data-mobile-files={path} className={SCREEN}>
+            <header className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 pb-3 ${SAFE_TOP}`}>
+                <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="truncate text-sm font-semibold">{workspaceName}</span>
                 <span className="truncate font-mono text-xs text-[var(--fg-3)]">/{path}</span>
             </header>
-            <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border-1)] px-4 py-2">
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-1)] px-4 py-2">
                 {path !== '' ? (
-                    <button type="button" data-action="up" onClick={onUp} className={`${BUTTON} flex items-center gap-1.5`}><Icon name="corner-left-up" size="xs" />Up</button>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="up" onClick={onUp} className={`${BUTTON} flex items-center gap-1.5`}><Icon name="corner-left-up" size="xs" />Up</Button>
                 ) : null}
                 <span className="flex-1" />
                 <label className={`${BUTTON} flex cursor-pointer items-center gap-1.5`}>
@@ -436,10 +473,10 @@ export function MobileFiles({ workspaceName, path, entries, onOpen, onUp, onBack
                     <input type="file" accept="image/*" capture="environment" data-action="upload-photo" className="hidden" onChange={pick} disabled={uploading !== false} />
                 </label>
             </div>
-            {uploading !== false ? <p data-uploading role="status" className="px-4 py-2 text-xs text-[var(--fg-2)]">{uploading}</p> : null}
-            {outcome ? <p data-upload-outcome className="px-4 py-2 text-xs text-[var(--fg-3)]">{outcome}</p> : null}
-            {error ? <p data-refusal className="px-4 py-2 text-xs text-[var(--danger)]">{error}</p> : null}
-            <main className="flex flex-1 flex-col">
+            {uploading !== false ? <p data-uploading role="status" className="shrink-0 px-4 py-2 text-xs text-[var(--fg-2)]">{uploading}</p> : null}
+            {outcome ? <p data-upload-outcome className="shrink-0 px-4 py-2 text-xs text-[var(--fg-3)]">{outcome}</p> : null}
+            {error ? <p data-refusal className="shrink-0 px-4 py-2 text-xs text-[var(--danger)]">{error}</p> : null}
+            <main data-mobile-scroll className={`${SCROLL} flex flex-col ${SAFE_BOTTOM}`}>
                 {entries === null ? (
                     <div data-mobile-files-loading className="flex flex-col gap-2 p-4" aria-busy>
                         <div className="h-11 animate-pulse rounded-lg bg-[var(--bg-2)]" />
@@ -451,11 +488,11 @@ export function MobileFiles({ workspaceName, path, entries, onOpen, onUp, onBack
                     <ul className="flex flex-col">
                         {entries.map((e) => (
                             <li key={e.id}>
-                                <button type="button" data-file-entry={e.id} data-kind={e.type} onClick={() => onOpen(e)} className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-left text-[14px] active:bg-[var(--bg-2)]">
+                                <Button size="xs" labelClassName="contents" type="button" data-file-entry={e.id} data-kind={e.type} onClick={() => onOpen(e)} className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-left text-[14px] active:bg-[var(--bg-2)] justify-start">
                                     <Icon name={e.type === 'folder' ? 'folder' : 'file'} size="sm" className={e.type === 'folder' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'} />
                                     <span className="min-w-0 flex-1 truncate">{e.label}</span>
                                     {e.type === 'folder' ? <Icon name="chevron-right" size="xs" className="text-[var(--fg-4)]" /> : null}
-                                </button>
+                                </Button>
                             </li>
                         ))}
                     </ul>
@@ -477,12 +514,12 @@ export type MobilePreview =
 export function MobileFileView({ path, preview, onBack }: { path: string; preview: MobilePreview | null; onBack: () => void }) {
     const name = path.slice(path.lastIndexOf('/') + 1);
     return (
-        <div data-mobile-file-view={path} className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
-            <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 py-3">
-                <button type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</button>
+        <div data-mobile-file-view={path} className={SCREEN}>
+            <header className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 pb-3 ${SAFE_TOP}`}>
+                <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="truncate text-sm font-semibold">{name}</span>
             </header>
-            <main className="flex-1 overflow-auto">
+            <main data-mobile-scroll className={`${SCROLL} overflow-x-auto ${SAFE_BOTTOM}`}>
                 {preview === null ? (
                     <div data-preview="loading" className="m-4 h-40 animate-pulse rounded-lg bg-[var(--bg-2)]" aria-busy />
                 ) : preview.kind === 'markdown' ? (
@@ -494,13 +531,14 @@ export function MobileFileView({ path, preview, onBack }: { path: string; previe
                 ) : preview.kind === 'pdf' ? (
                     <div data-preview="pdf" className="flex flex-col items-center gap-3 p-6 text-center text-[13px] text-[var(--fg-3)]">
                         <Icon name="file-text" size="lg" />
-                        <a href={preview.url} target="_blank" rel="noreferrer" data-action="open-pdf" className={PRIMARY}>Open {name}</a>
+                        {/* A blob: object URL (createObjectURL, the PWA's https origin): react-fancy 5.72.0+ accepts it in Button's link form. */}
+                        <Button size="xs" href={preview.url} target="_blank" rel="noreferrer" data-action="open-pdf" className={PRIMARY}>Open {name}</Button>
                         <span>It opens in this phone’s own PDF viewer.</span>
                     </div>
                 ) : preview.kind === 'other' ? (
                     <div data-preview="other" className="flex flex-col items-center gap-3 p-6 text-center text-[13px] text-[var(--fg-3)]">
                         <span>No preview for this kind of file.</span>
-                        {preview.url ? <a href={preview.url} download={name} data-action="download" className={BUTTON}>Download</a> : null}
+                        {preview.url ? <Button size="xs" href={preview.url} download={name} data-action="download" className={BUTTON}>Download</Button> : null}
                     </div>
                 ) : (
                     <p data-preview="error" className="p-4 text-[13px] text-[var(--danger)]">{preview.reason}</p>
@@ -513,10 +551,16 @@ export function MobileFileView({ path, preview, onBack }: { path: string; previe
 /** A remembered phone dialing its host — opened from the home screen, or back from sleep. Never the PIN form. */
 export function MobileConnecting({ host }: { host: string }) {
     return (
-        <div data-mobile="connecting" role="status" className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-[var(--bg-0)] px-6 text-[var(--fg-1)]">
-            <span className="size-10 rounded-[10px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
-            <p className="flex items-center gap-2 text-sm"><Icon name="loader" size="sm" className="animate-spin" />Connecting to <span className="font-mono">{host}</span>…</p>
-            <p className="text-center text-xs text-[var(--fg-3)]">It must be on and on your tailnet. This keeps trying on its own.</p>
+        <div data-mobile="connecting" role="status" className={SCREEN}>
+            <div data-mobile-scroll className={`${SCROLL} flex flex-col px-6 ${SAFE_TOP} ${SAFE_BOTTOM}`}>
+                {/* `my-auto`, not `justify-center` on the scroller: centred while it fits, and when it does not, it overflows
+                    downward where it can be scrolled to — a centred overflow spills off the TOP, out of reach. */}
+                <div className="my-auto flex flex-col items-center gap-3 py-6">
+                    <span className="size-10 rounded-[10px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
+                    <p className="flex items-center gap-2 text-sm"><Icon name="loader" size="sm" className="animate-spin" />Connecting to <span className="font-mono">{host}</span>…</p>
+                    <p className="text-center text-xs text-[var(--fg-3)]">It must be on and on your tailnet. This keeps trying on its own.</p>
+                </div>
+            </div>
         </div>
     );
 }
@@ -542,20 +586,25 @@ export function MobilePair({ host, refusal, connecting, onConnect, waiting = nul
         onConnect({ pin: String(data.get('pin') ?? ''), label: String(data.get('label') ?? '') });
     };
     return (
-        <div data-mobile="pair" className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-[var(--bg-0)] px-6 text-[var(--fg-1)]">
-            <span className="size-10 rounded-[10px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
-            <h1 className="text-base font-semibold">Pair with <span className="font-mono">{host}</span></h1>
-            <p className="text-center text-[13px] text-[var(--fg-3)]">Type the PIN that machine shows under Settings → Workstation → Remote access. It is good for two minutes.</p>
-            <form onSubmit={submit} className="flex w-full max-w-xs flex-col gap-3">
-                <Input name="pin" inputMode="numeric" autoComplete="one-time-code" placeholder="482913" aria-label="PIN" className="text-center font-mono text-lg tracking-[0.3em]" />
-                <Input name="label" defaultValue={ownName} aria-label="This device’s name" />
-                {waiting ? (
-                    // Visible progress, never a spinner that says nothing: what it waits for, where, and how long is left.
-                    <p data-mobile-waiting="" role="status" className="text-center text-xs text-[var(--fg-2)]">{`Press Allow on ${host} to finish pairing · ${timeLeftWords(waiting.expiresAt - now)}`}</p>
-                ) : null}
-                {refusal ? <p data-refusal className="text-xs text-[var(--danger)]">{refusal}</p> : null}
-                <button type="submit" disabled={connecting || waiting !== null} className="rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60">{waiting ? 'Waiting for Allow…' : connecting ? 'Connecting…' : 'Connect'}</button>
-            </form>
+        <div data-mobile="pair" className={SCREEN}>
+            {/* The keyboard takes half a small phone: the form scrolls, so Connect is always reachable above it. */}
+            <div data-mobile-scroll className={`${SCROLL} flex flex-col px-6 ${SAFE_TOP} ${SAFE_BOTTOM}`}>
+                <div className="my-auto flex flex-col items-center gap-4 py-6">
+                    <span className="size-10 rounded-[10px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
+                    <h1 className="text-base font-semibold">Pair with <span className="font-mono">{host}</span></h1>
+                    <p className="text-center text-[13px] text-[var(--fg-3)]">Type the PIN that machine shows under Settings → Workstation → Remote access. It is good for two minutes.</p>
+                    <form onSubmit={submit} className="flex w-full max-w-xs flex-col gap-3">
+                        <Input name="pin" inputMode="numeric" autoComplete="one-time-code" placeholder="482913" aria-label="PIN" className="text-center font-mono text-lg tracking-[0.3em]" />
+                        <Input name="label" defaultValue={ownName} aria-label="This device’s name" />
+                        {waiting ? (
+                            // Visible progress, never a spinner that says nothing: what it waits for, where, and how long is left.
+                            <p data-mobile-waiting="" role="status" className="text-center text-xs text-[var(--fg-2)]">{`Press Allow on ${host} to finish pairing · ${timeLeftWords(waiting.expiresAt - now)}`}</p>
+                        ) : null}
+                        {refusal ? <p data-refusal className="text-xs text-[var(--danger)]">{refusal}</p> : null}
+                        <Button size="xs" type="submit" disabled={connecting || waiting !== null} className="rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60">{waiting ? 'Waiting for Allow…' : connecting ? 'Connecting…' : 'Connect'}</Button>
+                    </form>
+                </div>
+            </div>
         </div>
     );
 }

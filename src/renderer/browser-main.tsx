@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createRoot } from 'react-dom/client';
 import type { BrowserSnapshot } from '../main/genie-browser-window.js';
 import { GenieBrowserChrome } from './components/GenieBrowserChrome.js';
+import { SingleSiteWindow } from './components/SingleSiteWindow.js';
 import { registerAppIcons } from './icons.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
 import './styles.css';
@@ -26,6 +27,8 @@ interface BrowserBridge {
     forward(): Promise<void>;
     reload(): Promise<void>;
     setPreset(id: string): Promise<void>;
+    popBack(): Promise<void>;
+    restart(): Promise<void>;
     setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
     /** The native window buttons are drawn over the title row (Windows, Linux): their colours follow the theme. */
     readonly overlay: boolean;
@@ -36,7 +39,7 @@ declare global {
     interface Window { genieBrowser?: BrowserBridge }
 }
 
-const EMPTY: BrowserSnapshot = { tabs: [], active: null, presetId: 'fit', presets: [], sites: [] };
+const EMPTY: BrowserSnapshot = { notice: null, tabs: [], active: null, presetId: 'fit', presets: [], sites: [] };
 
 function Browser({ bridge }: { bridge: BrowserBridge }) {
     const [snapshot, setSnapshot] = useState<BrowserSnapshot>(EMPTY);
@@ -62,6 +65,9 @@ function Browser({ bridge }: { bridge: BrowserBridge }) {
     const active = snapshot.tabs.find((t) => t.id === snapshot.active);
     useLayoutEffect(report, [report, snapshot.sites.length, active?.error, refusal]);
     const answer = (call: Promise<Answer>) => { void call.then((a) => setRefusal(a.ok ? null : a.error)); };
+    if (new URLSearchParams(window.location.search).has('single')) {
+        return <SingleSiteWindow snapshot={snapshot} pageRef={pageRef} onBack={() => void bridge.back()} onForward={() => void bridge.forward()} onReload={() => void bridge.reload()} onPop={() => void bridge.popBack()} />;
+    }
     return (
         <GenieBrowserChrome
             snapshot={snapshot}
@@ -78,6 +84,7 @@ function Browser({ bridge }: { bridge: BrowserBridge }) {
             onForward={() => void bridge.forward()}
             onReload={() => void bridge.reload()}
             onPreset={(id) => void bridge.setPreset(id)}
+            onRestart={() => void bridge.restart()}
         />
     );
 }

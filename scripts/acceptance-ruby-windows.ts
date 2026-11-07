@@ -17,7 +17,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RUBY_RECIPES } from '../src/core/ruby-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, type RubyVersionsPorts } from '../src/main/ruby-versions.js';
 import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
@@ -36,13 +37,13 @@ async function main(): Promise<void> {
     const ports: RubyVersionsPorts = {
         platform: 'win32', arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run,
         windowsTar: join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'tar.exe'),
-        fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = RUBY_RECIPES[0]!.version;
     const pathBefore = userPath();
 
     console.log('1. a tampered downloads page');
-    const tampered = await installRubyVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/value="[0-9a-f]{64}"/g, `value="${'f'.repeat(64)}"`) } : r; } });
+    const tampered = await installRubyVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/value="[0-9a-f]{64}"/g, `value="${'f'.repeat(64)}"`) } : r; } });
     check(tampered.kind === 'not-installed' && /does not match the sha256 RubyInstaller publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : JSON.stringify(tampered));
     check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 

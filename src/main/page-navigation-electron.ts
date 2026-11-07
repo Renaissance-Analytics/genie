@@ -16,6 +16,14 @@ import type { DrivablePage } from './mcp-tools-pages.js';
 export const NAV_WORLD = 1001;
 
 const open = new Map<string, { readonly wc: WebContents; revision: number }>();
+const changeListeners = new Set<() => void>();
+const changed = (): void => { for (const listener of [...changeListeners]) listener(); };
+
+/** A page attached, moved, named or gone: for the Genie browser's process, which says what it has to the host. */
+export function onPagesChanged(listener: () => void): () => void {
+    changeListeners.add(listener);
+    return () => { changeListeners.delete(listener); };
+}
 
 /** Attach a view's page under `id`; the returned function detaches it (the view closed). */
 export function attachPageNavigation(id: string, wc: WebContents): () => void {
@@ -24,10 +32,12 @@ export function attachPageNavigation(id: string, wc: WebContents): () => void {
     wc.on('dom-ready', () => {
         void wc.executeJavaScriptInIsolatedWorld(NAV_WORLD, [{ code: DOM_NAVIGATION_SCRIPT }]).catch(() => { /* a page that went away mid-load */ });
     });
-    const moved = () => { entry.revision += 1; };
+    const moved = () => { entry.revision += 1; changed(); };
+    wc.on('page-title-updated', () => changed());
     wc.on('did-navigate', moved);
     wc.on('did-navigate-in-page', moved);
-    return () => { if (open.get(id) === entry) open.delete(id); };
+    changed();
+    return () => { if (open.get(id) === entry) { open.delete(id); changed(); } };
 }
 
 /** The pages open now, each with its transport into the isolated world. */

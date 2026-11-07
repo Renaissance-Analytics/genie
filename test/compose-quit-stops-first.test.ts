@@ -94,3 +94,4 @@ it('while the `.env` pass still waits on git, every supervised process is alread
     release();
     await shutting;
 });
+

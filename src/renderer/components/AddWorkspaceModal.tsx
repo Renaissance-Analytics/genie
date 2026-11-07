@@ -1,4 +1,4 @@
-import { Icon, Modal } from '@particle-academy/react-fancy';
+import { Button, Icon, Modal } from '@particle-academy/react-fancy';
 import { useEffect, useState, type ReactNode } from 'react';
 import { newWorkspaceProblem, workspaceFolderName } from '../../core/add-workspace.js';
 import { defaultRemoteChoice, remoteChoiceProblem, type Published, type RemoteChoice } from '../../core/agi-remote.js';
@@ -16,7 +16,7 @@ import { TynnProjectLink, type TynnLinkApi } from './TynnProjectLink.js';
  * The two halves are hook-free, so a test can press them; the modal holds the stage and the draft.
  */
 
-const card = 'flex min-h-[132px] flex-col items-start gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-left hover:border-[var(--violet-400)] hover:bg-[var(--bg-2)]';
+const card = 'flex min-h-[132px] flex-col items-start gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-left hover:border-[var(--violet-400)] hover:bg-[var(--bg-2)] justify-start';
 const groupLabel = 'text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-4)]';
 const button = 'rounded-md border border-[var(--border-1)] px-3 py-1 text-xs hover:bg-[var(--bg-2)] disabled:opacity-50';
 const primary = 'flex items-center gap-1.5 rounded-md bg-[var(--violet-500)] px-3 py-1 text-xs font-medium text-white hover:bg-[var(--violet-400)] disabled:opacity-50';
@@ -24,11 +24,11 @@ const primary = 'flex items-center gap-1.5 rounded-md bg-[var(--violet-500)] px-
 /** One card — a call, not a component, so the chooser stays one hook-free tree a test can walk and press. */
 function sourceCard({ id, icon, title, desc, onClick }: { id: string; icon: string; title: string; desc: string; onClick: () => void }) {
     return (
-        <button type="button" data-add-source={id} onClick={onClick} className={card}>
+        <Button size="xs" labelClassName="contents" type="button" data-add-source={id} onClick={onClick} className={card}>
             <span className="text-[var(--violet-400)]"><Icon name={icon} size="lg" /></span>
             <span className="text-sm font-semibold text-[var(--fg-1)]">{title}</span>
             <span className="text-xs text-[var(--fg-3)]">{desc}</span>
-        </button>
+        </Button>
     );
 }
 
@@ -97,7 +97,7 @@ export function NewWorkspaceForm({ name, parent, sep, busy, error, onName, onBro
                 <span className="text-xs font-semibold">Folder</span>
                 <div className="flex items-center gap-2">
                     <input data-field="workspace-parent" value={parent} readOnly placeholder="No folder chosen" className="min-w-0 flex-1 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1.5 font-mono text-xs" />
-                    <button type="button" data-action="browse-parent" onClick={onBrowse} className={`${button} flex items-center gap-1.5`}><Icon name="folder" size="xs" />Browse</button>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="browse-parent" onClick={onBrowse} className={`${button} flex items-center gap-1.5`}><Icon name="folder" size="xs" />Browse</Button>
                 </div>
                 <span data-lands-at="" className="text-xs text-[var(--fg-3)]">{lands ? `Lands at ${lands}` : 'Pick the folder your workspaces live in.'}</span>
             </div>
@@ -105,8 +105,8 @@ export function NewWorkspaceForm({ name, parent, sep, busy, error, onName, onBro
             {remote && onRemote ? <RemoteChoiceView choice={remote} github={github ?? null} folder={folder} onChoice={onRemote} onGithub={onGithub ?? (() => {})} /> : null}
             {error ? <p data-add-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
             <div className="flex items-center justify-end gap-2">
-                <button type="button" data-action="cancel-add" onClick={onCancel} className={button}>Cancel</button>
-                <button type="button" data-action="create-workspace" disabled={!ready} onClick={onCreate} className={primary}><Icon name="check" size="xs" />{busy ? 'Working…' : 'Create workspace'}</button>
+                <Button size="xs" type="button" data-action="cancel-add" onClick={onCancel} className={button}>Cancel</Button>
+                <Button size="xs" labelClassName="contents" type="button" data-action="create-workspace" disabled={!ready} onClick={onCreate} className={primary}><Icon name="check" size="xs" />{busy ? 'Working…' : 'Create workspace'}</Button>
             </div>
         </div>
     );

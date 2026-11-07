@@ -4,6 +4,7 @@ import type { LiveSession } from '../src/core/roster.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
 import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentView.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE PROCESS-ENDED BLOCK IN THE RIGHT COLUMN (the board's error state): heading, the engine's words in mono, the
@@ -37,7 +38,8 @@ describe('the process-ended block', () => {
         expect(html.split('data-action="restart"').length - 1).toBe(1);
         expect(html).toContain('data-action="copy-log"');
         // Copied through main, and the outcome ANNOUNCED beside it: a failed copy is never silent (clipboard-buttons.test).
-        expect(html).toMatch(/data-action="copy-log"[^>]*>Copy log<\/button><span data-copy-announce=""[^>]*role="status"/);
+        expect(control(html, 'data-action="copy-log"')).toMatchObject({ tag: 'button', fancy: true, text: 'Copy log' });
+        expect(html).toMatch(/data-action="copy-log"[\s\S]*?<\/button><span data-copy-announce=""[^>]*role="status"/);
     });
 
     it('absent while the session is working — and with no log the block still names the reason', () => {

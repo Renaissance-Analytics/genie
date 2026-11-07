@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 import { planV1InboxImport, type V1Inbox, type V1InboxAttachment, type V1InboxContext, type V1InboxIdentity, type V1InboxMessage } from '../core/v1-inbox.js';
 import type { InboxStore } from './inbox-store.js';
-import { OS_WORKSPACE } from './registry.js';
+import { OS_WORKSPACE } from '../core/os-agent.js';
 import { V1_OPEN_OPTIONS } from './v1-settings.js';
 
 /**

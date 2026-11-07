@@ -1,5 +1,18 @@
 import { heldRows, rowsPatch, type AgentPushPayload, type HeldRows } from '../core/agent-push-wire.js';
 import { Coalescer } from '../core/coalesce.js';
+import { asAgentId, type AgentId } from '../core/identity.js';
+import type { InboxApi } from './agent-stores-api.js';
+
+/** Mail arrival and receipt changes refresh the participants' watched chats, without an estate-wide push or poll. */
+export function wireInboxChatUpdates(inbox: Pick<InboxApi, 'onMessagesChanged'>, changed: (agentId: AgentId) => void): () => void {
+    return inbox.onMessagesChanged(messages => {
+        const participants = new Set(messages.flatMap(message => [message.from, message.to]));
+        for (const participant of participants) {
+            const agentId = asAgentId(participant);
+            if (agentId) changed(agentId);
+        }
+    });
+}
 
 export interface AgentPushPorts<D extends { readonly rows: readonly R[] }, R> {
     /** The agent's detail now; `null` = no such agent. */

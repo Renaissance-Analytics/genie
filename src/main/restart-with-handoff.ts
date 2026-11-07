@@ -14,7 +14,7 @@ import type { Finished } from './attention-store.js';
 export interface RestartPorts {
     /** The one restart (main/agent-ops-host.ts `restartAgent(…, 'graceful')`). */
     restart(agentId: AgentRecord['id']): Promise<{ ok: true } | { ok: false; reason: string }>;
-    prompt(agentId: AgentRecord['id'], text: string, by?: string | null): boolean;
+    prompt(agentId: AgentRecord['id'], text: string, by?: string | null): boolean | Promise<boolean>;
 }
 
 export interface FinishedPort {
@@ -32,7 +32,7 @@ export async function restartWithHandoff(ports: RestartPorts, attention: Finishe
 
     const restarted = await ports.restart(record.id);
     if (!restarted.ok) return { ok: false, reason: restarted.reason };
-    if (!ports.prompt(record.id, handoffPrompt(fin.handoff))) return { ok: false, reason: `${record.name} started but did not take the handoff prompt` };
+    if (!(await ports.prompt(record.id, handoffPrompt(fin.handoff)))) return { ok: false, reason: `${record.name} started but did not take the handoff prompt` };
 
     attention.markSeen(finishedId);
     return { ok: true };

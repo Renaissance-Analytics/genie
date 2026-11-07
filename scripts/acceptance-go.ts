@@ -15,7 +15,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GO_RECIPES, goBinaryName } from '../src/core/go-versions.js';
 import { installGoVersion, listGoVersions, removeGoVersion, type GoVersionsPorts } from '../src/main/go-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
 const results: boolean[] = [];
@@ -30,12 +31,12 @@ async function main(): Promise<void> {
     const platform = process.platform as GoVersionsPorts['platform'];
     const ports: GoVersionsPorts = {
         platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run,
-        fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = GO_RECIPES[0]!.version;
 
     console.log('1. a tampered release index');
-    const tampered = await installGoVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256":\s*"[0-9a-f]{64}"/g, `"sha256":"${'f'.repeat(64)}"`) } : r; } });
+    const tampered = await installGoVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256":\s*"[0-9a-f]{64}"/g, `"sha256":"${'f'.repeat(64)}"`) } : r; } });
     check(tampered.kind === 'not-installed' && /does not match the sha256 go\.dev publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : tampered.kind);
     check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 

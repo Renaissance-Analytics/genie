@@ -16,7 +16,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PHP_INI_EXTENSIONS } from '../src/core/php-versions.js';
-import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, removePhpVersion, resolvePhpCgi, type PhpVersionsPorts } from '../src/main/php-versions.js';
+import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, removePhpVersion, resolvePhpCgi, type PhpVersionsPorts } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
@@ -31,12 +32,12 @@ async function main(): Promise<void> {
     nodePhpVersionsFs().mkdirp(root);
     const ports: PhpVersionsPorts = {
         platform: 'linux', root, fs: nodePhpVersionsFs(), run, cpus: availableParallelism(),
-        fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = '8.4.27';
 
     console.log("1. a tampered release JSON");
-    const tampered = await installPhpVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256":\s*"[0-9a-f]{64}"/g, `"sha256":"${'f'.repeat(64)}"`) } : r; } });
+    const tampered = await installPhpVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256":\s*"[0-9a-f]{64}"/g, `"sha256":"${'f'.repeat(64)}"`) } : r; } });
     check(tampered.kind === 'not-installed' && /does not match the sha256 php\.net publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : JSON.stringify(tampered));
     check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 

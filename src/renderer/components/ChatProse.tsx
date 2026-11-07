@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ContentRenderer, Icon, type RenderExtension, type RenderExtensionProps } from '@particle-academy/react-fancy';
+import { Button, ContentRenderer, Icon, type RenderExtension, type RenderExtensionProps } from '@particle-academy/react-fancy';
 import { NO_REFS, liftChatBlocks, prepareChatMarkdown, type ChatRefs } from '../../core/chat-markup.js';
 import { COPIED_MS, resultCopyPayload } from '../../core/chat-copy.js';
 import { copyToClipboard, genieClipboardWriter } from '../clipboard.js';
@@ -30,7 +30,7 @@ export type CopyState = 'idle' | 'copied' | 'failed';
 export function CopyButtonView({ kind, label, state, onCopy }: { kind: 'result'; label: string; state: CopyState; onCopy: () => void }) {
     return (
         <span className="inline-flex items-center">
-            <button
+            <Button size="xs" labelClassName="contents"
                 type="button"
                 data-copy={kind}
                 data-copy-state={state}
@@ -44,7 +44,7 @@ export function CopyButtonView({ kind, label, state, onCopy }: { kind: 'result';
                     : state === 'failed'
                         ? <span data-icon-state="x" className="text-[var(--danger)]"><Icon name="x" size="xs" /></span>
                         : <span data-icon-state="copy"><Icon name="copy" size="xs" /></span>}
-            </button>
+            </Button>
             {/* Announced, not only drawn (moic lacks this): a screen reader hears that the copy happened — or that it did not. */}
             <span role="status" aria-live="polite" className="sr-only">{state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : ''}</span>
         </span>

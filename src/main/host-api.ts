@@ -1,4 +1,7 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
+import type { NativeTerminalPort } from './local-terminal-native.js';
+import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
+import type { Headroom } from '../core/headroom.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
@@ -6,16 +9,58 @@ import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-o
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import type { CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
-import type { RemoteMethod } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { Finished } from './attention-store.js';
 import type { HostApi } from './remote-host.js';
 import { restartWithHandoff, type RestartPorts } from './restart-with-handoff.js';
 import type { PtyOpened, TerminalOptions } from './terminal-host.js';
+import type { StartForWork as StartForWorkAnswer } from './start-on-demand.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { BytesResult, FileOpResult, OpenResult } from './files-host.js';
 import type { TreeNode } from '../core/files-panel.js';
+import { droneRefusal, type WorkstationRole } from '../core/workstation-role.js';
+import type { AppSourceKind } from '../core/app-inbox.js';
+import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
+import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
+import { isLocalFilesMethod } from '../core/local-files.js';
+import { invokeLocalFiles, type LocalFilesDeps } from './local-files-api.js';
+import type { FilesWatchPort } from './local-files-watches.js';
+import { isLocalDraftMethod } from '../core/local-drafts.js';
+import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js';
+import { isLocalArtboardMethod } from '../core/local-artboard.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
+
+/** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
+export interface LocalOwnerDeps {
+    appInbox: {
+        state(workspaceId: string): AppInboxCardState;
+        workspaceExists(workspaceId: string): boolean;
+        createKey(workspaceId: string, name: string): Promise<{ id: string; token: string }>;
+        scriptKeys(workspaceId: string): readonly { id: string }[];
+        revokeKey(keyId: string): Promise<unknown>;
+        rotate(kind: AppSourceKind, id: string): void;
+        revokeSource(source: { kind: AppSourceKind; id: string; workspaceId: string }): Promise<unknown>;
+        allowSource(kind: AppSourceKind, id: string): Promise<unknown>;
+        restartSource(workspaceId: string, kind: AppSourceKind, id: string): Promise<string>;
+    };
+    deviceLink?: {
+        hosts(): Promise<string[]>;
+        forget(url: string): Promise<boolean>;
+        adopt(url: string, token: string): Promise<boolean>;
+    };
+    tynnNetwork: {
+        hasAccount(): boolean;
+        signedIn(): boolean;
+        role(): WorkstationRole | null;
+        workstations(): Promise<TynnWorkstationList>;
+        setRole(workstationId: string, role: WorkstationRole, code: string): Promise<RoleChange>;
+        rereadRole(): void;
+        shares: NonNullable<TynnNetworkBridge['shares']>;
+    };
+}
 
 /**
  * THE HOST API (§6.8) — what a remote connection may perform on THIS Genie: one `invoke` over the
@@ -26,6 +71,12 @@ import type { TreeNode } from '../core/files-panel.js';
  */
 
 export interface HostApiDeps {
+    localTerminals?: NativeTerminalPort;
+    artboard?: LocalArtboardPort;
+    chatDrafts?: LocalDraftsStore;
+    filesWatch?: FilesWatchPort;
+    localFiles?: LocalFilesDeps;
+    localOwner?: LocalOwnerDeps;
     /** The timer and clock the agent events are coalesced on (core/coalesce.ts). Default: the real ones. */
     schedule?: (ms: number, fn: () => void) => () => void;
     now?: () => number;
@@ -36,17 +87,28 @@ export interface HostApiDeps {
     find(agentId: string): AgentRecord | null;
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
+    /**
+     * START ON FIRST MESSAGE (q_04ce323c; main/start-on-demand.ts): a message to an agent that is not running starts it
+     * first, under the same refusals as Start. Absent = a message to a stopped agent is refused, as before.
+     */
+    /** May answer later: the agent engine in genie-host answers its start asynchronously (main/start-on-demand.ts). */
+    startForWork?(record: AgentRecord): StartForWorkAnswer | Promise<StartForWorkAnswer>;
+    /**
+     * THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): `startForWork`, and a new driver on the same
+     * conversation when the run's own stopped itself (prism-acp 0.37.0). Absent = `startForWork`.
+     */
+    startForYourMessage?(record: AgentRecord): Promise<StartForWorkAnswer>;
     host: Pick<RestartPorts, 'prompt'> & {
-        start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
-        stop(agentId: AgentRecord['id']): boolean;
+        start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
+        stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
         resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
-        answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): { ok: true } | { ok: false; reason: string };
+        answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
-        cancel(agentId: AgentRecord['id']): CancelOutcome;
+        cancel(agentId: AgentRecord['id']): CancelOutcome | Promise<CancelOutcome>;
         /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
         resumeLimit(provider: string): void;
         /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
-        promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): { ok: true } | { ok: false; reason: string | null };
+        promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): ({ ok: true } | { ok: false; reason: string | null }) | Promise<{ ok: true } | { ok: false; reason: string | null }>;
         subscribe(listener: (agentId: string) => void): () => void;
     };
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
@@ -54,6 +116,8 @@ export interface HostApiDeps {
     attention: { finished(): readonly Finished[]; markSeen(id: string): void };
     terminals: {
         open(options: TerminalOptions): PtyOpened;
+        /** `open`, answered once the pid and shell are known (a pty made under genie-host). Absent = `open`'s answer is it. */
+        openReady?(options: TerminalOptions): Promise<PtyOpened>;
         write(id: string, data: string): boolean;
         resize(id: string, cols: number, rows: number): boolean;
         close(id: string): boolean;
@@ -126,8 +190,9 @@ export interface HostApiDeps {
         /** Optional for the same reason: a host without it answers with a refusal. */
         commitsSince?(workspaceId: string, sinceMs: number): Promise<unknown>;
         settings(workspaceId: string): Promise<unknown> | unknown;
-        setSetting(workspaceId: string, key: string, value: boolean | string): Promise<unknown>;
+        setSetting(workspaceId: string, key: string, value: unknown): Promise<unknown>;
         resetSetting(workspaceId: string, key: string): Promise<unknown>;
+        onSettingsChanged?(listener: (workspaceId: string) => void): () => void;
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<unknown>;
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<unknown>;
         /** A workspace's colour (genie#1300). Optional: a host without it refuses. */
@@ -152,12 +217,20 @@ export interface HostApiDeps {
         /** The provider's models for the agent's picker; `refresh` asks the provider again. */
         models(agentId: string, refresh: boolean): Promise<unknown>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+        /** A tool row's whole output, from the host's store, bounded (Tynn story #386). Absent = previews only. */
+        toolOutput?(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
     };
     /** Every agent's activity feed (the Dashboard's lanes, beta.33 item 10): one workspace's, and each as it changes. */
     activity?: {
         feeds(workspaceId: string): Readonly<Record<string, ActivityFeed>>;
         subscribe(listener: (feed: ActivityFeed) => void): () => void;
     };
+    /** Buffered provider readings, with the native initial read and subsequent changes. */
+    headroom?: {
+        view(): Readonly<Record<string, Headroom>>;
+        subscribe(listener: (room: Readonly<Record<string, Headroom>>) => void): () => void;
+    };
+    retryPausedAccount?(provider: string): void;
     features: {
         snapshot(): Promise<FeatureData>;
         act(action: FeatureAction): Promise<FeatureData>;
@@ -168,6 +241,7 @@ export interface HostApiDeps {
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
         install(): Promise<{ report: string }> | null;
+        notes?(): Promise<UpdateState | null>;
         /** Abandon a drain in progress (§7.5); `false` when there is none. */
         onChange(listener: (state: UpdateState) => void): () => void;
     } | null;
@@ -175,23 +249,97 @@ export interface HostApiDeps {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''));
 const num = (v: unknown): number | undefined => (typeof v === 'number' && v > 0 ? Math.floor(v) : undefined);
+const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 
 export function buildHostApi(deps: HostApiDeps): HostApi {
     const agent = (id: unknown): AgentRecord | null => deps.find(str(id));
+    const owner = (): LocalOwnerDeps => {
+        if (!deps.localOwner) throw new Error('this host has no local owner operations');
+        return deps.localOwner;
+    };
 
     const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+        if (isLocalTerminalMethod(method)) {
+            if (!deps.localTerminals) throw new Error('the local terminal service is not available');
+            const name = method.slice('terminals.local'.length).toLowerCase();
+            if (!['open', 'write', 'resize', 'close', 'list', 'attach'].includes(name)) throw new Error('terminal stream control requires its authenticated local connection');
+            return deps.localTerminals.invoke(name, decodeTerminalNativeArguments(name, args));
+        }
+        if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
+        if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
+        if (isLocalArtboardMethod(method)) return invokeLocalArtboard(deps.artboard, method, args);
         switch (method) {
+            case 'appInbox.state':
+                return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };
+            case 'appInbox.createKey': {
+                const [workspaceId, name] = args;
+                if (!named(workspaceId) || typeof name !== 'string') return { ok: false, reason: 'name a workspace and the key' };
+                const inbox = owner().appInbox;
+                if (!inbox.workspaceExists(workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
+                try {
+                    const made = await inbox.createKey(workspaceId, name);
+                    return { ok: true, id: made.id, name: name.trim(), token: made.token, state: inbox.state(workspaceId) };
+                } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+            }
+            case 'appInbox.revokeKey': {
+                const [workspaceId, keyId] = args;
+                if (!named(workspaceId) || !named(keyId)) return { ok: false, reason: 'name a workspace and the key' };
+                const inbox = owner().appInbox;
+                if (!inbox.scriptKeys(workspaceId).some(k => k.id === keyId)) return { ok: false, reason: 'that key is not one of this workspace’s' };
+                await inbox.revokeKey(keyId);
+                return { ok: true, state: inbox.state(workspaceId) };
+            }
+            case 'appInbox.source': {
+                const [workspaceId, op, kind, id] = args;
+                if (!named(workspaceId) || (op !== 'rotate' && op !== 'revoke' && op !== 'allow') || (kind !== 'site' && kind !== 'process') || !named(id)) return { ok: false, reason: 'rotate, revoke or allow a site or a process' };
+                const inbox = owner().appInbox;
+                try {
+                    if (op === 'rotate') inbox.rotate(kind, id);
+                    else if (op === 'revoke') await inbox.revokeSource({ kind, id, workspaceId });
+                    else await inbox.allowSource(kind, id);
+                    const after = await inbox.restartSource(workspaceId, kind, id);
+                    return { ok: true, text: `${op === 'rotate' ? 'Rotated' : op === 'revoke' ? 'Revoked' : 'Allowed'}: ${after}`, state: inbox.state(workspaceId) };
+                } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+            }
+            case 'deviceLink.hosts': return (await owner().deviceLink?.hosts()) ?? [];
+            case 'deviceLink.forget': return typeof args[0] === 'string' ? (await owner().deviceLink?.forget(args[0])) ?? false : false;
+            case 'deviceLink.adopt': return typeof args[0] === 'string' && typeof args[1] === 'string' ? (await owner().deviceLink?.adopt(args[0], args[1])) ?? false : false;
+            case 'tynnNetwork.workstations': {
+                const network = owner().tynnNetwork;
+                if (!network.hasAccount()) return { ok: false, reason: 'this Genie has no Tynn account' };
+                const refused = droneRefusal(network.role());
+                if (refused) return { ok: false, reason: refused };
+                return network.workstations();
+            }
+            case 'tynnNetwork.setRole': {
+                const network = owner().tynnNetwork, [workstationId, role, code] = args;
+                const refused = droneRefusal(network.role());
+                if (refused) return { ok: false, reason: refused };
+                if (typeof workstationId !== 'string' || (role !== 'pilot' && role !== 'drone') || typeof code !== 'string') return { ok: false, reason: 'not a role change' };
+                if (!network.signedIn()) return { ok: false, reason: 'Sign in to Tynn to change a workstation’s role' };
+                const result = await network.setRole(workstationId, role, code);
+                if (result.ok) network.rereadRole();
+                return result;
+            }
+            case 'tynnNetwork.shares.list': return owner().tynnNetwork.shares.list(typeof args[0] === 'string' ? args[0] : null);
+            case 'tynnNetwork.shares.mint': {
+                const input = (args[0] ?? {}) as { workspaceId?: unknown; capability?: unknown; expiresInDays?: unknown };
+                return owner().tynnNetwork.shares.mint({ workspaceId: typeof input.workspaceId === 'string' ? input.workspaceId : null,
+                    capability: input.capability === 'readonly' ? 'readonly' : 'control', expiresInDays: typeof input.expiresInDays === 'number' ? input.expiresInDays : 7 });
+            }
+            case 'tynnNetwork.shares.revoke': return typeof args[0] === 'string' ? owner().tynnNetwork.shares.revoke(args[0]) : { ok: false, reason: 'not a link' };
             case 'snapshot':
                 return deps.snapshot();
             case 'agentDetail':
                 return deps.detailFor(str(args[0]));
             case 'openAgent': {
+                // Opening SHOWS the agent (q_04ce323c): nothing starts. Its first message, or Start, starts it.
                 const r = agent(args[0]);
-                return r ? deps.host.start(r, deps.cwdFor(r)) : { ok: false, reason: 'unknown agent' };
+                return r ? { ok: true } : { ok: false, reason: 'unknown agent' };
             }
             case 'stopAgent': {
                 const r = agent(args[0]);
-                return { ok: r ? deps.host.stop(r.id) : false };
+                return { ok: r ? await deps.host.stop(r.id) : false };
             }
             case 'resumeLimit': {
                 const r = agent(args[0]);
@@ -206,16 +354,21 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'prompt': {
                 const r = agent(args[0]);
                 const text = str(args[1]);
+                // THE FIRST MESSAGE STARTS IT (q_04ce323c), as the composer's does; a refused start is said, nothing sent.
+                if (r && (deps.startForYourMessage || deps.startForWork) && (text.length > 0 || Array.isArray(args[2]))) {
+                    const started = deps.startForYourMessage ? await deps.startForYourMessage(r) : await deps.startForWork!(r);
+                    if (!started.ok) return { ok: false, reason: started.reason };
+                }
                 // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
                 if (Array.isArray(args[2])) {
                     const attachments = attachmentsOf(args[2]);
                     if (!r) return { ok: false, reason: 'unknown agent' };
                     if (attachments === null || attachments.length === 0) return { ok: false, reason: 'an attachment is not a file' };
                     if (!deps.host.promptWith) return { ok: false, reason: 'this host does not take files in a message' };
-                    const sent = deps.host.promptWith(r.id, text, attachments, 'you');
+                    const sent = await deps.host.promptWith(r.id, text, attachments, 'you');
                     return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
                 }
-                return { ok: r !== null && text.length > 0 && deps.host.prompt(r.id, text, 'you') };
+                return { ok: r !== null && text.length > 0 && (await deps.host.prompt(r.id, text, 'you')) };
             }
             case 'resolvePrompt': {
                 const r = agent(args[0]);
@@ -240,60 +393,86 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
             }
             case 'agents.restart':
-                return deps.agentOps.restart(str(args[0]), args[1] === 'fresh' ? 'fresh' : 'graceful');
+                if (typeof args[0] !== 'string' || (args[1] !== 'graceful' && args[1] !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
+                return deps.agentOps.restart(args[0], args[1]);
             case 'agents.previewDelete':
-                return deps.agentOps.previewDelete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : []);
+                if (typeof args[0] !== 'string' || (args[1] !== 'unmount' && args[1] !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
+                return deps.agentOps.previewDelete(args[0], args[1], Array.isArray(args[2]) ? args[2].map(String) : []);
             case 'agents.delete':
-                return deps.agentOps.delete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : [], args[3] === true);
+                if (typeof args[0] !== 'string' || (args[1] !== 'unmount' && args[1] !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
+                return deps.agentOps.delete(args[0], args[1], Array.isArray(args[2]) ? args[2].map(String) : [], args[3] === true);
             case 'agents.switchDriver':
-                return deps.agentOps.switchDriver(str(args[0]), str(args[1]));
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
+                return deps.agentOps.switchDriver(args[0], args[1]);
             case 'agents.setBudget':
-                return deps.agentOps.setBudget(str(args[0]), args[1] === null ? null : Number(args[1]));
+                if (typeof args[0] !== 'string' || (args[1] !== null && !(typeof args[1] === 'number' && args[1] >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
+                return deps.agentOps.setBudget(args[0], args[1] as number | null);
             case 'agents.setMode':
-                return deps.agentOps.setMode(str(args[0]), args[1] === 'automated' ? 'automated' : 'manual');
+                if (typeof args[0] !== 'string' || (args[1] !== 'automated' && args[1] !== 'manual')) return { ok: false, reason: 'mode is automated or manual' };
+                return deps.agentOps.setMode(args[0], args[1]);
             case 'agents.setAutoApprove':
-                return deps.agentOps.setAutoApprove(str(args[0]), args[1] === true);
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'autonomy is on or off' };
+                return deps.agentOps.setAutoApprove(args[0], args[1]);
             case 'agents.setManageTabs':
-                return deps.agentOps.setManageTabs(str(args[0]), args[1] === true);
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'managing tabs is on or off' };
+                return deps.agentOps.setManageTabs(args[0], args[1]);
             case 'agents.setDrivePages':
-                return deps.agentOps.setDrivePages(str(args[0]), args[1] === true);
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'driving pages is on or off' };
+                return deps.agentOps.setDrivePages(args[0], args[1]);
             case 'agents.setIssueWatch':
-                return deps.agentOps.setIssueWatch(str(args[0]), args[1]);
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
+                return deps.agentOps.setIssueWatch(args[0], args[1]);
             case 'agents.setAccessScope':
-                return deps.agentOps.setAccessScope(str(args[0]), args[1] === 'none' || args[1] === 'all' ? args[1] : 'self');
+                if (typeof args[0] !== 'string' || (args[1] !== 'none' && args[1] !== 'self' && args[1] !== 'all')) return { ok: false, reason: 'scope is none, self or all' };
+                return deps.agentOps.setAccessScope(args[0], args[1]);
             case 'agents.setPermissions':
-                return deps.agentOps.setPermissions(str(args[0]), args[1] === 'edits' || args[1] === 'ask' ? args[1] : 'all');
+                if (typeof args[0] !== 'string' || (args[1] !== 'all' && args[1] !== 'edits' && args[1] !== 'ask')) return { ok: false, reason: 'permissions are all, ask or edits' };
+                return deps.agentOps.setPermissions(args[0], args[1]);
             case 'agents.setModel':
-                // `null` (or nothing, or empty) = back to the provider's default.
-                return deps.agentOps.setModel(str(args[0]), args[1] === null || args[1] === undefined || args[1] === '' ? null : str(args[1]));
+                if (typeof args[0] !== 'string' || (args[1] !== null && typeof args[1] !== 'string')) return { ok: false, reason: 'a model is a name, or null for the provider default' };
+                // Only explicit null clears it. The operation keeps its existing empty-name refusal.
+                return deps.agentOps.setModel(args[0], args[1]);
             case 'agents.models':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
                 // Only an explicit `true` asks the provider again: a refresh starts its CLI.
-                return deps.agentOps.models(str(args[0]), args[1] === true);
+                return deps.agentOps.models(args[0], args[1] === true);
             case 'agents.diagnose':
-                return deps.agentOps.diagnose(str(args[0]));
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'diagnose names an agent' };
+                return deps.agentOps.diagnose(args[0]);
+            case 'agents.toolOutput':
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'toolOutput names an agent and a tool call' };
+                return deps.agentOps.toolOutput ? deps.agentOps.toolOutput(args[0], args[1]) : { ok: false, reason: 'this host keeps no tool outputs' };
             case 'workspaces.previewAdd':
+                // Preserve the retired native wizard's early refusals before any coercion or disk operation.
+                if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
                 if (!deps.workspaceOps.previewAdd) throw new Error('this host cannot preview adding a folder');
-                return deps.workspaceOps.previewAdd(str(args[0]));
+                return deps.workspaceOps.previewAdd(args[0]);
             case 'workspaces.previewAddFromGit':
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'give a git URL and a parent folder' };
                 if (!deps.workspaceOps.previewAddFromGit) throw new Error('this host cannot preview a clone');
-                return deps.workspaceOps.previewAddFromGit(str(args[0]), str(args[1]));
+                return deps.workspaceOps.previewAddFromGit(args[0], args[1]);
             case 'workspaces.confirmAddFromGit':
-                return deps.workspaceOps.confirmAddFromGit(str(args[0]), str(args[1]));
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'give a git URL and a parent folder' };
+                return deps.workspaceOps.confirmAddFromGit(args[0], args[1]);
             case 'workspaces.readSource':
+                if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
                 if (!deps.workspaceOps.readSource) throw new Error('this host cannot read a folder to set it up');
-                return deps.workspaceOps.readSource(str(args[0]));
+                return deps.workspaceOps.readSource(args[0]);
             case 'workspaces.stageFromGit':
+                if (typeof args[0] !== 'string' || args[0].trim() === '') return { ok: false, reason: 'give a git URL' };
                 if (!deps.workspaceOps.stageFromGit) throw new Error('this host cannot import from git');
-                return deps.workspaceOps.stageFromGit(str(args[0]));
+                return deps.workspaceOps.stageFromGit(args[0]);
             case 'workspaces.registerExisting':
+                if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
                 if (!deps.workspaceOps.registerExisting) throw new Error('this host cannot add an existing workspace');
-                return deps.workspaceOps.registerExisting(str(args[0]));
+                return deps.workspaceOps.registerExisting(args[0]);
             case 'workspaces.buildEnvelope':
                 if (!deps.workspaceOps.buildEnvelope) throw new Error('this host cannot build a workspace');
                 return deps.workspaceOps.buildEnvelope(args[0], args[1]);
             case 'workspaces.discardStaged':
+                if (typeof args[0] !== 'string') return { ok: true };
                 if (!deps.workspaceOps.discardStaged) throw new Error('this host cannot discard an import');
-                return deps.workspaceOps.discardStaged(str(args[0]));
+                return deps.workspaceOps.discardStaged(args[0]);
             case 'workspaces.githubRepos':
                 if (!deps.workspaceOps.githubRepos) throw new Error('this host cannot list GitHub repositories');
                 return deps.workspaceOps.githubRepos();
@@ -307,23 +486,29 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (!deps.workspaceOps.createTynnProject) throw new Error('this host cannot create Tynn projects');
                 return deps.workspaceOps.createTynnProject(args[0]);
             case 'workspaces.importedAgents':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'name a workspace' };
                 if (!deps.workspaceOps.importedAgents) throw new Error('this host cannot read a workspace’s agent files');
-                return deps.workspaceOps.importedAgents(str(args[0]));
+                return deps.workspaceOps.importedAgents(args[0]);
             case 'workspaces.adoptAgent':
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'name a workspace and an agent' };
                 if (!deps.workspaceOps.adoptAgent) throw new Error('this host cannot adopt agents');
-                return deps.workspaceOps.adoptAgent(str(args[0]), str(args[1]));
+                return deps.workspaceOps.adoptAgent(args[0], args[1]);
             case 'workspaces.tynnProjects':
                 if (!deps.workspaceOps.tynnProjects) throw new Error('this host cannot list Tynn projects');
                 return deps.workspaceOps.tynnProjects();
             case 'workspaces.previewAddFromTynn':
+                if (typeof args[0] !== 'string' || args[0] === '' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'choose a Tynn project and a parent folder' };
                 if (!deps.workspaceOps.previewAddFromTynn) throw new Error('this host cannot preview a Tynn envelope');
-                return deps.workspaceOps.previewAddFromTynn(str(args[0]), str(args[1]));
+                return deps.workspaceOps.previewAddFromTynn(args[0], args[1]);
             case 'workspaces.confirmAddFromTynn':
-                return deps.workspaceOps.confirmAddFromTynn(str(args[0]), str(args[1]));
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'give a parent folder and a Tynn project' };
+                return deps.workspaceOps.confirmAddFromTynn(args[0], args[1]);
             case 'workspaces.create':
-                return deps.workspaceOps.create(str(args[0]), str(args[1]), args[2], typeof args[3] === 'string' && args[3] !== '' ? args[3] : undefined);
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'give the workspace a name and a folder' };
+                return deps.workspaceOps.create(args[0], args[1], args[2], typeof args[3] === 'string' && args[3] !== '' ? args[3] : undefined);
             case 'workspaces.confirmAdd':
-                return deps.workspaceOps.confirmAdd(str(args[0]));
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'confirmAdd names a folder' };
+                return deps.workspaceOps.confirmAdd(args[0]);
             case 'workspaces.hibernate':
                 return deps.workspaceOps.hibernate(str(args[0]));
             case 'workspaces.wake':
@@ -360,7 +545,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.settings':
                 return deps.workspaceOps.settings(str(args[0]));
             case 'workspaces.setSetting':
-                return deps.workspaceOps.setSetting(str(args[0]), str(args[1]), typeof args[2] === 'boolean' ? args[2] : str(args[2]));
+                return deps.workspaceOps.setSetting(str(args[0]), str(args[1]), args[2]);
             case 'workspaces.resetSetting':
                 return deps.workspaceOps.resetSetting(str(args[0]), str(args[1]));
             case 'workspaces.setGoverns':
@@ -384,7 +569,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const options = (args[1] ?? {}) as { cols?: unknown; rows?: unknown; command?: unknown };
                 const env = deps.serviceEnvFor(workspace.id);
                 const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
-                return deps.terminals.open({ workspaceId: workspace.id, cwd: workspace.path, cols: num(options.cols), rows: num(options.rows), command, ...(Object.keys(env).length > 0 ? { env } : {}) });
+                const wanted: TerminalOptions = { workspaceId: workspace.id, cwd: workspace.path, cols: num(options.cols), rows: num(options.rows), command, personal: true, ...(Object.keys(env).length > 0 ? { env } : {}) };
+                return deps.terminals.openReady ? await deps.terminals.openReady(wanted) : deps.terminals.open(wanted);
             }
             case 'terminals.write':
                 return deps.terminals.write(str(args[0]), str(args[1]));
@@ -420,8 +606,19 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates ? deps.updates.download() : false;
             case 'updates.install':
                 return deps.updates?.install() ?? null;
+            case 'updates.notes':
+                return deps.updates?.notes?.() ?? null;
+            case 'headroom':
+                return deps.headroom ? deps.headroom.view() : null;
+            case 'accountRetry': {
+                const record = typeof args[0] === 'string' ? deps.find(args[0]) : null;
+                if (!record) return { ok: false, reason: 'No agent named.' };
+                deps.retryPausedAccount?.(record.provider);
+                return { ok: true };
+            }
             case 'activity':
-                return deps.activity?.feeds(str(args[0])) ?? {};
+                if (typeof args[0] !== 'string') return {};
+                return deps.activity ? deps.activity.feeds(args[0]) : {};
             case 'inbox.sendFile':
                 return deps.uploads.sendFile(str(args[0]), str(args[1]), str(args[2]), Buffer.from(str(args[3]), 'base64'));
             case 'files.children':
@@ -441,6 +638,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     const terminalWorkspaces = new Map<string, string>();
     return {
         invoke,
+        ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
+        ...(deps.localTerminals ? { localTerminals: deps.localTerminals } : {}),
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
         // A terminal's workspace, remembered once seen: its exit is pushed after it has left the list.
         workspaceOfTerminal: (terminalId) => {
@@ -466,8 +665,11 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.terminals.onData((id, data) => listener('terminal-data', { id, data })),
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
                 deps.features.onChange((data) => listener('features', data)),
-                deps.updates?.onChange((state) => listener('updates', state)) ?? (() => {}),
-                deps.activity?.subscribe((feed) => listener('activity', feed)) ?? (() => {}),
+                deps.updates?.onChange((state) => { listener('updates', state); listener(LOCAL_EVENTS.updates, state); }) ?? (() => {}),
+                deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
+                deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
+                deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
+                deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };
         },

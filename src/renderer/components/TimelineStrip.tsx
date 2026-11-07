@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import type { RefObject } from 'react';
 import type { StreamFilter } from '../../core/lanes.js';
 import type { Chip, SessionTimeline, TickKind, TimelineHead } from '../../core/session-timeline.js';
@@ -42,19 +42,19 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
             <span className="w-14 shrink-0 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Session</span>
             <div className="relative h-7 min-w-0 flex-1">
                 {timeline.segments.map((s) => (
-                    <button
+                    <Button variant="ghost" size="xs" labelClassName="contents"
                         key={s.rowId}
                         type="button"
                         data-segment={s.label}
                         title={`Turn ${s.n}`}
                         aria-label={`Turn ${s.n}`}
                         onClick={() => onOpenRow(s.rowId)}
-                        className="absolute inset-y-0 border-l border-[var(--border-2)] text-left hover:bg-[var(--bg-2)]"
+                        className="absolute inset-y-0 rounded-none border-l border-[var(--border-2)] p-0 text-left hover:bg-[var(--bg-2)] justify-start"
                         style={{ left: `${s.x * 100}%`, width: `${s.w * 100}%` }}
                     >
                         {/* A label only where there is room (session-timeline.ts LABEL_GAP); the title names every turn. */}
                         {s.showLabel ? <span data-segment-label="" className="absolute -top-0.5 left-1 whitespace-nowrap font-mono text-[11px] text-[var(--fg-3)]">{s.label}</span> : null}
-                    </button>
+                    </Button>
                 ))}
                 {timeline.ticks.map((k) => (
                     <span
@@ -72,7 +72,7 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
                     const lane = LEGEND_LANE[k];
                     const on = filter !== null && filter.includes(lane);
                     return (
-                        <button
+                        <Button variant="ghost" size="xs" labelClassName="contents"
                             key={k}
                             type="button"
                             data-legend={k}
@@ -83,19 +83,19 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
                         >
                             <span className={`size-1.5 rounded-[2px] ${TICK[k]}`} />
                             {k}
-                        </button>
+                        </Button>
                     );
                 })}
                 {/* NEXT EDIT (§4.2 `E`), a button: only when there is an edit to go to — a button that would do nothing is not drawn. */}
                 {timeline.ticks.some((k) => k.kind === 'edit') ? (
-                    <button type="button" data-action="next-edit" title="Next edit (E)" onClick={() => onNextEdit?.()} className="flex items-center gap-1 rounded px-1 hover:bg-[var(--bg-2)]">
+                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="next-edit" title="Next edit (E)" onClick={() => onNextEdit?.()} className="flex items-center gap-1 rounded px-1 hover:bg-[var(--bg-2)]">
                         Next edit
                         <kbd className="font-mono text-[10px] text-[var(--fg-4)]">E</kbd>
-                    </button>
+                    </Button>
                 ) : null}
             </div>
             {layoutDoor ? (
-                <button
+                <Button size="xs"
                     type="button"
                     data-action="toggle-layout"
                     data-nav={layoutDoor.route}
@@ -104,9 +104,9 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
                     className="flex h-[26px] shrink-0 items-center rounded-md border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]"
                 >
                     {layoutDoor.label}
-                </button>
+                </Button>
             ) : null}
-            <button
+            <Button size="xs" labelClassName="contents"
                 type="button"
                 data-action="toggle-lanes"
                 aria-pressed={lanesOpen}
@@ -116,7 +116,7 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
             >
                 Lanes
                 <Icon name={lanesOpen ? 'chevron-up' : 'chevron-down'} size="xs" className="text-[var(--fg-3)]" />
-            </button>
+            </Button>
         </div>
     );
 }
@@ -149,7 +149,7 @@ export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef
              */}
             <div data-chip-lane="" className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
             {chips.map((chip) => (
-                <button
+                <Button size="xs" labelClassName="contents"
                     key={chip.id}
                     type="button"
                     {...(chip.id === 'all' ? { 'data-chip': 'all' } : (FACETS as readonly string[]).includes(chip.id) ? { 'data-facet': chip.id } : { 'data-lane': chip.id })}
@@ -163,7 +163,7 @@ export function ChipsRow({ chips, selected, onChange, find = '', onFind, findRef
                     {chip.label}
                     {/* A MEASURED zero is kept: a turn with no edits genuinely has none. */}
                     <span {...(chip.id === 'all' ? {} : (FACETS as readonly string[]).includes(chip.id) ? { 'data-facet-count': chip.n } : { 'data-lane-count': chip.n })} className="font-mono text-[10px] tabular-nums text-[var(--fg-4)]">{chip.n}</span>
-                </button>
+                </Button>
             ))}
             </div>
             {/* FIND IN STREAM (the board's `Find in stream  /`): a box at the right; Escape clears it and gives the keys back. */}

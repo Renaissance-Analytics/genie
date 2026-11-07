@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SitePanelViews, type PanelViewPort } from '../src/main/site-panel-views.js';
+import { SitePanelViews, type PanelViewPort } from '../src/core/site-panel-views.js';
 
 /**
  * LIVE SITE PANELS (beta.35 item 36, step 5; the owner, FTQ q_227d0bb6: site panels are LIVE pages). A workspace tab's

@@ -1,4 +1,4 @@
-import { OS_WORKSPACE } from './registry.js';
+import { OS_WORKSPACE } from '../core/os-agent.js';
 import { resolve as resolvePath } from 'node:path';
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
@@ -198,7 +198,7 @@ function customEnvArg(v: unknown): Record<string, string> | string {
 }
 
 function siteView(s: SiteInfo): Record<string, unknown> {
-    return { id: s.id, name: s.name, host: s.host, url: `https://${s.host}/`, state: s.state, port: s.port, repoPath: s.repoPath, problem: s.problem };
+    return { id: s.id, name: s.name, host: s.host, url: `https://${s.host}/`, state: s.state, port: s.port, repoPath: s.repoPath, problem: s.problem, ...(s.firstStart ? { waitsForThePerson: s.firstStart } : {}) };
 }
 
 const NOT_HERE = 'this Genie has no services or sites to manage (doctor mode runs none); nothing was done';

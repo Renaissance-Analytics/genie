@@ -1,4 +1,4 @@
-import { Badge, Icon, Modal, Select } from '@particle-academy/react-fancy';
+import { Badge, Button, Icon, Modal, Select } from '@particle-academy/react-fancy';
 import { useEffect, useState, type ReactNode } from 'react';
 import { workspaceFolderName } from '../../core/add-workspace.js';
 import { defaultRemoteChoice, remoteChoiceProblem, type Published, type RemoteChoice } from '../../core/agi-remote.js';
@@ -62,9 +62,9 @@ export function WizardStepper({ step, onStep }: { step: number; onStep: (i: numb
         <ol data-wizard-steps="" className="flex items-center gap-2 text-xs">
             {WIZARD_STEPS.map((name, i) => (
                 <li key={name} className="flex items-center gap-2">
-                    <button type="button" data-wizard-step={name} aria-current={i === step ? 'step' : undefined} onClick={() => onStep(i)} className={chip(i === step)}>
+                    <Button size="xs" type="button" data-wizard-step={name} aria-current={i === step ? 'step' : undefined} onClick={() => onStep(i)} className={chip(i === step)}>
                         {i + 1}. {name}
-                    </button>
+                    </Button>
                     {i < WIZARD_STEPS.length - 1 ? <Icon name="chevron-right" size="xs" /> : null}
                 </li>
             ))}
@@ -123,8 +123,8 @@ export function ReposStepView({ draft, onPatch, onMode, onPrimary, github = null
                 <div className="flex flex-col gap-1.5">
                     <span className={muted}>This monorepo has {members} member{members === 1 ? '' : 's'}. Choose how to bring it in:</span>
                     <div className="flex gap-2">
-                        <button type="button" data-monorepo-mode="explode" aria-pressed={draft.monorepoMode === 'explode'} onClick={() => onMode('explode')} className={chip(draft.monorepoMode === 'explode')}>Explode into {members} submodule{members === 1 ? '' : 's'}</button>
-                        <button type="button" data-monorepo-mode="wrap" aria-pressed={draft.monorepoMode === 'wrap'} onClick={() => onMode('wrap')} className={chip(draft.monorepoMode === 'wrap')}>Wrap whole (one submodule)</button>
+                        <Button size="xs" type="button" data-monorepo-mode="explode" aria-pressed={draft.monorepoMode === 'explode'} onClick={() => onMode('explode')} className={chip(draft.monorepoMode === 'explode')}>Explode into {members} submodule{members === 1 ? '' : 's'}</Button>
+                        <Button size="xs" type="button" data-monorepo-mode="wrap" aria-pressed={draft.monorepoMode === 'wrap'} onClick={() => onMode('wrap')} className={chip(draft.monorepoMode === 'wrap')}>Wrap whole (one submodule)</Button>
                     </div>
                 </div>
             ) : null}
@@ -200,7 +200,7 @@ export function DispositionStepView({ rows, onSet, onSetAll }: { rows: readonly 
             </p>
             <div className="flex items-center gap-1.5">
                 <span className={muted}>Set all:</span>
-                {DISPOSITIONS.map((d) => <button key={d.value} type="button" data-set-all={d.value} onClick={() => onSetAll(d.value)} className={button}>{d.short}</button>)}
+                {DISPOSITIONS.map((d) => <Button size="xs" key={d.value} type="button" data-set-all={d.value} onClick={() => onSetAll(d.value)} className={button}>{d.short}</Button>)}
             </div>
             <table className={table}>
                 <thead><tr><th>Entry</th><th>Git</th><th>Becomes</th><th>Target</th></tr></thead>
@@ -285,7 +285,7 @@ export function WorkspaceStepView({ draft, sep, onName, onBrowse, remote, github
                 <span className="text-xs font-semibold">Folder</span>
                 <div className="flex items-center gap-2">
                     <input data-field="workspace-parent" value={draft.parent} readOnly placeholder="No folder chosen" className="min-w-0 flex-1 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1.5 font-mono text-xs" />
-                    <button type="button" data-action="browse-parent" onClick={onBrowse} className={`${button} flex items-center gap-1.5`}><Icon name="folder" size="xs" />Browse</button>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="browse-parent" onClick={onBrowse} className={`${button} flex items-center gap-1.5`}><Icon name="folder" size="xs" />Browse</Button>
                 </div>
                 <span data-lands-at="" className={muted}>{lands ? `Lands at ${lands}` : 'Pick the folder your workspaces live in.'}</span>
             </div>
@@ -309,7 +309,7 @@ export function ExistingWorkspaceView({ path, staged, url, parent, sep, onBrowse
                     <p className={muted}><span className="font-mono">{url}</span> has a project.json, so it is added as it is. Genie clones it into the folder you choose.</p>
                     <div className="flex items-center gap-2">
                         <input data-field="workspace-parent" value={parent} readOnly placeholder="No folder chosen" className="min-w-0 flex-1 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1.5 font-mono text-xs" />
-                        <button type="button" data-action="browse-parent" onClick={onBrowse} className={`${button} flex items-center gap-1.5`}><Icon name="folder" size="xs" />Browse</button>
+                        <Button size="xs" labelClassName="contents" type="button" data-action="browse-parent" onClick={onBrowse} className={`${button} flex items-center gap-1.5`}><Icon name="folder" size="xs" />Browse</Button>
                     </div>
                     {parent.trim() ? <span data-lands-at="" className={muted}>Lands at {parent.trim().replace(/[\\/]+$/, '')}{sep}{leaf}</span> : null}
                 </>
@@ -400,9 +400,9 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
         const ready = !busy && (!read.staged || parent.trim() !== '');
         body = <ExistingWorkspaceView path={read.path} staged={read.staged === true} url={read.url} parent={parent} sep={sep} onBrowse={() => pickParent(setParent, parent)} />;
         footer = (
-            <button type="button" data-action="add-existing" disabled={!ready} onClick={() => finish(() => (read.staged && read.url ? (discard(read.path), cloneExisting(read.url, parent)) : registerExisting(read.path)))} className={primaryButton}>
+            <Button size="xs" labelClassName="contents" type="button" data-action="add-existing" disabled={!ready} onClick={() => finish(() => (read.staged && read.url ? (discard(read.path), cloneExisting(read.url, parent)) : registerExisting(read.path)))} className={primaryButton}>
                 <Icon name="check" size="xs" />{busy ? 'Adding…' : 'Add workspace'}
-            </button>
+            </Button>
         );
     } else if (draft) {
         const d = draft;
@@ -444,18 +444,18 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
         );
         footer = (
             <>
-                {step > 0 ? <button type="button" data-action="wizard-back" disabled={busy} onClick={() => setStep(step - 1)} className={button}>Back</button> : null}
+                {step > 0 ? <Button size="xs" type="button" data-action="wizard-back" disabled={busy} onClick={() => setStep(step - 1)} className={button}>Back</Button> : null}
                 {step < WIZARD_STEPS.length - 1 ? (
-                    <button type="button" data-action="wizard-next" disabled={busy || !canLeaveStep(d, step)} onClick={() => go(step + 1)} className={primaryButton}>Next<Icon name="arrow-right" size="xs" /></button>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="wizard-next" disabled={busy || !canLeaveStep(d, step)} onClick={() => go(step + 1)} className={primaryButton}>Next<Icon name="arrow-right" size="xs" /></Button>
                 ) : (
-                    <button type="button" data-action="build-workspace" disabled={busy || finishProblem !== null} onClick={() => {
+                    <Button size="xs" labelClassName="contents" type="button" data-action="build-workspace" disabled={busy || finishProblem !== null} onClick={() => {
                         setBusy(true); setError(null);
                         void build(plan, remote).then((r) => {
                             if (!r.ok) { setError(r.reason); return; }
                             if (r.published && r.published.problems.length > 0) { setPartial({ id: r.id, path: r.path ?? '', published: r.published }); return; }
                             onAdded(r.id);
                         }, (e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
-                    }} className={primaryButton}><Icon name="check" size="xs" />{busy ? 'Building the workspace…' : 'Add workspace'}</button>
+                    }} className={primaryButton}><Icon name="check" size="xs" />{busy ? 'Building the workspace…' : 'Add workspace'}</Button>
                 )}
             </>
         );
@@ -470,7 +470,7 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
                     {body}
                     {error ? <p data-add-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
                     <div className="flex items-center justify-end gap-2">
-                        <button type="button" data-action="cancel-add" disabled={busy} onClick={close} className={button}>Cancel</button>
+                        <Button size="xs" type="button" data-action="cancel-add" disabled={busy} onClick={close} className={button}>Cancel</Button>
                         <span className="flex-1" />
                         {footer}
                     </div>

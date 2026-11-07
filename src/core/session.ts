@@ -1,19 +1,23 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
-import { openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
+import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-store.js';
+import { boundToolEvent } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
 import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
-import type { AgentId } from './identity.js';
+import { threadKeyFor, type AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
-import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult } from './process-tree.js';
+import { carriedLabel, type CarryOver } from './carry-over.js';
+import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult, startTimeUnknown } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
-import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
+import { RATE_LIMIT_META, headroomFromMeta, rateLimitWarning, type Headroom } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
 import { randomUUID } from 'node:crypto';
+import { SLEEPING_AFTER_IDLE_MS } from './agent-status.js';
+import { redockReorientation } from './redock.js';
 import { providerProblemWords } from './claude-cli-version.js';
 
 /**
@@ -237,6 +241,27 @@ export const LIMIT_RESUME_PROMPT = "The provider's rate limit has reset. Continu
 export const OVERLOAD_RETRY_MS: readonly number[] = [30_000, 60_000, 120_000, 240_000];
 export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last turn did not finish. Continue where you left off.';
 
+/**
+ * CLAUDE'S CANCEL STATE UNCERTAIN (prism-acp 0.37.0): its cancel receipt was missing (30 s) or did not account for the
+ * prompts in flight, so prism-acp ended them all cancelled (raw `cancel accounting mismatch`), stopped the CLI and said
+ * this fixed reason through `onProtocolError`; that driver's `prompt()` throws `ClaudeCancelStateError` with this code
+ * from then on. Matched here by value so core/ stays free of prism-acp at runtime; test/prism-acp-version.test.ts holds
+ * them to the installed package's own error.
+ */
+export const CANCEL_STATE_UNCERTAIN = 'cancel state uncertain; driver stopped';
+export const CANCEL_STATE_UNCERTAIN_CODE = 'claude_cancel_state_uncertain';
+
+/**
+ * COOLING (the owner, 2026-11-01): "a state they enter right after finishing a turn (coming out of the work state).
+ * Instead of immediately marking them as idle, they are "Cooling" down for 15 seconds then become Idle. This way I can
+ * sort By status and agents that are in between turns aren't making the whole list jump around."
+ *
+ * How long a turn that ended cleanly reads `Cooling` before `Idle`. Fixed, not a setting. DISPLAY ONLY: `turnState` is
+ * `idle` throughout, so nothing that decides whether to prompt (the inbox push, a flow, the person's message, a setting
+ * applied after a turn) waits for it.
+ */
+export const COOLING_MS = 15_000;
+
 export interface AgentSessionOptions {
     agentId: AgentId;
     cwd: string;
@@ -244,6 +269,17 @@ export interface AgentSessionOptions {
     driverFactory: SessionDriverFactory;
     /** Resume this provider-side conversation instead of starting a fresh one. */
     resumeSessionId?: string | null;
+    /**
+     * THE CONVERSATION A PROVIDER SWITCH CARRIES (Tynn story #380, core/carry-over.ts): attached ONCE, above the words of
+     * the next prompt that goes; the chat marks that turn with a `notice` row carrying the exact text sent, and the
+     * person's message row stays their words alone. A send the provider refuses, or a turn that does not reply (failed,
+     * stopped, held), keeps it for the next prompt; a turn that replied calls `onCarryOverSent`.
+     */
+    carryOver?: CarryOver | null;
+    onCarryOverSent?: () => void;
+    /** Independent of provider carry-over and held trust words; consumed only by an accepted first prompt. */
+    redockAt?: string;
+    onRedockSent?: (at: string) => void;
     /**
      * Notified for every ledger row, so a surface can render without re-reading the thread.
      *
@@ -290,6 +326,11 @@ export interface AgentSessionOptions {
      */
     permissionDecision?: (request: PermissionRequestLike) => 'allow' | 'deny' | 'ask';
     /**
+     * Whether this run may be handed work now, asked at each hand-over. False = it waits, as it does on a limit, and a run
+     * that ends leaves it owed, so the next one gets it. Absent = always.
+     */
+    mayTakeWork?: () => boolean;
+    /**
      * The provider has identified its own conversation, once.
      *
      * Fired when `cliSessionId` first becomes known — the value a later resume is keyed on, and
@@ -325,11 +366,13 @@ export interface AgentSessionOptions {
      * (hosting plan 1.2). What the host writes into its spawn ledger, so a crash cannot orphan them unrecorded.
      */
     onSpawned?: (processes: readonly ProcessInfo[]) => void;
+    /** The machine could not be read after a spawn, twice: these pids are recorded with no start time. */
+    onReadingFailed?: (pids: readonly number[]) => void;
     /** Output arrived from this run after it was stopped (hosting plan 1.4). Said once per run. */
     onStraggler?: () => void;
     /** Genie's clock, for the stamps below (when an approval parked, when a failure was recorded). Injected so a host's clock reaches them. */
     clock?: () => number;
-    /** Run `fire` after `ms`; answers a cancel. Injected so a test can fire it; default `setTimeout`. */
+    /** Run `fire` after `ms`; answers a cancel (an overload's retry, the Cooling wait). Injected so a test can fire it; default `setTimeout`. */
     retryLater?: (ms: number, fire: () => void) => () => void;
 }
 
@@ -343,6 +386,10 @@ export class AgentSession {
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
     #overloads = 0;
     #overloadCancel: (() => void) | null = null;
+    /** The Cooling wait (COOLING_MS) after a turn that ended cleanly, while it runs; `null` = not cooling. One per session. */
+    #coolingCancel: (() => void) | null = null;
+    #idleSince: number | null = null;
+    #sleepingCancel: (() => void) | null = null;
     #turnState: TurnState = 'idle';
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
@@ -364,20 +411,38 @@ export class AgentSession {
     /** A tool was refused for want of Claude Design's `/design-login` (core/design-login.ts): the login window fixes it. */
     #designLogin = false;
     /**
-     * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there: the provider queues it (Claude
-     * runs it as its own turn after the current one; Codex refuses a second prompt in flight). Its marker is written
-     * when ITS turn starts — when the one before it ends. Writing it at send time numbered it as the running turn, so
-     * the owner's record read `10, 10, 10, 10, 11, 12, 14, 14…`: the same number per message sent mid-turn, and a gap for
-     * every queued turn that ended without a marker (the owner, 2026-10-14).
+     * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there. Claude Code takes it and usually
+     * FOLDS it into the running turn (measured, the 2026-10-20 note in `onTurnEnd`), so no turn of its own may ever come;
+     * Codex refuses a second prompt in flight, and `deliver` holds it for the turn's end (`#afterTurn`). A marker for it
+     * is written only when a turn of its own starts: its first activity after the running turn ends, or a silent turn
+     * end. Writing it at send time numbered it as the running turn, so the owner's record read `10, 10, 10, 10, 11, 12,
+     * 14, 14…`: the same number per message sent mid-turn, and a gap for every one that never got a turn of its own (the
+     * owner, 2026-10-14).
      */
     #inTurn = false;
-    /** Who sent each prompt still waiting for its turn (`by`, as `prompt` takes it), oldest first. */
-    #queued: (string | null)[] = [];
+    /**
+     * Each prompt still waiting for its turn, oldest first: who sent it (`by`, as `prompt` takes it), and what it was, so
+     * one Claude DROPS at a Stop (prism-acp 0.37.0, `#dropped`) can be sent again or kept as a draft.
+     */
+    #queued: Array<{ by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
+    /**
+     * THE DRIVER STOPPED ITSELF and will take no prompt again (prism-acp 0.37.0: Claude's cancel state uncertain,
+     * `CANCEL_STATE_UNCERTAIN`). Not Broken — nothing about the agent is wrong — but this run is over: the person's next
+     * message starts a new driver on the same conversation (`SessionHost.needsNewDriver`, main/start-on-demand.ts).
+     */
+    #needsNewDriver = false;
     /**
      * Who asked to stop the running turn (`cancel`'s `by`), until that turn ends. The cancelled turn's end is then
      * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
      */
     #stopAskedBy: string | null = null;
+    /**
+     * STOP MEANS STOP UNTIL THE PERSON ACTS (genie#1565): the person stopped the last turn they saw running, and has not
+     * sent anything since. While set no inbox notice is handed over (`deliverable`); at the stop itself only what the person
+     * queued was kept to send, which, if anything, ends the pause at once (`#keepOnlyYours`). The person's own message (`deliver`/`prompt` by `you`) or `resumeAfterStop` clears it. A turn the
+     * provider ended, or one cancelled with nobody here asking, never sets it.
+     */
+    #stoppedByYou = false;
     /** Turns ENDED in this run only. `#turns` carries on from the recorded history (#223); a wait for an answer must not. */
     #endedThisRun = 0;
     /** The provider's own words for why a turn did not finish. `null` when none did. */
@@ -408,6 +473,8 @@ export class AgentSession {
      * child. A stop reaches the roots' tree AS IT IS THEN, so a provider the shell launched later is still reached.
      */
     #roots: readonly ProcessInfo[] | null = null;
+    /** The off-loop reading that settles `#roots` after the newest spawn on a tree with `read` + `capture`; a stop waits for it. */
+    #rootsReading: Promise<void> | null = null;
     /** Every process of this run seen so far (the roots' trees at start and at stop) — what a verification checks. */
     #members: readonly ProcessInfo[] = [];
     /**
@@ -460,9 +527,26 @@ export class AgentSession {
      * been satisfied by `zephyr-bfd`.
      *
      * `persisted` tracks whether the thread already holds this message, so a growing message is
-     * written once when it closes rather than once per chunk.
+     * written once when it closes rather than once per chunk. `messageId`: the provider's own id for it, when it gives one
+     * (Codex's item id): a chunk with another id is another message.
      */
-    #openMessage: { event: Extract<StreamEvent, { kind: 'message' | 'think' }>; persisted: boolean } | null = null;
+    #openMessage: { event: Extract<StreamEvent, { kind: 'message' | 'think' }>; persisted: boolean; messageId?: string | null } | null = null;
+    /**
+     * ROWS THAT ARRIVED BESIDE THE OPEN MESSAGE (genie#1456): emitted and written right after it closes (`#besideTheOpen`).
+     * Holding them keeps the two rules everything downstream relies on: the growing message is the NEWEST row (the host's
+     * `replacesLast` overwrites the last row, and `LiveReadings` reads that), and rows reach the thread in the order they
+     * reached the screen.
+     */
+    #heldBeside: StreamEvent[] = [];
+    /** A subagent's calls not yet answered, and the call that spawned each: a row of one is known as theirs even if it comes without the mark. */
+    #subagentCalls = new Map<string, string>();
+    /** The carry-over waiting for the next prompt, and the one sent with the turn now running (Tynn story #380). */
+    #carryOver: CarryOver | null = null;
+    #redockAt: string | null = null;
+    #carryInFlight: CarryOver | null = null;
+    /** Per-agent provider reading; a turn end arms delivery with the next accepted input. */
+    #latestHeadroom: Headroom | null = null;
+    #rateWarningPending = false;
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -483,6 +567,8 @@ export class AgentSession {
     constructor(options: AgentSessionOptions) {
         this.#options = options;
         this.agentId = options.agentId;
+        this.#carryOver = options.carryOver ?? null;
+        this.#redockAt = options.redockAt ?? null;
         if (options.turnsBefore !== undefined && options.turnsBefore >= 0) { this.#turns = options.turnsBefore; this.#marked = options.turnsBefore; }
     }
 
@@ -531,29 +617,127 @@ export class AgentSession {
         this.#changed();
     }
 
+    /**
+     * QUIET: a restart now would cut nothing. Promptable, not on a limit, and past the Cooling wait, because
+     * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
+     * For a restart Genie chooses by itself; the person's own Restart does not ask.
+     */
+    get quiet(): boolean {
+        // What waits in `#afterTurn` here is held for the next run, and a run that ends leaves it owed.
+        return this.promptable && !this.#held && this.#coolingCancel === null;
+    }
+
     get turnState(): TurnState {
         return this.#turnState;
     }
 
     /**
-     * Whether the session can take a turn NOW — Genie's own reading, the same for every provider: alive, started (the
-     * driver's declared `ready`, when it declares one), no turn in flight (Genie's own record, `#inTurn` — never inferred
-     * from output), nothing parked on a person, and not broken or stopped. What the inbox push waits for.
-     *
-     * Deliberately not `turnState === 'idle'`. A session just started reads `working` until a turn of its own ends — with
-     * no turn running — so a notice for an agent started and mailed at once waited for somebody else to prompt it (B26).
+     * COOLING (COOLING_MS): the turn ended cleanly less than 15 s ago and nothing has happened since — no new turn, no
+     * stop. A status for the board to show and sort by, never a gate: `turnState` is `idle`, and `promptable` and
+     * `deliverable` read exactly as they would without it.
      */
+    get cooling(): boolean {
+        return this.#coolingCancel !== null && this.#turnState === 'idle';
+    }
+
+    /** A clock for display only; prompts and mail never wait on Sleeping. */
+    get idleSince(): number | null { return this.#turnState === 'idle' && !this.cooling ? this.#idleSince : null; }
+
+    #startIdle(): void {
+        this.#sleepingCancel?.();
+        this.#idleSince = this.#now();
+        this.#sleepingCancel = this.#later(SLEEPING_AFTER_IDLE_MS, () => {
+            this.#sleepingCancel = null;
+            if (this.#turnState === 'idle' && !this.cooling && this.running) this.#changed();
+        });
+    }
+
+    /** Begin the Cooling wait, replacing one already running; its end is announced, so the board redraws it Idle. */
+    #startCooling(): void {
+        this.#stopCooling();
+        this.#coolingCancel = this.#later(COOLING_MS, () => {
+            this.#coolingCancel = null;
+            this.#startIdle();
+            this.#changed();
+        });
+    }
+
+    #stopCooling(): void {
+        this.#coolingCancel?.();
+        this.#coolingCancel = null;
+        this.#sleepingCancel?.();
+        this.#sleepingCancel = null;
+        this.#idleSince = null;
+    }
+
+    /** The injected timer, or `setTimeout` — unref'd, so a wait that only redraws a status never holds the process open. */
+    #later(ms: number, fire: () => void): () => void {
+        if (this.#options.retryLater) return this.#options.retryLater(ms, fire);
+        const t = setTimeout(fire, ms);
+        t.unref?.();
+        return () => clearTimeout(t);
+    }
+
     /**
      * A TURN IN FLIGHT, by Genie's own record (a prompt went in and its end has not come) — not `turnState: 'working'`,
-     * which a session that is still STARTING reads as too. What a Restart asks before it tells the agent its turn was
-     * cut (genie#1238): a restart pressed while the run was only coming up cut nothing.
+     * which provider activity before any turn of this run reads as too. What a Restart asks before it tells the agent
+     * its turn was cut (genie#1238): a restart pressed while the run was only coming up cut nothing.
      */
     get inTurn(): boolean {
         return this.#inTurn;
     }
 
+    /**
+     * STILL COMING UP: the driver declared a `ready` (Genie's own start always does — the MCP preparation and the
+     * provider's handshake, main/deferred-driver.ts) that has not resolved. What the header and the chat show as
+     * `Starting`, and what a first message waits for (q_04ce323c: start on first message, visibly).
+     */
+    get starting(): boolean {
+        return this.#starting;
+    }
+
+    /**
+     * Whether the session can take a NEW turn now — Genie's own reading, the same for every provider: alive, started (the
+     * driver's declared `ready`, when it declares one), no turn in flight (Genie's own record, `#inTurn` — never inferred
+     * from output), nothing parked on a person, and not broken or stopped. What the plan keep-alive waits for.
+     *
+     * Deliberately not `turnState === 'idle'`. A session just started USED to read `working` until a turn of its own
+     * ended — with no turn running — so a notice for an agent started and mailed at once waited for somebody else to
+     * prompt it (B26). It reads idle now (2026-11-01), but idle is still not enough: a session still STARTING is idle too,
+     * and cannot take a turn until its `ready`.
+     */
     get promptable(): boolean {
-        return this.running && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+        return this.running && !this.#needsNewDriver && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+    }
+
+    /**
+     * Whether a message handed over now reaches the agent at its NEXT STEP, the way the person's typed message does
+     * (`deliver`): alive, started, not held on a limit, not broken or stopped. A turn in flight does not stop it — Claude
+     * folds the message into the running turn; Codex has it held and sent when the turn ends. What the inbox push waits
+     * for (genie#1411; the owner, 2026-11-01: "inbox nudges should queue up and post to the agent as soon as possible just
+     * like user input"). Held is excluded: a notice is Genie's to tell again, so it waits out the limit untold, not queued.
+     */
+    get deliverable(): boolean {
+        return this.running && !this.#needsNewDriver && !this.#starting && !this.#held && !this.#stoppedByYou && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+    }
+
+    /** This run's driver stopped itself and takes no prompt again: a new one is started for the next work (`#needsNewDriver`). */
+    get needsNewDriver(): boolean {
+        return this.#needsNewDriver;
+    }
+
+    /** The person stopped the last turn and has not acted since: notices wait and held input was left as drafts (genie#1565). */
+    get stoppedByYou(): boolean {
+        return this.#stoppedByYou;
+    }
+
+    /**
+     * The person acted (sent, or sent a draft): what the stop paused goes on as usual. Not announced here: it is called
+     * just before the person's own message goes, and an announcement now would let a waiting notice open its turn AHEAD
+     * of that message. The caller's hand-over announces it.
+     */
+    resumeAfterStop(): void {
+        this.#stoppedByYou = false;
     }
 
     /** `null` until the provider reports one. It is what a later resume is keyed on. */
@@ -728,33 +912,39 @@ export class AgentSession {
      * A MESSAGE FOR THE AGENT THAT MUST ARRIVE: sent now when the provider takes it (Claude reads it at its next step);
      * held for the end of the turn when it refuses a prompt mid-turn (Codex), then sent in order. An approval's note
      * (item 16) — from the card here, or from a Genie approval answered on the Deck (main/feature-ipc.ts).
+     *
+     * Answers what became of it: `null` = the provider has it now; an id = it is HELD (`#afterTurn`, `hasQueuedPrompt`)
+     * and goes when a turn ends, the limit resets or the driver is ready.
      */
-    deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+    deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.running) throw new Error('session is not running');
+        if (by === 'you') this.resumeAfterStop();
         if (this.#afterTurn.length === 0 && !this.#starting) {
             try {
-                this.prompt(text, by, sent, context);
-                return;
+                return this.prompt(text, by, sent, context);
             } catch (error) {
+                // A driver that has stopped itself takes nothing again: said, and a new one is needed (`#needsNewDriver`).
+                if (cancelStateUncertain(error)) this.#driverStoppedItself();
                 // Only a refusal DURING a turn can wait for its end. An idle driver failure must reach the caller.
                 if (!this.#inTurn) throw error;
             }
         }
-        this.#queuePrompt(text, by, sent, context);
+        return this.#queuePrompt(text, by, sent, context);
     }
 
-    /** One queue holds input waiting for either a turn or a provider pause. */
-    #queuePrompt(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, context: PromptContext): void {
+    /** One queue holds input waiting for either a turn or a provider pause. Answers the held prompt's id. */
+    #queuePrompt(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, context: PromptContext): string {
         const id = randomUUID();
         this.#afterTurn.push({ id, text, by, sent, context });
         const row = promptRow(text, by, sent, context);
         if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: sent?.content ?? null } });
         this.#changed();
+        return id;
     }
 
     /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
-        if (this.#afterTurn.length === 0 || !this.running || this.#starting || this.#approval !== null || this.#inTurn || this.#held) return;
+        if (this.#afterTurn.length === 0 || !this.running || this.#needsNewDriver || this.#starting || this.#approval !== null || this.#inTurn || this.#held || this.#options.mayTakeWork?.() === false) return;
         while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
             const next = this.#afterTurn[0]!;
             try {
@@ -769,6 +959,11 @@ export class AgentSession {
             this.#afterTurn.shift();
             void this.#emitRow({ kind: 'prompt_delivery', id: next.id, status: 'sent' });
         }
+    }
+
+    /** The ids of the prompts held for the turn's end, in order — what the agent host tells a window (the host split). */
+    get queuedPromptIds(): readonly string[] {
+        return this.#afterTurn.map((p) => p.id);
     }
 
     hasQueuedPrompt(id: string): boolean {
@@ -795,10 +990,65 @@ export class AgentSession {
         this.#changed();
     }
 
+    /**
+     * What was held and can no longer go in this run becomes a DRAFT the next Restart owes (`deliverOwed`). Except a
+     * Genie notice (`context.retold`): its sender tells it again on its own, so kept as owed it would arrive twice — it is
+     * discarded instead, and the chat drops it (genie#1411).
+     */
     #leaveQueuedAsDrafts(): void {
         const waiting = this.#afterTurn;
         this.#afterTurn = [];
-        for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: 'undelivered' });
+        for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
+    }
+
+    /**
+     * AFTER THE PERSON'S STOP (genie#1565): what the person queued stays queued; the rest is settled as
+     * `#leaveQueuedAsDrafts` settles it — a Genie notice discarded (its sender tells it again), anything else a draft.
+     */
+    #keepOnlyYours(): void {
+        const waiting = this.#afterTurn;
+        this.#afterTurn = waiting.filter((p) => p.by === 'you');
+        for (const p of waiting) {
+            if (p.by !== 'you') void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
+        }
+    }
+
+    /**
+     * A PROMPT THE STOP DROPPED (prism-acp 0.37.0's `cancel_queued`, genie#1565): settled by the rules a prompt HELD at
+     * the Stop follows (`#keepOnlyYours`), so Claude and Codex agents stop alike —
+     * - a Genie notice (`context.retold`) is not sent again: its sender tells it again (the turn it went into was stopped,
+     *   so the inbox counts it untold) once the pause lifts;
+     * - the person's own message goes, as its own turn — them acting (genie#1143) — and so does anyone's after a stop
+     *   the person did not ask for;
+     * - someone else's message after the person's Stop, or anything this run can no longer send (its driver stopped
+     *   itself), is kept as a DRAFT the person can send and a Restart owes (`deliverOwed`).
+     * Sent on the next microtask: prism-acp ends every dropped prompt in one go, and one sent in between would read the
+     * next one's end as its own.
+     */
+    #dropped(p: { by: string | null; text: string; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }): void {
+        if (p.context.retold === true) return;
+        const id = randomUUID();
+        if (this.#needsNewDriver || !this.running || (this.#stoppedByYou && p.by !== 'you')) {
+            const row = promptRow(p.text, p.by, p.sent, p.context);
+            if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: p.sent?.content ?? null } });
+            void this.#emitRow({ kind: 'prompt_delivery', id, status: 'undelivered' });
+            return;
+        }
+        if (p.by === 'you') this.#stoppedByYou = false;
+        this.#afterTurn.push({ id, text: p.text, by: p.by, sent: p.sent, context: p.context });
+        queueMicrotask(() => {
+            if (!this.#inTurn) this.#flushAfterTurn();
+            this.#changed();
+        });
+    }
+
+    /** The driver stopped itself (`CANCEL_STATE_UNCERTAIN`): said once; this run takes nothing more (`#needsNewDriver`). */
+    #driverStoppedItself(): void {
+        if (this.#needsNewDriver) return;
+        this.#needsNewDriver = true;
+        this.#stopCooling();
+        void this.#emitRow({ kind: 'notice', level: 'warning', message: 'The Stop could not be confirmed, so this run was ended to be sure nothing kept going. Your next message starts the agent again on the same conversation.' });
+        this.#changed();
     }
 
     start(): void {
@@ -825,7 +1075,14 @@ export class AgentSession {
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: problem });
                         return;
                     }
+                    // CLAUDE'S CANCEL STATE UNCERTAIN (prism-acp 0.37.0): the driver ended its CLI to be sure the Stop
+                    // stopped everything. Not a failure of the agent: the next message from the person starts a new one.
+                    if (problem === CANCEL_STATE_UNCERTAIN) {
+                        this.#driverStoppedItself();
+                        return;
+                    }
                     this.#turnState = 'failed';
+                    this.#stopCooling();
                     this.#leaveQueuedAsDrafts();
                     this.#changed();
                     /*
@@ -884,14 +1141,29 @@ export class AgentSession {
                     this.#echo = null;
                     this.#echoSeen = '';
 
+                    /*
+                     * A PROMPT THE STOP DROPPED (prism-acp 0.37.0, genie#1565): Claude's interrupt sends `cancel_queued`,
+                     * so a prompt it took mid-turn never runs; each ends on its own, cancelled, AFTER the stopped turn (raw
+                     * `dropped by cancel`, or `cancel accounting mismatch` when the receipt could not be trusted). It was
+                     * never a turn: no marker, no `stopped` row, no count. Ended while Genie holds no turn open with a
+                     * prompt still waiting for one, cancelled — a prompt that did start ran as a turn and opened it.
+                     */
+                    if (!this.#inTurn && outcome.stopReason === 'cancelled' && !outcome.isError && this.#queued.length > 0) {
+                        this.#dropped(this.#queued.shift()!);
+                        this.#changed();
+                        return;
+                    }
+
                     // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
                     // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
                     // turn, and it opens nothing, as before.
-                    if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
+                    if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
 
                     this.#turns += 1;
                     this.#endedThisRun += 1;
                     this.#inTurn = false;
+                    // Arm before queued mail is flushed. This never sends input or starts a turn by itself.
+                    this.#rateWarningPending = rateLimitWarning(this.#latestHeadroom, this.#now()) !== null;
 
                     // A turn that did not finish cleanly is `failed`, not `idle`. Reporting
                     // idle would present a crashed turn as a completed one, which is the
@@ -913,6 +1185,13 @@ export class AgentSession {
                     // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
                     const byOverload = crashed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
                     this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
+                    // The carry-over this turn took: gone with a reply; otherwise the next prompt carries it again (Tynn story #380).
+                    if (this.#carryInFlight !== null) {
+                        const carried = this.#carryInFlight;
+                        this.#carryInFlight = null;
+                        if (this.#lastTurnEnd === 'replied') this.#options.onCarryOverSent?.();
+                        else this.#carryOver ??= carried;
+                    }
                     this.#limitThisTurn = false;
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
@@ -932,8 +1211,7 @@ export class AgentSession {
                         this.#failedAt = null;
                         this.#held = true;
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: `The provider is overloaded (${outcome.failure?.reason ?? 'overloaded'}). Genie retries in ${Math.round(ms / 1000)} s (attempt ${this.#overloads} of ${OVERLOAD_RETRY_MS.length}); anything you send meanwhile goes then.` });
-                        const later = this.#options.retryLater ?? ((wait: number, fire: () => void) => { const t = setTimeout(fire, wait); return () => clearTimeout(t); });
-                        this.#overloadCancel = later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
+                        this.#overloadCancel = this.#later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
                     } else if (paused !== null) {
                         // ACCOUNT PAUSED, not Broken and not Signed out: the provider refused the account itself. Said in
                         // words with what to do; main alerts once per login and `Try again` brings every agent on it back.
@@ -971,10 +1249,17 @@ export class AgentSession {
                     // here did.
                     const stopper = this.#stopAskedBy;
                     this.#stopAskedBy = null;
+                    // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once.
+                    const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you';
+                    if (stoppedByYou) this.#stoppedByYou = true;
                     if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
                     // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
                     // never the agent's last handoff, which a session answering in chat never files.
                     if (this.#lastTurnEnd === 'replied') void this.#emitRow({ kind: 'finished', n: Math.max(this.#marked, this.#turns) });
+                    // COOLING (COOLING_MS): only a turn that REPLIED — a failed, stopped, held or signed-out turn keeps its
+                    // own state. Started before the flush below: a prompt that waited opens a turn there, which ends it.
+                    if (this.#lastTurnEnd === 'replied') this.#startCooling();
+                    else this.#stopCooling();
                     // A QUEUED PROMPT IS NOT ASSUMED TO BECOME A TURN (the owner, 2026-10-20: idle agents not woken by
                     // mail). Claude Code FOLDS a prompt sent mid-turn into the running turn; opening its turn here left a
                     // phantom one that never ended — moic `working` for 36 minutes while idle, so no inbox notice and the
@@ -982,15 +1267,23 @@ export class AgentSession {
                     // one (its first activity, credited to the oldest queued sender) or ends one silently (above). After a
                     // crashed turn nothing is assumed to run: the queue is dropped and the failure stands.
                     if (crashed) this.#queued = [];
-                    // EXCEPT after a stop: there is no running turn to fold into, and Claude runs the queued prompt as its
-                    // own turn after the interrupt (measured, test/stop-cancels-turn.test.ts), so that turn opens now.
-                    else if (outcome.stopReason === 'cancelled' && this.#queued.length > 0) {
-                        void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
-                        this.#inTurn = true;
-                        this.#turnState = 'working';
-                    }
+                    // After a stop nothing is assumed either: since prism-acp 0.37.0 Claude DROPS what it took mid-turn,
+                    // and each such prompt ends on its own after this one (`#dropped`). It used to run it after the
+                    // interrupt, and its turn was opened here.
                     // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
                     if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
+                    // EXCEPT after the person's own Stop (genie#1565; the owner's Codex agent, beta.58: "Stopped by you",
+                    // then at once a new turn for an inbox notice held mid-turn). Only what the PERSON queued goes on
+                    // (genie#1143: cancelling a turn preserves their queue; Claude runs theirs after the interrupt too),
+                    // and its going is them acting. Genie's notice is dropped for its book to tell once they act;
+                    // anyone else's message is left as a draft for them to send.
+                    else if (stoppedByYou) {
+                        this.#keepOnlyYours();
+                        if (this.#afterTurn.length > 0) {
+                            this.#stoppedByYou = false;
+                            if (!this.#inTurn) this.#flushAfterTurn();
+                        }
+                    }
                     else if (!this.#inTurn) this.#flushAfterTurn();
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
@@ -1002,6 +1295,7 @@ export class AgentSession {
                     // A retry waiting out an overload has nobody to send to now.
                     this.#overloadCancel?.();
                     this.#overloadCancel = null;
+                    this.#stopCooling();
                     // Persist whatever of the last reply arrived. A provider dying mid-sentence
                     // should cost the rest of the sentence, not the part it already said.
                     this.#closeMessage();
@@ -1064,6 +1358,34 @@ export class AgentSession {
         });
         const tree = this.#options.processTree ?? systemProcessTree;
         const aroundSpawn = (spawn: () => void): void => {
+            if (tree.read && tree.capture) {
+                /*
+                 * NOTHING READ ON THE LOOP (beta.53 freezes: the two `snapshot()` readings below were PowerShell on main,
+                 * 2–20 s each on Windows, around every spawn — eleven agents resuming held the window for minutes). The
+                 * spawn's own children are captured as they are created; their start times and trees come from a
+                 * reading off the loop. The newest spawn's reading is the one kept; a stop waits for it (`#rootsReading`).
+                 */
+                const pids: number[] = [];
+                const read = tree.read.bind(tree);
+                const reading: Promise<void> = Promise.resolve().then(async () => {
+                    let after = await read().catch(() => null);
+                    if (after === null && this.#rootsReading === reading) after = await read().catch(() => null);
+                    if (this.#rootsReading !== reading) return;
+                    if (after === null) {
+                        // Still no reading. A crash must not leave this provider unrecorded, so its pid goes in with no start time: said at every boot, and never reaped.
+                        this.#roots = null;
+                        this.#options.onSpawned?.(pids.map((pid) => startTimeUnknown(pid, process.pid)));
+                        this.#options.onReadingFailed?.(pids);
+                        return;
+                    }
+                    this.#roots = after.filter((p) => pids.includes(p.pid) && p.ppid === process.pid);
+                    this.#members = subtreeOf(after, this.#roots);
+                    this.#options.onSpawned?.(this.#members);
+                });
+                this.#rootsReading = reading;
+                tree.capture(spawn, pids);
+                return;
+            }
             const before = tree.snapshot();
             try { spawn(); }
             finally {
@@ -1086,8 +1408,12 @@ export class AgentSession {
             this.#starting = true;
             const done = (): void => {
                 this.#starting = false;
+                if (this.#turnState === 'idle' && this.#idleSince === null) this.#startIdle();
                 this.#changed();
             };
+            // A prompt queued while it started opens its turn in the flush. That needs no announcement of its own: the
+            // rows it writes (its turn marker, its `prompt_delivery`) are each pushed, the last already reading `working`
+            // — a second push for the same moment only costs the window (genie#1418, batch B).
             ready.then(() => { done(); this.#flushAfterTurn(); }, done);
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
@@ -1100,20 +1426,54 @@ export class AgentSession {
                 .then((h) => { const recorded = h.lastTurn; this.#turns += recorded; this.#marked += recorded; })
                 .catch(() => { /* no record yet: turns start at 1 */ });
         }
-        this.#turnState = 'working';
+        // STARTED IS NOT WORKING (the owner, 2026-11-01, on beta.55: "an agent should not show as working when I haven't
+        // started it yet"). This read `working` until a turn of its own ended, with no turn running, so an agent opened
+        // and never prompted showed `Turn 0 · running`, a `Stop this turn`, `Working` in the rail, and a setting change
+        // waited for a turn that never came. It is idle until a prompt opens a turn or the provider starts working.
+        this.#turnState = 'idle';
+        if (!this.#starting) this.#startIdle();
     }
 
     /**
      * `by` is who started the turn when the caller knows (`you` from the composer, `genie` for a reminder or a
      * handoff ask, a peer's name) — written into the ledger as the turn's marker, and `null` when nobody said.
+     * Answers `null` when the provider took it, or the id it is held under (held on a limit, or still starting).
      */
-    prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+    prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.#driver) throw new Error('session is not started');
-        if (this.#held || this.#starting) {
-            this.#queuePrompt(text, by, sent, context);
-            return;
-        }
+        if (by === 'you') this.resumeAfterStop();
+        if (this.#held || this.#starting || this.#options.mayTakeWork?.() === false) return this.#queuePrompt(text, by, sent, context);
         this.#send(text, by, sent, true, context);
+        return null;
+    }
+
+    /** A word from Genie held for the next turn this session opens (`holdForNextWork`); `null` = none. */
+    #heldForNextWork: string | null = null;
+    #heldSent: (() => void) | null = null;
+
+    /** It goes ahead of the next prompt that opens a turn, and starts none of its own. Replaces one already held. */
+    holdForNextWork(text: string, sent: (() => void) | null = null): void {
+        this.#heldForNextWork = text;
+        this.#heldSent = sent;
+    }
+
+    /** Work is held (`mayTakeWork`, a limit, a start). */
+    get workWaiting(): boolean {
+        return this.#afterTurn.length > 0;
+    }
+
+    /** `mayTakeWork` says yes again: what it held goes now, or when the turn ends. */
+    releaseWork(): void {
+        this.#flushAfterTurn();
+        this.#changed();
+    }
+
+    /** True = it was still held, and now it is not. */
+    withdrawHeld(): boolean {
+        const was = this.#heldForNextWork !== null;
+        this.#heldForNextWork = null;
+        this.#heldSent = null;
+        return was;
     }
 
     /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
@@ -1123,10 +1483,34 @@ export class AgentSession {
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
         // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
-        this.#driver.prompt(sent ? sent.content : text);
+        // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
+        const carry = this.#carryOver;
+        const redockAt = this.#inTurn ? null : this.#redockAt;
+        const redock = redockAt === null ? null : redockReorientation(redockAt);
+        // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
+        const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
+        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
+        // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
+        // What Genie held for the next work goes between the carry-over and the person's words.
+        const held = this.#inTurn ? null : this.#heldForNextWork;
+        const handed = held === null ? text : `${held}\n\n${text}`;
+        const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
+        this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
+        if (redockAt !== null) {
+            this.#redockAt = null;
+            this.#options.onRedockSent?.(redockAt);
+        }
+        this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
+        if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
+        if (held !== null) {
+            const sentNow = this.#heldSent;
+            this.#heldForNextWork = null;
+            this.#heldSent = null;
+            sentNow?.();
+        }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
-        if (this.#inTurn) this.#queued.push(by);
+        if (this.#inTurn) this.#queued.push({ by, text, sent, context });
         else {
             // Whatever the queue still holds was folded into an earlier turn (no turn of its own came): not ahead of this.
             this.#queued = [];
@@ -1134,13 +1518,21 @@ export class AgentSession {
             this.#inTurn = true;
             this.#limitThisTurn = false;
         }
+        // What the turn carried, marked where it happened: the exact text sent, opened from the chat — never your message.
+        if (redock) void this.#emitRow({ kind: 'notice', level: 'info', message: redock });
+        if (carry) void this.#emitRow({ kind: 'notice', level: 'info', message: carriedLabel(carry), carried: { from: carry.from, turns: carry.turns, text: carry.text } });
+        if (rateWarning) void this.#emitRow({ kind: 'notice', level: 'warning', message: rateWarning });
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
+        // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
+        if (held !== null) void this.#emitRow(promptRow(held, 'genie', null, {}));
         if (record) void this.#emitRow(promptRow(text, by, sent, context));
-        // A provider that DOES echo it is not recorded twice (see `#handle`).
-        this.#echo = text;
+        // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
+        this.#echo = `${above}${handed}`;
         this.#echoSeen = '';
         this.#turnState = 'working';
+        // A new turn during Cooling goes straight to Working, and its timer goes with it.
+        this.#stopCooling();
     }
 
     /**
@@ -1164,6 +1556,7 @@ export class AgentSession {
         this.#ended = true;
         this.#overloadCancel?.();
         this.#overloadCancel = null;
+        this.#stopCooling();
         this.#leaveQueuedAsDrafts();
 
         // A promise nobody will ever resolve is a provider process waiting forever. `stop` means stop, and that has to
@@ -1181,21 +1574,43 @@ export class AgentSession {
         const tree = this.#options.processTree ?? systemProcessTree;
         const driver = this.#driver;
         const graceMs = options.graceMs ?? 0;
+        /*
+         * The tree BEFORE the provider is told to end, read OFF the loop on a tree that can (beta.53 freezes: this was a
+         * PowerShell reading on main before every graceful stop — a restart, a hibernate, a quit). It waits for the
+         * start's own reading first, so a stop asked right after a start still knows the spawn's processes.
+         */
+        const read = tree.read?.bind(tree);
+        const earlyOffLoop = read && tree.capture
+            ? (async (): Promise<void> => {
+                await this.#rootsReading;
+                const roots = this.#roots;
+                if (!roots || roots.length === 0) return;
+                const early = await read().catch(() => null);
+                if (early) this.#members = unionOf(this.#members, subtreeOf(early, roots));
+            })()
+            : null;
+        const earlyOnLoop = (): void => {
+            const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
+            if (early && this.#roots) this.#members = unionOf(this.#members, subtreeOf(early, this.#roots));
+        };
         if (graceMs > 0 && driver?.stop && this.#alive && !this.#exited) {
             // PRISM-ACP 0.21.1 OWNS THE TREE: its stop closes stdin, waits the grace, ends the supervised tree (a Job Object
             // on Windows) and reports. Genie's reading then verifies it as before — and reaps anything it still finds.
-            const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
-            if (early && this.#roots) this.#members = unionOf(this.#members, subtreeOf(early, this.#roots));
-            let ended: Promise<unknown>;
-            try { ended = Promise.resolve(driver.stop({ graceMs })); } catch (error) { ended = Promise.reject(error); }
+            const stopDriver = driver.stop.bind(driver);
+            const ended = (earlyOffLoop ?? Promise.resolve(earlyOnLoop())).then(() => stopDriver({ graceMs }));
             this.#stopping = ended.catch(() => undefined).then(() => this.#endTree(tree, signal));
         } else if (graceMs > 0 && driver?.endInput && this.#alive && !this.#exited) {
             // The tree BEFORE stdin closes: a provider that then ends on its own (on Windows) orphans its children, and
             // a reading after its exit could no longer reach them from the roots.
-            const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
-            if (early && this.#roots) this.#members = unionOf(this.#members, subtreeOf(early, this.#roots));
-            try { driver.endInput(); } catch { /* a stdin already closed: the kill below ends it */ }
-            this.#stopping = this.#exitWithin(graceMs).then(() => this.#endTree(tree, signal));
+            const endInput = driver.endInput.bind(driver);
+            const close = (): void => { try { endInput(); } catch { /* a stdin already closed: the kill below ends it */ } };
+            if (earlyOffLoop) {
+                this.#stopping = earlyOffLoop.then(close).then(() => this.#exitWithin(graceMs)).then(() => this.#endTree(tree, signal));
+            } else {
+                earlyOnLoop();
+                close();
+                this.#stopping = this.#exitWithin(graceMs).then(() => this.#endTree(tree, signal));
+            }
         } else {
             this.#stopping = this.#endTree(tree, signal);
         }
@@ -1229,7 +1644,12 @@ export class AgentSession {
 
     /** Kill, reap, verify. Synchronous up to the first verification; retries (bounded) only for a survivor. */
     #endTree(tree: ProcessTree, signal: NodeJS.Signals): Promise<StopVerdict> {
-        if (tree.read && tree.reap) return this.#endTreeAsync(tree.read.bind(tree), tree.reap.bind(tree), signal);
+        if (tree.read && tree.reap) {
+            const read = tree.read.bind(tree);
+            const reap = tree.reap.bind(tree);
+            // The start's own reading first (a stop right after a start): its roots are what this ends.
+            return (this.#rootsReading ?? Promise.resolve()).then(() => this.#endTreeAsync(read, reap, signal));
+        }
         const roots = this.#roots;
         const before = roots && roots.length > 0 ? tree.snapshot() : null;
         if (before && roots) this.#members = unionOf(this.#members, subtreeOf(before, roots));
@@ -1364,6 +1784,18 @@ export class AgentSession {
         return driver.modelState();
     }
 
+    /**
+     * Whether `modelState()` / `switchModel()` would answer rather than `null` — read without asking the provider, so the
+     * agent host can tell a window that is not in its process (the host split, phase 1).
+     */
+    get canSayModels(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.modelState === 'function';
+    }
+
+    get canSwitchModel(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.setModel === 'function';
+    }
+
     /** Ask the running provider to read its rate limits, or `null` when nothing is running or it cannot (`SessionDriver.readRateLimits`). */
     get canReadRateLimits(): boolean {
         return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.readRateLimits === 'function';
@@ -1438,11 +1870,46 @@ export class AgentSession {
      * ends, and when the provider exits. Writing per chunk would put a row in the thread for
      * every few tokens, and reassembling them on read would mean the same joining rule
      * implemented in two places — which is how the two copies drift apart.
+     *
+     * What was held beside it follows it, in the order it came.
      */
     #closeMessage(): void {
         const open = this.#openMessage;
         this.#openMessage = null;
         this.#enqueue(open);
+        if (this.#heldBeside.length === 0) return;
+        const held = this.#heldBeside;
+        this.#heldBeside = [];
+        for (const event of held) void this.#wireRow(event);
+    }
+
+    /**
+     * WHETHER A ROW ARRIVED BESIDE THE OPEN MESSAGE, rather than after it (genie#1456: one reply drawn as four bubbles, cut
+     * mid-word). Only the agent's own next step ends what it is saying. A subagent working in the background and a notice
+     * about the session say nothing about that: they land between two deltas of one text block, whenever they happen to.
+     * Measured in the ledgers: of 54 mid-word cuts in `tynn`'s, 40 had only a subagent's calls between the pieces and 14
+     * only notices, none a call of its own; Codex cut a reply per word on `model/safetyBuffering/updated`.
+     *
+     * A usage report is not one of these: it is how a provider says a message is over, and on Codex nothing else may
+     * separate two of them.
+     */
+    #besideTheOpen(event: StreamEvent): boolean {
+        const subagent = event.kind === 'tool' && event.parentToolCallId !== undefined;
+        return this.#openMessage !== null && (subagent || event.kind === 'notice');
+    }
+
+    /**
+     * WHOSE CALL THIS IS, ON THE ROW ITSELF (genie#1473). The ledger's readers see only rows, and the chat took a subagent's
+     * running Bash for the agent's own: a message read at once sat under "Bash 2m" and Interrupt and send, with its reply
+     * below it. prism-acp marks a subagent's call and its result; a row of that call that comes without the mark gets it here.
+     */
+    #markSubagentCall(event: StreamEvent): StreamEvent {
+        if (event.kind !== 'tool') return event;
+        const parent = event.parentToolCallId ?? this.#subagentCalls.get(event.toolCallId);
+        if (parent === undefined) return event;
+        if (event.status === 'completed' || event.status === 'failed') this.#subagentCalls.delete(event.toolCallId);
+        else this.#subagentCalls.set(event.toolCallId, parent);
+        return { ...event, parentToolCallId: parent };
     }
 
     /**
@@ -1477,8 +1944,15 @@ export class AgentSession {
      * A rejected write never breaks the chain: the next write runs whether this one failed or not. A row that still
      * cannot be saved is counted (`unpersistedEvents`) AND said in the ledger, once per run (`#sayNotSaved`).
      */
-    #record(event: StreamEvent): Promise<void> {
+    /** `whole`: a tool's output that did not fit its row's preview, kept beside the ledger first (Tynn story #386). */
+    #record(event: StreamEvent, whole: string | null = null): Promise<void> {
         const write = async (): Promise<void> => {
+            const store = this.#options.store;
+            if (whole !== null && event.kind === 'tool' && store instanceof ThreadStore) {
+                // Before the row that names it. A sidecar that cannot be written leaves the row and its preview: the
+                // whole is then "not kept" when a person opens it, and the conversation is still saved.
+                try { await store.writeToolOutput(threadKeyFor(this.agentId), event.toolCallId, whole); } catch { /* the preview stands */ }
+            }
             for (let attempt = 0; ; attempt += 1) {
                 try {
                     const thread = openAgentThread(this.#options.store, this.agentId);
@@ -1538,10 +2012,8 @@ export class AgentSession {
         }
         if (typeof meta === 'object' && meta !== null && RATE_LIMIT_META in meta) {
             const raw = (meta as Record<string, unknown>)[RATE_LIMIT_META];
-            if (this.#options.onHeadroom) {
-                const room = headroomFromMeta(raw);
-                if (room) this.#options.onHeadroom(room);
-            }
+            const room = headroomFromMeta(raw);
+            if (room) { this.#latestHeadroom = room; this.#options.onHeadroom?.(room); }
             const readings = limitReadingsFromMeta(raw);
             if (readings.length > 0) {
                 const notice = update['notice'];
@@ -1571,8 +2043,9 @@ export class AgentSession {
             return;
         }
 
-        const event = toStreamEvent(update);
-        if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
+        const read = toStreamEvent(update);
+        if (!read) return; // Deliberately not a ledger row (e.g. the slash-command menu).
+        const event = this.#markSubagentCall(read);
 
         /*
          * A MESSAGE joins the one being streamed, when it is the same speaker.
@@ -1624,9 +2097,20 @@ export class AgentSession {
         // turn: a marker (nobody prompted it, so `by: null`) and `working` until it ends. Without this it ran under
         // "Idle", and a quit, which cancels only the turns it believes are running, killed it mid-flight. What trails a
         // turn's end (usage, debug notices) is not activity and opens nothing.
-        if (this.#turnState === 'idle' && (event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent'))) {
+        //
+        // BEFORE ANY TURN OF THIS RUN has ended (a session only started reads idle now, not working), activity is shown as
+        // working and opens no marker — what a started session always did: no turn is numbered that Genie cannot place.
+        const activity = event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent');
+        // Not announced here: this frame's own row (a reply, a thought, a tool call — every one of them a row, emitted
+        // below in this same call) is pushed and already reads `working`. Announcing it as well was a second push per
+        // first frame (genie#1418, batch B: session-host.test's push count).
+        // Activity during Cooling is a turn of the agent's own: Working, and the timer goes.
+        if (this.#turnState === 'idle' && activity) this.#stopCooling();
+        if (this.#turnState === 'idle' && activity && this.#lastTurnEnd === null) {
+            this.#turnState = 'working';
+        } else if (this.#turnState === 'idle' && activity) {
             // A prompt queued while the last turn ran is credited to this one (it ran as its own turn); none = nobody's.
-            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
+            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift()?.by ?? null });
             this.#inTurn = true;
             this.#turnState = 'working';
             this.#changed();
@@ -1643,6 +2127,11 @@ export class AgentSession {
             }
         }
 
+        if (this.#besideTheOpen(event)) {
+            this.#heldBeside.push(event);
+            return;
+        }
+
         if (event.kind === 'think') {
             const open = this.#openMessage;
             if (open && open.event.kind === 'think') {
@@ -1651,15 +2140,17 @@ export class AgentSession {
                 this.#options.onEvent?.(open.event, { replacesLast: true });
                 return; // Written to the thread once, when it closes.
             }
+            this.#closeMessage();
             this.#openMessage = { event, persisted: false };
             this.#options.onEvent?.(event, { replacesLast: false });
-            this.#enqueue(open);
             return;
         }
 
         if (event.kind === 'message') {
             const open = this.#openMessage;
-            if (open && open.event.kind === 'message' && open.event.speaker === event.speaker && open.event.peerName === event.peerName) {
+            const messageId = typeof update['messageId'] === 'string' ? update['messageId'] : null;
+            const sameItem = !open?.messageId || messageId === null || open.messageId === messageId;
+            if (open && open.event.kind === 'message' && open.event.speaker === event.speaker && open.event.peerName === event.peerName && sameItem) {
                 open.event = { ...open.event, text: open.event.text + event.text };
                 this.#options.onEvent?.(open.event, { replacesLast: true });
                 return; // Written to the thread once, when it closes.
@@ -1667,20 +2158,25 @@ export class AgentSession {
 
             // A different speaker: the previous message is finished, and must reach the thread
             // before this one does.
-            this.#openMessage = { event, persisted: false };
+            this.#closeMessage();
+            this.#openMessage = { event, persisted: false, messageId };
             this.#options.onEvent?.(event, { replacesLast: false });
-            this.#enqueue(open);
             return;
         }
 
         /*
-         * Anything else CLOSES the open message.
+         * Anything else not beside it (`#besideTheOpen`) CLOSES the open message.
          *
          * A reply, a tool call, then more reply is three rows in that order — which is the
          * point of a ledger. Joining across the tool call would reorder the account of what
          * happened, and the queue is what keeps the tool call from being written before the
          * words that preceded it.
          */
+        await this.#wireRow(event);
+    }
+
+    /** A row off the wire that is not a message chunk, arriving now or held until now: emitted, and what it says acted on. */
+    #wireRow(event: StreamEvent): Promise<void> {
         const written = this.#emitRow(event);
         // REFUSED FOR WANT OF /design-login (#1081): said ONCE per login, after the refused call, however many calls fail.
         if (!this.#designLogin && designLoginRefused(event)) {
@@ -1688,31 +2184,40 @@ export class AgentSession {
             void this.#emitRow({ kind: 'notice', level: 'warning', message: 'Claude Design needs its login on this machine, which an agent session cannot run. Use "Log in to Claude Design" above; Genie tells this agent to retry once it has run.' });
             this.#changed();
         }
-        await written;
+        return written;
     }
 
     /**
      * One row that is not a message chunk — from the wire or minted here (a turn marker): closes the open message,
      * reaches the renderer synchronously, and is written to the thread after the message it closed.
      */
-    async #emitRow(event: StreamEvent): Promise<void> {
-        const closing = this.#openMessage;
-        this.#openMessage = null;
+    async #emitRow(raw: StreamEvent): Promise<void> {
+        this.#closeMessage();
 
+        /*
+         * BOUNDED BEFORE ANYONE HOLDS IT (Tynn story #386): a tool row carries at most a 16 KB preview of its input and
+         * output, and an unfinished call none — in this session's rows, the window's, and the ledger. The whole output
+         * goes in a sidecar the row names, read only when a person opens the row. A store that keeps no files beside
+         * its log (a test's memory store) keeps the preview alone.
+         */
+        const { event, whole } = boundToolEvent(raw, { sidecar: this.#options.store instanceof ThreadStore });
         this.#options.onEvent?.(event, { replacesLast: false });
-
-        this.#enqueue(closing);
 
         // ON THE SAME CHAIN as the message writes: waiting for the chain and then writing outside it let two rows
         // emitted together (a turn marker and your message) reach the thread in either order. A storage fault must not
         // take the turn down with it — and must not vanish either (`#record`).
-        await this.#record(event);
+        await this.#record(event, whole);
     }
 }
 
 /** What a prompt's ledger row carries beyond its text: a Genie notice's mail (beta.33 item 18). */
 export interface PromptContext {
     readonly mail?: readonly NoticeMail[] | undefined;
+    /**
+     * Its sender tells it again on its own if it does not go (the inbox push, from its book): held and left undelivered,
+     * it is discarded, never kept as a draft the next Restart owes (`#leaveQueuedAsDrafts`). Never written to the row.
+     */
+    readonly retold?: boolean | undefined;
 }
 
 /**
@@ -1800,4 +2305,9 @@ function answerFor(request: PermissionRequestLike, decision: 'allow' | 'deny'): 
     };
     const chosen = (decision === 'allow' ? idOf('allow_once') : null) ?? idOf('reject_once');
     return chosen ? { outcome: 'selected', optionId: chosen } : { outcome: 'cancelled' };
+}
+
+/** prism-acp 0.37.0's `ClaudeDriver.prompt()` after an uncertain cancel: `ClaudeCancelStateError`, known by its code. */
+function cancelStateUncertain(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === CANCEL_STATE_UNCERTAIN_CODE;
 }

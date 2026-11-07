@@ -1,13 +1,11 @@
 /**
- * REMOTE, PAIRING, SHARING (§6.8) — the pure half.
+ * REMOTE AND PAIRING (§6.8) — the pure half.
  *
  * - The BATON: exactly one connection drives a host at a time. A READ is never gated on it; a
  *   WRITE is; an UPGRADE is gated on OWNERSHIP of the host, not on the baton — the owner on a
  *   phone may upgrade, a guest who happens to be driving may not. `lock` is the kill-switch.
- * - SHARE LINKS: minted for THIS host, served exactly once and never re-served — a link is a
- *   credential you cannot unsend, and a URL that can be shown twice has already been shown to
- *   the wrong screen once. Redeemed by secret; expiry and revocation refuse; another host's link
- *   is simply not a valid link here.
+ * - Sharing is a Tynn link (main/tynn-share-links.ts): the old local share link was removed
+ *   (audit M-d), so nothing here mints or redeems one.
  * - PAIRING by PIN: six digits, two minutes, one use, five attempts.
  * - The THREE-WAY SPLIT of settings is DERIVED from each setting's declared scope, never from a
  *   hand-kept list — the list missed two providers for two releases.
@@ -60,88 +58,6 @@ export class Baton {
         }
         return { ok: true };
     }
-}
-
-export interface ShareLink {
-    readonly id: string;
-    readonly workspaceId: string;
-    readonly grantedTo: string;
-    readonly expiresAt: number;
-    readonly served: boolean;
-    readonly revoked: boolean;
-}
-
-interface ShareRecord extends ShareLink {
-    readonly secret: string;
-}
-
-export class ShareLinks {
-    readonly #host: string;
-    readonly #now: () => number;
-    readonly #random: () => string;
-    readonly #links = new Map<string, ShareRecord>();
-
-    constructor(deps: { host: string; now: () => number; random: () => string }) {
-        this.#host = deps.host;
-        this.#now = deps.now;
-        this.#random = deps.random;
-    }
-
-    mint(input: { workspaceId: string; grantedTo: string; expiresInMs: number }): ShareLink {
-        const secret = this.#random();
-        const record: ShareRecord = {
-            id: `share_${secret}`,
-            workspaceId: input.workspaceId,
-            grantedTo: input.grantedTo,
-            expiresAt: this.#now() + input.expiresInMs,
-            served: false,
-            revoked: false,
-            secret,
-        };
-        this.#links.set(record.id, record);
-        return publicView(record);
-    }
-
-    /** The URL, exactly once. */
-    serve(id: string): { ok: true; url: string } | { ok: false; reason: string } {
-        const r = this.#links.get(id);
-        if (!r) return { ok: false, reason: 'not a valid link' };
-        if (r.served) return { ok: false, reason: 'this link was already served once and cannot be shown again; mint a new one' };
-        this.#links.set(id, { ...r, served: true });
-        return { ok: true, url: `https://${this.#host}/share/${id}#${r.secret}` };
-    }
-
-    redeem(id: string, secret: string): { ok: true; workspaceId: string; grantedTo: string } | { ok: false; reason: string } {
-        const r = this.#links.get(id);
-        if (!r || r.secret !== secret) return { ok: false, reason: 'not a valid link' };
-        if (r.revoked) return { ok: false, reason: 'this link was revoked' };
-        if (this.#now() > r.expiresAt) return { ok: false, reason: 'this link expired' };
-        return { ok: true, workspaceId: r.workspaceId, grantedTo: r.grantedTo };
-    }
-
-    revoke(id: string): boolean {
-        const r = this.#links.get(id);
-        if (!r) return false;
-        this.#links.set(id, { ...r, revoked: true });
-        return true;
-    }
-
-    /** Roster first, minting form second: who holds a link to this host. */
-    roster(): ShareLink[] {
-        return [...this.#links.values()].map(publicView);
-    }
-
-    static hostOf(url: string): string | null {
-        try {
-            return new URL(url).host;
-        } catch {
-            return null;
-        }
-    }
-}
-
-function publicView(r: ShareRecord): ShareLink {
-    return { id: r.id, workspaceId: r.workspaceId, grantedTo: r.grantedTo, expiresAt: r.expiresAt, served: r.served, revoked: r.revoked };
 }
 
 export const PIN_TTL_MS = 120_000;

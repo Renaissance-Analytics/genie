@@ -1,4 +1,4 @@
-import { Icon, Modal } from '@particle-academy/react-fancy';
+import { Button, Icon, Modal } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { CONNECT_EMPTY_GUIDANCE, type ConnectProgress } from '../../core/connect-machine.js';
 import type { RoleChange, TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
@@ -41,7 +41,7 @@ function Progress({ state, onRetry, retryAction }: { state: ConnectProgress; onR
         return (
             <span data-problem="connect" className="flex flex-wrap items-center gap-2 text-xs text-[var(--danger)]">
                 <span>{state.reason}</span>
-                <button type="button" data-action={retryAction} onClick={onRetry} className={BUTTON}><Icon name="refresh-cw" size="xs" />Retry</button>
+                <Button size="xs" labelClassName="contents" type="button" data-action={retryAction} onClick={onRetry} className={BUTTON}><Icon name="refresh-cw" size="xs" />Retry</Button>
             </span>
         );
     }
@@ -123,8 +123,8 @@ export function RoleChangeForm({ to, name, code, state, onCode, onConfirm, onCan
                     onChange={(e) => onCode(e.target.value)}
                     className="w-24 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 font-mono tracking-widest"
                 />
-                <button type="submit" data-action="confirm-role" disabled={!ready || state.kind === 'working'} className={BUTTON}>Confirm</button>
-                <button type="button" data-action="cancel-role" onClick={onCancel} aria-label="Cancel" title="Cancel" className="rounded-md p-1 text-[var(--fg-3)] hover:bg-[var(--bg-1)]"><Icon name="x" size="xs" /></button>
+                <Button size="xs" type="submit" data-action="confirm-role" disabled={!ready || state.kind === 'working'} className={BUTTON}>Confirm</Button>
+                <Button size="xs" labelClassName="contents" type="button" data-action="cancel-role" onClick={onCancel} aria-label="Cancel" title="Cancel" className="rounded-md p-1 text-[var(--fg-3)] hover:bg-[var(--bg-1)]"><Icon name="x" size="xs" /></Button>
             </div>
             <Progress state={state} onRetry={onConfirm} retryAction="retry-role" />
         </form>
@@ -182,12 +182,12 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {}, onS
                                 <span data-workstation-role={role} title={ROLE_TITLE[role]} aria-label={ROLE_NAME[role]} className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-medium ${role === 'pilot' ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'bg-[var(--bg-3)] text-[var(--fg-3)]'}`}><Icon name={ROLE_ICON[role]} size="xs" />{ROLE_NAME[role]}</span>
                             ) : null}
                             {switchable && role ? (
-                                <button type="button" data-action="change-role" title={`Make ${w.name} a ${role === 'pilot' ? 'drone' : 'pilot'}`} onClick={() => setChanging({ id: w.id, to: role === 'pilot' ? 'drone' : 'pilot', code: '', state: { kind: 'idle' } })} className={`shrink-0 whitespace-nowrap ${BUTTON}`}>
+                                <Button size="xs" labelClassName="contents" type="button" data-action="change-role" title={`Make ${w.name} a ${role === 'pilot' ? 'drone' : 'pilot'}`} onClick={() => setChanging({ id: w.id, to: role === 'pilot' ? 'drone' : 'pilot', code: '', state: { kind: 'idle' } })} className={`shrink-0 whitespace-nowrap ${BUTTON}`}>
                                     <Icon name={ROLE_ICON[role === 'pilot' ? 'drone' : 'pilot']} size="xs" />Make {role === 'pilot' ? 'drone' : 'pilot'}
-                                </button>
+                                </Button>
                             ) : null}
                             {w.connectable && onOpenWorkstation ? (
-                                <button type="button" data-action="open-workstation" title={`Open ${w.name} in its own window`} disabled={state.kind === 'working'} onClick={() => onOpenWorkstation(w)} className={`shrink-0 whitespace-nowrap ${OPEN_BUTTON}`}>Open</button>
+                                <Button size="xs" type="button" data-action="open-workstation" title={`Open ${w.name} in its own window`} disabled={state.kind === 'working'} onClick={() => onOpenWorkstation(w)} className={`shrink-0 whitespace-nowrap ${OPEN_BUTTON}`}>Open</Button>
                             ) : (
                                 <span className="shrink-0 text-[11px] whitespace-nowrap text-[var(--fg-3)]">{!w.active ? 'not active' : 'not shared with you'}</span>
                             )}
@@ -229,7 +229,7 @@ export function ShareLinkForm({ value, state, onChange, onOpen }: { value: strin
                     onChange={(e) => onChange(e.target.value)}
                     className="min-w-0 flex-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1 font-mono text-xs"
                 />
-                <button type="submit" data-action="open-share-link" disabled={value.trim() === '' || state.kind === 'working'} className={BUTTON}>Open</button>
+                <Button size="xs" type="submit" data-action="open-share-link" disabled={value.trim() === '' || state.kind === 'working'} className={BUTTON}>Open</Button>
             </div>
             <Progress state={state} onRetry={onOpen} retryAction="retry-share-link" />
         </form>
@@ -269,7 +269,7 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
             {workstations !== null && refresh.kind === 'failed' ? (
                 <span data-tynn-refresh="failed" className="flex flex-wrap items-center gap-2 text-xs text-[var(--danger)]">
                     <span>{refresh.reason}</span>
-                    {onRefresh ? <button type="button" data-action="retry-workstations" onClick={onRefresh} className={BUTTON}><Icon name="refresh-cw" size="xs" />Retry</button> : null}
+                    {onRefresh ? <Button size="xs" labelClassName="contents" type="button" data-action="retry-workstations" onClick={onRefresh} className={BUTTON}><Icon name="refresh-cw" size="xs" />Retry</Button> : null}
                 </span>
             ) : null}
             {workstations === null ? (
@@ -279,14 +279,14 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
             )}
             <div className="flex items-center gap-1 border-t border-[var(--border-1)] pt-1.5">
                 {onOpenLink ? (
-                    <button type="button" data-action="paste-share-link" onClick={onOpenLink} className={quiet}><Icon name="link" size="xs" />Share link</button>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="paste-share-link" onClick={onOpenLink} className={quiet}><Icon name="link" size="xs" />Share link</Button>
                 ) : null}
-                <button type="button" data-action="open-connect-surface" onClick={onOpenSurface} className={quiet}><Icon name="settings" size="xs" />Remote access</button>
+                <Button size="xs" labelClassName="contents" type="button" data-action="open-connect-surface" onClick={onOpenSurface} className={quiet}><Icon name="settings" size="xs" />Remote access</Button>
                 {/* Genie 1's ⟳ "Rescan" (master.tsx:5046): ask Tynn again, here. */}
                 {onRefresh ? (
-                    <button type="button" data-action="refresh-workstations" title="Ask Tynn again" aria-label="Ask Tynn again" disabled={refresh.kind === 'working'} onClick={onRefresh} className={`ml-auto ${quiet}`}>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="refresh-workstations" title="Ask Tynn again" aria-label="Ask Tynn again" disabled={refresh.kind === 'working'} onClick={onRefresh} className={`ml-auto ${quiet}`}>
                         <Icon name="refresh-cw" size="xs" className={refresh.kind === 'working' ? 'animate-spin' : ''} />
-                    </button>
+                    </Button>
                 ) : null}
             </div>
         </div>

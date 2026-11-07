@@ -81,7 +81,8 @@ describe('genie#1298: the drag strip never scrolls', () => {
         // scrolled up under the strip punches a hole in it: the window moved only while the list was at the top. Outside
         // the drag strip there is nothing to exempt, so the scrollers say nothing at all.
         const scrollers = all.filter((e) => classes(e).some((c) => /^overflow-(y-)?(auto|scroll)$/.test(c)));
-        expect(scrollers.length).toBeGreaterThanOrEqual(3);
+        // The question and the drawer's body; the queue is a fixed tab strip that does not scroll (Tynn story #378).
+        expect(scrollers.length).toBeGreaterThanOrEqual(2);
         const regioned = all.filter((e) => /-webkit-app-region/.test(e.attrs));
         expect(regioned.length, 'positive control: the drag strip carries one').toBeGreaterThanOrEqual(1);
         for (const s of scrollers) {
@@ -104,8 +105,8 @@ describe('genie#1298: the drag strip never scrolls', () => {
 
     it('every scroller in the window is the containing block of its absolutely positioned children (none escapes to grow the document)', () => {
         const scrollers = all.filter((e) => classes(e).some((c) => /^overflow-(y-)?(auto|scroll)$/.test(c)));
-        // The queue, the question, the drawer's body: three.
-        expect(scrollers.length).toBeGreaterThanOrEqual(3);
+        // The question and the drawer's body: two. The queue is a tab strip of a fixed height that never scrolls (Tynn story #378).
+        expect(scrollers.length).toBeGreaterThanOrEqual(2);
         for (const s of scrollers) expect(classes(s), s.attrs).toContain('relative');
     });
 

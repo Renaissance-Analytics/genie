@@ -1,12 +1,4 @@
-import {
-    Icon,
-    Popover,
-    Tooltip,
-    browserPlatformHints,
-    detectPlatform,
-    modifierKeyLabel,
-    type FancyPlatform,
-} from '@particle-academy/react-fancy';
+import { browserPlatformHints, Button, detectPlatform, Icon, modifierKeyLabel, Popover, Tooltip, type FancyPlatform } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { FEATURE_ICONS } from '../../core/rail-view.js';
 import type { UpdateChip } from '../../core/update-chip.js';
@@ -144,7 +136,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
             style={{ paddingRight: `calc(${controlsInset}px + 10px)` }}
         >
             {/* The mark is a button, not an ornament: clicking it lands on the Dashboard. */}
-            <button
+            <Button variant="ghost" size="xs" labelClassName="contents"
                 type="button"
                 data-nav="genie://dashboard"
                 aria-label="Genie — Dashboard"
@@ -155,7 +147,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                 <span className="text-[13px] font-semibold">Genie</span>
                 {/* The running version until there is an update to act on — then the chip says what comes next. */}
                 {version && !update ? <span data-running-version={version} className="font-mono text-[10px] text-[var(--fg-4)]">v{version}</span> : null}
-            </button>
+            </Button>
 
             {/*
              * The four feature icons — GApps, Knowledge Graph, Flows, Genie OSA.
@@ -168,7 +160,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
             <div className="flex shrink-0 items-center gap-0.5">
                 {FEATURE_ICONS.map((f) => (
                     <Tooltip key={f.label} content={f.label} placement="bottom">
-                        <button
+                        <Button variant="ghost" size="xs" labelClassName="contents"
                             type="button"
                             data-feature={f.label}
                             aria-label={f.label}
@@ -176,12 +168,12 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                             className="[-webkit-app-region:no-drag] flex size-6 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
                         >
                             <Icon name={f.icon} size="sm" />
-                        </button>
+                        </Button>
                     </Tooltip>
                 ))}
                 {inbox ? (
                     <Tooltip content={inbox.unread ? `AgentInbox · ${inbox.unread} unread` : 'AgentInbox'} placement="bottom">
-                        <button
+                        <Button variant="ghost" size="xs" labelClassName="contents"
                             type="button"
                             data-system-icon="AgentInbox"
                             data-inbox-icon={inbox.open ? 'open' : 'closed'}
@@ -196,21 +188,21 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                                     {inbox.unread > 99 ? '99+' : inbox.unread}
                                 </span>
                             ) : null}
-                        </button>
+                        </Button>
                     </Tooltip>
                 ) : null}
                 {connect ? (
                     <Popover placement="bottom-start" open={connectOpen} onOpenChange={(open) => { setConnectOpen(open); if (open) connect.onRefresh?.(); }}>
                         <Popover.Trigger className="[-webkit-app-region:no-drag]">
                             <Tooltip content={CONNECT_LABEL} placement="bottom">
-                                <button
+                                <Button variant="ghost" size="xs" labelClassName="contents"
                                     type="button"
                                     data-system-icon="Connect"
                                     aria-label={CONNECT_LABEL}
                                     className={`flex size-6 items-center justify-center rounded-md hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)] ${connectOpen ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'}`}
                                 >
                                     <Icon name="monitor" size="sm" />
-                                </button>
+                                </Button>
                             </Tooltip>
                         </Popover.Trigger>
                         <Popover.Content className="[-webkit-app-region:no-drag]">
@@ -245,7 +237,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
              * `Command`, which owns its own input when it opens — two inputs for one search is
              * a focus fight nobody wins.
              */}
-            <button
+            <Button variant="ghost" size="xs" labelClassName="contents"
                 type="button"
                 data-palette
                 aria-label="Search, jump, run"
@@ -260,7 +252,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                  * hint learns to ignore hints.
                  */}
                 <span data-palette-hint className="ml-auto whitespace-nowrap font-mono text-[11px]">{hint}</span>
-            </button>
+            </Button>
 
             {/*
              * The workstation chip. Health is a DOT, not a word — the word would be read as a
@@ -283,7 +275,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
               */}
             {update ? (
                 onOpenUpdate ? (
-                    <button
+                    <Button variant="ghost" size="xs" labelClassName="contents"
                         type="button"
                         data-update-chip={update.phase}
                         data-update-action={update.action ?? 'none'}
@@ -293,7 +285,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     >
                         <Icon name={update.action === 'update-install' ? 'rotate-cw' : 'download'} size="xs" />
                         {update.label}
-                    </button>
+                    </Button>
                 ) : (
                     <span data-update-chip={update.phase} className="flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--bg-2)] px-2 py-0.5 text-[11px] text-[var(--fg-3)]">
                         <Icon name="download" size="xs" />

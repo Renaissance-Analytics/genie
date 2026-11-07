@@ -80,10 +80,9 @@ describe('a reading in an agent’s stream reaches the host’s owner with its p
 });
 
 describe('in the header', () => {
-    it('one pill per provider, its share left and window, the reset on hover', () => {
+    it('one pill per provider, its share left and window; the detail is a popover (rate-limit-popover)', () => {
         const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(62), codex: h(97, '7d') }} />);
-        // The hover card and the pill’s accessible name list every reported window with its reset (genie#1268, rate-limit-detail).
-        expect(html).toMatch(/data-rate-limit="claude"[^>]*aria-label="Claude Code rate limits: 5h window: 38% used · 62% left · resets [^"]+"/);
+        expect(html).toMatch(/data-rate-limit="claude"[^>]*aria-label="Claude Code rate limits: 62% left in the 5-hour window"/);
         expect(html).toContain('62%');
         expect(html).toMatch(/data-rate-limit="codex"/);
         expect(html).toContain('97%');

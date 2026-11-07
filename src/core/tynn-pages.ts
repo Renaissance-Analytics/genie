@@ -174,7 +174,7 @@ const rank = (status: string): number => {
 
 /** Tynn's WIP answer (GET /wip) as the tab draws it; null when it is not WIP — never an empty one. */
 export function parseWip(json: unknown): WipView | null {
-    if (!isRow(json) || typeof json.view !== 'string' || !(json.view in WIP_LENSES) || !Array.isArray(json.stories) || !Array.isArray(json.tasks)) return null;
+    if (!isRow(json) || typeof json.view !== 'string' || !Object.hasOwn(WIP_LENSES, json.view) || !Array.isArray(json.stories) || !Array.isArray(json.tasks)) return null;
     const v = isRow(json.active_version) ? json.active_version : null;
     const versionId = v ? str(v.id) : null;
     const c = isRow(json.story_counts) ? json.story_counts : {};
@@ -206,8 +206,9 @@ export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQ
     const q = new URLSearchParams();
     if (page === 'wip') {
         const view = query.view;
-        if (view !== undefined && view in WIP_LENSES) q.append('view', view);
+        if (view !== undefined && Object.hasOwn(WIP_LENSES, view)) q.append('view', view);
         if (query.story !== undefined && query.story !== '') q.append('story', query.story);
+        if (query.product !== undefined && query.product !== '') q.append('product', query.product);
     }
     const s = q.toString();
     return `/api/v1/projects/${encodeURIComponent(projectId)}${WIP_DATA_API.path}${s === '' ? '' : `?${s}`}`;

@@ -18,7 +18,7 @@ export interface AttentionToolsDeps {
      */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
     /** Hand the caller's plan to its session (`SessionHost.reportPlan`); `false` = it has no running session. Absent = refused. */
-    readonly reportPlan?: (agentId: string, steps: readonly { content: string; status: string }[]) => boolean;
+    readonly reportPlan?: (agentId: string, steps: readonly { content: string; status: string }[]) => boolean | Promise<boolean>;
     /** The caller's KEPT plan (identity.ts `plan`), running or not; `null` = it has reported none. Absent = cannot read. */
     readonly readPlan?: (agentId: string) => readonly { content: string; status: string }[] | null;
 }
@@ -108,7 +108,7 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
                 steps.push({ content, status });
             }
             if (!deps.reportPlan) return err('this Genie cannot show plans');
-            if (!deps.reportPlan(caller.agentId, steps)) return err(`${caller.agentName} has no running session to show a plan in`);
+            if (!(await deps.reportPlan(caller.agentId, steps))) return err(`${caller.agentName} has no running session to show a plan in`);
             return ok({ ok: true, step: steps.filter((s) => s.status === 'completed').length, of: steps.length });
         }),
     };

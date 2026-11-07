@@ -1,6 +1,7 @@
-import { Icon, Input } from '@particle-academy/react-fancy';
+import { Button, Icon, Input } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import type { Approval, OptionTone } from '../../core/approval.js';
+import { visibleApprovalText } from '../../core/approval-text.js';
 
 /**
  * A PARKED APPROVAL — the one thing on screen that an agent is genuinely blocked on.
@@ -53,6 +54,11 @@ export function ApprovalCard(props: ApprovalCardProps) {
     return <ApprovalCardView {...props} note={note} onNote={setNote} />;
 }
 
+/** All of an approval's text (core/approval-text.ts). The toast draws this too. */
+export function ApprovalText({ text }: { text: string }) {
+    return <>{visibleApprovalText(text).map((part, i) => (part.named ? <span key={i} data-approval-named="" className="rounded bg-[var(--warning)]/15 px-0.5 font-semibold text-[var(--warning)]">{part.text}</span> : part.text))}</>;
+}
+
 export function ApprovalCardView({ approval, answering, refusal = null, onAnswer, agentName, note, onNote }: ApprovalCardProps & { note: string; onNote: (note: string) => void }) {
     // The board's heading and meta, each only when the request reported the piece; the question itself always.
     const heading = approval.tool ? `${agentName ? `${agentName} asks` : 'asks'} to run ${approval.tool}` : null;
@@ -70,12 +76,12 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
             ) : null}
             <div className="mb-2 flex items-start gap-2">
                 <Icon name="circle-help" size="sm" className="mt-0.5 shrink-0 text-[var(--warning)]" />
-                <span data-approval-question className="min-w-0 flex-1 font-mono text-xs text-[var(--fg-1)]">
-                    {approval.question}
+                <span data-approval-question className="min-w-0 flex-1 whitespace-pre-wrap font-mono text-xs text-[var(--fg-1)] [overflow-wrap:anywhere]">
+                    <ApprovalText text={approval.question} />
                 </span>
             </div>
             {approval.command && approval.command !== approval.question ? (
-                <pre data-approval-command="" className="mb-2 overflow-x-auto rounded-md bg-[var(--bg-2)] px-2.5 py-1.5 font-mono text-[11px] leading-[17px] text-[var(--fg-2)]">{approval.command}</pre>
+                <pre data-approval-command="" className="mb-2 whitespace-pre-wrap rounded-md bg-[var(--bg-2)] px-2.5 py-1.5 font-mono text-[11px] leading-[17px] text-[var(--fg-2)] [overflow-wrap:anywhere]"><ApprovalText text={approval.command} /></pre>
             ) : approval.command ? (
                 <pre data-approval-command="" className="hidden">{approval.command}</pre>
             ) : null}
@@ -92,7 +98,7 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
             />
             <div className="flex flex-wrap gap-2">
                 {approval.options.map((option) => (
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         key={option.id}
                         type="button"
                         data-approval-option={option.id}
@@ -101,12 +107,13 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
                         // The provider is blocked on a single promise; a second answer resolves
                         // nothing and the second press would look ignored.
                         disabled={answering !== null}
+                        loading={answering === option.id}
                         onClick={() => onAnswer(option.id, note)}
                         className={`rounded-md border px-2.5 py-1 text-xs disabled:opacity-50 ${TONE[option.tone]}`}
                     >
                         {option.label}
                         {KEY_HINT[option.tone] ? <span data-key-hint={KEY_HINT[option.tone]} className="ml-1.5 rounded-sm border border-current/30 px-1 font-mono text-[10px] opacity-70">{KEY_HINT[option.tone]}</span> : null}
-                    </button>
+                    </Button>
                 ))}
             </div>
             {/* The host would not take the last answer: say why, here, where the press was. The buttons above are live again. */}

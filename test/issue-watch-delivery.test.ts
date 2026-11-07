@@ -120,11 +120,13 @@ describe('through the same delivery as mail', () => {
             prompts,
             host: {
                 subscribe: (l: (id: AgentId) => void) => { listeners.add(l); return () => listeners.delete(l); },
-                promptable: (id: AgentId) => (running.has(id) ? 1 : null),
+                deliverable: (id: AgentId) => (running.has(id) ? 1 : null),
                 runOf: (id: AgentId) => (running.has(id) ? 1 : null),
                 turnsEndedThisRun: () => 0,
+                inTurn: () => false,
+                hasQueuedPrompt: () => false,
                 probe: () => null,
-                prompt: (id: AgentId, text: string, by?: string | null) => { prompts.push({ id, text, by: by ?? null }); return true; },
+                handOff: (id: AgentId, text: string, by?: string | null) => { prompts.push({ id, text, by: by ?? null }); return { queued: null }; },
             },
         };
     }
@@ -162,16 +164,17 @@ describe('through the same delivery as mail', () => {
     });
 });
 
-describe('main runs it', () => {
-    const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+describe('genie-host runs it (P5c; the window only on the emergency no-host path)', () => {
+    const src = readFileSync('src/main/issue-watch-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+    const push = readFileSync('src/main/issue-watch-push.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('one client listening with the signed-in account’s key and host, one delivery, through the inbox delivery', () => {
         expect(src.match(/new IssueWatchClient\(/g)).toHaveLength(1);
         expect(src.match(/new IssueWatchDelivery\(/g)).toHaveLength(1);
-        expect(src).toMatch(/onEvents: \(projectId, events\) => \{[\s\S]{0,300}issueWatchDelivery\.onEvents\(projectId, events\);/);
-        expect(src).toMatch(/wireInboxPush\(\{\s*inbox: \{ onSend: \(listener\) => issueWatchDelivery\.onQueued\(listener\) \}/);
+        expect(src).toMatch(/onEvents: \(projectId, events\) => \{[\s\S]{0,300}this\.#delivery\.onEvents\(projectId, events\);/);
+        expect(push).toMatch(/wireInboxPush\(\{\s*inbox: \{ onSend: \(listener\) => p\.delivery\.onQueued\(listener\) \}/);
         // Over the signed-in SESSION (main/tynn-account.ts), as Genie 1 did — the person's id and session-bound requests;
         // never a bearer token.
-        expect(src).toMatch(/tynn: \(\) => \{[\s\S]{0,200}tynnAccount\?\.userId\(\)[\s\S]{0,200}request: \(path, init\) => account\.request\(path, init\)/);
+        expect(src).toMatch(/tynn: \(\) => \{[\s\S]{0,200}account\?\.userId\(\)[\s\S]{0,200}request: \(path, init\) => account\.request\(path, init\)/);
         expect(src).not.toMatch(/credentials: \(\) =>/);
         expect(src).not.toMatch(/tynn_token/);
     });

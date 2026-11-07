@@ -60,7 +60,10 @@ function doctorBeside(agents: readonly string[] | null) {
     runs.push(run);
     const call = async (name: string, args: Record<string, unknown>) => {
         const tool = run.tools().find((t) => t.definition.name === name)!;
+        const before = started.length;
         const r = await tool.handler(args as never, { server: 'genie', tool: name, headers: {} });
+        // A start is prepared first, as a normal launch is: the provider comes after it answers.
+        if (name === 'startAgent' && !r.isError) for (let i = 0; i < 200 && started.length === before; i += 1) await new Promise((done) => setTimeout(done, 5));
         return { isError: r.isError, json: JSON.parse(r.text) as Record<string, any> };
     };
     return { run, call, started };
@@ -136,7 +139,7 @@ describe('the running Genie respects the hold', () => {
     it('normal Genie wires the hold into its session host, and publishes which agents it runs', () => {
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
         expect(main.match(/heldElsewhere:/g) ?? []).toHaveLength(1);
-        expect(main.match(/markGenieRunning\(genieHome\(\),\s*[a-zA-Z]/g) ?? []).not.toHaveLength(0);
+        expect(main.match(/markGenieRunning\(genieRoot\(\),\s*[a-zA-Z]/g) ?? []).not.toHaveLength(0);
     });
 });
 

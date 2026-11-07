@@ -1,4 +1,5 @@
 import { clockAmPm } from './clock-words.js';
+import { isSleeping } from './agent-status.js';
 import { limitTitle } from './limit-words.js';
 import type { Fidelity } from './dashboard-view.js';
 import { observedState, type TakeOverProbe } from './observed.js';
@@ -49,7 +50,7 @@ export interface StatePill {
     word: string;
     /** `m:ss` while a turn is running. `null` when there is nothing to count. */
     elapsed: string | null;
-    tone: 'ok' | 'warn' | 'bad' | 'muted';
+    tone: 'ok' | 'warn' | 'bad' | 'muted' | 'cool';
     /** The hover: the full date and time a rate-limit hold resumes (the owner, 2026-10-25). Absent = no hover. */
     title?: string;
 }
@@ -124,11 +125,16 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
         return { word: `Broken · ${session.failure.reason}${when}`, elapsed: null, tone: 'bad' };
     }
 
+    // COMING UP (q_04ce323c: start on first message, and the person sees it start): no turn, no timer, no Stop.
+    if (session.running && session.starting === true && session.turnState !== 'working') return { word: 'Starting', elapsed: null, tone: 'muted' };
     const running = session.running && session.turnState === 'working';
     // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): once its turn is over; a turn still running reads as running.
     if (!running && session.designLogin) return { word: 'Claude Design login needed', elapsed: null, tone: 'warn' };
     // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): what it started in the background still runs.
     if (!running && session.running && (session.background ?? 0) > 0) return { word: `Working · ${session.background} in the background`, elapsed: null, tone: 'ok' };
+    // COOLING (core/session.ts COOLING_MS): the 15 s after a turn that replied.
+    if (!running && session.running && session.cooling === true) return { word: 'Cooling', elapsed: null, tone: 'cool' };
+    if (isSleeping(session, now())) return { word: 'Sleeping', elapsed: null, tone: 'muted' };
     if (!running) return { word: ctx.turns === 0 && session.running ? 'No turns yet' : 'Idle', elapsed: null, tone: 'muted' };
 
     return {
@@ -376,7 +382,7 @@ export function processEnded(session: LiveSession | null, rows: readonly TimedEv
     return { reason: session.failure?.reason ?? 'the session ended without a reason Genie received', lastTool, log: log.join('\n'), exit };
 }
 
-export function contextNote(session: LiveSession | null, rows: readonly TimedEvent[], pillTone: 'ok' | 'warn' | 'bad' | 'muted'): ContextNote | null {
+export function contextNote(session: LiveSession | null, rows: readonly TimedEvent[], pillTone: StatePill['tone']): ContextNote | null {
     if (!session) return null;
     const clockOf = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
     if (pillTone === 'bad' || session.failure !== null) {

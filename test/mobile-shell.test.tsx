@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { DeckItem } from '../src/core/deck.js';
 import { MobilePair, MobileShell } from '../src/renderer/components/MobileShell.js';
+import { control } from './helpers/control-markup.js';
+import { controlByText } from './helpers/control-markup.js';
 
 /**
  * THE PHONE'S SHELL (§6.8 mobile UI: questions mirrored). One screen: the loud `● REMOTE — <host>`
@@ -72,7 +74,7 @@ describe('MobileShell', () => {
     });
 
     it('answering disables the card while an answer is in flight', () => {
-        expect(shell({ answering: 'allow' })).toMatch(/data-approval-option="allow"[^>]*disabled/);
+        expect(control(shell({ answering: 'allow' }), 'data-approval-option="allow"')!.open).toMatch(/\sdisabled=""/);
     });
 });
 
@@ -88,7 +90,9 @@ describe('MobilePair', () => {
         expect(html).toMatch(/<input[^>]*inputmode="numeric"/i);
         expect(html).toMatch(/<input[^>]*name="label"/);
         expect(html).toMatch(/<input[^>]*value="phone"/);
-        expect(html).toMatch(/<button[^>]*type="submit"[^>]*>Connect/);
+        const connect = controlByText(html, 'Connect');
+        expect(connect).toMatchObject({ tag: 'button', fancy: true });
+        expect(connect!.open).toContain('type="submit"');
         expect(html).not.toContain('data-refusal');
     });
 

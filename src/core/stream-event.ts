@@ -27,8 +27,7 @@ import type { PromptBlock } from './prompt-content.js';
 /**
  * A piece of AgentInbox mail a Genie notice told the agent about (beta.33 item 18), as it was when told: the inbox's id
  * (so the chat can open THAT message), who sent it (`human` or an agent id) and the name that agent had then, and what
- * it says. The notice's prompt stays short — the agent collects the mail with `receive` — so this is the context a
- * person reads in the chat.
+ * it says. This is the chat's preview context; the provider receives the full original mail in its delivery prompt.
  */
 export interface NoticeMail {
     readonly id: string;
@@ -88,10 +87,27 @@ export type StreamEvent =
           toolKind: ToolKind | null;
           rawInput: unknown;
           /**
-           * What the tool answered (ACP `rawOutput`, else its text `content` blocks), capped at 4000 characters; ABSENT
-           * when the update carries none. The Dashboard reads a commit's sha from git's own output here (core/delivery.ts).
+           * What the tool answered (ACP `rawOutput`, else its text `content` blocks); ABSENT when the update carries none.
+           * The Dashboard reads a commit's sha from git's own output here (core/delivery.ts). As mapped it is whole; the
+           * session keeps at most a 16 KB preview of it in the row (core/tool-row-bound.ts, Tynn story #386), and an
+           * `in_progress` row none at all.
            */
           output?: string;
+          /** `output` is a PREVIEW: the whole answer's size in bytes. ABSENT when `output` is the whole answer. */
+          outputBytes?: number;
+          /**
+           * Where the whole answer is kept: a file in the ledger's own folder (`<ledger>/tool-<id>.out`), read only when a
+           * person opens the row (`agents.toolOutput`). ABSENT when it was not kept (a row of an older ledger).
+           */
+          outputFile?: string;
+          /** `rawInput` is a PREVIEW (long fields cut): the whole input's size in bytes of JSON. ABSENT when it is whole. */
+          inputBytes?: number;
+          /**
+           * A SUBAGENT's call: the call that spawned it (prism-acp's {@link PARENT_TOOL_CALL_META}). ABSENT on the agent's own,
+           * and on every row recorded before genie#1473. The session marks every row of such a call, even one that came
+           * unmarked, so a reader can trust a row without following its call.
+           */
+          parentToolCallId?: string;
       }
     | {
           kind: 'usage';
@@ -157,6 +173,11 @@ export type StreamEvent =
           tasks?: BackgroundTask[];
           /** One background task's event — started, updated, ended; absent when the notice is not one. */
           task?: TaskEvent;
+          /**
+           * A PROVIDER SWITCH'S CARRY-OVER went with this turn (Tynn story #380, core/carry-over.ts): where it came from, how
+           * many turns, and the exact text sent. Minted by the session, never read off the wire, never carried again.
+           */
+          carried?: { from: string; turns: number; text: string };
       }
     /**
      * A DECISION on a permission request — minted by the session when the human answers (or the session stops with
@@ -239,6 +260,12 @@ export const REPLAY_META = 'particle.academy/replay';
  * `{ turns, items, diagnostics, reasons, omittedDiagnostics, complete }`.
  */
 export const REPLAY_SUMMARY_META = 'particle.academy/replay_summary';
+/**
+ * prism-acp's mark on a tool call made INSIDE another (its exported `META_PARENT_TOOL_CALL`): a subagent's calls and their
+ * results, naming the call that spawned it; absent on the agent's own. Pinned to prism-acp's value in
+ * test/reply-one-row-1456.test.ts.
+ */
+export const PARENT_TOOL_CALL_META = 'particle.academy/parent_tool_call_id';
 /** Where prism-acp (0.19.0+) puts a compaction on a `notice` (its exported `META_COMPACTION`): trigger, pre/post tokens. */
 export const COMPACTION_META = 'particle.academy/compaction';
 
@@ -247,6 +274,12 @@ function thinkingEstimateOf(update: Record<string, unknown>): number | null {
     if (!isRecord(meta)) return null;
     const n = meta['particle.academy/thinking_tokens_estimate'];
     return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function parentCallField(update: Record<string, unknown>): { parentToolCallId?: string } {
+    const meta = update['_meta'];
+    const parent = isRecord(meta) ? meta[PARENT_TOOL_CALL_META] : undefined;
+    return typeof parent === 'string' ? { parentToolCallId: parent } : {};
 }
 
 /** A tool's answer as text: `rawOutput` (a string, or `{ output | stdout }`), else the text of its `content` blocks. */
@@ -266,7 +299,8 @@ function outputField(update: Record<string, unknown>): { output?: string } {
         });
         if (parts.length > 0) text = parts.join('\n');
     }
-    return text === null ? {} : { output: text.slice(0, 4000) };
+    // Whole here: the session bounds the row it keeps and shows, and keeps the rest beside the ledger (Tynn story #386).
+    return text === null ? {} : { output: text };
 }
 
 export function toStreamEvent(update: Record<string, unknown>): StreamEvent | null {
@@ -301,6 +335,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 toolKind: toolKindOf(update['kind']),
                 rawInput: update['rawInput'] ?? null,
                 ...outputField(update),
+                ...parentCallField(update),
             };
 
         case 'usage_update': {

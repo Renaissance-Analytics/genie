@@ -1,5 +1,6 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { ChildProcess, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveProgram } from './program-lookup.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -87,6 +88,13 @@ export interface ProcessTree {
     read?(): Promise<readonly ProcessInfo[] | null>;
     /** `killTree`, asynchronously: the same rules (no tree, the same process only, the cap), each kill off main. */
     reap?(targets: readonly ProcessInfo[], now: readonly ProcessInfo[], limit?: number): Promise<ReapResult>;
+    /**
+     * WHICH PROCESSES `fn` CREATED, WITHOUT READING THE MACHINE (beta.53 freezes: a start's before/after `snapshot` was two
+     * PowerShell readings on main, 2–20 s each on Windows). Runs `fn` and pushes into `sink` the pid of every child this
+     * process creates while it runs — exactly the spawn's own, since nothing else runs on main inside a synchronous call.
+     * What `fn` made before a throw is kept; the throw is rethrown. Present with `read`; absent on a synchronous test tree.
+     */
+    capture?(fn: () => void, sink: number[]): void;
 }
 
 /** One process as the snapshot reads it. `started` is epoch ms (Windows: CreationDate; Linux/macOS: `ps lstart`). */
@@ -96,6 +104,13 @@ export interface ProcessInfo {
     readonly started: number;
     readonly name: string;
 }
+
+/**
+ * A PROCESS WHOSE START TIME WAS NEVER READ (the machine could not be read when it was spawned). No real process has this start time, so `sameProcess` matches nothing: a record
+ * with it says a provider was started and ends nothing, because a pid alone is not a process, and it may by now be someone else's.
+ */
+export const START_UNKNOWN = -1;
+export const startTimeUnknown = (pid: number, ppid: number): ProcessInfo => ({ pid, ppid, started: START_UNKNOWN, name: 'start time unknown' });
 
 export interface ReapResult {
     killed: number;
@@ -114,6 +129,8 @@ export interface ProcessTreeIo {
     snapshotAsync?(): Promise<ProcessInfo[]>;
     /** `killOne` without blocking. Never rejects for an already-dead pid. */
     killOneAsync?(pid: number): Promise<void>;
+    /** `ProcessTree.capture`: run `fn`, pushing into `sink` the pid of each child created meanwhile. */
+    captureSpawns?(fn: () => void, sink: number[]): void;
 }
 
 /**
@@ -242,6 +259,7 @@ export function makeProcessTree(io: ProcessTreeIo): ProcessTree {
             await Promise.all(same.map((t) => killOneAsync(t.pid).catch(() => {})));
             return { killed: same.length, refused: false };
         },
+        ...(io.captureSpawns ? { capture: io.captureSpawns.bind(io) } : {}),
     } : {};
     return {
         ...async,
@@ -292,12 +310,23 @@ const WIN32_ARGS = ['-NoProfile', '-NonInteractive', '-Command', WIN32_SCRIPT];
 const WIN32_OPTIONS = { encoding: 'utf8' as const, timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true };
 
 function win32Snapshot(): ProcessInfo[] {
-    return parseWin32Snapshot(execFileSync('powershell', WIN32_ARGS, WIN32_OPTIONS), process.pid);
+    return parseWin32Snapshot(execFileSync(resolveProgram('powershell'), WIN32_ARGS, WIN32_OPTIONS), process.pid);
 }
+
+/**
+ * WHO READS IT, WHERE A LONG-LIVED HELPER RUNS (genie-host): 1.8 to 2.2 s a launch, about 65 ms through the helper. Its failure is not the reading's: a launch still answers. The helper is left out of
+ * the reading the same way a scan's own PowerShell is, by the pid the script reports.
+ */
+let win32Reader: ((script: string) => Promise<string>) | null = null;
+export function setWin32ProcessReader(reader: ((script: string) => Promise<string>) | null): void { win32Reader = reader; }
 
 /** The same reading, off the event loop (genie#1201). */
 async function win32SnapshotAsync(): Promise<ProcessInfo[]> {
-    const { stdout } = await execFileAsync('powershell', WIN32_ARGS, WIN32_OPTIONS);
+    if (win32Reader) {
+        const text = await win32Reader(WIN32_SCRIPT).catch(() => null);
+        if (text !== null) return parseWin32Snapshot(text, process.pid);
+    }
+    const { stdout } = await execFileAsync(resolveProgram('powershell'), WIN32_ARGS, WIN32_OPTIONS);
     return parseWin32Snapshot(stdout, process.pid);
 }
 
@@ -330,12 +359,12 @@ const PS_ARGS = ['-A', '-o', 'pid=,ppid=,lstart=,comm='];
 const psOptions = () => ({ encoding: 'utf8' as const, timeout: 20_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
 
 function posixSnapshot(): ProcessInfo[] {
-    return parsePosixSnapshot(execFileSync('ps', PS_ARGS, psOptions()), process.pid);
+    return parsePosixSnapshot(execFileSync(resolveProgram('ps'), PS_ARGS, psOptions()), process.pid);
 }
 
 /** The same reading, off the event loop (genie#1201). */
 async function posixSnapshotAsync(): Promise<ProcessInfo[]> {
-    const { stdout } = await execFileAsync('ps', PS_ARGS, psOptions());
+    const { stdout } = await execFileAsync(resolveProgram('ps'), PS_ARGS, psOptions());
     return parsePosixSnapshot(stdout, process.pid);
 }
 
@@ -352,13 +381,34 @@ export function parsePosixSnapshot(out: string, selfPid: number): ProcessInfo[] 
     return rows.filter((r) => !(r.ppid === selfPid && /(^|\/)ps$/.test(r.name)));
 }
 
+/**
+ * The children THIS process creates while `fn` runs: Node's `child_process` creates every child through
+ * `ChildProcess.prototype.spawn` (spawn, execFile and fork included, whatever module imported them), and the pid is set
+ * when it returns. Hooked for the length of the synchronous call only, restored on every path.
+ */
+function captureChildSpawns(fn: () => void, sink: number[]): void {
+    const proto = ChildProcess.prototype as unknown as { spawn: (...args: unknown[]) => unknown };
+    const original = proto.spawn;
+    proto.spawn = function capturing(this: ChildProcess, ...args: unknown[]): unknown {
+        const result = original.apply(this, args);
+        if (typeof this.pid === 'number') sink.push(this.pid);
+        return result;
+    };
+    try {
+        fn();
+    } finally {
+        proto.spawn = original;
+    }
+}
+
 export const systemProcessTree: ProcessTree = makeProcessTree({
+    captureSpawns: captureChildSpawns,
     snapshot: () => (process.platform === 'win32' ? win32Snapshot() : posixSnapshot()),
     snapshotAsync: () => (process.platform === 'win32' ? win32SnapshotAsync() : posixSnapshotAsync()),
     // The same kill as killOne below — one pid, never `/T` — without holding the event loop.
     killOneAsync: async (pid) => {
         try {
-            if (process.platform === 'win32') await execFileAsync('taskkill', ['/PID', String(pid), '/F'], { timeout: 20_000, windowsHide: true });
+            if (process.platform === 'win32') await execFileAsync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { timeout: 20_000, windowsHide: true });
             else process.kill(pid, 'SIGKILL');
         } catch {
             // Already gone is the common case and is a success, not an error.
@@ -376,7 +426,7 @@ export const systemProcessTree: ProcessTree = makeProcessTree({
                  * unrelated service. Every genuine descendant is already in the verified set,
                  * so the tree flag adds only processes nobody checked.
                  */
-                execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
+                execFileSync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
             } else {
                 process.kill(pid, 'SIGKILL');
             }

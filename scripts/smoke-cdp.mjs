@@ -1,3 +1,4 @@
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * THE SMOKE PATH — a real Electron window, driven over the Chrome DevTools Protocol.
  *
@@ -7,15 +8,16 @@
  *
  * ## Why CDP and not a test framework
  *
- * Because it needs **no third-party dependency and no test-only code in the product.**
+ * Because it needs no third-party dependency.
  * `--remote-debugging-port` is a Chromium flag passed on the command line in the container;
- * Node 22 has a global `WebSocket`; the protocol is JSON. Nothing is added to the tree and
- * nothing in `src/` knows this file exists.
+ * Node 22 has a global `WebSocket`; the protocol is JSON. Launch with GENIE_PAGE_PROBE=1:
+ * window.genieTest exposes the same bridge the app uses, with its existing connection.
  *
  * That last part matters more than the convenience. The previous build had a `GENIE_E2E`
  * escape hatch that short-circuited the single-instance lock, and the measured result was two
  * instances opening windows on the owner's desktop while real agents were mid-turn. A harness
  * that requires the product to behave differently is a harness that tests a different product.
+ * GENIE_PAGE_PROBE changes only bridge exposure; product behavior, locks and routes stay the same.
  *
  * ## Where it runs
  *
@@ -252,7 +254,9 @@ check(named === true, '9. the snapshot came from the real registry, not the empt
 
 // 9. Stylesheet actually applied. A wrong Tailwind `@source` ships a stylesheet with none of
 //    the board's metrics in it, and every surface silently collapses to unstyled blocks.
-const railWidth = await cdp.evaluate('(() => { const n = document.querySelector("nav"); return n ? Math.round(n.getBoundingClientRect().width) : 0; })()');
+// The rail CONTAINER (`data-rail`, w-52): since the rail became react-fancy's Sidebar (#1430) the first <nav> is Sidebar's
+// landmark inside it (191px = 208 − 1px border − 16px padding), so the container is what the 208 is about.
+const railWidth = await cdp.evaluate('(() => { const n = document.querySelector("[data-rail=expanded]"); return n ? Math.round(n.getBoundingClientRect().width) : 0; })()');
 check(railWidth === 208, '10. the rail is 208px — the stylesheet applied', `${railWidth}px`);
 
 const barHeight = await cdp.evaluate('(() => { const n = document.querySelector("[data-route]")?.parentElement; return n ? Math.round(n.getBoundingClientRect().height) : 0; })()');
@@ -325,22 +329,26 @@ check(
  * was green, because each one rendered the feature directly rather than asking whether the
  * screen would. **The only check that would have caught it is a click.**
  */
+// Seeded manual agents are Stopped: hidden by default, reachable through the persistent count button.
+check(await cdp.evaluate(`document.querySelector('[data-dashboard-filter="stopped"]')?.getAttribute('aria-pressed') === 'false' && document.querySelectorAll('[data-surface="dashboard"] [data-agent][data-state="stopped"]').length === 0`), '16a. Stopped agents are hidden by default');
+await cdp.evaluate(`document.querySelector('[data-dashboard-filter="stopped"]').click(); true`);
+await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])'))`, 'the seeded stopped agents after revealing them');
 const agentRow = await cdp.evaluate(`
     (() => {
-        // A WORKSPACE agent's row: genie's own group comes first on the Dashboard (the design mockup, 2026-10-19).
-        const row = document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]');
+        const row = document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])');
         return row ? JSON.stringify({ id: row.getAttribute('data-agent'), text: row.textContent }) : null;
     })()
 `);
 check(typeof agentRow === 'string', '16. the seeded agent appears on the Dashboard', String(agentRow));
-// 60. GENIE'S OWN GROUP, FIRST (the design mockup): `genie · default agent · not in a workspace`, above every workspace.
-check(await cdp.evaluate(`(() => { const g = document.querySelector('[data-genie-group]'); const w = document.querySelector('[data-surface="dashboard"] div[data-workspace]'); return Boolean(g && w && (g.compareDocumentPosition(w) & Node.DOCUMENT_POSITION_FOLLOWING) && /default agent · not in a workspace/.test(g.textContent ?? '')); })()`), '60. the Dashboard opens with genie’s own group, above the workspaces', await cdp.evaluate(`document.querySelector('[data-genie-group]')?.textContent?.slice(0, 80) ?? null`));
+const flatRows = await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-surface="dashboard"] [data-dashboard-list] [data-agent]')].map((r) => ({ name: r.querySelector('span.font-medium')?.textContent?.trim() ?? '', workspace: Boolean(r.querySelector('[data-column="workspace"]')) })))`);
+const flat = JSON.parse(flatRows || '[]');
+check(flat.length === 3 && flat.every((r) => r.workspace) && flat.map((r) => r.name).join('|') === ['atlas', 'genie', 'wren'].join('|') && await cdp.evaluate(`!document.querySelector('[data-genie-group], [data-group-toggle]')`), '60. one alphabetical table includes genie and every agent with a Workspace cell', flatRows);
 
 if (typeof agentRow === 'string') {
     // 17. A ROW CLICK OPENS THAT AGENT'S CHAT BESIDE THE DASHBOARD, WHICH STAYS (genie#1209; the owner, 2026-10-26: "on the
     // dashboard page I should be able to click on agent to bring up their chat and stay on the dashboard").
     const rowId = JSON.parse(agentRow).id;
-    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]').click(); true`);
+    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])').click(); true`);
     const chatted = await waitFor(
         cdp,
         `Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${rowId}"]')) && Boolean(document.querySelector('[data-surface="dashboard"]'))`,
@@ -365,7 +373,7 @@ if (typeof agentRow === 'string') {
             const body = document.querySelector('[data-stream]');
             return JSON.stringify({
                 tab: Boolean(tab),
-                active: tab?.getAttribute('data-active') === 'true',
+                active: tab?.getAttribute('aria-selected') === 'true',
                 body: body?.getAttribute('data-stream') ?? null,
             });
         })()
@@ -401,7 +409,7 @@ if (typeof agentRow === 'string') {
     // Undo exactly those two, or check 24's "Back again returns to the Dashboard" lands on a tab instead — the first
     // CI run of this check did precisely that. `go(-2)`, not a click on Stream, which would be a third entry.
     await cdp.evaluate('history.go(-2); true');
-    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('data-active') === 'true'`, 'the Stream tab again, by history');
+    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('aria-selected') === 'true'`, 'the Stream tab again, by history');
 
     /*
      * The composer is REACHABLE from here.
@@ -480,18 +488,15 @@ if (typeof agentRow === 'string') {
     check(backHome, '23. Back leaves the agent for the Dashboard (opening the chat is no history entry), the chat still docked');
     check(backHome, '24. Back returns to the Dashboard');
 
-    // 52. THE BOARD'S DOORS ARE REAL (board audit, 2026-10-12: "Open workspace →" was a span, no By status, no Chat ⌘J,
-    // the group header named the workspace by its id). The header names the seeded workspace by its NAME (never a
-    // 26-char id), offers the segmented control and Chat ⌘J, and `Open workspace →` is a button that lands on the
-    // workspace; Back returns to the Dashboard.
+    // 52. The Workspace cell opens the workspace, both persistent state filters and Chat are real buttons.
     const doors = await cdp.evaluate(`JSON.stringify({
         open: document.querySelectorAll('button[data-open-workspace]').length,
-        toggle: Boolean(document.querySelector('[data-group-toggle="status"]')),
+        filters: ['sleeping', 'stopped'].every((s) => document.querySelector('button[data-dashboard-filter="' + s + '"]')),
         chat: Boolean(document.querySelector('button[data-action="chat-genie"]')),
-        header: (document.querySelector('[data-workspace] .font-semibold')?.textContent ?? ''),
+        workspace: (document.querySelector('button[data-open-workspace="tynn"]')?.textContent ?? '').trim(),
     })`);
     const d = JSON.parse(doors || '{}');
-    check(d.open >= 1 && d.toggle && d.chat && d.header.length > 0 && !/^[0-9a-z]{26}$/i.test(d.header), '52. the Dashboard\'s doors are real: Open workspace, By status, Chat ⌘J, and the group header names the workspace', doors);
+    check(d.open >= 1 && d.filters && d.chat && d.workspace.length > 0 && !/^[0-9a-z]{26}$/i.test(d.workspace), '52. the Dashboard has named Workspace buttons, both state filters and Chat', doors);
     await cdp.evaluate(`document.querySelector('button[data-open-workspace]').click(); true`);
     const landed = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the workspace after Open workspace →');
     check(landed, '53. Open workspace → lands on the workspace');
@@ -579,8 +584,9 @@ if (!approvalEnabled) {
     console.log('  SKIP  the approval round trip — no codex agent was seeded');
 } else {
     // The agent's PAGE, by its route: a Dashboard row click now opens the chat beside the board (genie#1209, step 17).
-    // Start it as the row click used to (App's onOpenAgent: openAgent, then its page) — the approval needs a running agent.
-    await cdp.evaluate(`window.genie.openAgent('${codexRow}'); window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
+    // Start it with Start (the one restart; opening starts nothing since q_04ce323c), then its page — the approval needs a running agent.
+    await waitForPageProbe(cdp);
+    await cdp.evaluate(`window.genieTest.agents.restart('${codexRow}', 'graceful'); window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]'))`, 'the codex agent');
 
     // The composer must be REACHABLE — that is a claim about this screen and worth asserting.
@@ -697,7 +703,7 @@ if (!approvalEnabled) {
         await cdp.evaluate(`document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]').click(); true`);
         const toTab = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'the codex agent tab with its chat docked');
         await new Promise((r) => setTimeout(r, 750));
-        const landed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agent: Boolean(document.querySelector('[data-surface="agent"]')), deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, stream: document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('data-active') ?? null, address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
+        const landed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agent: Boolean(document.querySelector('[data-surface="agent"]')), deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, stream: document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('aria-selected') ?? null, address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
         check(typeof codexWs === 'string' && chatBefore !== codexRow && onLane && stillBlocking === true && toTab && landed.agent && !landed.deck && !landed.workspace
             && landed.agentId === codexRow && landed.stream === 'true' && !String(landed.address ?? '').includes('deck') && landed.subject === codexRow,
             '32b. clicking a WAITING agent on its workspace dashboard opens that agent’s tab (stream), not the Deck, and the docked chat follows', JSON.stringify({ codexWs, chatBefore, onLane, stillBlocking, toTab, ...landed }));
@@ -707,7 +713,7 @@ if (!approvalEnabled) {
         await cdp.evaluate(`window.location.hash = '#genie://workspace/' + ${JSON.stringify(String(codexWs))}; true`);
         await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'))`, 'the codex lane again');
         const focused = await cdp.evaluate(`(() => { const l = document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'); l.focus(); const ok = document.activeElement === l; l.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return ok; })()`);
-        const byKey = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-surface="deck"]') && document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') === '${codexRow}' && document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('data-active') === 'true' && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'Enter on the lane: the codex agent tab with its chat docked');
+        const byKey = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-surface="deck"]') && document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') === '${codexRow}' && document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('aria-selected') === 'true' && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'Enter on the lane: the codex agent tab with its chat docked');
         const keyed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
         check(focused === true && byKey, '32c. Enter on a focused workspace-dashboard lane does what the click does: the agent’s tab, its chat, never the Deck', JSON.stringify({ focused, byKey, ...keyed }));
         // Back to its page, where the approval card is answered below.
@@ -1008,6 +1014,28 @@ if (!approvalEnabled) {
         'an xterm to mount for the panel’s terminal',
     );
     check(paneUp, '36. the panel’s terminal is a real terminal pane with xterm mounted');
+    // WHAT THE TERMINAL DREW, AND WHEN (said only if 37 or 38 fails; it changes no timing): from the moment xterm mounts,
+    // when anything first appears in it and what, so a failure says whether the shell ever drew a prompt before the typing.
+    await cdp.evaluate(`(() => {
+        const rows = document.querySelector('[data-terminal-pane] .xterm-rows');
+        const watch = window.__smokeTerminal = { mountedAt: performance.now(), firstOutputMs: null, firstText: '' };
+        if (!rows) return true;
+        const seen = () => {
+            const text = (rows.innerText ?? '').trim();
+            if (watch.firstOutputMs === null && text !== '') { watch.firstOutputMs = Math.round(performance.now() - watch.mountedAt); watch.firstText = text.slice(0, 200); }
+        };
+        seen();
+        new MutationObserver(seen).observe(rows, { childList: true, subtree: true, characterData: true });
+        return true;
+    })()`);
+    /** On a failure of 37 or 38: the rows (numbered, the drawn ones), the cursor's row, and whether a prompt was ever drawn. */
+    const terminalDump = async () => cdp.evaluate(`(() => {
+        const rows = [...(document.querySelector('[data-terminal-pane] .xterm-rows')?.children ?? [])];
+        const drawn = rows.map((r, i) => [i, (r.innerText ?? '').replace(/\\s+$/, '')]).filter(([, s]) => s !== '').map(([i, s]) => i + ': ' + s.slice(0, 160));
+        const cursorRow = rows.findIndex((r) => r.querySelector('.xterm-cursor'));
+        const w = window.__smokeTerminal ?? null;
+        return JSON.stringify({ drawn: drawn.slice(-12), cursorRow, firstOutputMs: w?.firstOutputMs ?? null, firstText: w?.firstText ?? '', sinceMountMs: w ? Math.round(performance.now() - w.mountedAt) : null });
+    })()`).catch((e) => `(unread: ${e?.message ?? e})`);
 
     // Let the shell print its prompt, then focus xterm's textarea and type.
     await new Promise((r) => setTimeout(r, 1200));
@@ -1019,12 +1047,14 @@ if (!approvalEnabled) {
     const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
     const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
     check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
+    if (!typed) console.log(`  TERMINAL_AT_37 ${await terminalDump()}`);
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
     const ran = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 >= 2`, 'the shell to print the token back');
     const count = await cdp.evaluate(`${rowsText}.split('${token}').length - 1`);
     check(ran, '38. the SHELL ran it — the token comes back as output, not just as typed', `${count} occurrence(s)`);
+    if (!ran) console.log(`  TERMINAL_AT_38 ${await terminalDump()}`);
 
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     if (shot.result?.data) {
@@ -1058,7 +1088,7 @@ if (!approvalEnabled) {
     await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]').click(); true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard');
     // The agent's PAGE, by its route (a row click opens its chat beside the board, genie#1209).
-    await cdp.evaluate(`(() => { const id = document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]')?.getAttribute('data-agent'); if (id) window.location.hash = '#genie://agent/' + id + '?tab=stream'; return true; })()`);
+    await cdp.evaluate(`(() => { const id = document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])')?.getAttribute('data-agent'); if (id) window.location.hash = '#genie://agent/' + id + '?tab=stream'; return true; })()`);
     const onAgent = await waitFor(cdp, `Boolean(document.querySelector('[data-action="take-over"]'))`, 'the Agent view with its Take over control');
     if (onAgent) {
         await cdp.evaluate(`document.querySelector('[data-action="take-over"]').click(); true`);

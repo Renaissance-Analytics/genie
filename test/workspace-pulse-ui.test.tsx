@@ -55,10 +55,10 @@ const agent: AgentRow = {
 const board = (pulsing: ReadonlySet<string> | undefined) => renderToStaticMarkup(
     <Dashboard rows={[agent, { ...agent, id: 'b1', name: 'pica', workspaceId: 'fancy' }]} workspaces={[{ id: 'tynn', path: '/w/tynn' }, { id: 'fancy', path: '/w/fancy' }]} onOpenAgent={() => {}} onAddAgent={() => {}} {...(pulsing ? { pulsing } : {})} />,
 );
-const header = (html: string, id: string) => html.match(new RegExp(`<div[^>]*data-workspace-head="${id}"[^>]*>`))?.[0] ?? '';
+const header = (html: string, id: string) => html.match(new RegExp(`<div[^>]*data-column="workspace" data-workspace="${id}"[^>]*>`))?.[0] ?? '';
 
 describe('the Dashboard', () => {
-    it('the pulsing workspace’s group header pulses (motion-safe, still ring otherwise); the others do not', () => {
+    it('the pulsing Workspace cell pulses (motion-safe, still ring otherwise); the others do not', () => {
         const html = board(new Set(['fancy']));
         expect(header(html, 'fancy')).toMatch(/data-workspace-pulse="true"/);
         expect(header(html, 'fancy')).toMatch(/motion-safe:animate-pulse/);

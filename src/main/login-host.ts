@@ -1,5 +1,4 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DESIGN_LOGIN } from '../core/design-login.js';
 import { providerLogin } from '../core/provider-login.js';
@@ -10,7 +9,7 @@ import type { TerminalHost } from './terminal-host.js';
  * folder and then prompts the login command if possible. if not, make sure the window … includes a loud notice that
  * tells the user what to do").
  *
- * `start(provider)` makes a fresh scratch folder under the OS temp directory, runs the provider's own login there
+ * `start(provider)` makes a fresh scratch folder under the caller's scratch (`<root>/cache/tmp/<this process>`, P7), runs the provider's own login there
  * (`core/provider-login.ts`) — or, for a provider Genie has no login for, its own CLI — and opens it in a window of its own
  * (`genie://takeover/<id>?login=<provider>`), whose notice says what to do. One login per provider: a second click brings
  * the same window back.
@@ -36,6 +35,8 @@ export interface LoginHostOptions {
     binaryFor?: ((provider: string) => string | null) | undefined;
     /** The workspace a login terminal belongs to: Genie's own, not a project's. */
     workspaceId?: string | undefined;
+    /** The folder a login's throwaway folder is made in: this process's scratch under Genie's root (scratch-area.ts), never the OS temp. */
+    scratch: () => string;
 }
 
 interface Live {
@@ -45,6 +46,11 @@ interface Live {
 }
 
 const OS_WORKSPACE = '__genie__';
+
+/** An unknown provider's name IS the shell line, so it may only be a plain name. A record's provider is checked where it is written (isAcpProvider); this is the last place before a shell. */
+const PLAIN_NAME = /^[A-Za-z0-9._-]+$/;
+/** A resolved path goes inside double quotes in a shell line. These leave them, or are read inside them: a quote, a line break, cmd's %, a POSIX shell's $ and backtick, and a final backslash, which eats the closing quote. */
+const quotable = (path: string): boolean => !/["\r\n%$`]/.test(path) && !path.endsWith('\\');
 
 export class LoginHost {
     readonly #options: LoginHostOptions;
@@ -69,13 +75,20 @@ export class LoginHost {
         }
         const design = provider === DESIGN_LOGIN;
         const known = design ? null : providerLogin(provider);
+        if (!design && !PLAIN_NAME.test(provider)) return { ok: false, reason: 'That provider’s login could not start: its name is not one Genie can run.' };
         // Claude Design's login runs in Claude Code's own CLI.
         const cli = design ? 'claude' : provider;
         const binary = this.#options.binaryFor?.(cli) ?? null;
+        if (binary !== null && !quotable(binary)) return { ok: false, reason: `The ${known?.name ?? provider} login could not start: the path set for it has a character Genie will not put in a command.` };
         const program = binary === null ? cli : `"${binary}"`;
         // The provider's documented login, its first word the resolved CLI; with none known (or Claude Design), the CLI itself.
         const command = known ? `${program}${known.login.slice(known.login.indexOf(' '))}` : program;
-        const scratch = mkdtempSync(join(tmpdir(), `genie-login-${provider}-`));
+        let scratch: string;
+        try {
+            scratch = mkdtempSync(join(this.#options.scratch(), `genie-login-${provider}-`));
+        } catch (error) {
+            return { ok: false, reason: `The ${known?.name ?? provider} login could not start: its scratch folder could not be made (${(error as Error).message}).` };
+        }
         let opened: { id: string };
         try {
             opened = this.#options.terminals.open({ workspaceId: this.#options.workspaceId ?? OS_WORKSPACE, cwd: scratch, command, shell: true, limited: false });

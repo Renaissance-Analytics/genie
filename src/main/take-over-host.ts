@@ -2,7 +2,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import { type Burst, type TakeOverProbe } from '../core/observed.js';
 import { randomUUID } from 'node:crypto';
 import { takeOverEnv } from '../core/take-over-env.js';
-import type { TerminalHost } from './terminal-host.js';
+import type { TerminalsApi } from './terminals-host.js';
 
 /**
  * TAKE OVER — §1, the only TUI support there is:
@@ -32,7 +32,7 @@ import type { TerminalHost } from './terminal-host.js';
  */
 
 export interface TakeOverOptions {
-    terminals: TerminalHost;
+    terminals: TerminalsApi;
     /** Open (or re-open — the opener decides whether that means focus) a window on a route. */
     openWindow: (route: string) => void;
     clock?: () => number;
@@ -55,7 +55,7 @@ interface Live {
 const BURSTS_KEPT = 600;
 
 export class TakeOverHost {
-    readonly #terminals: TerminalHost;
+    readonly #terminals: TerminalsApi;
     readonly #openWindow: (route: string) => void;
     readonly #clock: () => number;
     readonly #mcp: () => { mcpUrl: string; token: string } | null;
@@ -92,22 +92,10 @@ export class TakeOverHost {
      * The click. Opens the TUI in a terminal in the agent's workspace and a window on it.
      *
      * One take-over per agent: a second click re-opens the window (focus) rather than starting
-     * a second TUI on the same persona. A persona that lists `tuis:` and does not name the
-     * requested one is REFUSED — §6.2's rule for switching driver, which this is by another
-     * name — with the TUI named so the reader knows what to edit.
+     * a second TUI on the same persona. AGENT.md names no provider (Tynn story #380): nothing in
+     * it refuses a Take Over.
      */
-    start(
-        record: AgentRecord,
-        cwd: string,
-        tui: string,
-        persona: { tuis?: readonly string[] | undefined } = {},
-    ): { ok: true; terminalId: string } | { ok: false; reason: string } {
-        if (persona.tuis && !persona.tuis.includes(tui)) {
-            return {
-                ok: false,
-                reason: `${record.name}'s AGENT.md lists tuis: [${persona.tuis.join(', ')}] and "${tui}" is not among them.`,
-            };
-        }
+    start(record: AgentRecord, cwd: string, tui: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
 
         const existing = this.#live.get(record.id);
         if (existing) {
@@ -122,7 +110,7 @@ export class TakeOverHost {
         const callerId = `takeover_${randomUUID()}`;
         const env = mcp === null ? undefined : takeOverEnv({ mcpUrl: mcp.mcpUrl, token: mcp.token, terminalId: callerId });
         // A WORKSPACE terminal. There is no agent parameter to pass, which is the point.
-        const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, limited: false, ...(env === undefined ? {} : { env }) });
+        const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, personal: true, limited: false, ...(env === undefined ? {} : { env }) });
         if (env !== undefined) this.#callers.set(callerId, { agentId: record.id, agentName: record.name, workspaceId: record.workspaceId, workspacePath: cwd });
         this.#live.set(record.id, { terminalId: opened.id, startedAt: this.#clock(), lastOutputAt: null, bursts: [] });
         this.#openWindow(`genie://takeover/${opened.id}`);
@@ -132,6 +120,11 @@ export class TakeOverHost {
     /** Who a GENIE_TERMINAL_ID this host minted belongs to — the MCP tools' `resolveCaller`. `null` for any other id. */
     callerFor(terminalId: string): { agentId: AgentId; agentName: string; workspaceId: string; workspacePath: string } | null {
         return this.#callers.get(terminalId) ?? null;
+    }
+
+    /** Every Take Over terminal's caller (the host split, P3.1): genie-host resolves these agents' calls to its tools. */
+    callers(): Record<string, { agentId: AgentId; agentName: string; workspaceId: string; workspacePath: string }> {
+        return Object.fromEntries(this.#callers);
     }
 
     /** What is known about this agent's TUI, or `null` — never a fake Observed row. */
