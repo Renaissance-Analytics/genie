@@ -68,9 +68,10 @@ export function installMeasurementHostLaunch(options, injected) {
         return Reflect.apply(originalExec, this, forwarded);
     }
     if (enabled) { ports.child.spawn = wrapped; ports.child.execFile = wrappedExec; ports.syncBuiltinESMExports(); }
-    const installed = () => ports.child.spawn === wrapped && ports.child.execFile === wrappedExec;
+    // execFile may be wrapped again over this one (the ArtBoard trace wraps it to time each call): still this one's, through it.
+    const installed = () => ports.child.spawn === wrapped;
     return {
         snapshot: () => ({ enabled, installed: enabled && !stopped && installed(), injectedPids: [...injectedPids], dropped }),
-        stop() { if (stopped) return; stopped = true; if (enabled && installed()) { ports.child.spawn = original; ports.child.execFile = originalExec; ports.syncBuiltinESMExports(); } },
+        stop() { if (stopped) return; stopped = true; if (enabled && installed()) { ports.child.spawn = original; if (ports.child.execFile === wrappedExec) ports.child.execFile = originalExec; ports.syncBuiltinESMExports(); } },
     };
 }
