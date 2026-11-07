@@ -134,13 +134,16 @@ describe('the fancy + prism drift watcher', () => {
 });
 
 describe('the deps-drift workflow', () => {
-    const wf = readFileSync('.github/workflows/deps-drift.yml', 'utf8').replace(/\r\n/g, '\n');
+    // Read inside each test: a missing workflow fails these two, not the whole file at collection.
+    const workflow = () => readFileSync('.github/workflows/deps-drift.yml', 'utf8').replace(/\r\n/g, '\n');
     it('runs daily, on demand, and on PRs that touch the manifest or the lockfile', () => {
+        const wf = workflow();
         expect(wf).toMatch(/schedule:\n\s+- cron: '[^']+'/);
         expect(wf).toMatch(/workflow_dispatch:/);
         expect(wf).toMatch(/pull_request:\n\s+paths:[\s\S]*?- package\.json[\s\S]*?- package-lock\.json/);
     });
     it('runs the audit against the lockfile and the report step decides red or green', () => {
+        const wf = workflow();
         expect(wf).toMatch(/npm audit --package-lock-only --json/);
         expect(wf).toMatch(/node scripts\/ci\/deps-drift\.mjs collect/);
         expect(wf).toMatch(/node scripts\/ci\/deps-drift\.mjs report[^\n]*--summary "\$GITHUB_STEP_SUMMARY"/);
