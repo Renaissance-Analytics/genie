@@ -167,3 +167,16 @@ export async function writeThroughHost(payload: CopyPayload, host: HostClipboard
         return false;
     }
 }
+
+/** An inline code span or a link under the pointer (genie#1556), as ChatProse reads it from the DOM. */
+export interface InlineCopySource {
+    readonly tag: string;
+    readonly text: string;
+    readonly href: string | null;
+    /** Inside a fenced code block: that block has its own button. */
+    readonly inBlock: boolean;
+}
+
+export function inlineCopyText(_el: InlineCopySource): { kind: 'inline' | 'link'; text: string } | null {
+    return null;
+}

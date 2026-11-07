@@ -92,6 +92,8 @@ export interface DeckItem {
      * Deck, greyed and said, with one-click Dismiss and "Dismiss all stale".
      */
     stale?: StaleReason | undefined;
+    /** Why this was asked although its agent is Autonomous (Tynn #439), in words. Absent = nothing to explain. */
+    why?: string | undefined;
 }
 
 /** Why a question's agent no longer waits for it. */

@@ -193,7 +193,12 @@ export function applyOutcome(agentName: string, what: string, apply: ApplyWhen):
  * A Claude agent's TOOL SETTING as the answer to one shell call (genie#1188), read at the moment the permission hook
  * asks: all tools (and no setting) → allow, nobody asked; ask → park it for the person; edits only → refuse. In a workspace the person has not trusted, "all tools" asks too: the setting was never about this folder.
  */
-export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined, where: { readonly untrusted?: boolean } = {}): 'allow' | 'deny' | 'ask' {
+/** Why an AUTONOMOUS agent was still asked (Tynn #439), drawn on the card: the workspace is not trusted. */
+export const AUTONOMY_UNTRUSTED = 'Autonomous doesn’t apply here: this workspace isn’t trusted.';
+/** Why an AUTONOMOUS agent was still asked (Tynn #439): the action is one autonomy never answers (approval-queue PERSON_ONLY_ACTIONS). */
+export const AUTONOMY_PERSON_ONLY = 'Autonomous doesn’t cover this: it always asks you.';
+
+export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined, where: { readonly untrusted?: boolean; readonly autonomous?: boolean } = {}): 'allow' | 'deny' | 'ask' {
     if (permissions === 'ask') return 'ask';
     if (permissions === 'edits') return 'deny';
     return where.untrusted === true ? 'ask' : 'allow';
