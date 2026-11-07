@@ -5,9 +5,9 @@
 #   ... -Phase interactive
 #       The same, in the logged-on person's session, as a scheduled task "run only when logged on". This is what a real desktop's host inherits. Exit 4 if nobody is logged on.
 #   ... -Phase logon-install    then log off and on, or reboot with autologon, then   ... -Phase logon-read
-#       A task at logon that keeps trying until Credential Manager answers: how long a host started at logon could be refused, and in what words.
+#       A per-user Run entry at sign-in that keeps trying until Credential Manager answers: how long a host started at logon could be refused, and in what words. No administrator needed; install and read as the same user.
 #
-# Prints `### keychain ...` lines from scripts/perf-lag/keychain-measure.mjs and `### keychain-sessions ...` here. The tasks are removed afterwards. No secret is involved.
+# Prints `### keychain ...` lines from scripts/perf-lag/keychain-measure.mjs and `### keychain-sessions ...` here. Tasks and the Run entry are removed afterwards. No secret is involved.
 #   ... -Phase autologon        (the password on stdin, never an argument) sets Windows to log genie on at the next boot, in this VM only
 #   ... -Phase wait-logon       waits for a logged-on session after that boot
 #   ... -Phase persist-write    then a reboot, then   ... -Phase persist-read    a value written in one boot and read in the next, each in the logged-on session
@@ -23,6 +23,32 @@ $repo = (Get-Location).Path
 $node = (Get-Command node).Source
 $env:KEYCHAIN_MEASURE_ALLOW = '1'
 $logonFile = Join-Path $env:PUBLIC 'genie-keychain-at-logon.txt'
+$logonRunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$logonRunName = 'GenieKeychainAtLogon'
+
+# Keep the command and its verification together. Run launches the executable directly,
+# so no public .cmd wrapper or shell expansion is needed for these quoted paths.
+function Install-LogonHook {
+    $command = "`"$node`" `"$repo\scripts\perf-lag\keychain-at-logon.mjs`" `"$logonFile`" `"$repo`""
+    # https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys
+    if ($command.Length -gt 260) { throw 'the Run command exceeds 260 characters; use a shorter repository or Node path' }
+    if (-not (Test-Path -LiteralPath $logonRunKey -ErrorAction Stop)) {
+        # New-Item -Force would erase an existing key's OTHER startup values.
+        New-Item -Path $logonRunKey -ErrorAction Stop | Out-Null
+    }
+    New-ItemProperty -Path $logonRunKey -Name $logonRunName -Value $command -PropertyType String -Force -ErrorAction Stop | Out-Null
+    $installed = Get-ItemPropertyValue -Path $logonRunKey -Name $logonRunName -ErrorAction Stop
+    if ($installed -cne $command) { throw 'the Run value does not match the command written; the sign-in hook is not verified' }
+}
+
+function Remove-LogonHook {
+    if (-not (Test-Path -LiteralPath $logonRunKey -ErrorAction Stop)) { return }
+    $values = Get-ItemProperty -LiteralPath $logonRunKey -ErrorAction Stop
+    if ($null -eq $values.PSObject.Properties[$logonRunName]) { return }
+    Remove-ItemProperty -Path $logonRunKey -Name $logonRunName -ErrorAction Stop
+    $values = Get-ItemProperty -LiteralPath $logonRunKey -ErrorAction Stop
+    if ($null -ne $values.PSObject.Properties[$logonRunName]) { throw 'the Run value remains after removal' }
+}
 
 function Say-Session {
     $groups = (whoami /groups) -join "`n"
@@ -195,18 +221,32 @@ switch ($Phase) {
         Write-Output "### keychain-sessions wait-logon=PASS  after $([int]((Get-Date) - $began).TotalSeconds) s: $($someone -join '; ')"
     }
     'logon-install' {
-        Remove-Item -Force -ErrorAction SilentlyContinue $logonFile
-        $cmd = Join-Path $env:PUBLIC 'genie-keychain-at-logon.cmd'
-        Set-Content -Encoding ASCII -Path $cmd -Value "@echo off`r`n`"$node`" `"$repo\scripts\perf-lag\keychain-at-logon.mjs`" `"$logonFile`" `"$repo`""
-        schtasks /Create /TN GenieKeychainAtLogon /TR "`"$cmd`"" /SC ONLOGON /IT /F /RL LIMITED /RU $env:USERNAME | Out-Null
-        Write-Output '### keychain-sessions logon-install=PASS  now log off and on, or reboot with autologon, then -Phase logon-read'
+        try {
+            if (Test-Path -LiteralPath $logonFile -ErrorAction Stop) { Remove-Item -LiteralPath $logonFile -Force -ErrorAction Stop }
+            Install-LogonHook
+            Write-Output '### keychain-sessions logon-install=PASS  verified HKCU Run entry; now sign out and in as this user, or reboot with autologon, then -Phase logon-read'
+        } catch {
+            Write-Output "### keychain-sessions logon-install=FAIL  $($_.Exception.Message)"
+            exit 1
+        }
+        exit 0
     }
     'logon-read' {
+        $code = 0
         try {
-            if (-not (Test-Path $logonFile)) { Write-Output '### keychain-sessions logon-read=FAIL  no result: nobody has logged on since the install'; exit 1 }
-            Get-Content $logonFile
+            if (-not (Test-Path -LiteralPath $logonFile -ErrorAction Stop)) { throw 'no result: sign in as the installing user, or check that the hook command ran successfully' }
+            Get-Content -LiteralPath $logonFile -ErrorAction Stop
             $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
             Write-Output "--- last boot $($boot.ToString('o'))"
-        } finally { schtasks /Delete /TN GenieKeychainAtLogon /F 2>$null | Out-Null }
+        } catch {
+            Write-Output "### keychain-sessions logon-read=FAIL  $($_.Exception.Message)"
+            $code = 1
+        } finally {
+            try { Remove-LogonHook } catch {
+                Write-Output "### keychain-sessions logon-read=FAIL  could not remove the sign-in hook: $($_.Exception.Message)"
+                $code = 1
+            }
+        }
+        exit $code
     }
 }
