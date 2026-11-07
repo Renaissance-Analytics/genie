@@ -88,3 +88,17 @@ a{display:inline-block;margin:12px 12px 0 0;padding:8px 14px;border-radius:6px;b
 </main></body></html>`;
     return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
+
+export interface PageMemorySampler {
+    sample(): void;
+    loaded(): void;
+    bytes(): number | null;
+    mb(): number | null;
+}
+
+/** The page's working set as last read. Not yet: whatever the last reading was, 0 included. */
+export function pageMemorySampler(o: { read: () => number | null; later: (fn: () => void) => void }): PageMemorySampler {
+    let last: number | null = null;
+    const sample = (): void => { last = o.read(); };
+    return { sample, loaded: sample, bytes: () => last, mb: () => (last === null ? null : Math.round(last / (1024 * 1024))) };
+}
