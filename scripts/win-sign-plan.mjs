@@ -83,7 +83,7 @@ function signatures(root, files) {
     // One PowerShell for all of them: a path per line in, a JSON array out.
     const list = join(root, '..', 'win-sign-plan.files.txt');
     writeFileSync(list, files.map((f) => join(root, f)).join('\n'));
-    const script = `$ErrorActionPreference = 'Stop'; Get-Content -LiteralPath '${list.replace(/'/g, "''")}' | ForEach-Object { $s = Get-AuthenticodeSignature -LiteralPath $_; [pscustomobject]@{ path = $_; status = [string]$s.Status; subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { '' } } } | ConvertTo-Json -Compress`;
+    const script = `$ErrorActionPreference = 'Stop'; Get-Content -LiteralPath '${list.replace(/'/g, "''")}' | ForEach-Object { $s = Get-AuthenticodeSignature -LiteralPath $_; [pscustomobject]@{ path = [string]$_; status = [string]$s.Status; subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { '' } } } | ConvertTo-Json -Compress`;
     // Without the caller's PSModulePath: started from pwsh 7, Windows PowerShell 5.1 inherits pwsh's module path and
     // cannot load Microsoft.PowerShell.Security, where Get-AuthenticodeSignature lives (measure run 42376824533).
     const env = { ...process.env };
