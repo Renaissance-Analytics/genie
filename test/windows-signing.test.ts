@@ -8,25 +8,23 @@ import { describe, expect, it } from 'vitest';
 const require = createRequire(import.meta.url);
 const read = (file: string) => existsSync(file) ? readFileSync(file, 'utf8').replace(/\r\n/g, '\n') : '';
 const yaml = (file: string) => require('js-yaml').load(read(file)) ?? {};
-const exclusions = ['Environment', 'WorkloadIdentity', 'ManagedIdentity', 'SharedTokenCache', 'VisualStudio',
-    'VisualStudioCode', 'AzurePowerShell', 'AzureDeveloperCli', 'InteractiveBrowser'];
 const azureFixture = () => ({ publisherName: 'Renaissance Analytics', endpoint: 'https://eus.codesigning.azure.net',
-    certificateProfileName: 'genie-public', codeSigningAccountName: 'renaissance-analytics',
-    ...Object.fromEntries(exclusions.map((name) => [`Exclude${name}Credential`, 'true'])), ExcludeAzureCliCredential: 'false' });
+    certificateProfileName: 'genie-public', codeSigningAccountName: 'renaissance-analytics' });
 
 describe('Windows release signing', () => {
-    it('selects the public profile and only the azure/login CLI credential, with SHA256 timestamps', () => {
+    it('selects the public profile and the unmodified default credential chain, with SHA256 timestamps', () => {
         const win = yaml('electron-builder.yml').win;
         expect(win.azureSignOptions).toMatchObject({ ...azureFixture(), fileDigest: 'SHA256', timestampDigest: 'SHA256',
             timestampRfc3161: 'http://timestamp.acs.microsoft.com' });
+        expect(Object.keys(win.azureSignOptions).filter((key) => key.startsWith('Exclude'))).toEqual([]);
         expect(win.signExts).toContain('.dll');
         expect(win.signExecutable).not.toBe(false);
         expect(win.verifyUpdateCodeSignature).not.toBe(false);
     });
 
     it('uses the documented adapter version', () => {
-        expect(yaml('package.json').devDependencies['electron-builder']).toBe('26.17.0');
-        expect(yaml('package-lock.json').packages['node_modules/app-builder-lib'].version).toBe('26.17.0');
+        expect(yaml('package.json').devDependencies['electron-builder']).toBe('^26.5.0');
+        expect(yaml('package-lock.json').packages['node_modules/app-builder-lib'].version).toBe('26.15.3');
     });
 
     it('the pinned builder signs extra-resource executables and DLLs while copying them', () => {
@@ -63,7 +61,8 @@ describe('Windows release signing', () => {
         expect(upload).toBeGreaterThan(verify);
         expect(jobs.verify.needs).toEqual(['publish', 'publish-windows']);
         expect(read('.github/workflows/release.yml')).not.toMatch(/AZURE_(?:CLIENT_SECRET|PASSWORD)|CSC_LINK|CSC_KEY_PASSWORD/);
-        expect(steps.some((s: any) => /patch-azure-signing.cjs/.test(s.run ?? ''))).toBe(true);
+        expect(steps.some((s: any) => /patch-azure-signing.cjs/.test(s.run ?? ''))).toBe(false);
+        expect(existsSync('scripts/patch-azure-signing.cjs')).toBe(false);
     });
 
     it('sign-test is manual, branch constrained, secretless, and verifies before artifact upload', () => {
@@ -93,10 +92,9 @@ describe('Windows release signing', () => {
         expect(read('scripts/after-pack.cjs')).toContain('retain-signed-uninstaller.cjs');
     });
 
-    it('the actual Azure adapter binds exclusion switches and quoted paths correctly in Windows PowerShell', () => {
+    it('the unmodified locked Azure adapter binds the profile and quoted paths in Windows PowerShell', () => {
         const managerPath = require.resolve('app-builder-lib/out/codeSign/windowsSignAzureManager.js');
-        let source = read(managerPath);
-        if (existsSync('scripts/patch-azure-signing.cjs')) source = require('../scripts/patch-azure-signing.cjs').patchAzureSwitches(source);
+        const source = read(managerPath);
         const module = { exports: {} as any };
         new Function('require', 'module', 'exports', source)(createRequire(managerPath), module, module.exports);
         let command = '';
@@ -106,18 +104,15 @@ describe('Windows release signing', () => {
         } } });
         return manager.signFile({ path: "C:\\build's folder\\Genie.exe", options: { azureSignOptions: azureFixture() } }).then(() => {
             expect(command).toContain("'C:\\build''s folder\\Genie.exe'");
-            if (process.platform !== 'win32') {
-                expect(command).toContain('-ExcludeEnvironmentCredential:$true');
-                expect(command).toContain('-ExcludeAzureCliCredential:$false');
-                return;
-            }
-            const params = [...exclusions, 'AzureCli'].map((name) => `[switch]$Exclude${name}Credential`).join(',');
-            const stub = `function Invoke-TrustedSigning { [CmdletBinding()]param(${params},[string]$Endpoint,[string]$CertificateProfileName,[string]$CodeSigningAccountName,[string]$TimestampRfc3161,[string]$TimestampDigest,[string]$FileDigest,[string]$Files) $PSBoundParameters | ConvertTo-Json -Compress };`;
+            expect(command).not.toContain('-Exclude');
+            if (process.platform !== 'win32') return;
+            const stub = `function Invoke-TrustedSigning { [CmdletBinding()]param([string]$Endpoint,[string]$CertificateProfileName,[string]$CodeSigningAccountName,[string]$TimestampRfc3161,[string]$TimestampDigest,[string]$FileDigest,[string]$Files) $PSBoundParameters | ConvertTo-Json -Compress };`;
             const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', stub + command], { encoding: 'utf8' });
             expect(result.status, result.stderr).toBe(0);
             const bound = JSON.parse(result.stdout);
-            for (const name of exclusions) expect(bound[`Exclude${name}Credential`].IsPresent).toBe(true);
-            expect(bound.ExcludeAzureCliCredential.IsPresent).toBe(false);
+            expect(bound.Endpoint).toBe('https://eus.codesigning.azure.net');
+            expect(bound.CertificateProfileName).toBe('genie-public');
+            expect(bound.CodeSigningAccountName).toBe('renaissance-analytics');
             expect(bound.Files).toBe("C:\\build's folder\\Genie.exe");
         });
     });
