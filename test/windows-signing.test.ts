@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
@@ -91,10 +93,12 @@ describe('Windows release signing', () => {
             exec: async (_exe: string, args: string[]) => { command = args.at(-1)!; },
         } } });
         return manager.signFile({ path: "C:\\build's folder\\Genie.exe", options: { azureSignOptions: azureFixture() } }).then(() => {
-            expect(command).toContain('-ExcludeEnvironmentCredential:$true');
-            expect(command).toContain('-ExcludeAzureCliCredential:$false');
             expect(command).toContain("'C:\\build''s folder\\Genie.exe'");
-            if (process.platform !== 'win32') return; // same test's real PowerShell binding runs in the Windows guard job
+            if (process.platform !== 'win32') {
+                expect(command).toContain('-ExcludeEnvironmentCredential:$true');
+                expect(command).toContain('-ExcludeAzureCliCredential:$false');
+                return;
+            }
             const params = [...exclusions, 'AzureCli'].map((name) => `[switch]$Exclude${name}Credential`).join(',');
             const stub = `function Invoke-TrustedSigning { [CmdletBinding()]param(${params},[string]$Endpoint,[string]$CertificateProfileName,[string]$CodeSigningAccountName,[string]$TimestampRfc3161,[string]$TimestampDigest,[string]$FileDigest,[string]$Files) $PSBoundParameters | ConvertTo-Json -Compress };`;
             const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', stub + command], { encoding: 'utf8' });
@@ -104,5 +108,68 @@ describe('Windows release signing', () => {
             expect(bound.ExcludeAzureCliCredential.IsPresent).toBe(false);
             expect(bound.Files).toBe("C:\\build's folder\\Genie.exe");
         });
+    });
+
+    it('retains exactly the signed uninstaller bytes, only after successful signing', async () => {
+        expect(existsSync('scripts/retain-signed-uninstaller.cjs')).toBe(true);
+        const retain = require('../scripts/retain-signed-uninstaller.cjs');
+        const dir = mkdtempSync(join(tmpdir(), 'genie-sign-retain-'));
+        try {
+            const uninstaller = join(dir, 'Genie-setup.__uninstaller.exe');
+            const app = join(dir, 'Genie.exe');
+            writeFileSync(uninstaller, 'unsigned');
+            writeFileSync(app, 'app');
+            const packager = { platformSpecificBuildOptions: {}, async signIf(file: string) {
+                writeFileSync(file, 'signed by fixture'); return true;
+            } };
+            retain({ packager, outDir: dir });
+            await packager.signIf(app);
+            expect(existsSync(join(dir, 'signature-evidence/nsis-uninstaller.exe'))).toBe(false);
+            await packager.signIf(uninstaller);
+            expect(readFileSync(join(dir, 'signature-evidence/nsis-uninstaller.exe'), 'utf8')).toBe('signed by fixture');
+            const refused = { platformSpecificBuildOptions: {}, async signIf(_file: string) { return false; } };
+            retain({ packager: refused, outDir: join(dir, 'refused') });
+            await expect(refused.signIf(uninstaller)).rejects.toThrow(/uninstaller/i);
+            expect(existsSync(join(dir, 'refused/signature-evidence/nsis-uninstaller.exe'))).toBe(false);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it('the actual verifier rejects bad signatures, wrong publisher, no timestamp and missing payloads', () => {
+        expect(existsSync('scripts/verify-windows-signatures.ps1')).toBe(true);
+        if (process.platform !== 'win32') return; // actual PowerShell script runs on the Windows guard row
+        const dir = mkdtempSync(join(tmpdir(), 'genie-sign-verify-'));
+        const files = ['win-unpacked/Genie.exe', 'win-unpacked/resources/bin/genie-launch.exe',
+            'win-unpacked/resources/deep/ours.dll', 'Genie-test-setup.exe', 'signature-evidence/nsis-uninstaller.exe'];
+        try {
+            for (const file of files) {
+                const dest = join(dir, file);
+                mkdirSync(join(dest, '..'), { recursive: true });
+                writeFileSync(dest, 'fixture');
+            }
+            const quote = (value: string) => "'" + value.replace(/'/g, "''") + "'";
+            const run = (bad = '', kind = '') => {
+                const mock = `$ErrorActionPreference='Stop'; function Get-AuthenticodeSignature { param([string]$LiteralPath)
+                    $bad = (Split-Path -Leaf $LiteralPath) -eq ${quote(bad)}
+                    $cert = [pscustomobject]@{Subject='CN=Renaissance Analytics'}
+                    $cert | Add-Member ScriptMethod GetNameInfo { param($type,$issuer) 'Renaissance Analytics' }
+                    if ($bad -and ${quote(kind)} -eq 'publisher') { $cert.Subject='CN=Someone Else'; $cert | Add-Member -Force ScriptMethod GetNameInfo { param($type,$issuer) 'Someone Else' } }
+                    [pscustomobject]@{ Status=$(if ($bad -and ${quote(kind)} -eq 'status') {'NotSigned'} else {'Valid'}); SignerCertificate=$cert; TimeStamperCertificate=$(if ($bad -and ${quote(kind)} -eq 'timestamp') {$null} else {[pscustomobject]@{Subject='Timestamp authority'}}) }
+                }; & ./scripts/verify-windows-signatures.ps1 -ReleaseDir ${quote(dir)}`;
+                return spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', mock], { encoding: 'utf8' });
+            };
+            const valid = run();
+            expect(valid.status, valid.stderr).toBe(0);
+            for (const file of files) expect(valid.stdout).toContain(file.split('/').at(-1));
+            for (const file of files) {
+                const invalid = run(file.split('/').at(-1), 'status');
+                expect(invalid.status, `unsigned ${file} passed: ${invalid.stdout}`).not.toBe(0);
+            }
+            for (const kind of ['publisher', 'timestamp']) expect(run('ours.dll', kind).status).not.toBe(0);
+            for (const file of ['win-unpacked/Genie.exe', 'win-unpacked/resources/bin/genie-launch.exe', 'signature-evidence/nsis-uninstaller.exe', 'Genie-test-setup.exe']) {
+                rmSync(join(dir, file));
+                expect(run().status, `missing ${file} passed`).not.toBe(0);
+                writeFileSync(join(dir, file), 'fixture');
+            }
+        } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 });
