@@ -54,7 +54,8 @@ export function TynnWipTab({ workspaceId, host }: { workspaceId: string; host: T
     const read = useCallback(async () => {
         if (!host.page) { setState({ state: 'error', reason: 'This Genie cannot read Tynn\'s WIP page.' }); return; }
         const r = await host.page(workspaceId, 'wip', queryRef.current);
-        if (r.ok) setState((s) => ({ state: 'ready', view: r.view, op: s.state === 'ready' ? s.op ?? null : null }));
+        if (r.ok && r.page === 'wip') setState((s) => ({ state: 'ready', view: r.view, op: s.state === 'ready' ? s.op ?? null : null }));
+        else if (r.ok) setState({ state: 'error', reason: 'Tynn answered with a different workspace page.' });
         else setState(r.state === 'not-linked' ? { state: 'not-linked' } : r.state === 'signed-out' ? { state: 'signed-out', reason: r.reason } : { state: 'error', reason: r.reason });
     }, [host, workspaceId]);
     useEffect(() => { void read(); }, [read, query]);

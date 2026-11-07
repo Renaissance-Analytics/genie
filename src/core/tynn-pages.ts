@@ -1,4 +1,5 @@
 import { BOARD_CLAIMS, BOARD_LIVE, initialsOf, LIVE_QUIET_MS, parseClaims, type BoardClaim, type BoardClaims, type BoardOp, type BoardRefusal, type TynnBoardHost } from './tynn-board.js';
+import { issuesQueryPath, normalizeIssueFilters, parseIssueQueue, type IssueQueueView } from './tynn-issues.js';
 
 /**
  * THE TYNN TAB IS tynn.ai's WORKSPACE (genie#1295). The owner, 2026-10-31: "all I see is the board view for the tynn
@@ -28,8 +29,8 @@ export const TYNN_SECTIONS: readonly TynnSection[] = [
 export const TYNN_FIRST_SECTION: TynnSectionId = 'board';
 
 /** A page of the tab that is read as one answer (the board has its own door and scope query). */
-export type TynnPage = 'wip';
-export const TYNN_PAGES: readonly TynnPage[] = ['wip'];
+export type TynnPage = 'wip' | 'issues';
+export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues'];
 
 // ── WIP (workspace-ux 0.6.0, surface `wip`) ──────────────────────────────────────────────────────────────────────────
 
@@ -199,10 +200,11 @@ export function parseWip(json: unknown): WipView | null {
 // ── Reading a page ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type TynnPageQuery = Readonly<Record<string, string | undefined>>;
-export type TynnPageView = { readonly page: 'wip'; readonly view: WipView };
+export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'issues'; readonly view: IssueQueueView };
 
 /** GET a page of the workspace's project: only the query the page's contract declares, and only real values. */
 export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQuery): string {
+    if (page === 'issues') return issuesQueryPath(projectId, normalizeIssueFilters(query));
     const q = new URLSearchParams();
     if (page === 'wip') {
         const view = query.view;
@@ -216,6 +218,10 @@ export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQ
 
 /** Tynn's answer for a page, as the tab draws it; null when it is not that page. */
 export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | null {
+    if (page === 'issues') {
+        const view = parseIssueQueue(json);
+        return view ? { page, view } : null;
+    }
     if (page === 'wip') {
         const view = parseWip(json);
         return view ? { page, view } : null;

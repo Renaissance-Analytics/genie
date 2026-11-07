@@ -263,6 +263,7 @@ export function issueChangesPath(projectId: string, filters: IssueFilters, curso
 
 /** An action's call, or null when the tab does not offer it or it names no issue where it needs one. */
 export function issueActionRequest(projectId: string, action: string, issueId: string | null): { method: IssueMethod; path: string } | null {
+    if (!Object.hasOwn(ISSUES_API, action)) return null;
     const api = ISSUES_API[action];
     if (!api) return null;
     if (api.path.includes('{issueId}') && (issueId === null || issueId === '')) return null;

@@ -1,4 +1,4 @@
-import { ContentRenderer, Icon } from '@particle-academy/react-fancy';
+import { Button, ContentRenderer, Icon } from '@particle-academy/react-fancy';
 import { memo, useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { BoardFollower, type LiveState } from '../../core/tynn-board.js';
 import {
@@ -66,7 +66,7 @@ const inputClass = 'w-full rounded border border-[var(--border-1)] bg-[var(--bg-
 
 function Pill({ on, label, onClick, data, icon }: { on: boolean; label: string; onClick: () => void; data: Record<string, string>; icon?: string }) {
     return (
-        <button
+        <Button variant="ghost" size="sm"
             type="button"
             aria-pressed={on}
             aria-label={label}
@@ -77,13 +77,13 @@ function Pill({ on, label, onClick, data, icon }: { on: boolean; label: string; 
         >
             {icon ? <Icon name={icon} size="xs" /> : null}
             {icon ? null : label}
-        </button>
+        </Button>
     );
 }
 
 function IconButton({ icon, label, onClick, disabled = false, data, tone }: { icon: string; label: string; onClick: () => void; disabled?: boolean; data: Record<string, string>; tone?: 'danger' }) {
     return (
-        <button
+        <Button variant="ghost" size="sm"
             type="button"
             aria-label={label}
             title={label}
@@ -93,14 +93,14 @@ function IconButton({ icon, label, onClick, disabled = false, data, tone }: { ic
             {...data}
         >
             <Icon name={icon} size="xs" />
-        </button>
+        </Button>
     );
 }
 
 /** A real button that looks like one, with its own in-progress label while it runs. */
 function PrimaryButton({ icon, label, busyLabel, busy, disabled, data, type = 'button', onClick }: { icon: string; label: string; busyLabel: string; busy: boolean; disabled: boolean; data: Record<string, string>; type?: 'button' | 'submit'; onClick?: () => void }) {
     return (
-        <button
+        <Button variant="ghost" size="sm"
             type={type}
             disabled={busy || disabled}
             onClick={onClick}
@@ -109,7 +109,7 @@ function PrimaryButton({ icon, label, busyLabel, busy, disabled, data, type = 'b
         >
             <Icon name={busy ? 'loader' : icon} size="xs" className={busy ? 'animate-spin' : ''} />
             {busy ? busyLabel : label}
-        </button>
+        </Button>
     );
 }
 
@@ -122,9 +122,9 @@ function OpLine({ op, onRetry }: { op: IssueOp; onRetry?: (() => void) | undefin
             <Icon name="circle-alert" size="xs" />
             <span className="min-w-0 flex-1">{op.reason ?? 'It did not work.'}</span>
             {onRetry ? (
-                <button type="button" data-issue-retry="" onClick={onRetry} className="inline-flex items-center gap-1 rounded border border-current px-1.5 py-0.5 text-[11px] font-medium">
+                <Button variant="ghost" size="sm" type="button" data-issue-retry="" onClick={onRetry} className="inline-flex items-center gap-1 rounded border border-current px-1.5 py-0.5 text-[11px] font-medium">
                     <Icon name="rotate-ccw" size="xs" /> Retry
-                </button>
+                </Button>
             ) : null}
         </p>
     );
@@ -134,8 +134,9 @@ const IssueCard = memo(function IssueCard({ issue, onOpen }: { issue: IssueRow; 
     const type = issue.type !== null ? ISSUE_TYPE_LOOK[issue.type] : undefined;
     const chip = STATUS_CHIP[issue.status];
     return (
-        <button
+        <Button variant="ghost" size="sm"
             type="button"
+            labelClassName="flex w-full min-w-0 flex-col items-start gap-1.5"
             data-issue-card={issue.id}
             onClick={() => onOpen(issue.id)}
             style={type?.border ? { borderLeftColor: type.border } : undefined}
@@ -150,7 +151,7 @@ const IssueCard = memo(function IssueCard({ issue, onOpen }: { issue: IssueRow; 
                 {issue.github ? <span className="rounded bg-[var(--bg-2)] px-1.5 py-0.5 text-[10px]">{issue.github.repo}#{issue.github.number}</span> : null}
                 {chip ? <span data-issue-status-chip={issue.status} className="rounded bg-[var(--bg-2)] px-1.5 py-0.5 text-[10px]">{chip}</span> : null}
             </span>
-        </button>
+        </Button>
     );
 });
 
@@ -323,9 +324,9 @@ export function TynnIssuesPanel({ state, onFilters, onAction, open = null, onOpe
                         {op && open === null ? <OpLine op={op} onRetry={onRetry} /> : null}
                         <LiveMark live={live} />
                         {onRefresh ? <IconButton icon="refresh-cw" label="Refresh" onClick={onRefresh} data={{ 'data-issues-refresh': '' }} /> : null}
-                        <button type="button" aria-label="New issue" title="New issue" data-issues-new="" onClick={() => setOpen('new')} className="inline-flex items-center gap-1 rounded-md bg-[var(--accent)] px-2 py-1 text-[12px] font-medium text-[var(--accent-fg,white)] hover:opacity-90">
+                        <Button variant="ghost" size="sm" type="button" aria-label="New issue" title="New issue" data-issues-new="" onClick={() => setOpen('new')} className="inline-flex items-center gap-1 rounded-md bg-[var(--accent)] px-2 py-1 text-[12px] font-medium text-[var(--accent-fg,white)] hover:opacity-90">
                             <Icon name="plus" size="xs" />
-                        </button>
+                        </Button>
                     </span>
                 </div>
                 {view.issues.length === 0 ? (
