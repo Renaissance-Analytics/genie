@@ -122,6 +122,10 @@ if (isMain) {
     for (const r of rows) console.log(`### ${r.wouldSign ? 'SIGN' : '    '} ${r.kind.padEnd(11)} ${r.file}${r.signer ? `  [${r.signer}]` : ''}${r.status ? ` (${r.status})` : ''}`);
     const resigned = rows.filter((r) => r.wouldSign && r.kind === 'third-party');
     console.log(`### would replace another publisher's signature on ${resigned.length} file(s)${resigned.length ? `: ${resigned.map((r) => r.file).join(', ')}` : ''}`);
+    // The other half: an .exe or .dll that ships unsigned and that the build would NOT sign would ship unsigned (a DLL
+    // added to the package and not to signExts). On a signed tree there is none of these, so --check is for an unsigned one.
+    const leftUnsigned = rows.filter((r) => !r.wouldSign && r.kind === 'unsigned' && /\.(exe|dll)$/i.test(r.file));
+    console.log(`### would leave ${leftUnsigned.length} unsigned .exe/.dll unsigned${leftUnsigned.length ? `: ${leftUnsigned.map((r) => r.file).join(', ')} (add it to win.signExts)` : ''}`);
     if (jsonAt >= 0) writeFileSync(args[jsonAt + 1], JSON.stringify({ signExts: config.signExts, rows }, null, 2));
-    if (args.includes('--check') && resigned.length > 0) process.exit(1);
+    if (args.includes('--check') && (resigned.length > 0 || leftUnsigned.length > 0)) process.exit(1);
 }

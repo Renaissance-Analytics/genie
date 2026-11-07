@@ -17,7 +17,9 @@ describe('Windows release signing', () => {
         expect(win.azureSignOptions).toMatchObject({ ...azureFixture(), fileDigest: 'SHA256', timestampDigest: 'SHA256',
             timestampRfc3161: 'http://timestamp.acs.microsoft.com' });
         expect(Object.keys(win.azureSignOptions).filter((key) => key.startsWith('Exclude'))).toEqual([]);
-        expect(win.signExts).toContain('.dll');
+        // Only what ships unsigned is signed, never another publisher's file (test/win-sign-plan.test.ts proves which).
+        expect(win.signExts).not.toContain('.dll');
+        expect(win.signExts).toContain('!OpenConsole.exe');
         expect(win.signExecutable).not.toBe(false);
         expect(win.verifyUpdateCodeSignature).not.toBe(false);
     });

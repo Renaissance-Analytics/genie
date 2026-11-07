@@ -1,5 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ELECTRON_BUILDER_VERSION, classify, shouldSignFile } from '../scripts/win-sign-plan.mjs';
 
@@ -85,15 +88,54 @@ describe('the checks that hold it', () => {
         expect(check, 'after the unsigned build, in the same job').toBeGreaterThan(build);
     });
 
-    it('the release\'s verifier takes the plan: what the build does not sign must keep its own publisher\'s valid signature', () => {
-        const release = read('.github/workflows/release.yml');
-        const plan = release.indexOf('node scripts/win-sign-plan.mjs release/win-unpacked electron-builder.yml --json release/signature-evidence/win-sign-plan.json');
-        const verify = release.indexOf('verify-windows-signatures.ps1');
-        expect(plan).toBeGreaterThan(-1);
-        expect(verify).toBeGreaterThan(plan);
-        const ps = read('scripts/verify-windows-signatures.ps1');
-        expect(ps).toMatch(/win-sign-plan\.json/);
-        // Not signed by the build: Valid, and NOT ours (signed again by us, or stripped, fails).
-        expect(ps).toMatch(/keeps its publisher's signature/);
+    it('the release\'s and sign-test\'s verifier takes the plan: what the build does not sign must keep its own publisher\'s valid signature', () => {
+        for (const workflow of ['.github/workflows/release.yml', '.github/workflows/sign-test.yml']) {
+            const text = read(workflow);
+            const build = text.indexOf('npx electron-builder --publish never');
+            const plan = text.indexOf('node scripts/win-sign-plan.mjs release/win-unpacked electron-builder.yml --json release/signature-evidence/win-sign-plan.json');
+            const verify = text.indexOf('verify-windows-signatures.ps1');
+            expect(plan, workflow).toBeGreaterThan(build);
+            expect(verify, workflow).toBeGreaterThan(plan);
+        }
+        expect(read('scripts/verify-windows-signatures.ps1')).toMatch(/win-sign-plan\.json/);
+    });
+
+    // The real verifier, with Get-AuthenticodeSignature mocked per file (as test/windows-signing.test.ts does), on a tree
+    // whose plan says one file is not signed by the build. Windows only: the guard row runs it there.
+    it('the verifier: a file the build does not sign passes with its own publisher\'s signature, and fails signed by us or unsigned', () => {
+        if (process.platform !== 'win32') return;
+        const dir = mkdtempSync(join(tmpdir(), 'genie-sign-plan-verify-'));
+        const files = ['win-unpacked/Genie.exe', 'win-unpacked/resources/bin/genie-launch.exe', 'win-unpacked/resources/deep/conpty.dll',
+            'Genie-test-setup.exe', 'signature-evidence/nsis-uninstaller.exe'];
+        try {
+            for (const file of files) {
+                const dest = join(dir, file);
+                mkdirSync(join(dest, '..'), { recursive: true });
+                writeFileSync(dest, 'fixture');
+            }
+            writeFileSync(join(dir, 'signature-evidence/win-sign-plan.json'), JSON.stringify({ rows: [
+                { file: 'Genie.exe', wouldSign: true }, { file: 'resources/bin/genie-launch.exe', wouldSign: true }, { file: 'resources/deep/conpty.dll', wouldSign: false },
+            ] }));
+            const quote = (value: string) => "'" + value.replace(/'/g, "''") + "'";
+            /** conpty.dll's signature: `microsoft` (its own publisher), `ours` (signed again by us) or `none`. */
+            const run = (conpty: 'microsoft' | 'ours' | 'none') => {
+                const mock = `$ErrorActionPreference='Stop'; function Get-AuthenticodeSignature { param([string]$LiteralPath)
+                    $isConpty = (Split-Path -Leaf $LiteralPath) -eq 'conpty.dll'
+                    $name = if ($isConpty -and ${quote(conpty)} -eq 'microsoft') { 'Microsoft Corporation' } else { 'Renaissance Analytics' }
+                    $cert = [pscustomobject]@{Subject="CN=$name"}
+                    $cert | Add-Member ScriptMethod GetNameInfo ([scriptblock]::Create("param(\`$type,\`$issuer) '$name'"))
+                    [pscustomobject]@{ Status=$(if ($isConpty -and ${quote(conpty)} -eq 'none') {'NotSigned'} else {'Valid'}); SignerCertificate=$cert; TimeStamperCertificate=[pscustomobject]@{Subject='CN=Timestamp'} }
+                }; & ./scripts/verify-windows-signatures.ps1 -ReleaseDir ${quote(dir)}`;
+                return spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', mock], { encoding: 'utf8' });
+            };
+            const own = run('microsoft');
+            expect(own.status, own.stderr).toBe(0);
+            expect(own.stdout).toMatch(/VALID \(its own publisher\): .*conpty\.dll \| CN=Microsoft Corporation/);
+            const resigned = run('ours');
+            expect(resigned.status, 'conpty.dll signed again by us passed').not.toBe(0);
+            expect(resigned.stdout + resigned.stderr).toMatch(/was signed by us/);
+            const stripped = run('none');
+            expect(stripped.status, 'conpty.dll with no signature passed').not.toBe(0);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
     });
 });
