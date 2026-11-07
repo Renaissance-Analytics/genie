@@ -7,7 +7,7 @@ import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
-import type { CancelOutcome } from '../core/session.js';
+import { cancelIntent, type CancelIntent, type CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
 import { LOCAL_EVENTS, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
@@ -104,7 +104,7 @@ export interface HostApiDeps {
         resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
-        cancel(agentId: AgentRecord['id']): CancelOutcome | Promise<CancelOutcome>;
+        cancel(agentId: AgentRecord['id'], intent?: CancelIntent): CancelOutcome | Promise<CancelOutcome>;
         /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
         resumeLimit(provider: string): void;
         /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
@@ -346,7 +346,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'cancelTurn': {
                 const r = agent(args[0]);
-                return r ? deps.host.cancel(r.id) : { ok: false, reason: 'unknown agent' };
+                // A remote window's Stop this turn or Interrupt and send: only `interrupt` is an interrupt (Tynn #672 part 3).
+                return r ? deps.host.cancel(r.id, cancelIntent(args[1])) : { ok: false, reason: 'unknown agent' };
             }
             case 'prompt': {
                 const r = agent(args[0]);

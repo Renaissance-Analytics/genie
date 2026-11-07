@@ -91,6 +91,7 @@ import {
     type DriverEvents,
     type PermissionOutcomeLike,
     type CancelOutcome,
+    type CancelIntent,
     type PermissionRequestLike,
     type PromptContext,
     type SessionDriverFactory,
@@ -1393,11 +1394,12 @@ export class SessionHost {
      * slot, its provider and its conversation untouched — and the turn ends when the provider reports it cancelled.
      * Ending the agent is `stop` below, a different action. `not-running` for an agent with no session here.
      */
-    cancel(agentId: AgentId, by: string | null = 'you'): CancelOutcome {
+    cancel(agentId: AgentId, by: string | null = 'you', intent: CancelIntent = 'stop'): CancelOutcome {
         const entry = this.#running.get(agentId);
         if (!entry) return { ok: false, reason: 'not-running' };
 
-        const outcome = entry.session.cancel(by);
+        // `intent`: a Stop latches the session until the person acts; an interrupt-and-send does not (Tynn #672 part 3).
+        const outcome = entry.session.cancel(by, intent);
         this.#emit(agentId);
         return outcome;
     }

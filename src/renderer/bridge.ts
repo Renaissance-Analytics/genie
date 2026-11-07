@@ -244,7 +244,8 @@ export interface GenieBridge {
      * running (prism-acp's turn cancel). `ok: true` = the provider was asked; `reason` names why nothing was stopped —
      * `no-turn`, `not-running`, `unsupported` (this agent cannot stop a turn; it was not killed instead) or `refused`.
      */
-    cancelTurn(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `intent`: `stop` (Stop this turn, the default) latches the agent until the person acts; `interrupt` (Interrupt and send) does not. */
+    cancelTurn(agentId: string, intent?: 'stop' | 'interrupt'): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Resume now`: the agent's provider login, held for its rate limit, opens at once (Tynn #794). */
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */

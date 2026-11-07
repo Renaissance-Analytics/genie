@@ -104,7 +104,7 @@ const bridge: PreloadBridge = {
         void ipcRenderer.invoke('genie:stop-agent', agentId);
     },
 
-    cancelTurn: (agentId) => ipcRenderer.invoke('genie:cancel-turn', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
+    cancelTurn: (agentId, intent) => ipcRenderer.invoke('genie:cancel-turn', agentId, intent) as Promise<{ ok: true } | { ok: false; reason: string }>,
     resumeLimit: (agentId) => ipcRenderer.invoke('genie:resume-limit', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     providerLogin: (agentId) => ipcRenderer.invoke('genie:provider-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,

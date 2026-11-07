@@ -231,7 +231,8 @@ export interface ShellProps {
     /** "Stop agent" — END the agent's session (§6.2 stop): the Agent view's operations menu. Not the turn's Stop. */
     onStopAgent?: ((agentId: string) => void) | undefined;
     /** `Stop this turn` — the Agent view's header and the chat's context line: the turn ends, the agent keeps running. */
-    onCancelTurn?: ((agentId: string) => void) | undefined;
+    /** `intent`: `stop` (the default) latches the agent until the person acts; `interrupt` does not (Tynn #672 part 3). */
+    onCancelTurn?: ((agentId: string, intent?: 'stop' | 'interrupt') => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
     onProviderLogin?: ((agentId: string) => void) | undefined;
@@ -955,9 +956,10 @@ export function Shell({
                         {...(featureAsk ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
-                        onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
-                        // Interrupt and send (item 21): the same Stop-this-turn path; what waits is already with the provider and runs next.
-                        onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
+                        onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId, 'stop') : undefined}
+                        // Interrupt and send (item 21): the same cancel, but an INTERRUPT: what waits is already with the provider and runs next,
+                        // so the agent is not held for the person to type again, and Genie's notices still reach it (Tynn #672 part 3).
+                        onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId, 'interrupt') : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { provider: snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                         onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
