@@ -77,3 +77,11 @@ export function extensionsFrom(update: Record<string, unknown>): ProviderExtensi
 export function toPromptCmds(commands: readonly ProviderCommand[] | null | undefined): { name: string; hint: string }[] {
     return (commands ?? []).map((c) => ({ name: `/${c.name}`, hint: c.description }));
 }
+
+/**
+ * A slash command typed to an agent that offers none: the reason it is not sent, or `null` to send it (Tynn #440).
+ * Red-first placeholder: nothing is refused yet.
+ */
+export function unsupportedSlashCommand(_text: string, _extensions: ProviderExtensions | null, _reportsCommands: boolean): string | null {
+    return null;
+}
