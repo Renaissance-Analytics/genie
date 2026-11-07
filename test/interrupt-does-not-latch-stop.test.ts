@@ -8,6 +8,10 @@ import type { ProcessTree } from '../src/core/process-tree.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import { openDurableStore } from '../src/core/thread-store.js';
 import { AgentSession, type DriverEvents, type SessionDriver, type SessionDriverFactory, type TurnOutcomeLike } from '../src/core/session.js';
+import { memoryPair } from '../src/core/line-transport.js';
+import { SessionEngineClient } from '../src/main/session-engine-client.js';
+import { SessionEngineServer } from '../src/main/session-engine-server.js';
+import { SessionHost } from '../src/main/session-host.js';
 
 /*
  * AN INTERRUPT IS NOT A STOP (Tynn #672 part 3). "Stop this turn" latches: the session stops taking Genie's notices
@@ -96,14 +100,43 @@ describe('the interrupt reaches the session as an interrupt, on every route', ()
         expect(shell).toMatch(/onStopTurn=\{chatTurnStop && chatThread \? \(\) => onCancelTurn\?\.\(chatThread\.agentId, 'stop'\)/);
     });
 
-    it('the bridges, the IPC, the remote protocol and the engine carry it to SessionHost.cancel', () => {
+    it('the renderer bridges and the IPC registration hand the intent on (main.ts\'s handler is inline in boot; its own text is checked)', () => {
         expect(read('src/renderer/App.tsx')).toMatch(/onCancelTurn=\{\(agentId, intent\) => \{ void resolvedBridge\?\.cancelTurn\(agentId, intent\); \}\}/);
         expect(read('src/main/preload.ts')).toMatch(/cancelTurn: \(agentId, intent\) => ipcRenderer\.invoke\('genie:cancel-turn', agentId, intent\)/);
         expect(read('src/renderer/remote-bridge.ts')).toMatch(/cancelTurn: \(agentId, intent\) => answer<[^>]*>\('cancelTurn', agentId, intent\)/);
-        expect(read('src/main/main.ts')).toMatch(/ipcMain\.handle\('genie:cancel-turn', \(_event, raw: unknown, intent: unknown\) => \{[^}]*host\.cancel\(record\.id, 'you', cancelIntent\(intent\)\)/);
-        expect(read('src/main/main.ts')).toMatch(/cancel: \(id, intent\) => host!\.cancel\(id, 'you', intent\)/);
-        expect(read('src/main/host-api.ts')).toMatch(/deps\.host\.cancel\(r\.id, cancelIntent\(args\[1\]\)\)/);
-        expect(read('src/main/session-engine-server.ts')).toMatch(/host\.cancel\(id\(\), by\(1\), cancelIntent\(args\[2\]\)\)/);
-        expect(read('src/main/session-host.ts')).toMatch(/entry\.session\.cancel\(by, intent\)/);
+        const main = read('src/main/main.ts');
+        // The handler's own text, from its registration to its closing `});` (as test/stop-cancels-turn.test.ts slices it).
+        const handler = main.match(/ipcMain\.handle\('genie:cancel-turn'[^]*?\n {4}\}\);/)?.[0] ?? '';
+        expect(handler).toContain('(_event, raw: unknown, intent: unknown)');
+        expect(handler).toContain("host.cancel(record.id, 'you', cancelIntent(intent))");
+        // The remote API's dependency, as main.ts gives it.
+        expect(main).toMatch(/cancel: \(id, intent\) => host!\.cancel\(id, 'you', intent\)/);
+    });
+
+    it('BEHAVIOUR: the engine carries a window\'s intent to SessionHost.cancel (engine.cancel, window to genie-host)', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'genie-interrupt-engine-'));
+        const server = new SessionEngineServer({ token: TOKEN, build: 't' });
+        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: noProcessTree, ...server.hostOptions() });
+        const seen: Array<[string | null, string]> = [];
+        const real = host.cancel.bind(host);
+        host.cancel = (agentId, by, intent) => { seen.push([by ?? null, intent ?? 'stop']); return real(agentId, by, intent); };
+        server.attach(host);
+        const [hostSide, windowSide] = memoryPair();
+        server.accept(hostSide);
+        const client = new SessionEngineClient();
+        try {
+            expect(await client.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
+            const agent = mintAgentId();
+            await client.cancel(agent, 'you', 'interrupt');
+            await client.cancel(agent, 'you', 'stop');
+            await client.cancel(agent);
+            expect(seen).toEqual([['you', 'interrupt'], ['you', 'stop'], ['you', 'stop']]);
+        } finally {
+            client.disconnect();
+            await rm(dir, { recursive: true, force: true });
+        }
     });
 });
+
+const TOKEN = 'interrupt-latch-token';
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
