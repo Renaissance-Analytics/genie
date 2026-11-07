@@ -39,7 +39,7 @@ export function installMeasurementHostHeartbeat(injected) {
 export function installMeasurementHostLaunch(options, injected) {
     const ports = injected ?? { env: process.env, child: process.getBuiltinModule('node:child_process'), path: process.getBuiltinModule('node:path'), syncBuiltinESMExports: process.getBuiltinModule('node:module').syncBuiltinESMExports };
     const enabled = ports.env.GENIE_ARTBOARD_MEASURE_ALLOW === '1' && ports.env.GENIE_PAGE_PROBE === '1';
-    const original = ports.child.spawn, originalSync = ports.child.execFileSync, injectedPids = []; let stopped = false, dropped = 0;
+    const original = ports.child.spawn, originalExec = ports.child.execFile, injectedPids = []; let stopped = false, dropped = 0;
     const same = (a, b) => typeof a === 'string' && typeof b === 'string' && ports.path.relative(ports.path.resolve(a), ports.path.resolve(b)) === '';
     function wrapped(...args) {
         const [file, argv, spawnOptions] = args, env = spawnOptions?.env;
@@ -51,24 +51,26 @@ export function installMeasurementHostLaunch(options, injected) {
         return child;
     }
     /*
-     * On Windows the product starts the host through genie-launch.exe (#1628): `execFileSync(launcher, ['detach', log,
-     * execPath, entry])`, which prints the host's pid. The same exact launch gets the same preload, before the entry.
+     * On Windows the product starts the host through genie-launch.exe (#1628), asynchronously: `execFile(launcher,
+     * ['detach', log, execPath, entry], options, callback)`, which prints the host's pid. The same exact launch gets the
+     * same preload, before the entry, and the pid it prints is recorded.
      */
-    function wrappedSync(...args) {
-        const [file, argv, spawnOptions] = args, env = spawnOptions?.env;
-        if (args.length !== 3 || typeof file !== 'string' || ports.path.basename(file).toLowerCase() !== 'genie-launch.exe' || !Array.isArray(argv) || argv.length !== 4 || argv[0] !== 'detach'
+    function wrappedExec(...args) {
+        const [file, argv, spawnOptions, callback] = args, env = spawnOptions?.env;
+        if (args.length !== 4 || typeof callback !== 'function' || typeof file !== 'string' || ports.path.basename(file).toLowerCase() !== 'genie-launch.exe' || !Array.isArray(argv) || argv.length !== 4 || argv[0] !== 'detach'
             || !same(argv[2], options.execPath) || !same(argv[3], options.entry)
-            || env?.ELECTRON_RUN_AS_NODE !== '1' || env.GENIE_ARTBOARD_MEASURE_ALLOW !== '1' || env.GENIE_PAGE_PROBE !== '1' || !same(env.GENIE_HOME, options.home) || typeof env.GENIE_HOST_BUILD !== 'string') return Reflect.apply(originalSync, this, args);
-        const forwarded = [...args]; forwarded[1] = ['detach', argv[1], argv[2], '--import', options.preloadUrl, argv[3]];
-        const said = Reflect.apply(originalSync, this, forwarded);
-        const pid = Number(String(said).trim());
-        if (Number.isSafeInteger(pid) && pid > 0 && !injectedPids.includes(pid)) { if (injectedPids.length < 16) injectedPids.push(pid); else dropped++; }
-        return said;
+            || env?.ELECTRON_RUN_AS_NODE !== '1' || env.GENIE_ARTBOARD_MEASURE_ALLOW !== '1' || env.GENIE_PAGE_PROBE !== '1' || !same(env.GENIE_HOME, options.home) || typeof env.GENIE_HOST_BUILD !== 'string') return Reflect.apply(originalExec, this, args);
+        const forwarded = [file, ['detach', argv[1], argv[2], '--import', options.preloadUrl, argv[3]], spawnOptions, (error, stdout, stderr) => {
+            const pid = Number(String(stdout ?? '').trim());
+            if (!error && Number.isSafeInteger(pid) && pid > 0 && !injectedPids.includes(pid)) { if (injectedPids.length < 16) injectedPids.push(pid); else dropped++; }
+            callback(error, stdout, stderr);
+        }];
+        return Reflect.apply(originalExec, this, forwarded);
     }
-    if (enabled) { ports.child.spawn = wrapped; ports.child.execFileSync = wrappedSync; ports.syncBuiltinESMExports(); }
-    const installed = () => ports.child.spawn === wrapped && ports.child.execFileSync === wrappedSync;
+    if (enabled) { ports.child.spawn = wrapped; ports.child.execFile = wrappedExec; ports.syncBuiltinESMExports(); }
+    const installed = () => ports.child.spawn === wrapped && ports.child.execFile === wrappedExec;
     return {
         snapshot: () => ({ enabled, installed: enabled && !stopped && installed(), injectedPids: [...injectedPids], dropped }),
-        stop() { if (stopped) return; stopped = true; if (enabled && installed()) { ports.child.spawn = original; ports.child.execFileSync = originalSync; ports.syncBuiltinESMExports(); } },
+        stop() { if (stopped) return; stopped = true; if (enabled && installed()) { ports.child.spawn = original; ports.child.execFile = originalExec; ports.syncBuiltinESMExports(); } },
     };
 }
