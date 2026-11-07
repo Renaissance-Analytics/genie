@@ -97,3 +97,23 @@ it('the real page helper returns all timestamped gaps and the drop count from it
     expect(create).toHaveBeenCalledOnce(); expect(gauge.beat).toHaveBeenCalled();
     expect(result.heartbeat).toMatchObject({ dropped: 0, gaps: gauge.snapshot().gaps });
 });
+
+it('on Windows the same exact host launch through genie-launch.exe (#1628, asynchronous) gets the preload before the entry, and its printed pid', async () => {
+    const f = launchPorts();
+    const execFile = vi.fn((_file: string, _args: string[], _options: unknown, callback: (e: Error | null, out: string, err: string) => void) => { callback(null, '4242\r\n', ''); return {}; });
+    (f.ports.child as Record<string, unknown>).execFile = execFile;
+    const { installMeasurementHostLaunch } = await load(), probe = installMeasurementHostLaunch(f.options, f.ports);
+    const launcher = path.resolve('build/win-launcher/genie-launch.exe');
+    const options = { env: f.spawnOptions.env, windowsHide: true, encoding: 'utf8' };
+    const child = f.ports.child as unknown as { execFile: typeof execFile };
+    const heard: string[] = [];
+    child.execFile(launcher, ['detach', 'host.log', process.execPath, f.options.entry], options, (_e, out) => { heard.push(out); });
+    expect(execFile.mock.calls[0]?.slice(0, 3)).toEqual([launcher, ['detach', 'host.log', process.execPath, '--import', f.options.preloadUrl, f.options.entry], options]);
+    expect(heard).toEqual(['4242\r\n']);
+    // CONTROL: any other launch through it is left as it was.
+    child.execFile(launcher, ['job', 'git', 'status'], options, () => {});
+    expect(execFile.mock.calls.at(-1)?.[1]).toEqual(['job', 'git', 'status']);
+    expect(probe.snapshot()).toMatchObject({ installed: true, injectedPids: [4242], dropped: 0 });
+    probe.stop();
+    expect(child.execFile).toBe(execFile);
+});

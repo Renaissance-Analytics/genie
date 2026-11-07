@@ -11,7 +11,8 @@ import { describe, expect, it } from 'vitest';
  *  - the spawn host's own implementation (`spawn-exec.ts`: what the child runs; in main only as the logged fallback
  *    when the child cannot start), or the client that forks the child (`spawn-host-client.ts`: one spawn, at boot);
  *  - the launcher of the agent host (`engine-launch.ts`, the host split #1387: one DETACHED spawn of genie-host at boot,
- *    again only when the host was lost). It cannot go through the spawn host: that child ends every process it made
+ *    again only when the host was lost; on Windows through genie-launch.exe, asynchronously, #1628 — test/host-spawn-async
+ *    holds that no synchronous child start is ever made there). It cannot go through the spawn host: that child ends every process it made
  *    when the window ends, and genie-host must outlive the window;
  *  - on the KNOWN list below: modules that still spawn on main, each with its reason and owner. The list may only
  *    SHRINK. A new module that spawns goes through `execFileRunner` (or the spawn host) instead.

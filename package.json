@@ -11,7 +11,7 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build:renderer": "vite build",
-    "build:main": "vite build -c vite.main.config.ts",
+    "build:main": "node scripts/build-win-launcher.mjs && vite build -c vite.main.config.ts",
     "build:preload": "vite build -c vite.preload.config.ts",
     "build": "npm run build:renderer && npm run build:main && npm run build:preload",
     "verify": "npm run typecheck && npm test && npm run build",

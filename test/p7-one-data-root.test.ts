@@ -305,7 +305,9 @@ describe('the window’s root is genieRoot(), and the host is started on that sa
 
     it('spawnHostProcess starts the host from hostSpawnSpec, the one place its environment is made', () => {
         const src = readFileSync('src/main/engine-launch.ts', 'utf8');
-        const body = src.slice(src.indexOf('export function spawnHostProcess'), src.indexOf('export async function linkToRunningHost'));
+        const body = src.slice(src.indexOf('export async function spawnHostProcess'), src.indexOf('export async function linkToRunningHost'));
+        // CONTROL: the slice is the function (an empty one matches nothing and proves nothing).
+        expect(body).toMatch(/^export async function spawnHostProcess/);
         expect(body).toMatch(/hostSpawnSpec\(ports\)/);
         expect(body).not.toMatch(/GENIE_HOME:/);
     });

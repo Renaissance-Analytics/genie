@@ -56,6 +56,11 @@ extraResources:
   - from: build/runtime
     to: runtime
     filter: ['caddy', 'caddy.exe']
+  # genie-launch.exe (Windows; #1628): built from native/win-launcher by `npm run build:main`, never checked in. Signed
+  # with the app's executables wherever the app is signed. Elsewhere the folder is empty and nothing is packed.
+  - from: build/win-launcher
+    to: bin
+    filter: ['genie-launch.exe']
   # Genie's own tray mark, read at runtime from resources/ (an asar-packed PNG cannot be handed to the tray).
   - from: build/tray-icon.png
     to: tray-icon.png
