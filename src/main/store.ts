@@ -33,6 +33,8 @@ export interface WorkspaceRecord {
     path: string;
     /** Hibernated (§6.1): nothing may start here; stays asleep through restarts and upgrades. */
     asleep?: boolean;
+    /** Last awake display name; ghost labels and old inbox addresses never reopen the folder. */
+    hibernatedName?: string;
     /** Ops project (§6.1): the workspace ids this one GOVERNS. A Genie-side relation; the envelope schema has no such field. */
     governs?: string[];
     /** Its DEFAULT AGENT (Genie 1's): one of its own agents, the one an action uses when it names none. Absent = none. */

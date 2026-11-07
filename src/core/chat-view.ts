@@ -1,4 +1,5 @@
 import { limitTitle, limitWords } from './limit-words.js';
+import { isSleeping } from './agent-status.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import { repeatsCompaction, type TimedEvent } from './stream-view.js';
@@ -172,6 +173,7 @@ export function chatContext(detail: ChatDetail): ChatContext {
     if (s.running && (s.background ?? 0) > 0) return { text: `Working · ${s.background} in the background`, tone: 'ok' };
     // COOLING (core/session.ts COOLING_MS): the 15 s after a turn that replied.
     if (s.running && s.cooling === true) return { text: 'Cooling', tone: 'cool' };
+    if (isSleeping(s, Date.now())) return { text: 'Sleeping', tone: 'muted' };
     return { text: 'Idle', tone: 'muted' };
 }
 

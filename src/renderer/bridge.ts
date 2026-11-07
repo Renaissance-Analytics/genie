@@ -86,6 +86,8 @@ export interface GenieSnapshot {
      * answered — a confident claim about a machine nobody had asked. An older test caught it.
      */
     workspaces: readonly RailWorkspace[] | null;
+    /** Known folders only: consumed exclusively by the sidebar's explicit Show hibernated control. */
+    hibernatedWorkspaces?: readonly { id: string; path: string; name: string; asleep: true }[];
     /**
      * The attention band, or `null` until the queue has been read.
      *

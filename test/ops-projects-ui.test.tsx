@@ -25,11 +25,11 @@ describe('Dashboard', () => {
         id, name: id, provider: 'claude', workspaceId, fidelity: 'declared', state: 'idle', duration: null, ask: null, reason: null, fixes: [], step: null, target: null,
         activity: null, delivery: null, collaborators: null, commsAgeSeconds: null, contextUsed: null, contextSize: null,
     });
-    it('names the governor in the group header of a governed workspace only', () => {
+    it('lists governed and governing workspaces in the same flat agent table', () => {
         const html = renderToStaticMarkup(<Dashboard rows={[row('a', 'fancy'), row('b', 'ops')]} workspaces={[{ id: 'ops', path: '/w/ops' }, { id: 'fancy', path: '/w/fancy', governedBy: 'ops' }]} onOpenAgent={() => {}} onAddAgent={() => {}} onAddWorkspace={() => {}} />);
-        expect(html).toContain('data-governed-by="ops"');
-        expect(html).toMatch(/governed by ops/);
-        expect((html.match(/governed by/g) ?? []).length).toBe(1);
+        expect([...html.matchAll(/data-agent="([^"]+)"/g)].map((m) => m[1])).toEqual(['a', 'b']);
+        expect(html).toContain('data-workspace="fancy"'); expect(html).toContain('data-workspace="ops"');
+        expect(html).not.toContain('data-workspace-head');
     });
 });
 

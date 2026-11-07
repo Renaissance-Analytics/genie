@@ -37,6 +37,7 @@ export interface GenieToolParts {
     readonly roster: () => readonly AgentRecord[];
     /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
     readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
+    readonly refusalForRecipient?: (address: string) => string | null;
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
     readonly liveness?: (agentId: string) => Liveness;
     /** A Take Over terminal's id or a session's key → who is calling; anything else is nobody. */
@@ -93,6 +94,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             attention: p.attention,
             roster: p.roster,
             ...(p.workspaceSlugs ? { workspaceSlugs: p.workspaceSlugs } : {}),
+            ...(p.refusalForRecipient ? { refusalForRecipient: p.refusalForRecipient } : {}),
             ...(p.liveness ? { liveness: p.liveness } : {}),
             resolveCaller: p.resolveCaller,
             workspaceSetting: (workspaceId) => inboxSettingFrom(p.settings.snapshotFor(workspaceId)),

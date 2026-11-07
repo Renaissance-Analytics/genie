@@ -103,6 +103,7 @@ export interface GenieToolsDeps {
     readonly roster: () => readonly AgentRecord[];
     /** Each workspace's address slug: an agent is `name@slug` (registry.workspaceSlugs). Absent = the workspace id. */
     readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
+    readonly refusalForRecipient?: (address: string) => string | null;
     /** Is that agent running, and when was it last seen (core/liveness.ts)? Read-only; absent = not reported. */
     readonly liveness?: (agentId: string) => Liveness;
     readonly resolveCaller: (terminalId: string) => Caller | null;
@@ -357,6 +358,8 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     if (text === undefined) return err('send needs `text`');
                     // An APP's message (genie#1345) has no mailbox behind it: act on the app itself, never by mail to it.
                     if (isAppSender(to)) return err(`${to} is an app (a site, a process or a script): apps cannot be replied to; act on the app itself`);
+                    const refusal = deps.refusalForRecipient?.(to);
+                    if (refusal) return err(refusal);
                     const target = resolveAddress(to, deps.roster(), deps.workspaceSlugs?.());
                     let recipient: Participant;
                     if (target.kind === 'human') recipient = HUMAN;

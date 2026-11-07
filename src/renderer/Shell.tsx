@@ -184,6 +184,7 @@ export interface ShellProps {
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
+    onWakeWorkspace?: ((workspaceId: string) => void) | undefined;
     /** The rail's Browser row opens the Genie browser window (beta.35 item 36); absent = the browser surface, as before. */
     onOpenBrowser?: (() => void) | undefined;
     /** The terminal half of the bridge, handed to the Workspace surface. Keyed by workspace, never agent. */
@@ -318,7 +319,7 @@ export function Shell({
     featureAsk,
     pickFiles,
     onBrowserBounds,
-    agentDetail,
+    agentDetail: suppliedAgentDetail,
     agentResolved,
     selectedRowId,
     chatThread,
@@ -330,6 +331,7 @@ export function Shell({
     onChatAgent: onChatAgentProp,
     onAddAgent,
     onAddWorkspace,
+    onWakeWorkspace,
     onOpenBrowser,
     terminals = NO_TERMINALS,
     files = NO_FILES,
@@ -393,6 +395,8 @@ export function Shell({
     onConfirmAdd,
     onCancelAdd,
 }: ShellProps) {
+    const hiddenWorkspaces = new Set([...(snapshot.hibernatedWorkspaces ?? []).map((w) => w.id), ...(snapshot.workspaces ?? []).filter((w) => w.asleep).map((w) => w.id)]);
+    const agentDetail = suppliedAgentDetail?.agent.workspaceId && hiddenWorkspaces.has(suppliedAgentDetail.agent.workspaceId) ? null : suppliedAgentDetail;
     // Without the window's pick (a test, a remote window) a Dashboard row opens the agent's page, as before.
     const onChatAgent = onChatAgentProp ?? onOpenAgent;
     const parsed = parseRoute(route);
@@ -582,7 +586,8 @@ export function Shell({
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
                     deckCount={snapshot.deckItems === null ? null : needsYouCount(snapshot.deckItems)}
                     // Genie 1's row: the pulse from the agents' sessions, and the process / site indicators from Hosting.
-                    workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] })}
+                    workspaces={[...railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] }), ...(snapshot.hibernatedWorkspaces ?? []).map((workspace) => ({ ...workspace, count: null, alert: null }))]}
+                    onWakeWorkspace={onWakeWorkspace}
                     onOpenProcesses={(workspaceId) => setRuntimeModal({ kind: 'processes', workspaceId })}
                     onOpenSites={(workspaceId) => setRuntimeModal({ kind: 'sites', workspaceId })}
                     // On an agent's page its workspace stays the highlighted row (Tynn #805).
@@ -612,7 +617,7 @@ export function Shell({
                      * state a person cannot recover from without knowing a shortcut, and it is
                      * indistinguishable from a load that failed.
                      */}
-                    {canServe && parsed.surface === 'dashboard' && snapshot.workspaces !== null && snapshot.workspaces.length === 0 ? (
+                    {canServe && parsed.surface === 'dashboard' && snapshot.workspaces !== null && snapshot.workspaces.length === 0 && !snapshot.hibernatedWorkspaces?.length ? (
                         <Onboarding
                             state={{
                                 workspaces: snapshot.workspaces.length,
@@ -639,7 +644,7 @@ export function Shell({
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
                      * board audit. The skeleton (`workspaces === null`) still belongs to the Dashboard.
                      */}
-                    {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
+                    {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0 || !!snapshot.hibernatedWorkspaces?.length) ? (
                         <ErrorBoundary surface="Dashboard">
                         <Dashboard
                             pulsing={pulsingWorkspaces}
@@ -650,6 +655,7 @@ export function Shell({
                             // Genie's own row, its group first (the design mockup).
                             genie={snapshot.osAgent ?? null}
                             workspaces={snapshot.workspaces}
+                            hasHibernatedWorkspaces={!!snapshot.hibernatedWorkspaces?.length}
                             // A row click opens that agent's CHAT beside the Dashboard, which stays (genie#1209) — EVERY row,
                             // a waiting one too (the owner, 2026-10-28: "Dashboard should stay active while the chat changes
                             // to that agent chat"). A pending question no longer sends the click to the Deck: Genie 1 never let
@@ -660,8 +666,6 @@ export function Shell({
                             onAddWorkspace={onAddWorkspace}
                             onAddWorkspaceFromGit={onAddWorkspaceFromGit}
                             onAddWorkspaceFromTynn={onAddWorkspaceFromTynn}
-                            group={parsed.group}
-                            onGroup={(group) => onNavigate(formatRoute({ ...parsed, group }))}
                             // The row tray's doors (Open agent / Terminal / Files).
                             onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}

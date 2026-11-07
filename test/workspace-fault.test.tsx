@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { control } from './helpers/control-markup.js';
 import { groupByWorkspace, workspaceFault, type AgentRow } from '../src/core/dashboard-view.js';
 import { listReposOf, type RepoOpsPorts } from '../src/main/repo-ops-host.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
@@ -52,16 +53,19 @@ describe('workspaceFault', () => {
     });
 });
 
-describe('the group header', () => {
+describe('the Workspace cell', () => {
     const row = (over: Partial<AgentRow>): AgentRow =>
         ({ id: 'a1', name: 'atlas', provider: 'claude', workspaceId: 'moic', fidelity: 'declared', state: 'working', duration: null, ask: null, reason: null, fixes: [], target: null, delivery: null, collaborators: null, commsLevel: null, context: null, ...over }) as AgentRow;
     const workspaces = [{ id: 'moic', name: 'moic', path: '/w/moic' }];
     const render = (faults: Record<string, { text: string; repo: string } | null>) =>
         renderToStaticMarkup(<Dashboard rows={[row({})]} workspaces={workspaces} onOpenAgent={() => {}} onAddAgent={() => {}} faults={faults} onLocateRepo={() => {}} />);
 
-    it('shows the sentence and its `Locate repo` door on the group with a fault', () => {
+    it('offers a real Locate repo door with the fault context in its tooltip', () => {
         const html = render({ moic: { text: 'repo site not found in moic.agi', repo: 'site' } });
-        expect(html).toMatch(/data-workspace-fault="site"[\s\S]*?repo site not found in moic\.agi[\s\S]*?data-action="locate-repo"/);
+        const repair = control(html, 'data-action="locate-repo"');
+        expect(repair).toMatchObject({ tag: 'button', fancy: true });
+        expect(repair!.open).toContain('data-workspace-fault="site"');
+        expect(repair!.open).toContain('title="repo site not found in moic.agi"');
     });
 
     it('nothing on a group without one (positive control: the same board, no fault)', () => {

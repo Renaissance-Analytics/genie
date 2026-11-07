@@ -1,4 +1,5 @@
 import { clockAmPm } from './clock-words.js';
+import { isSleeping } from './agent-status.js';
 import { limitTitle } from './limit-words.js';
 import type { Fidelity } from './dashboard-view.js';
 import { observedState, type TakeOverProbe } from './observed.js';
@@ -133,6 +134,7 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
     if (!running && session.running && (session.background ?? 0) > 0) return { word: `Working · ${session.background} in the background`, elapsed: null, tone: 'ok' };
     // COOLING (core/session.ts COOLING_MS): the 15 s after a turn that replied.
     if (!running && session.running && session.cooling === true) return { word: 'Cooling', elapsed: null, tone: 'cool' };
+    if (isSleeping(session, now())) return { word: 'Sleeping', elapsed: null, tone: 'muted' };
     if (!running) return { word: ctx.turns === 0 && session.running ? 'No turns yet' : 'Idle', elapsed: null, tone: 'muted' };
 
     return {

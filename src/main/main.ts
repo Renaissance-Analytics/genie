@@ -1393,7 +1393,7 @@ async function boot(): Promise<void> {
     // WORKSPACE COLOURS (genie#1300): every workspace has one — its project.json's `appearance.color`, or a palette colour
     // Genie writes there (main/workspace-color-host.ts). A pass runs when the estate changes: at once for a workspace
     // without a colour (one just added), and at most every 5 s otherwise, so an agent's edit of the colour is picked up.
-    const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
+    const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
     workspaceColors = colors;
     theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
     let colorPassAt = 0;
@@ -1407,7 +1407,8 @@ async function boot(): Promise<void> {
             colorPassQueued = false;
             colorPassAt = Date.now();
             // The rail's order — governed workspaces under their governor — so the colours beside each other differ.
-            const order = nestGoverned(ws, (id) => ws.find((w) => w.id === id)?.governedBy ?? null);
+            const current = theRegistry.snapshot().workspaces ?? [];
+            const order = nestGoverned(current, (id) => current.find((w) => w.id === id)?.governedBy ?? null);
             void colors.ensure(order.map((w) => ({ id: w.id, path: w.path }))).catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`));
         }, 0);
     });
@@ -1519,6 +1520,7 @@ async function boot(): Promise<void> {
         },
         // A provider switch's carry-over went (Tynn story #380): the next prompt does not carry it again.
         onCarryOverSent: (agentId: AgentId) => { void theRegistry.clearCarryOver(agentId); },
+        onRedockSent: (agentId: AgentId, at: string) => { void theRegistry.clearRedock(agentId, at).catch(() => lifecycleLog(`redock reorientation acknowledgement could not be saved for ${agentId}; it remains pending on disk`)); },
         // Genie's own words went into the agent's thread (genie#1519): its record says so, for the next launch.
         markGenieWords: (agentId: AgentId) => { void theRegistry.markGenieWords(agentId); },
     };
@@ -1761,7 +1763,7 @@ async function boot(): Promise<void> {
         gitTree: gitTreeStatus,
         // Delete goes to the OS trash (Tynn #844), never an erase.
         trash: (absolutePath) => shell.trashItem(absolutePath),
-        workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
+        workspace: (id) => registry?.workspace(id) ?? null,
         agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => ({ id: a.id, name: a.name })),
         eventsOf: (agentId) => {
             const record = registry?.find(agentId as AgentId);
@@ -1790,7 +1792,8 @@ async function boot(): Promise<void> {
         };
     } else {
         // The emergency path only (no host could start, §4.1): the same hub, in this window.
-        const local = new FilesWatchHub({ send: (_owner, event) => onFilesEvent(event), gitTree: gitTreeStatus, repoStatus, log: lifecycleLog });
+        const local = new FilesWatchHub({ send: (_owner, event) => onFilesEvent(event), workspaceVisible: (id) => { const w = registry?.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: lifecycleLog });
+        registry?.subscribe(() => local.visibilityChanged());
         filesWatch = {
             watch: (viewId, workspace, want) => { local.subscribe('window', viewId, workspace, want); return true; },
             unwatch: (viewId) => local.unsubscribe('window', viewId),
@@ -2425,6 +2428,10 @@ async function boot(): Promise<void> {
      * write nothing; `confirmAdd` does the writes the plan showed.
      */
     const workspaceOps: WorkspaceOpsPorts = {
+        reverifyTrustBeforeRedock: async (id) => {
+            const view = await services?.workspaceTrust.refresh(id, 'redock');
+            if (!view) throw new Error('workspace trust is not available yet');
+        },
         fs: {
             // The same functions the first-commit test drives against a real folder and git (workspace-fs.ts).
             ...nodeWorkspaceFs(),
@@ -2690,6 +2697,7 @@ async function boot(): Promise<void> {
         roster: () => registry?.listAgents() ?? [],
         slugs: () => registry?.workspaceSlugs() ?? new Map(),
         defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
+        refusalForRecipient: (text, workspaceId) => registry?.mailRefusal(text, workspaceId) ?? null,
         enabled: (workspaceId) => services?.settings.snapshotFor(workspaceId).app_inbox !== false,
         siteHosts: (workspaceId) => services?.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host) ?? [],
         log: (line) => console.log(line),
@@ -2817,11 +2825,14 @@ async function boot(): Promise<void> {
         // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
         roster: () => registry?.listAgents() ?? [],
         workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
+        refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
+        inboxParticipantVisible: (id) => registry?.mailParticipantVisible(id) ?? true,
+        inboxVisibilityVersion: () => registry?.mailVisibilityVersion(),
         // Each site's own app credential (genie#1345), under its workspace's switch — compose never puts it in the service env.
         appInboxEnv: (source) => appInboxEnv(source),
         // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain
         // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
-        workspaces: () => registry?.listWorkspaces() ?? [],
+        workspaces: () => registry?.workspaceStates() ?? [],
         onWorkspacesChange: (listener) => registry?.subscribe(() => listener()) ?? (() => {}),
         // The rail's namer, so a question in the Deck and its window names the workspace the way the rail does.
         workspaceName: workspaceNameFor,
@@ -2836,8 +2847,8 @@ async function boot(): Promise<void> {
          */
         remoteApi: buildHostApi({
             filesWatch: {
-                exists: id => !!registry?.workspace(id),
-                watch: (viewId, id, want) => { const workspace = registry?.workspace(id); return filesWatch && workspace ? filesWatch.watch(viewId, { id: workspace.id, path: workspace.path }, want) : false; },
+                exists: id => { const w = registry?.workspace(id); return !!w && w.asleep !== true; },
+                watch: (viewId, id, want) => { const workspace = registry?.workspace(id); return filesWatch && workspace && workspace.asleep !== true ? filesWatch.watch(viewId, { id: workspace.id, path: workspace.path }, want) : false; },
                 unwatch: viewId => { filesWatch?.unwatch(viewId); },
                 subscribe: listener => { filesEventListeners.add(listener); return () => { filesEventListeners.delete(listener); }; },
             },
@@ -3285,7 +3296,13 @@ async function boot(): Promise<void> {
         });
         ownScheduler.plan();
         // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
-        registry.subscribe(() => ownScheduler.plan());
+        let processVisibility = JSON.stringify(registry.workspaceStates().filter((w) => w.asleep).map((w) => w.id).sort());
+        registry.subscribe(() => {
+            ownScheduler.plan();
+            const key = JSON.stringify(registry!.workspaceStates().filter((w) => w.asleep).map((w) => w.id).sort());
+            if (key === processVisibility) return;
+            processVisibility = key; ownBook.visibilityChanged();
+        });
         const restoredProcesses = ownBook.restore();
         if (windowSafeNow()) for (const p of ownBook.kept()) if (restoredProcesses.heldBack.includes(p.id)) windowSafe?.own()?.hold('process', { id: p.id, name: p.name });
         // Leaving safe mode arms the scheduled tasks again; it starts nothing by itself.
@@ -3323,6 +3340,7 @@ async function boot(): Promise<void> {
             approve: (caller, action, detail, call) => (own ? own.approvals.gate(caller, action, detail, call) : composed.approvals.gate(caller, action, detail, call)),
             roster,
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
+            refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
             resolveCaller,
             // createAgent: the workspace's default agent asks, the person approves in the Deck, the registry registers.
             agents: {
@@ -3985,6 +4003,8 @@ async function boot(): Promise<void> {
         const waiting = needsYouCount(snapshot.deckItems ?? []);
         if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
     });
+    // Rare workspace visibility changes refresh all popped-out views; agent activity above stays main-window only.
+    registry.subscribeWorkspaceVisibility((snapshot) => broadcast('genie:changed', snapshot));
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed

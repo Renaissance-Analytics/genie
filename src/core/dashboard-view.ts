@@ -40,7 +40,13 @@ export type Fidelity =
  * and colour, and it is WORKING for every order, group and count on the board (`rankOf`), so an agent between turns does
  * not jump; the move to Idle 15 s later is the only reorder.
  */
-export type AgentState = 'waiting' | 'broken' | 'working' | 'cooling' | 'idle' | 'remote';
+export type AgentState = 'waiting' | 'broken' | 'working' | 'cooling' | 'idle' | 'sleeping' | 'stopped' | 'remote';
+
+/** The Dashboard is one alphabetical list. Sleeping and Stopped are independent display filters. */
+export function dashboardRows(rows: readonly AgentRow[], show: { sleeping: boolean; stopped: boolean }): readonly AgentRow[] {
+    return rows.filter((row) => (shownState(row) !== 'sleeping' || show.sleeping) && (shownState(row) !== 'stopped' || show.stopped))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }) || a.id.localeCompare(b.id));
+}
 
 export type DeliveryKind = 'commit' | 'file' | 'handoff' | 'answer';
 
@@ -124,7 +130,7 @@ export const CONTEXT_DANGER_AT = 180_000;
  * waiting on a human is the only state where the human is the bottleneck, so it leads.
  */
 const STATE_ORDER: Record<AgentState, number> = {
-    waiting: 0, broken: 1, working: 2, cooling: 2, idle: 3, remote: 4,
+    waiting: 0, broken: 1, working: 2, cooling: 2, idle: 3, sleeping: 4, stopped: 5, remote: 6,
 };
 
 /**
@@ -156,7 +162,7 @@ interface BackgroundFacts<S extends string = string> {
  * all come from here.
  */
 function workingInBackground(row: BackgroundFacts): boolean {
-    return (row.state === 'idle' || row.state === 'cooling') && row.fidelity === 'declared' && (row.background ?? 0) > 0;
+    return (row.state === 'idle' || row.state === 'cooling' || row.state === 'sleeping') && row.fidelity === 'declared' && (row.background ?? 0) > 0;
 }
 
 /**
@@ -186,6 +192,7 @@ export interface StatusCell {
  * see bytes and nothing else, so `Active` — the grammar carries the epistemology.
  */
 export function statusOf(row: AgentRow): StatusCell {
+    if (row.state === 'stopped') return { word: 'Stopped', detail: null, tone: 'bad' };
     if (row.fidelity === 'remote') {
         return { word: 'Unreachable', detail: row.reason, tone: 'muted' };
     }
@@ -210,6 +217,8 @@ export function statusOf(row: AgentRow): StatusCell {
             return { word: row.fidelity === 'observed' ? 'Active' : 'Working', detail: row.duration, tone: 'ok' };
         case 'cooling':
             return { word: 'Cooling', detail: null, tone: 'cool' };
+        case 'sleeping':
+            return { word: 'Sleeping', detail: null, tone: 'muted' };
         default:
             return { word: row.fidelity === 'observed' ? 'Quiet' : 'Idle', detail: row.duration, tone: 'muted' };
     }
@@ -383,9 +392,9 @@ export interface SummaryChip {
  */
 export function summaryChips(rows: readonly AgentRow[]): readonly SummaryChip[] {
     const label: Record<Exclude<AgentState, 'cooling'>, string> = {
-        waiting: 'waiting on you', broken: 'broken', working: 'working', idle: 'idle', remote: 'unreachable',
+        waiting: 'waiting on you', broken: 'broken', working: 'working', idle: 'idle', sleeping: 'sleeping', stopped: 'stopped', remote: 'unreachable',
     };
-    const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
+    const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'sleeping', 'stopped', 'remote'];
 
     return order.flatMap((state) => {
         const n = rows.filter((r) => rankOf(r) === state).length;
@@ -406,8 +415,8 @@ export interface StatusGroup {
  * state with no agents — an empty heading would be a count of zero wearing a label.
  */
 export function groupByStatus(rows: readonly AgentRow[]): readonly StatusGroup[] {
-    const label: Record<Exclude<AgentState, 'cooling'>, string> = { waiting: 'Waiting on you', broken: 'Broken', working: 'Working', idle: 'Idle', remote: 'Unreachable' };
-    const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
+    const label: Record<Exclude<AgentState, 'cooling'>, string> = { waiting: 'Waiting on you', broken: 'Broken', working: 'Working', idle: 'Idle', sleeping: 'Sleeping', stopped: 'Stopped', remote: 'Unreachable' };
+    const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'sleeping', 'stopped', 'remote'];
     return order.flatMap((state) => {
         // In the order given: a row going Working -> Cooling keeps its place in the Working group.
         const mine = rows.filter((r) => rankOf(r) === state);

@@ -35,7 +35,10 @@ function open() {
     const id = mintAgentId();
     const session = new AgentSession({
         agentId: id, cwd: dir, store, driverFactory: factory, processTree: noTree,
-        retryLater: (ms, fire) => { timers.push({ ms, fire }); return () => {}; },
+        retryLater: (ms, fire) => {
+            const timer = { ms, fire }; timers.push(timer);
+            return () => { const index = timers.indexOf(timer); if (index !== -1) timers.splice(index, 1); };
+        },
     });
     session.start();
     const overloaded = () => events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error', failure: { kind: 'overloaded', reason: 'serverOverloaded' } } as never);

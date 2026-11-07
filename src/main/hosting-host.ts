@@ -195,6 +195,8 @@ export interface HostingDump {
     readonly problems: readonly string[];
     /** Every workspace's trust verdict as the host last read it (genie#1519). Local window links only, as the whole dump. */
     readonly trust?: readonly TrustEntry[];
+    /** Private ownership metadata, including hidden folders: absence from the public workspace view never grants writes. */
+    readonly registeredFolders?: readonly string[];
 }
 
 export type HostingEvent =
@@ -213,6 +215,7 @@ const attempt = <T>(read: () => T, fallback: T): T => { try { return read(); } c
 export class HostingService {
     readonly #stack: HostingApi;
     readonly #workspaces: () => readonly string[];
+    readonly #registeredFolders: (() => readonly string[]) | undefined;
     readonly #elevation: WindowElevation | null;
     readonly #listeners = new Set<(event: HostingEvent) => void>();
     readonly #schedule: (fn: () => void, ms: number) => () => void;
@@ -223,6 +226,7 @@ export class HostingService {
     constructor(stack: HostingApi, options: {
         /** The registered workspaces' ids: each one's env, engine choices and hibernation engines are in the dump. */
         workspaces: () => readonly string[];
+        registeredFolders?: () => readonly string[];
         elevation?: WindowElevation;
         /** Anything else the dump reads changed (a supervised process — an engine's dependents —, a workspace). */
         onChange?: (listener: () => void) => () => void;
@@ -230,6 +234,7 @@ export class HostingService {
     }) {
         this.#stack = stack;
         this.#workspaces = options.workspaces;
+        this.#registeredFolders = options.registeredFolders;
         this.#elevation = options.elevation ?? null;
         this.#schedule = options.schedule ?? ((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
         const changed = () => this.#changed();
@@ -272,6 +277,7 @@ export class HostingService {
             reconcile: this.#reconcile,
             problems: s.hostingProblems(),
             trust: s.trust.entries(),
+            ...(this.#registeredFolders ? { registeredFolders: this.#registeredFolders() } : {}),
         };
     }
 
@@ -322,7 +328,7 @@ export class HostingService {
             case 'deferTrustCertificate': return s.deferTrustCertificate();
             // The person's yes to a workspace (genie#1519). `engine.hosting` is a local window's only (session-engine-server.ts).
             case 'trust.trust': return s.trust.trust(str(a[0]));
-            case 'trust.refresh': return s.trust.refresh(str(a[0]));
+            case 'trust.refresh': return a[1] === 'redock' ? s.trust.refresh(str(a[0]), 'redock') : s.trust.refresh(str(a[0]));
             default: throw new Error(`a window cannot call hosting.${method}`);
         }
     }
@@ -428,7 +434,7 @@ export class HostingReplica implements HostingApi {
             return entry ? { trusted: entry.trusted, changed: entry.changed, list: entry.list } : null;
         },
         entries: () => [...this.#trustEntries()],
-        refresh: (workspaceId: string) => this.#ask<TrustView | null>('trust.refresh', workspaceId),
+        refresh: (workspaceId: string, purpose?: 'redock') => purpose === undefined ? this.#ask<TrustView | null>('trust.refresh', workspaceId) : this.#ask<TrustView | null>('trust.refresh', workspaceId, purpose),
         trust: (workspaceId: string) => this.#ask<TrustView | null>('trust.trust', workspaceId),
         mayWriteInto: async (folder: string) => {
             const dump = this.#dump;
@@ -437,7 +443,7 @@ export class HostingReplica implements HostingApi {
             const entry = (dump.trust ?? []).find((e) => e.path === folder);
             if (entry) return entry.trusted;
             // A registered workspace not read yet is not trusted; a folder that is no workspace is not this rule's.
-            return !Object.values(dump.workspaces).some((w) => w.path === folder);
+            return !(dump.registeredFolders ?? Object.values(dump.workspaces).flatMap((w) => w.path === null ? [] : [w.path])).includes(folder);
         },
         onVerdict: (listener: (workspaceId: string) => void) => { this.#verdictListeners.add(listener); return () => { this.#verdictListeners.delete(listener); }; },
     };
