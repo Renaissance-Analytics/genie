@@ -97,7 +97,9 @@ describe('the chat never scrolls sideways', () => {
         const log = mount(() => {});
         const entry = log.querySelector('[data-chat-message="mail-waiting"]')!;
         expect(entry.textContent).toContain('tynn-slave → tynn');
-        expect(entry.querySelector('[data-mail-refusal]')!.textContent).toBe(LONG);
+        const refusal = entry.querySelector('[data-mail-refusal]');
+        expect(refusal).not.toBeNull();
+        expect(refusal!.textContent).toBe(LONG);
         expect(log.querySelector('[data-who="delivery"]')).toBeNull();
     });
 });
