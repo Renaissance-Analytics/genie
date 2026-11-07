@@ -540,7 +540,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     // 108 memories and drew skeletons until a search). A query searches.
     const hits = await timed('knowledge', async () => state.knowledgeQuery
         ? (await services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' })).hits
-        : (await services.knowledge.list({ scopes: 'all', limit: 200 })).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class })));
+        : (await services.knowledge.summaries({ scopes: 'all', limit: 200 })).hits);
     const roster = services.agentAddresses();
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
