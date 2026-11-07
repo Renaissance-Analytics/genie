@@ -4150,6 +4150,8 @@ function bringBackItsPage(win: BrowserWindow): void {
         } catch { /* a window going away: the last sample stands */ }
     };
     sample();
+    // As soon as the page has loaded too (its renderer exists from then), not only on the 5 s tick.
+    win.webContents.on('did-finish-load', sample);
     const sampler = setInterval(sample, 5_000);
     sampler.unref?.();
     win.on('closed', () => { clearInterval(sampler); });
