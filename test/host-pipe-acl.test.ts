@@ -58,9 +58,21 @@ public static class PipeSd {
         LocalFree(text); LocalFree(sd);
         return sddl;
     }
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint revision, out IntPtr sd, out uint size);
+    // A SID as SDDL writes it: the built-in Administrator (RID 500, GitHub's Windows runner) is "LA", not its full SID.
+    public static string AsSddl(string sid) {
+        IntPtr sd; uint size;
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW("O:" + sid, 1, out sd, out size)) throw new Win32Exception();
+        IntPtr text; uint length;
+        if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, 1, 1, out text, out length)) throw new Win32Exception();
+        string owner = Marshal.PtrToStringUni(text);
+        LocalFree(text); LocalFree(sd);
+        return owner.Substring(2);
+    }
 }
 '@
-$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$user = [PipeSd]::AsSddl([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
 Write-Output ("USER " + $user)
 Write-Output ("SDDL " + [PipeSd]::Read($args[0]))
 `;
@@ -68,7 +80,7 @@ Write-Output ("SDDL " + [PipeSd]::Read($args[0]))
 let dir: string;
 let reader: string;
 
-/** The pipe's owner and DACL as SDDL, and the SID of the user this test runs as. */
+/** The pipe's owner and DACL as SDDL, and the user this test runs as, written the way SDDL writes it. */
 async function readPipe(pipe: string): Promise<{ user: string; sddl: string }> {
     const powershell = join(process.env['SystemRoot'] ?? 'C:/Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     const out = await new Promise<string>((done, fail) => execFile(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', reader, pipe], { encoding: 'utf8', timeout: 60_000, windowsHide: true }, (error, stdout, stderr) => (error ? fail(new Error(`${error.message}\n${stderr}`)) : done(stdout))));
