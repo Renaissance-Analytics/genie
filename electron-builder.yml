@@ -146,19 +146,8 @@ win:
     fileDigest: SHA256
     timestampRfc3161: http://timestamp.acs.microsoft.com
     timestampDigest: SHA256
-    # Invoke-TrustedSigning's documented switches, not Azure metadata.json's ExcludeCredentials.
-    # Strings match electron-builder's schema; scripts/patch-azure-signing.cjs emits PS switches.
-    # https://www.powershellgallery.com/packages/TrustedSigning/0.5.8/Content/TrustedSigning.psm1
-    ExcludeEnvironmentCredential: 'true'
-    ExcludeWorkloadIdentityCredential: 'true'
-    ExcludeManagedIdentityCredential: 'true'
-    ExcludeSharedTokenCacheCredential: 'true'
-    ExcludeVisualStudioCredential: 'true'
-    ExcludeVisualStudioCodeCredential: 'true'
-    ExcludeAzureCliCredential: 'false'
-    ExcludeAzurePowerShellCredential: 'true'
-    ExcludeAzureDeveloperCliCredential: 'true'
-    ExcludeInteractiveBrowserCredential: 'true'
+    # DefaultAzureCredential reaches azure/login's CLI session on the fresh hosted runner.
+    # No Exclude* switches: see docs/windows-signing.md for module/credential-chain docs.
   target:
     - nsis
   artifactName: ${productName}-${version}-setup.${ext}

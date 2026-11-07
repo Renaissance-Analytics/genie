@@ -28,8 +28,6 @@ jobs:
       - run: npm run build
       - name: fetch the pinned Caddy runtime
         run: npx tsx scripts/fetch-caddy.ts
-      - name: correct TrustedSigning switch serialization in the pinned builder
-        run: node scripts/patch-azure-signing.cjs
       - uses: azure/login@v2
         env:
           AZURE_CORE_OUTPUT: none

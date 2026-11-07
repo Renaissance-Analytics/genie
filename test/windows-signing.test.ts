@@ -28,6 +28,8 @@ describe('Windows release signing', () => {
     });
 
     it('the pinned builder signs extra-resource executables and DLLs while copying them', () => {
+        // Enter at the package root so its CommonJS platform-packager cycle initializes normally.
+        require('app-builder-lib');
         const { WinPackager } = require('app-builder-lib/out/winPackager.js');
         const packager = Object.create(WinPackager.prototype);
         packager.platformSpecificBuildOptions = { signExts: ['.dll'] };
@@ -162,7 +164,8 @@ describe('Windows release signing', () => {
                     if ($bad -and ${quote(kind)} -eq 'publisher') { $cert.Subject='CN=Someone Else'; $cert | Add-Member -Force ScriptMethod GetNameInfo { param($type,$issuer) 'Someone Else' } }
                     [pscustomobject]@{ Status=$(if ($bad -and ${quote(kind)} -eq 'status') {'NotSigned'} else {'Valid'}); SignerCertificate=$cert; TimeStamperCertificate=$(if ($bad -and ${quote(kind)} -eq 'timestamp') {$null} else {[pscustomobject]@{Subject='Timestamp authority'}}) }
                 }; & ./scripts/verify-windows-signatures.ps1 -ReleaseDir ${quote(dir)}`;
-                return spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', mock], { encoding: 'utf8' });
+                // Match the workflow's shell; Windows PowerShell inherits pwsh's incompatible module path.
+                return spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', mock], { encoding: 'utf8' });
             };
             const valid = run();
             expect(valid.status, valid.stderr).toBe(0);

@@ -20,33 +20,28 @@ into the draft using `gh release upload`. It does not rebuild after verification
 Linux's build, tests and electron-builder publication commands are unchanged.
 The final draft gate needs both jobs. Publishing the draft is still the owner's step.
 
-## Credential selection and the pinned adapter
+## Credential selection and the locked adapter
 
-Microsoft documents `Invoke-TrustedSigning` authentication and the individual
-`Exclude*Credential` switches in the [module's command documentation](https://www.powershellgallery.com/packages/TrustedSigning/0.5.8/Content/TrustedSigning-help.xml)
-and [published implementation](https://www.powershellgallery.com/packages/TrustedSigning/0.5.8/Content/TrustedSigning.psm1).
-The configuration excludes the other nine credential types, leaving
-`AzureCliCredential` enabled to use the CLI login created by
-[azure/login's OIDC flow](https://github.com/Azure/login/tree/v2#login-with-openid-connect-oidc-recommended).
-`WorkloadIdentityCredential` is excluded too: this setup uses the CLI session,
-not a workload-identity token file. The config uses the module's switch names;
-`ExcludeCredentials` is a metadata.json field, not a parameter of that command.
+The [published TrustedSigning module](https://www.powershellgallery.com/packages/TrustedSigning/0.5.8/Content/TrustedSigning.psm1)
+uses `DefaultAzureCredential`. Microsoft's [credential-chain documentation](https://learn.microsoft.com/en-us/dotnet/azure/sdk/authentication/credential-chains)
+describes how it advances past unavailable credentials and includes the Azure CLI
+session created by [azure/login's OIDC flow](https://github.com/Azure/login/tree/v2#login-with-openid-connect-oidc-recommended).
+These fresh hosted runners have no configured client secret, token-file credential
+or managed identity. The intended successful credential is the logged-in CLI;
+the protected sign-test run must confirm success and measure probe overhead.
 
-The [published app-builder-lib 26.17.0 package](https://registry.npmjs.org/app-builder-lib/-/app-builder-lib-26.17.0.tgz)
-contains `out/codeSign/windowsSignAzureManager.js`. It forwards additional Azure
-options as command parameters, but quotes every value as a string. That makes
-`ExcludeEnvironmentCredential: 'true'` become `-ExcludeEnvironmentCredential 'true'`,
-which PowerShell refuses for a switch. This was reproduced on the Windows CI runner.
-The config values are strings because electron-builder's Azure schema requires them.
+No `Exclude*Credential` parameters are passed. The existing lock stays at
+[app-builder-lib 26.15.3](https://registry.npmjs.org/app-builder-lib/-/app-builder-lib-26.15.3.tgz).
+Its `out/codeSign/windowsSignAzureManager.js` supports the configured Azure account,
+profile, endpoint, publisher and digest/timestamp options without a dependency
+change or vendor patch. A CI test evaluates that unmodified adapter and binds its
+generated command in Windows PowerShell using a local command stub, without Azure access.
 
-`scripts/patch-azure-signing.cjs` corrects only those ten switch parameters to
-PowerShell's `-Name:$true` / `-Name:$false` form. It is an explicit step in the two
-protected Windows jobs, requires app-builder-lib 26.17.0 and the exact source
-fragment, and fails if that adapter changes. It adds no install script and leaves
-upstream path/string escaping intact. A CI test evaluates that actual adapter and
-binds the resulting command in Windows PowerShell with a local command stub;
-the stub has no Azure access. Remove the correction once a reviewed upstream
-version handles switches correctly.
+If probe latency proves material, Microsoft's documented `AZURE_TOKEN_CREDENTIALS`
+environment variable can select a credential, but individual names such as
+`AzureCliCredential` require Azure.Identity >=1.15.0. That is not enabled here:
+first establish the signing module/dlib's actual Identity version and measure
+the default chain in sign-test before choosing an environment override.
 
 ## Binary coverage
 
