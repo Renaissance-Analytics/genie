@@ -52,6 +52,8 @@ function growOurs(ours: Map<number, ProcessInfo>, table: readonly ProcessInfo[])
  */
 const GIT_TREE_ROUNDS = 8;
 const GIT_TREE_WALL_MS = 10_000;
+/** How long the limit waits for a read's launcher to be gone (its job closed) before the walk; it is ended at once. */
+const GIT_JOB_END_WAIT_MS = 5_000;
 
 /**
  * What the limit ends: git, and what git started under it, a hook's child above all, which keeps the folder open and
@@ -68,9 +70,23 @@ const GIT_TREE_WALL_MS = 10_000;
  * name, no `/T`. A child that a hook detached before the first reading is not found. A job object would close even that
  * (noted for #1628's launcher).
  */
-async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree, platform: NodeJS.Platform = process.platform): Promise<void> {
+async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree, platform: NodeJS.Platform = process.platform, jobs: ReadonlySet<ChildProcess> = new Set()): Promise<void> {
     const running = children.filter((child) => child.exitCode === null && child.signalCode === null && child.pid !== undefined);
     if (running.length === 0) return;
+    // THE JOB FIRST, before anything in it (Windows, genie-launch.exe `job`). The launcher keeps its job's kill only while
+    // git runs: when git ends, the launcher lifts the kill and exits, and what git started is left running. So git must
+    // never end before its launcher. The walk below ended both at once, each by its own taskkill, and lost that race twice
+    // in 20 runs (run 42363613581: all 230 of a hook's children alive 40 s after the limit). Ending the launcher here ends
+    // its process with the kill still set, so the job ends everything in it. Waited for (bounded), then the walk takes
+    // whatever is left outside the job.
+    const jobbed = running.filter((child) => jobs.has(child));
+    if (jobbed.length > 0) {
+        await Promise.all(jobbed.map((child) => new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, GIT_JOB_END_WAIT_MS);
+            child.once('exit', () => { clearTimeout(timer); resolve(); });
+            child.kill();
+        })));
+    }
     const read = async (): Promise<readonly ProcessInfo[] | null> => (tree.read ? tree.read() : tree.snapshot());
     // Every one identified is ended: the tree's count limit is lifted (it guards a session's guess, not a verified walk).
     const end = async (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]): Promise<void> => {
@@ -111,6 +127,8 @@ async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree,
 /** The read, or a {@link GitDidNotAnswer} at the limit, and then what it started is ended. */
 export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: ProcessTree = systemProcessTree): Promise<T> {
     const children: ChildProcess[] = [];
+    /** The children that are a launcher holding a job: ended first, before anything in their job (endGitTrees). */
+    const jobs = new Set<ChildProcess>();
     let over = false;
     const limit: GitLimit = {
         git: (args, options, callback) => {
@@ -122,6 +140,7 @@ export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: Pr
                 ? execFile(launcher, ['job', resolveProgram('git'), ...args], { windowsHide: true, ...options }, callback)
                 : execFile(resolveProgram('git'), [...args], { windowsHide: true, ...options }, callback);
             children.push(child);
+            if (launcher !== null) jobs.add(child);
             return child;
         },
     };
@@ -129,7 +148,7 @@ export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: Pr
         const timer = setTimeout(() => {
             over = true;
             reject(new GitDidNotAnswer());
-            void endGitTrees(children, tree).catch((error: unknown) => console.error(`[git] what a read started could not be ended: ${error instanceof Error ? error.message : String(error)}`));
+            void endGitTrees(children, tree, process.platform, jobs).catch((error: unknown) => console.error(`[git] what a read started could not be ended: ${error instanceof Error ? error.message : String(error)}`));
         }, GIT_READ_LIMIT.ms);
         run(limit).then(
             (value) => { clearTimeout(timer); resolve(value); },
