@@ -49,7 +49,7 @@ describe('the tools', () => {
 
     const tools = (summary: IssueWatchSummary) => genieTools({
         inbox, attention, roster: () => [atlas], resolveCaller: (id) => (id === 't-atlas' ? caller : null),
-        workspaceSetting: () => ({ scope: 'self' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+        userActive: () => true, glow: () => true, thumbsUp: () => {},
         issueWatch: { forWorkspace: (workspaceId) => (workspaceId === 'tynn' ? summary : { state: 'live', linked: false }) },
     });
     const call = async (t: ReturnType<typeof tools>, name: string, args: JsonObject) => JSON.parse((await t.find((x) => x.definition.name === name)!.handler(args, { server: 'genie', tool: name, headers: {} })).text) as Record<string, unknown>;
@@ -96,7 +96,7 @@ describe('checkIssues(refresh: true) — Tynn reads GitHub now', () => {
         let summary: IssueWatchSummary = { state: 'live', linked: true, entry: parseIssueWatchEntry({ projectId: 'proj_1', items: [item('issue', 1)], feedbackItems: [] })! };
         const t = genieTools({
             inbox, attention, roster: () => [atlas], resolveCaller: (id) => (id === 't-atlas' ? caller : null),
-            workspaceSetting: () => ({ scope: 'self' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+            userActive: () => true, glow: () => true, thumbsUp: () => {},
             issueWatch: {
                 forWorkspace: () => summary,
                 // The refresh lands its snapshot before it answers: what checkIssues reads next is the fresh one.

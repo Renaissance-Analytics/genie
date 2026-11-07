@@ -138,7 +138,6 @@ describe('the `lists` MCP tool — an agent marking done', () => {
             attention,
             roster: () => [atlas],
             resolveCaller: (id) => (id === 't-atlas' ? caller : null),
-            workspaceSetting: () => ({ scope: 'self' }),
             userActive: () => true,
             glow: () => true,
             thumbsUp: () => {},

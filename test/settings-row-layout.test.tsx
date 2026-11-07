@@ -24,7 +24,7 @@ describe('the workspace’s Settings', () => {
     const ops: WorkspaceOpsProps = {
         asleep: false, agentCount: 1, removePreview: false, lastOutcome: null,
         onHibernate: () => {}, onWake: () => {}, onPreviewRemove: () => {}, onConfirmRemove: () => {}, onCancelRemove: () => {},
-        settings: { values: { approval_gates: 'writes', agent_cap: '2', inbox_access: 'self' }, overridden: [], onSet: () => {}, onReset: () => {} },
+        settings: { values: { approval_gates: 'writes', agent_cap: '2' }, overridden: [], onSet: () => {}, onReset: () => {} },
         defaultAgent: { agents: [{ id: 'a1', name: 'tynn' }], current: 'a1', onSet: () => {} },
     } as WorkspaceOpsProps;
     it('every row, the default agent’s included: words that may shrink, the control in its fixed column', () => {

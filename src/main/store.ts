@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
+import { isOsAgent } from '../core/os-agent.js';
 import { runtimeDir } from './paths.js';
 import { restrictPrivateFile } from './private-credentials.js';
 
@@ -225,8 +226,51 @@ function parseRecord(value: unknown, onDrop: (why: string) => void): AgentRecord
     return { ...(raw as unknown as AgentRecord), id };
 }
 
+const inboxAccessUpgrades = new Map<string, Promise<void>>();
+
+/** Before any reader or writer can discard the old setting, preserve its restrictions on the agents themselves. */
+export function migrateAgentInboxAccess(directory: string): Promise<void> {
+    const pending = inboxAccessUpgrades.get(directory);
+    if (pending) return pending;
+    const ready = upgradeAgentInboxAccess(directory).finally(() => { inboxAccessUpgrades.delete(directory); });
+    inboxAccessUpgrades.set(directory, ready);
+    return ready;
+}
+
+async function upgradeAgentInboxAccess(directory: string): Promise<void> {
+    const marker = join(directory, 'agent-inbox-access-migrated.json');
+    const done = await readJson<{ version?: unknown } | null>(marker, null);
+    if (done?.version === 1) return;
+
+    const file = join(directory, 'agents.json');
+    const records = await readJson<unknown[]>(file, []);
+    const settings = await readJson<Record<string, unknown>>(join(directory, 'settings.json'), {});
+    let changed = false;
+    const upgraded = records.map((raw) => {
+        // Preserve unparseable rows on disk; the normal reader still names their faults.
+        const agent = parseRecord(raw, () => {});
+        if (!agent) return raw;
+        const overrides = settings?.__workspaces as Record<string, Record<string, unknown> | undefined> | undefined;
+        const override = overrides?.[agent.workspaceId]?.inbox_access;
+        const old = typeof override === 'string' || typeof override === 'boolean' ? override : settings?.inbox_access;
+        const workspaceScope = old === 'none' || old === 'all' ? old : 'self';
+        const knownScope = ['none', 'self', 'specific', 'all'].includes(agent.accessScope);
+        const accessScope: AgentRecord['accessScope'] = isOsAgent(agent) ? 'all'
+            : !knownScope || agent.accessScope === 'none' || workspaceScope === 'none' ? 'none'
+            : workspaceScope === 'self' ? 'self' : agent.accessScope;
+        if (accessScope === agent.accessScope) return raw;
+        changed = true;
+        return { ...agent, accessScope };
+    });
+    // Save restrictions first. A crash before the marker safely repeats the intersection;
+    // a failed write prevents boot from exposing an unconverted roster.
+    if (changed) await writeJsonAtomic(file, upgraded);
+    await writeJsonAtomic(marker, { version: 1 });
+}
+
 export class Store {
     readonly #dir: string;
+    #inboxAccessReady: Promise<void> | undefined;
     /** Records that failed to parse, kept so a boot fault is reportable rather than silent. */
     readonly dropped: string[] = [];
 
@@ -285,6 +329,7 @@ export class Store {
     }
 
     async readAgents(): Promise<readonly AgentRecord[]> {
+        await (this.#inboxAccessReady ??= migrateAgentInboxAccess(this.#dir));
         const raw = await readJson<unknown[]>(this.agentsFile, []);
         this.dropped.length = 0;
 
@@ -295,6 +340,7 @@ export class Store {
     }
 
     async writeAgents(records: readonly AgentRecord[]): Promise<void> {
+        await (this.#inboxAccessReady ??= migrateAgentInboxAccess(this.#dir));
         await writeJsonAtomic(this.agentsFile, records);
     }
 }

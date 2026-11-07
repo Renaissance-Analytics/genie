@@ -32,7 +32,6 @@ async function sendThroughTool(caller = sender) {
     const tool = genieTools({
         inbox, attention, roster: () => [sender, recipient, outsider],
         resolveCaller: () => ({ agentId: caller.id, agentName: caller.name, workspaceId: caller.workspaceId, workspacePath: dir }),
-        workspaceSetting: () => ({ scope: 'self' }),
         userActive: () => true, glow: () => true, thumbsUp: () => {},
     }).find((t) => t.definition.name === 'agentinbox')!;
     const result = await tool.handler({ action: 'send', terminalId: 'worker', to: recipient.id, text: 'I need your decision.' }, { server: 'genie', tool: 'agentinbox', headers: {} });

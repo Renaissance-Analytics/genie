@@ -149,7 +149,6 @@ describe('the agent’s own tool', () => {
         const regs = genieTools({
             inbox, attention, roster: () => roster,
             resolveCaller: (key) => { const r = roster.find((a) => a.name === key); return r ? { agentId: r.id, agentName: r.name, workspaceId: r.workspaceId, workspacePath: dir } : null; },
-            workspaceSetting: () => ({ scope: 'self' }),
             userActive: () => true, glow: () => true, thumbsUp: () => {},
         } as GenieToolsDeps);
         const box = regs.find((t) => t.definition.name === 'agentinbox')!;

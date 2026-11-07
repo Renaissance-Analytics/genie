@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { SETTINGS, carryOverV1, migrateLegacyValue, type CarryOver, type SettingDef } from '../core/settings.js';
 import { runtimeDir } from './paths.js';
-import { readJson, writeJsonAtomic } from './store.js';
+import { migrateAgentInboxAccess, readJson, writeJsonAtomic } from './store.js';
 import { settingOf, snapshotForOf, snapshotOf, workspaceValuesOf, type SettingsData } from './settings-read.js';
 
 /**
@@ -61,6 +61,7 @@ export class SettingsStore {
     }
 
     static async open(userData: string, now: () => string = () => new Date().toISOString()): Promise<SettingsStore> {
+        await migrateAgentInboxAccess(runtimeDir(userData));
         const file = join(runtimeDir(userData), 'settings.json');
         const raw = await readJson<Partial<SettingsFile> & Record<string, unknown>>(file, { values: {}, carriedOver: null });
         // The file holds the user's values at the top level; the carry-over record rides beside them

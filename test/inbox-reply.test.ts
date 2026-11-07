@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { JsonObject } from '@particle-academy/prism-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
-import { reachable, resolveAddress, type WorkspaceInboxSetting } from '../src/core/inbox.js';
+import { reachable, resolveAddress } from '../src/core/inbox.js';
 import { AttentionStore } from '../src/main/attention-store.js';
 import { InboxStore } from '../src/main/inbox-store.js';
 import { genieTools, type Caller, type GenieToolsDeps, type Registration } from '../src/main/mcp-tools.js';
@@ -25,13 +25,6 @@ import { genieTools, type Caller, type GenieToolsDeps, type Registration } from 
  * The CONTROLS matter as much as the fix: a reply permission that leaked to an agent moic never wrote
  * to, or that turned a never-mailed agent reachable, would be a disclosure, not a convenience.
  */
-
-const settings: Record<string, WorkspaceInboxSetting> = {
-    'ws-moic': { scope: 'self' },
-    'ws-tynn': { scope: 'all' },
-    'ws-other': { scope: 'all' },
-};
-const workspaceSetting = (id: string): WorkspaceInboxSetting => settings[id] ?? { scope: 'self' };
 
 const moic = agentRecord({ id: mintAgentId(), workspaceId: 'ws-moic', provider: 'claude', name: 'moic', accessScope: 'self' });
 const tynn = agentRecord({ id: mintAgentId(), workspaceId: 'ws-tynn', provider: 'claude', name: 'tynn', accessScope: 'all' });
@@ -55,7 +48,6 @@ async function build(): Promise<void> {
         attention,
         roster: () => roster,
         resolveCaller: (terminalId) => callers[terminalId] ?? null,
-        workspaceSetting,
         userActive: () => true,
         glow: () => true,
         thumbsUp: () => {},
@@ -143,9 +135,9 @@ describe('CONTROLS: answering is not a hole', () => {
     it('writing TO someone earns nothing: tynn mailing moic first would not make moic answerable by tynn', () => {
         // Direction is the whole rule — the one who WROTE is the one who may be answered.
         const tynnWroteToMoic = (writer: string, reader: string) => writer === tynn.id && reader === moic.id;
-        expect(reachable(tynn, moic, workspaceSetting, { wroteTo: tynnWroteToMoic })).toBe(false);
+        expect(reachable(tynn, moic, { wroteTo: tynnWroteToMoic })).toBe(false);
         const moicWroteToTynn = (writer: string, reader: string) => writer === moic.id && reader === tynn.id;
-        expect(reachable(tynn, moic, workspaceSetting, { wroteTo: moicWroteToTynn })).toBe(true);
+        expect(reachable(tynn, moic, { wroteTo: moicWroteToTynn })).toBe(true);
     });
 
     it('an id nobody holds is still "nobody", never a guess', async () => {

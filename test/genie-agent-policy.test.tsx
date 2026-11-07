@@ -60,15 +60,14 @@ describe('the built-in Genie permission policy', () => {
         });
     }
 
-    it('remains reachable from every workspace even when workspace and incoming agent scopes are none', () => {
+    it('remains reachable from every workspace even when incoming agent scopes are none', () => {
         const os = { ...agentRecord({ id: mintAgentId(), workspaceId: OS_WORKSPACE, provider: 'claude', name: 'genie' }), accessScope: 'none' as const };
         const ordinary = agentRecord({ id: mintAgentId(), workspaceId: 'project', provider: 'codex', name: 'atlas', accessScope: 'none' });
-        const closed = () => ({ scope: 'none' as const });
-        expect(reachable(ordinary, os, closed)).toBe(true);
-        expect(reachable(os, ordinary, closed)).toBe(true);
+        expect(reachable(ordinary, os)).toBe(true);
+        expect(reachable(os, ordinary)).toBe(true);
         const impersonator = { ...os, workspaceId: 'project', id: mintAgentId() };
-        expect(reachable(ordinary, impersonator, closed)).toBe(false);
-        expect(reachable(impersonator, ordinary, closed)).toBe(false);
+        expect(reachable(ordinary, impersonator)).toBe(false);
+        expect(reachable(impersonator, ordinary)).toBe(false);
     });
 });
 

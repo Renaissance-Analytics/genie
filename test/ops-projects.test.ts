@@ -47,19 +47,18 @@ describe('the Dashboard groups the same way and names the governor', () => {
 describe('reach: the governor counts as the child\'s own workspace', () => {
     const agent = (id: string, workspaceId: string, accessScope: AgentRecord['accessScope'] = 'self'): AgentRecord =>
         ({ id, workspaceId, provider: 'claude', name: id, instructions: null, threadId: null, createdAt: 't', lastUsedAt: null, mode: 'manual', accessScope } as AgentRecord);
-    const self = () => ({ scope: 'self' as const });
     const governs = (from: string, to: string) => from === 'ops' && to === 'fancy';
 
-    it('an ops agent reaches a child agent whose workspace and scope are self; a stranger still does not; the child does not get the reverse for free', () => {
+    it('an ops agent reaches a child agent whose scope is self; a stranger still does not; the child does not get the reverse for free', () => {
         const opsAgent = agent('o', 'ops');
         const child = agent('c', 'fancy');
         const stranger = agent('s', 'tynn');
-        expect(reachable(opsAgent, child, self)).toBe(false);
-        expect(reachable(opsAgent, child, self, { governs })).toBe(true);
-        expect(reachable(stranger, child, self, { governs })).toBe(false);
-        expect(reachable(child, opsAgent, self, { governs })).toBe(false);
-        expect(reachable(opsAgent, agent('n', 'fancy', 'none'), self, { governs })).toBe(false);
-        expect(reachable(HUMAN, child, self)).toBe(true);
+        expect(reachable(opsAgent, child)).toBe(false);
+        expect(reachable(opsAgent, child, { governs })).toBe(true);
+        expect(reachable(stranger, child, { governs })).toBe(false);
+        expect(reachable(child, opsAgent, { governs })).toBe(false);
+        expect(reachable(opsAgent, agent('n', 'fancy', 'none'), { governs })).toBe(false);
+        expect(reachable(HUMAN, child)).toBe(true);
     });
 });
 

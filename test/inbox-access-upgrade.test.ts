@@ -19,11 +19,10 @@ const agent = (workspaceId: string, accessScope: AgentRecord['accessScope']) =>
     agentRecord({ id: mintAgentId(), workspaceId, provider: 'claude', name: `agent-${workspaceId}`, accessScope });
 const marker = () => join(runtimeDir(home), 'agent-inbox-access-migrated.json');
 const settingsFile = () => join(runtimeDir(home), 'settings.json');
-const closedWorkspace = () => ({ scope: 'none' as const });
 
 async function legacy(agents: readonly AgentRecord[], settings: Record<string, unknown>): Promise<Store> {
     const store = new Store(home);
-    await store.writeAgents(agents);
+    await writeJsonAtomic(store.agentsFile, agents);
     await writeJsonAtomic(settingsFile(), settings);
     return store;
 }
@@ -35,7 +34,7 @@ describe('the one-time upgrade from workspace and agent access to agent access a
         const store = await legacy([original], { __workspaces: { target: { inbox_access: 'none' } } });
         const [upgraded] = await store.readAgents();
         expect(upgraded!.accessScope).toBe('none');
-        expect(reachable(sender, upgraded!, closedWorkspace)).toBe(false);
+        expect(reachable(sender, upgraded!)).toBe(false);
         expect(JSON.parse(await readFile(store.agentsFile, 'utf8'))[0].accessScope).toBe('none');
         expect(JSON.parse(await readFile(marker(), 'utf8'))).toMatchObject({ version: 1 });
 
@@ -44,7 +43,7 @@ describe('the one-time upgrade from workspace and agent access to agent access a
         await SettingsStore.open(home);
         const [reopened] = await new Store(home).readAgents();
         expect(reopened!.accessScope).toBe('all');
-        expect(reachable(sender, reopened!, closedWorkspace)).toBe(true);
+        expect(reachable(sender, reopened!)).toBe(true);
     });
 
     it.each([
