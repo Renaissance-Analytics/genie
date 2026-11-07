@@ -409,6 +409,12 @@ export class KnowledgeStore {
         };
     }
 
+    /** RED STUB: what the feature snapshot made of the full list. */
+    summaries(input: ListInput): { hits: Hit[]; nextCursor: string | null } {
+        const r = this.list(input);
+        return { hits: r.nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class })), nextCursor: r.nextCursor };
+    }
+
     /** Offset paging behind an opaque cursor; `null` means that was the last page. */
     #page<R>(rows: readonly R[], limit: number | undefined, cursor: string | undefined): { items: R[]; nextCursor: string | null } {
         const size = Math.max(1, Math.min(limit ?? DEFAULT_LIMIT, 200));

@@ -125,3 +125,18 @@ export function pruneChatDrafts(drafts: ChatDrafts, agentIds: Iterable<string>):
     if (ids.every((id) => keep.has(id))) return drafts;
     return Object.fromEntries(ids.filter((id) => keep.has(id)).map((id) => [id, drafts[id]!]));
 }
+
+export interface RosterPruner {
+    /** The first prune, once the roster is loaded. */
+    start(): Promise<void>;
+    /** A registry snapshot arrived. */
+    changed(): void;
+}
+
+/** Prunes the drafts on the registry's snapshots. RED STUB: today's behaviour, a prune on every snapshot. */
+export function rosterPruner(deps: { ids: () => readonly string[]; prune: (ids: readonly string[]) => Promise<void>; failed: (error: unknown) => void }): RosterPruner {
+    return {
+        start: () => deps.prune(deps.ids()).catch(deps.failed),
+        changed: () => { void deps.prune(deps.ids()).catch(deps.failed); },
+    };
+}
