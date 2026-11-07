@@ -76,13 +76,14 @@ describe('the chat never scrolls sideways', () => {
         const log = mount(() => {});
         const kinds = [...log.querySelectorAll('[data-chat-message]')].map((e) => e.getAttribute('data-who'));
         expect(kinds).toEqual(['you', 'agent', 'mail', 'mail', 'system', 'stopped', 'thinking']);
-        expect(log.querySelector('[data-chat-message="mail"]')!.textContent).toContain(LONG);
+        // Mail deliberately caps its preview at160 characters; the refusal below retains the whole long token.
+        expect(log.querySelector('[data-mail-preview="mail"]')!.textContent).toBe(`${LONG.slice(0, 159)}…`);
         expect(log.querySelector('[data-who="delivery"]')).toBeNull();
         expect(log.querySelector('[data-chat-error]')!.textContent).toContain(LONG);
     });
 
     for (const openable of [true, false]) {
-        it(`every one-line clip in a row is a block or a flex item, so it clips (the notice's entries ${openable ? 'as buttons' : 'as text'})`, () => {
+        it(`every one-line clip in a row is a block or a flex item, so it clips (mail links ${openable ? 'as buttons' : 'as text'})`, () => {
             const log = mount(openable ? () => {} : undefined);
             // Genie's own row markup: a reply's rendered Markdown is react-fancy's (its code blocks scroll in their own box).
             const clips = [...log.querySelectorAll('*')].filter((el) => !el.closest('[data-chat-prose]') && classes(el).some((c) => c === 'truncate' || c === 'whitespace-nowrap'));
