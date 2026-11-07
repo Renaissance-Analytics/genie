@@ -23,7 +23,7 @@ export function installFilesCounters(scope, now = () => performance.now()) {
         if (value.kind === 'call' && typeof value.method === 'string' && !pending.has(value.id)) pending.set(value.id, { method: value.method, start: now() });
         if (value.kind === 'result') {
             const call = pending.get(value.id);
-            if (call) { calls.push({ method: call.method, ms: now() - call.start }); pending.delete(value.id); }
+            if (typeof call === 'function') { calls.push({ method: call.method, ms: now() - call.start }); pending.delete(value.id); }
         }
     };
     const paths = ['atob', 'btoa', 'JSON.parse', 'JSON.stringify', 'TextEncoder.prototype.encode', 'TextDecoder.prototype.decode', 'crypto.subtle.digest', 'Uint8Array.fromBase64', 'Uint8Array.prototype.toBase64', 'Buffer.from', 'Buffer.prototype.toString'];

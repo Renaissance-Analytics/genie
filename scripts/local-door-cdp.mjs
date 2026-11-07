@@ -68,7 +68,7 @@ class Cdp {
         const c = new Cdp(); c.socket = new WebSocket(url);
         c.socket.addEventListener('message', (event) => {
             const frame = JSON.parse(event.data); const done = c.pending.get(frame.id);
-            if (done) { c.pending.delete(frame.id); done(frame); }
+            if (typeof done === 'function') { c.pending.delete(frame.id); done(frame); }
         });
         c.socket.addEventListener('close', () => { for (const done of c.pending.values()) done({ error: { message: 'CDP closed' } }); c.pending.clear(); });
         await within(10_000, 'CDP connect', new Promise((resolve, reject) => {

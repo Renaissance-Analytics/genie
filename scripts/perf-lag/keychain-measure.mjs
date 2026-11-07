@@ -23,6 +23,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { secretNote } from '../secret-note.mjs';
 
 const SERVICE = 'GenieKeychainMeasure';
 const PINNED_VALUE = 'survives-a-reboot';
@@ -62,11 +63,11 @@ switch (phase) {
         const set = await attempt(() => round.setPassword('round'));
         check('round-trip-set', !set.error, set.error ?? '');
         const got = await attempt(() => round.getPassword());
-        check('round-trip-read-back', got.value === 'round', got.error ?? String(got.value));
+        check('round-trip-read-back', got.value === 'round', got.error ?? secretNote(got.value));
         const del = await attempt(() => round.deletePassword());
         check('round-trip-delete', !del.error, del.error ?? '');
         const gone = await attempt(() => round.getPassword());
-        check('missing-reads-as-null-not-an-error', !gone.error && (gone.value === null || gone.value === undefined), gone.error ?? String(gone.value));
+        check('missing-reads-as-null-not-an-error', !gone.error && (gone.value === null || gone.value === undefined), gone.error ?? secretNote(gone.value));
         // How large an entry can be (Windows Credential Manager has a limit; an ed25519 PEM is ~120 bytes).
         for (const size of [128, 512, 1280, 2048, 2560, 4096]) {
             const e = entry('size', true);
@@ -92,7 +93,7 @@ switch (phase) {
     }
     case 'persist-read': {
         const r = await attempt(() => entry('persist', true).getPassword());
-        check('PERSISTED-THROUGH-THE-REBOOT', r.value === PINNED_VALUE, r.error ?? String(r.value));
+        check('PERSISTED-THROUGH-THE-REBOOT', r.value === PINNED_VALUE, r.error ?? secretNote(r.value));
         await attempt(() => entry('persist', true).deletePassword());
         break;
     }
@@ -100,35 +101,35 @@ switch (phase) {
         const refused = await attempt(() => entry('pinned-nobus', true).setPassword('never'));
         check('pinned-with-no-secret-service-FAILS-clearly', Boolean(refused.error), refused.error ?? 'it WROTE: the pin did not hold');
         const read = await attempt(() => entry('pinned-nobus', true).getPassword());
-        check('pinned-read-with-no-secret-service-FAILS-not-missing', Boolean(read.error), read.error ?? `answered ${String(read.value)}`);
+        check('pinned-read-with-no-secret-service-FAILS-not-missing', Boolean(read.error), read.error ?? `answered ${secretNote(read.value)}`);
         // THE TRAP. Expected to succeed: this is the silent fallback the pin exists to stop.
         const trap = await attempt(() => entry('trap', false).setPassword(TRAP_VALUE));
         const back = trap.error ? trap : await attempt(() => entry('trap', false).getPassword());
-        check('control-unpinned-with-no-secret-service-falls-back-SILENTLY', !trap.error && back.value === TRAP_VALUE, trap.error ?? back.error ?? String(back.value));
+        check('control-unpinned-with-no-secret-service-falls-back-SILENTLY', !trap.error && back.value === TRAP_VALUE, trap.error ?? back.error ?? secretNote(back.value));
         break;
     }
     case 'recheck': {
         const pinned = await attempt(() => entry('pinned', true).getPassword());
-        check('pinned-there-in-a-new-session', pinned.value === PINNED_VALUE, pinned.error ?? String(pinned.value));
+        check('pinned-there-in-a-new-session', pinned.value === PINNED_VALUE, pinned.error ?? secretNote(pinned.value));
         withNoBus('nobus-recheck');
         break;
     }
     case 'nobus-recheck': {
         const trap = await attempt(() => entry('trap', false).getPassword());
-        check('control-unpinned-still-there-before-the-reboot', trap.value === TRAP_VALUE, trap.error ?? String(trap.value));
+        check('control-unpinned-still-there-before-the-reboot', trap.value === TRAP_VALUE, trap.error ?? secretNote(trap.value));
         break;
     }
     case 'after': {
         console.log(`keychain-measure after: uptime ${execFileSync('uptime', ['-p'], { encoding: 'utf8', timeout: 5_000 }).trim()}`);
         const pinned = await attempt(() => entry('pinned', true).getPassword());
-        check('PINNED-SURVIVED-THE-REBOOT', pinned.value === PINNED_VALUE, pinned.error ?? String(pinned.value));
+        check('PINNED-SURVIVED-THE-REBOOT', pinned.value === PINNED_VALUE, pinned.error ?? secretNote(pinned.value));
         withNoBus('nobus-after');
         await attempt(() => entry('pinned', true).deletePassword());
         break;
     }
     case 'nobus-after': {
         const trap = await attempt(() => entry('trap', false).getPassword());
-        check('control-UNPINNED-DID-NOT-SURVIVE-THE-REBOOT', !trap.error && (trap.value === null || trap.value === undefined), trap.error ?? `still reads ${String(trap.value)}`);
+        check('control-UNPINNED-DID-NOT-SURVIVE-THE-REBOOT', !trap.error && (trap.value === null || trap.value === undefined), trap.error ?? `still reads ${secretNote(trap.value)}`);
         break;
     }
     default:
