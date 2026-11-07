@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chatMessages } from '../src/core/chat-view.js';
+import { chatCommsOf, chatThreadFrom } from '../src/core/chat-view.js';
 import { agentRecord, mintAgentId, type AgentId } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
@@ -113,12 +113,14 @@ describe('mail wakes an agent in genie-host', () => {
             const deliveredMail = () => r.host.rowsFor(r.atlas.id).flatMap(({ event }) =>
                 event.kind === 'message' && event.speaker === 'peer' && event.peerName === 'genie' ? event.mail ?? [] : []);
             expect(deliveredMail()).toEqual([expect.objectContaining({ id: message.id, from: r.other.id, fromName: 'other', text })]);
-            const deliveredCards = () => chatMessages({ agent: { ...r.atlas, fidelity: 'declared' },
-                session: r.host.probe(r.atlas.id), rows: r.host.rowsFor(r.atlas.id) })
-                .filter((card) => card.mail?.some((m) => m.id === message.id));
-            expect(deliveredCards().map(({ delivered, mail }) => ({ delivered, mail }))).toEqual([
-                { delivered: true, mail: [{ id: message.id, from: 'other', subject: text }] },
+            const thread = () => chatThreadFrom({ agent: { ...r.atlas, fidelity: 'declared' },
+                session: r.host.probe(r.atlas.id), rows: r.host.rowsFor(r.atlas.id),
+                comms: chatCommsOf(r.inbox.involving(r.atlas.id)) }, r.atlas.id, [], Date.now);
+            const deliveredCards = () => thread().messages.filter(card => card.mailId === message.id);
+            expect(deliveredCards().map(({ mailId, text, delivered }) => ({ mailId, text, delivered }))).toEqual([
+                { mailId: message.id, text, delivered: true },
             ]);
+            expect(thread().messages.some(card => card.who === 'delivery')).toBe(false);
 
             await vi.advanceTimersByTimeAsync(10_000);
             expect(handOff).toHaveBeenCalledTimes(2);
