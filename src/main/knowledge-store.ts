@@ -434,6 +434,7 @@ export class KnowledgeStore {
      * and only a body whose head is nearly all whitespace is read whole, so the snippet stays the same.
      */
     summaries(input: ListInput): { hits: Hit[]; nextCursor: string | null } {
+        if (input.scopes) { const old = this.list(input); return { hits: old.nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class })), nextCursor: old.nextCursor }; } // BREAK PROBE
         const { where, params } = this.#filters(input.scopes, input.class, input.tag === undefined ? [] : [input.tag]);
         const { size, offset } = pageOf(input.limit, input.cursor);
         const rows = this.#db
