@@ -25,7 +25,7 @@ import type { CreateSiteInput, PhpCgiResolution, SiteManager } from './site-mana
 /** The site manager as a window uses it. */
 export type SitesApi = Pick<SiteManager, 'list' | 'get' | 'spec' | 'phpCgiFor' | 'restart' | 'serviceEnvChanged' | 'onChange'>;
 /** The engine registry as a window uses it. */
-export type EnginesApi = Pick<ServiceRegistry, 'list' | 'envFor' | 'choices' | 'add' | 'setActive' | 'use' | 'detach' | 'releaseSlice' | 'logs' | 'onChange' | 'onStarted'>;
+export type EnginesApi = Pick<ServiceRegistry, 'list' | 'envFor' | 'choices' | 'add' | 'setActive' | 'use' | 'detach' | 'releaseSlice' | 'createDatabaseRefusal' | 'createDatabase' | 'logs' | 'onChange' | 'onStarted'>;
 /** The workspaces' declared sites as a window uses them. */
 export type EnvelopeSitesApi = Pick<EnvelopeSites, 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart' | 'workspaceName' | 'workspacePath' | 'declaredIn'>;
 
@@ -307,6 +307,8 @@ export class HostingService {
             case 'engines.use': return s.engines.use(str(a[0]), str(a[1]));
             case 'engines.detach': return s.engines.detach(str(a[0]), str(a[1]));
             case 'engines.releaseSlice': return s.engines.releaseSlice(str(a[0]), str(a[1]));
+            case 'engines.createDatabaseRefusal': return s.engines.createDatabaseRefusal(str(a[0]), str(a[1]), str(a[2]));
+            case 'engines.createDatabase': return s.engines.createDatabase(str(a[0]), str(a[1]), str(a[2]));
             case 'engines.logs': return s.engines.logs(str(a[0]), typeof a[1] === 'number' ? a[1] : undefined);
             case 'envelopeSites.create': return s.envelopeSites.create(a[0] as CreateSiteInput);
             case 'envelopeSites.update': return s.envelopeSites.update(str(a[0]), a[1] as CreateSiteInput, (a[2] ?? {}) as SiteActor);
@@ -494,6 +496,8 @@ export class HostingReplica implements HostingApi {
         use: (workspaceId, id) => this.#ask('engines.use', workspaceId, id),
         detach: (workspaceId, id) => this.#ask('engines.detach', workspaceId, id),
         releaseSlice: (id, workspaceId) => this.#ask('engines.releaseSlice', id, workspaceId),
+        createDatabaseRefusal: (id, workspaceId, database) => this.#ask('engines.createDatabaseRefusal', id, workspaceId, database),
+        createDatabase: (id, workspaceId, database) => this.#ask('engines.createDatabase', id, workspaceId, database),
         logs: (id, tail) => this.#ask('engines.logs', id, tail ?? null),
         onChange: (listener: () => void) => { this.#engineListeners.add(listener); return () => { this.#engineListeners.delete(listener); }; },
         onStarted: (listener: (id: string) => void) => { this.#startedListeners.add(listener); return () => { this.#startedListeners.delete(listener); }; },
