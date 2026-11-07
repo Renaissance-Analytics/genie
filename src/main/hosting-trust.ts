@@ -66,6 +66,8 @@ export interface OwnTrustInput {
 
 export interface OwnTrust {
     readonly api: TrustApi;
+    /** Metadata-only teardown before a workspace sync; it starts no refresh or new folder read. */
+    suspendHidden(): void;
     /** Every workspace read again (after a workspace change), and the watchers follow. */
     workspacesChanged(): void;
     /** No pass starts from here; the one in flight is waited for, and this process's git policy goes with it. */
@@ -141,6 +143,7 @@ export function ownTrust(input: OwnTrustInput): OwnTrust {
     };
     return {
         api,
+        suspendHidden: () => watch.suspendHidden(),
         workspacesChanged: () => { refreshAll(); watchPass(); },
         close: async () => {
             setGitReadPolicy(null);

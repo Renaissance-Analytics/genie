@@ -67,10 +67,15 @@ export class TrustWatch {
     /** Every workspace once. The first takes the readings; after that, a change reads the verdict again. */
     async pass(): Promise<void> {
         if (this.#stopped) return;
+        this.suspendHidden();
         const now = this.#ports.workspaces().filter((w) => !w.asleep);
-        const ids = new Set(now.map((w) => w.id));
-        for (const id of [...this.#watched.keys()]) if (!ids.has(id)) this.#forget(id);
         for (const workspace of now) await this.#check(workspace.id, workspace.path);
+    }
+
+    /** Close hidden folders synchronously, with metadata alone: no reads while other consumers finish syncing. */
+    suspendHidden(): void {
+        const ids = new Set(this.#ports.workspaces().filter((w) => !w.asleep).map((w) => w.id));
+        for (const id of [...this.#watched.keys()]) if (!ids.has(id)) this.#forget(id);
     }
 
     stop(): void {

@@ -716,8 +716,8 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     sites.onChange(syncEnvFiles);
     const stopWatchingWorkspaces = input.onWorkspacesChange?.(() => {
         // Release sleeping folders' watches synchronously, before any remaining sites finish their sync.
-        trust.workspacesChanged();
-        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`));
+        trust.suspendHidden();
+        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`)).finally(() => trust.workspacesChanged());
     }) ?? (() => {});
     const quiesce = () => {
         stopWatchingWorkspaces();
