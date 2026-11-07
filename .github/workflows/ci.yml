@@ -246,7 +246,7 @@ jobs:
           name: unit-windows-slow-tests
           path: ${{ runner.temp }}/slow-tests.tsv
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
 
 
   # THE ZIP64 CHECK (`npm run verify:zip64`, test/zip64-acceptance/): a tree past 65,535 entries exported and read back. Not in
