@@ -18,6 +18,7 @@ import type { AgentActionKind } from '../core/agent-actions.js';
 import type { Comms } from '../core/comms.js';
 import {
     ENGINE_PROTOCOL,
+    WINDOW_LINK_LABEL,
     parseEngineFrame,
     type EngineAgentUpdate,
     type EngineAgentView,
@@ -92,6 +93,8 @@ export interface EngineClientOptions {
     readonly onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
     readonly mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
     readonly prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
+    /** What this link says it is in its hello: a window (the default), or the Genie browser's process (BROWSER_LINK_LABEL). */
+    readonly label?: string;
     /** A window tool's call, forwarded by the host's MCP server (P3.1): run it, answer its result. */
     readonly onToolCall?: (call: ForwardedToolCall) => Promise<McpToolResult>;
     /** openFileForUser, made while no window was there (P3.1). */
@@ -262,7 +265,7 @@ export class SessionEngineClient {
                 this.#deviceLink?.lost('the host closed the connection');
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
-            transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: 'genie window' }));
+            transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: this.#options.label ?? WINDOW_LINK_LABEL }));
         });
     }
 
