@@ -183,6 +183,12 @@ jobs:
         # Upload the exact verified bytes; invoking builder again would rebuild the installer.
         run: |
           tag="${GITHUB_REF_NAME#v}"
+          # Recheck after the environment approval/build: do not upload if someone published
+          # the draft while Windows was signing. A lookup failure also refuses the upload.
+          if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != true ]; then
+            echo "::error::Windows upload requires an existing draft release"
+            exit 1
+          fi
           echo "uploading verified Windows v$tag into its draft"
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             "release/Genie-$tag-setup.exe" "release/Genie-$tag-setup.exe.blockmap" release/latest.yml --clobber

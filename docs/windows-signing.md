@@ -79,7 +79,9 @@ PowerShell positive/negative fixture cases on Windows without signing permission
 
 After the PR's ordinary CI is green, the coordinator dispatches `sign-test.yml`
 at the exact reviewed `next/release-signing` head and the owner approves its
-environment. The workflow uploads the signed installer and signature evidence
+environment. GitHub requires a new manual workflow to [exist on the default branch](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
+before its first dispatch; the coordinator handles that bootstrap separately.
+The workflow uploads the signed installer and signature evidence
 only after verification. Check every `VALID` line, including the launcher,
 uninstaller, installer and DLLs. No release is created by this workflow.
 
