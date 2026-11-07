@@ -37,3 +37,10 @@ jobs:
       - name: Genie's terminal (Linux)
         if: runner.os == 'Linux'
         run: timeout 1200 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/typeahead/typeahead-genie-cdp.mjs 2>&1 | grep -E '^TYPEAHEAD' || true
+      - name: the UI path (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node scripts/typeahead/typeahead-ui-cdp.mjs *>&1 | Select-String -Pattern '^TYPEAHEAD'
+      - name: the UI path (Linux)
+        if: runner.os == 'Linux'
+        run: timeout 1200 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/typeahead/typeahead-ui-cdp.mjs 2>&1 | grep -E '^TYPEAHEAD' || true
