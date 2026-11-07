@@ -85,6 +85,28 @@ describe('Windows release signing', () => {
         expect(read('.github/workflows/sign-test.yml')).not.toMatch(/secrets\.|--publish always|gh release/);
     });
 
+    it('the actual Windows upload script refuses a public or unreadable release at upload time', () => {
+        const steps = yaml('.github/workflows/release.yml').jobs['publish-windows'].steps;
+        const script = steps.find((step: any) => /gh release upload/.test(step.run ?? '')).run;
+        // Replace only gh with a local shell function: exercise the actual workflow script,
+        // with no token/network/upload. A release may change while the signing job runs.
+        const stub = `gh() { if [ "$2" = view ]; then
+            if [ "$RELEASE_STATE" = error ]; then return 1; fi
+            printf '%s\\n' "$RELEASE_STATE"
+        elif [ "$2" = upload ]; then echo UPLOAD_CALLED; else return 1; fi; };\n`;
+        for (const state of ['true', 'false', 'error']) {
+            const run = spawnSync('bash', ['-e', '-c', stub + script], { encoding: 'utf8', env: { ...process.env,
+                RELEASE_STATE: state, GITHUB_REF_NAME: 'v0.0.0', GITHUB_REPOSITORY: 'fixture/genie' } });
+            if (state === 'true') {
+                expect(run.status, run.stderr).toBe(0);
+                expect(run.stdout).toContain('UPLOAD_CALLED');
+            } else {
+                expect(run.status, `release state ${state} allowed upload: ${run.stdout}`).not.toBe(0);
+                expect(run.stdout).not.toContain('UPLOAD_CALLED');
+            }
+        }
+    });
+
     it('requires the app, launcher, installer and retained uninstaller and scans every exe/dll', () => {
         const script = read('scripts/verify-windows-signatures.ps1');
         for (const name of ['Get-AuthenticodeSignature', 'Genie.exe', 'resources/bin/genie-launch.exe',
