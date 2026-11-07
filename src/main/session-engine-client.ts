@@ -34,7 +34,7 @@ import type { Attachment } from '../core/prompt-content.js';
 import type { GateView } from '../core/rate-limit-gate.js';
 import type { ClientTransport } from '../core/remote-protocol.js';
 import type { LiveSession } from '../core/roster.js';
-import type { CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
+import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
@@ -998,8 +998,8 @@ export class SessionEngineClient {
         return this.#value('engine.promptWith', [agentId, text, wire, by], { ok: false, reason: NOT_CONNECTED });
     }
 
-    cancel(agentId: AgentId, by: string | null = 'you'): Promise<CancelOutcome> {
-        return this.#value<CancelOutcome>('engine.cancel', [agentId, by], { ok: false, reason: 'refused' });
+    cancel(agentId: AgentId, by: string | null = 'you', intent: CancelIntent = 'stop'): Promise<CancelOutcome> {
+        return this.#value<CancelOutcome>('engine.cancel', [agentId, by, intent], { ok: false, reason: 'refused' });
     }
 
     deliver(agentId: AgentId, text: string, by: string | null = 'you'): Promise<boolean> {

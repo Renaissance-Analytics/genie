@@ -207,6 +207,18 @@ export type TurnState = 'idle' | 'working' | 'failed' | 'stopped' | 'unknown';
 export type CancelOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: 'not-running' | 'no-turn' | 'unsupported' | 'refused' };
 
 /**
+ * WHY A TURN IS CANCELLED (Tynn #672 part 3). `stop`: the person's "Stop this turn"; the session then waits for them
+ * (genie#1565, `#stoppedByYou`). `interrupt`: "Interrupt and send", which cancels the turn so the person's message, already
+ * handed over, runs next. That message is the next work, so nothing latches.
+ */
+export type CancelIntent = 'stop' | 'interrupt';
+
+/** An intent from outside (IPC, the remote protocol, the engine): only `interrupt` is an interrupt; anything else is a Stop. */
+export function cancelIntent(raw: unknown): CancelIntent {
+    return raw === 'interrupt' ? 'interrupt' : 'stop';
+}
+
+/**
  * How a stop ended (`AgentSession.stop`). `verified` only when a fresh reading shows every process the run was seen to
  * own is gone. Unverified says why, and names what is still running (`survivors`, empty when it could not look).
  */
@@ -436,6 +448,8 @@ export class AgentSession {
      * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
      */
     #stopAskedBy: string | null = null;
+    /** Why the pending cancel was asked (`CancelIntent`): only a Stop latches `#stoppedByYou` (Tynn #672 part 3). */
+    #stopIntent: CancelIntent = 'stop';
     /**
      * STOP MEANS STOP UNTIL THE PERSON ACTS (genie#1565): the person stopped the last turn they saw running, and has not
      * sent anything since. While set no inbox notice is handed over (`deliverable`); at the stop itself only what the person
@@ -1248,9 +1262,13 @@ export class AgentSession {
                     // reply simply ending mid-way. Who stopped it is whoever asked (`cancel`), and nobody when no one
                     // here did.
                     const stopper = this.#stopAskedBy;
+                    const intent = this.#stopIntent;
                     this.#stopAskedBy = null;
-                    // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once.
-                    const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you';
+                    this.#stopIntent = 'stop';
+                    // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once. Only the
+                    // person's STOP latches: an interrupt-and-send cancels the turn so their message runs next, and that
+                    // message is the next work, so Genie's notices are not held for them to type again (Tynn #672 part 3).
+                    const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you' && intent === 'stop';
                     if (stoppedByYou) this.#stoppedByYou = true;
                     if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
                     // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
@@ -1814,7 +1832,8 @@ export class AgentSession {
         return driver.setModel(modelId);
     }
 
-    cancel(by: string | null = 'you'): CancelOutcome {
+    /** `intent`: why (`CancelIntent`); only a Stop latches the session until the person acts (Tynn #672 part 3). */
+    cancel(by: string | null = 'you', intent: CancelIntent = 'stop'): CancelOutcome {
         const driver = this.#driver;
         if (!driver || this.#exited || !this.#alive) return { ok: false, reason: 'not-running' };
         if (!this.#inTurn) return { ok: false, reason: 'no-turn' };
@@ -1825,8 +1844,10 @@ export class AgentSession {
         }
 
         this.#stopAskedBy = by;
+        this.#stopIntent = intent;
         const refused = (cause: unknown): void => {
             this.#stopAskedBy = null;
+            this.#stopIntent = 'stop';
             const why = cause instanceof Error ? cause.message : String(cause);
             void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn could not be stopped: ${why}. It is still running; Stop agent ends the session.` });
             this.#changed();

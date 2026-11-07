@@ -282,13 +282,14 @@ describe('the wiring — every turn Stop reaches cancel; "Stop agent" still stop
     it('main handles genie:cancel-turn with host.cancel (never host.stop), and the remote host API maps host.cancel', () => {
         const main = source('../src/main/main.ts');
         const handler = main.match(/ipcMain\.handle\('genie:cancel-turn'[^]*?\n {4}\}\);/)?.[0] ?? '';
-        expect(handler).toContain('host.cancel(record.id)');
+        // With its intent since Tynn #672 part 3: a Stop latches, an interrupt-and-send does not (test/interrupt-does-not-latch-stop.test.ts).
+        expect(handler).toContain("host.cancel(record.id, 'you', cancelIntent(intent))");
         expect(handler).not.toContain('.stop(');
-        expect(main.match(/cancel: \(id\) => host!\.cancel\(id\)/g) ?? []).toHaveLength(1);
+        expect(main.match(/cancel: \(id, intent\) => host!\.cancel\(id, 'you', intent\)/g) ?? []).toHaveLength(1);
         // Control: the session-ending handler is still there, still stopping.
         expect(main).toMatch(/ipcMain\.handle\('genie:stop-agent'[^]*?host\.stop\(record\.id\)/);
-        expect(source('../src/main/preload.ts')).toMatch(/cancelTurn: \(agentId\) => ipcRenderer\.invoke\('genie:cancel-turn', agentId\)/);
-        expect(source('../src/renderer/remote-bridge.ts')).toMatch(/cancelTurn: \(agentId\) => answer<[^>]*>\('cancelTurn', agentId\)/);
+        expect(source('../src/main/preload.ts')).toMatch(/cancelTurn: \(agentId, intent\) => ipcRenderer\.invoke\('genie:cancel-turn', agentId, intent\)/);
+        expect(source('../src/renderer/remote-bridge.ts')).toMatch(/cancelTurn: \(agentId, intent\) => answer<[^>]*>\('cancelTurn', agentId, intent\)/);
     });
 
     it('the Agent view header’s turn Stop calls onCancelTurn; the menu’s stop-agent calls onStop; the chat’s turn Stop is wired to onCancelTurn', () => {
@@ -302,12 +303,12 @@ describe('the wiring — every turn Stop reaches cancel; "Stop agent" still stop
 
         const shell = source('../src/renderer/Shell.tsx');
         const flyout = shell.match(/<ChatFlyout[^]*?\/>/)?.[0] ?? '';
-        expect(flyout).toMatch(/onStopTurn=\{[^\n]*onCancelTurn\?\.\(chatThread\.agentId\)[^\n]*\}/);
+        expect(flyout).toMatch(/onStopTurn=\{[^\n]*onCancelTurn\?\.\(chatThread\.agentId, 'stop'\)[^\n]*\}/);
         expect(flyout).not.toContain('onStopAgent');
         expect(shell).toMatch(/onCancelTurn=\{onCancelTurn\}/);
 
         const app = source('../src/renderer/App.tsx');
-        expect(app).toMatch(/onCancelTurn=\{\(agentId\) => \{ void resolvedBridge\?\.cancelTurn\(agentId\); \}\}/);
+        expect(app).toMatch(/onCancelTurn=\{\(agentId, intent\) => \{ void resolvedBridge\?\.cancelTurn\(agentId, intent\); \}\}/);
         // Control: Stop agent still reaches the bridge's stop.
         expect(app).toMatch(/onStopAgent=\{\(agentId\) => \{ resolvedBridge\?\.stopAgent\(agentId\); \}\}/);
     });

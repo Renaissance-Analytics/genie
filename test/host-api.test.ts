@@ -29,7 +29,7 @@ function fakes() {
         host: {
             start: (r, cwd) => { calls.push(`start:${r.id}:${cwd}`); return { ok: true }; },
             stop: (id) => { calls.push(`stop:${id}`); return true; },
-            cancel: (id) => { calls.push(`cancel:${id}`); return { ok: true }; },
+            cancel: (id, intent) => { calls.push(`cancel:${id}:${intent ?? '-'}`); return { ok: true }; },
             resumeLimit: (provider) => { calls.push(`resume-limit:${provider}`); },
             prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
             answerApproval: (id, opt, note) => { calls.push(`approve:${id}:${opt}${note ? `:${note}` : ''}`); return { ok: true as const }; },
@@ -125,11 +125,21 @@ describe('invoke', () => {
         const f = fakes();
         const api = buildHostApi(f.deps);
         expect(await api.invoke('cancelTurn', ['agent_a'])).toEqual({ ok: true });
-        expect(f.calls).toEqual(['cancel:agent_a']);
+        // No intent is a Stop (Tynn #672 part 3).
+        expect(f.calls).toEqual(['cancel:agent_a:stop']);
         expect(await api.invoke('stopAgent', ['agent_a'])).toEqual({ ok: true });
-        expect(f.calls).toEqual(['cancel:agent_a', 'stop:agent_a']);
+        expect(f.calls).toEqual(['cancel:agent_a:stop', 'stop:agent_a']);
         expect(await api.invoke('cancelTurn', ['nope'])).toEqual({ ok: false, reason: 'unknown agent' });
         expect(f.calls).toHaveLength(2);
+    });
+
+    it('cancelTurn carries a remote window\'s intent: interrupt as an interrupt, anything else as a Stop (Tynn #672 part 3)', async () => {
+        const f = fakes();
+        const api = buildHostApi(f.deps);
+        expect(await api.invoke('cancelTurn', ['agent_a', 'interrupt'])).toEqual({ ok: true });
+        expect(await api.invoke('cancelTurn', ['agent_a', 'stop'])).toEqual({ ok: true });
+        expect(await api.invoke('cancelTurn', ['agent_a', 'anything'])).toEqual({ ok: true });
+        expect(f.calls).toEqual(['cancel:agent_a:interrupt', 'cancel:agent_a:stop', 'cancel:agent_a:stop']);
     });
 
     it('resumeLimit is `Resume now` (Tynn #794): it opens the AGENT’S PROVIDER login, once; an unknown agent is refused', async () => {

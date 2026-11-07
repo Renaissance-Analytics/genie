@@ -1,6 +1,7 @@
 import { limitOf } from '../core/shell-limits.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
+import { cancelIntent } from '../core/session.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
 import { readTynnPage } from './tynn-page-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
@@ -2000,10 +2001,11 @@ async function boot(): Promise<void> {
         return { ok: true };
     });
 
-    ipcMain.handle('genie:cancel-turn', (_event, raw: unknown) => {
+    ipcMain.handle('genie:cancel-turn', (_event, raw: unknown, intent: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host) return { ok: false, reason: 'not-running' };
-        return host.cancel(record.id);
+        // Stop this turn latches the session until the person acts; Interrupt and send does not (Tynn #672 part 3).
+        return host.cancel(record.id, 'you', cancelIntent(intent));
     });
 
     ipcMain.handle('genie:prompt', async (_event, raw: unknown, text: unknown, files: unknown) => {
@@ -2911,7 +2913,7 @@ async function boot(): Promise<void> {
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),
-                cancel: (id) => host!.cancel(id),
+                cancel: (id, intent) => host!.cancel(id, 'you', intent),
                 resumeLimit: (provider) => host!.resumeLimit(provider),
                 prompt: (id, text, by) => host!.prompt(id, text, by),
                 // A phone's photo in the chat (genie#1346): the composer's own attach path, the same as `genie:prompt`.

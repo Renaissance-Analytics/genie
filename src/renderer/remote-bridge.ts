@@ -328,7 +328,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         },
         openAgent: (agentId) => fire('openAgent', agentId),
         stopAgent: (agentId) => fire('stopAgent', agentId),
-        cancelTurn: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('cancelTurn', agentId),
+        cancelTurn: (agentId, intent) => answer<{ ok: true } | { ok: false; reason: string }>('cancelTurn', agentId, intent),
         resumeLimit: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('resumeLimit', agentId),
         providerLogin: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('providerLogin', agentId),
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a

@@ -23,6 +23,7 @@ import {
     type WireAttachment,
 } from '../core/engine-protocol.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
+import { cancelIntent } from '../core/session.js';
 import type { ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
@@ -542,7 +543,8 @@ export class SessionEngineServer {
                 return host.promptWith(id(), str(1), attachments, by(3));
             }
             case 'engine.cancel':
-                return host.cancel(id(), by(1));
+                // Only `interrupt` is an interrupt; anything else, or nothing, is a Stop (Tynn #672 part 3).
+                return host.cancel(id(), by(1), cancelIntent(args[2]));
             case 'engine.deliver':
                 return host.deliver(id(), str(1), by(2));
             case 'engine.answerApproval':
