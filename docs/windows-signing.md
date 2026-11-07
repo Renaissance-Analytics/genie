@@ -55,9 +55,29 @@ the default chain in sign-test before choosing an environment override.
 In that same pinned package, `out/winPackager.js`'s
 `createTransformerForExtraFiles` signs `.exe` extra resources while copying them.
 It applies to `resources/bin/genie-launch.exe` from #1642 without a custom signer.
-The `signExts: ['.dll']` setting adds DLLs to that copy transformation and to the
-root/app.asar.unpacked scans. This covers Genie.exe, Electron DLLs, Caddy, the
-launcher, and unpacked native helpers. NSIS separately signs its installer,
+**Only what ships unsigned is signed.** signtool's sign replaces a file's existing
+signature, and electron-builder signs every file its rule selects without checking
+for one. Measured on the unsigned package (`scripts/win-sign-plan.mjs`, run 42377299413;
+`test/fixtures/win-packed-signatures.json`), `signExts: ['.dll']` re-signed 11
+Microsoft-signed files: `d3dcompiler_47.dll`, and `conpty.dll` and `OpenConsole.exe` in
+node-pty's conpty folders.
+
+`signExts` therefore names the unsigned DLLs (dxcompiler, electron_wer, ffmpeg,
+vk_swiftshader, vulkan-1, winpty) and excludes `!OpenConsole.exe`; every other `.exe`
+is signed by electron-builder's default. Microsoft's files keep Microsoft's
+signature. Covered:
+- Genie.exe, the launcher, Caddy, fancy-pty's helper, winpty-agent and the unsigned
+  Electron DLLs are signed.
+- Microsoft's files keep their own signature.
+
+Checked in three places:
+- CI's `it packages (windows)` runs `win-sign-plan.mjs --check` on its unsigned
+  package. It fails on any file the build would sign that another publisher signed,
+  and on any unsigned `.exe`/`.dll` it would leave unsigned, such as a new DLL not
+  added to `signExts`.
+- The release and sign-test write the plan before `verify-windows-signatures.ps1`.
+- The verifier then requires each file the build did not sign to keep its own
+  publisher's valid signature. NSIS separately signs its installer,
 uninstaller and staged elevate.exe (`out/targets/nsis/NsisTarget.js` and
 `out/targets/nsis/nsisUtil.js`). The launcher must be integrated before sign-test;
 the verifier deliberately fails if it is missing.

@@ -135,9 +135,14 @@ protocols:
 
 win:
   icon: build/icon.ico
-  # Extra resources (including resources/bin/genie-launch.exe) use WinPackager's copy/sign
-  # transformer. signExts also covers DLLs at the root and in app.asar.unpacked.
-  signExts: ['.dll']
+  # WHAT IS SIGNED: what ships UNSIGNED, never a file another publisher already signed (signtool's sign
+  # REPLACES an existing signature; electron-builder 26.15.3 never looks for one). Measured
+  # (test/fixtures/win-packed-signatures.json, test/win-sign-plan.test.ts): every .exe is signed by
+  # default except OpenConsole.exe (Microsoft's, in node-pty's conpty folders), and of the DLLs only
+  # the ones that ship unsigned are named here. conpty.dll and d3dcompiler_47.dll (Microsoft's) are not
+  # signed again. Entries match by `endsWith`, so a name is a whole file name. A new packed DLL is
+  # unsigned until it is added here; CI's it packages (windows) and the release verifier say so.
+  signExts: ['!OpenConsole.exe', 'dxcompiler.dll', 'electron_wer.dll', 'ffmpeg.dll', 'vk_swiftshader.dll', 'vulkan-1.dll', 'winpty.dll']
   azureSignOptions:
     publisherName: Renaissance Analytics
     endpoint: https://eus.codesigning.azure.net
