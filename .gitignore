@@ -27,3 +27,6 @@ v1-installers/
 # A row's staged files for the WSL batch's patch script (`.patch/patch-<row>.mjs` copies them into place inside the
 # machine). Scratch: the ship step commits the placed files by path, never this directory.
 .patch/
+
+# genie-launch.exe, built from native/win-launcher by scripts/build-win-launcher.mjs (never checked in, #1628)
+build/win-launcher/

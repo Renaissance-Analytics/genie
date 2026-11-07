@@ -6,6 +6,7 @@ import { isLocalPathLike } from '../core/envelope-plan.js';
 import { findIn, systemProcessTree, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
 import { resolveProgram } from '../core/program-lookup.js';
 import { gitMayRun } from './git-read-policy.js';
+import { winLauncherPath } from './win-launcher.js';
 
 /**
  * HOW LONG A GIT READ MAY TAKE. Long enough that a slow real repository doesn't reach it: a status on a huge tree, with a scanner in the way, takes tens of seconds. A read past it is a failure the person sees, with a Retry, never an empty list that reads as "nothing changed".
@@ -114,7 +115,12 @@ export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: Pr
     const limit: GitLimit = {
         git: (args, options, callback) => {
             if (over) { callback(new GitDidNotAnswer(), '', ''); return null; }
-            const child = execFile(resolveProgram('git'), [...args], { windowsHide: true, ...options }, callback);
+            // On Windows inside a kill-on-close job (genie-launch.exe, #1639): what git or a hook starts — MSYS background
+            // children whose fork parent is gone included — is in the job, and ending the read ends the job.
+            const launcher = winLauncherPath();
+            const child = launcher !== null
+                ? execFile(launcher, ['job', resolveProgram('git'), ...args], { windowsHide: true, ...options }, callback)
+                : execFile(resolveProgram('git'), [...args], { windowsHide: true, ...options }, callback);
             children.push(child);
             return child;
         },
