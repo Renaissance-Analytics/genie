@@ -553,6 +553,12 @@ jobs:
         if: runner.os == 'Windows'
         run: node scripts/win-sign-plan.mjs release/win-unpacked electron-builder.yml --check
 
+      # THE INSTALL DIRECTORY HOLDS WHAT THE APP RUNS (scripts/packed-tree-check.mjs; test/packed-tree.test.ts; Tynn #437):
+      # no other platform's binaries, no build scripts or sources, and every file the app loads on Windows x64.
+      - name: the packaged tree holds only what the app runs
+        if: runner.os == 'Windows'
+        run: node scripts/packed-tree-check.mjs release/win-unpacked
+
       - name: prove the packaged Windows updater metadata and asset names
         if: runner.os == 'Windows'
         run: node scripts/verify-windows-update.cjs release test/fixtures/windows-update-beta59.json
