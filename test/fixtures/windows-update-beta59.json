@@ -1,0 +1,10 @@
+{
+  "tagName": "v2.0.0-beta.59",
+  "assets": [
+    { "name": "Genie-2.0.0-beta.59-setup.exe" },
+    { "name": "Genie-2.0.0-beta.59-setup.exe.blockmap" },
+    { "name": "Genie-2.0.0-beta.59.AppImage" },
+    { "name": "latest-linux.yml" },
+    { "name": "latest.yml" }
+  ]
+}

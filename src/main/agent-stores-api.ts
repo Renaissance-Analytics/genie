@@ -34,6 +34,7 @@ export interface KnowledgeApi {
     get(...a: Parameters<KnowledgeStore['get']>): MaybePromise<ReturnType<KnowledgeStore['get']>>;
     search(...a: Parameters<KnowledgeStore['search']>): MaybePromise<ReturnType<KnowledgeStore['search']>>;
     list(...a: Parameters<KnowledgeStore['list']>): MaybePromise<ReturnType<KnowledgeStore['list']>>;
+    summaries(...a: Parameters<KnowledgeStore['summaries']>): MaybePromise<ReturnType<KnowledgeStore['summaries']>>;
 }
 
 /** The stores themselves: what a window that opened them (the emergency path) holds, and what genie-host holds. */
