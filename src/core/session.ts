@@ -106,6 +106,26 @@ export interface SessionDriver {
      * read is reported on the session. Optional: Claude's driver has none (its limits come with its own events).
      */
     readRateLimits?(): Promise<void>;
+    /**
+     * STEER A RUNNING TURN — prism-acp 0.38.0's `CodexDriver.steer` (Tynn #440): input added to the turn in flight, so
+     * mail reaches a busy Codex agent at its next step, as it reaches Claude. `supported` needs Codex >= 0.163; without
+     * it (or without these members: Claude, a fake, an older prism) a mid-turn prompt is held for the turn's end.
+     * Acceptance is not observation: a record reaches `observed` (`onSteerUpdate`, `steerState`) when the provider shows
+     * the input in the turn. Steer state is per driver process; it does not survive a restart.
+     */
+    readonly steeringState?: { readonly supported: boolean };
+    steer?(content: readonly PromptBlock[], options: { clientId: string }): Promise<SteerAcceptanceLike>;
+    steerState?(clientId: string): SteerRecordLike | { readonly kind: 'not_known' };
+    acknowledgeSteer?(clientId: string): boolean;
+}
+
+/** prism-acp 0.38.0's `SteerAcceptance`: the native reply to one steer. */
+export type SteerAcceptanceLike = { readonly outcome: 'accepted' | 'not_delivered' | 'unknown'; readonly steerId: string };
+
+/** prism-acp 0.38.0's `SteerRecord` (and `SteerUpdate`): what became of one steer, as far as the provider has shown. */
+export interface SteerRecordLike {
+    readonly steerId: string;
+    readonly kind: string;
 }
 
 /** A turn's outcome, as `prism-acp` reports it. */
@@ -171,6 +191,8 @@ export interface DriverEvents {
      */
     onTurnEnd?: (outcome: TurnOutcomeLike) => void;
     onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
+    /** A steer's record changed (prism-acp 0.38.0, Codex): accepted, observed, ended unobserved, not delivered, unknown. */
+    onSteerUpdate?: (update: SteerRecordLike) => void;
 }
 
 /**
@@ -625,7 +647,8 @@ export class AgentSession {
         this.#held = false;
         this.#overloadCancel?.();
         this.#overloadCancel = null;
-        if (this.#afterTurn.length === 0) {
+        // A prompt steered into the held turn and not yet settled is not waiting to go (Tynn #440).
+        if (!this.#afterTurn.some((p) => p.steer === undefined)) {
             this.prompt(nothingWaited, 'genie');
             return;
         }
@@ -922,7 +945,15 @@ export class AgentSession {
     }
 
     /** Messages a provider refused mid-turn, sent in order as soon as a turn ends. */
-    #afterTurn: Array<{ id: string; text: string; by: string | null; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
+    #afterTurn: Array<{ id: string; text: string; by: string | null; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext; steer?: string }> = [];
+
+    /**
+     * MAIL STEERED INTO A RUNNING CODEX TURN (prism-acp 0.38.0, Tynn #440), by the steer's fresh client id. Its prompt
+     * stays in `#afterTurn`, marked (`steer`), so the turn's end does not send it again while it may still be seen; it
+     * leaves when the record settles — `observed`: sent; `not_delivered` / `turn_ended_unobserved`: unmarked, held for
+     * the turn's end as before; `unknown`: MAYBE delivered, so never sent again (`unconfirmed`).
+     */
+    #steers = new Map<string, { promptId: string; acceptance: 'pending' | 'accepted' | 'not_delivered' | 'unknown'; kind: string | null }>();
 
     /**
      * A MESSAGE FOR THE AGENT THAT MUST ARRIVE: sent now when the provider takes it (Claude reads it at its next step);
@@ -935,7 +966,8 @@ export class AgentSession {
     deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.running) throw new Error('session is not running');
         if (by === 'you') this.resumeAfterStop();
-        if (this.#afterTurn.length === 0 && !this.#starting) {
+        // A prompt steered into the turn and still waiting to be seen is not ahead of this one.
+        if (!this.#afterTurn.some((p) => p.steer === undefined) && !this.#starting) {
             try {
                 return this.prompt(text, by, sent, context);
             } catch (error) {
@@ -945,7 +977,105 @@ export class AgentSession {
                 if (!this.#inTurn) throw error;
             }
         }
-        return this.#queuePrompt(text, by, sent, context);
+        const id = this.#queuePrompt(text, by, sent, context);
+        this.#steerIntoTurn(id);
+        return id;
+    }
+
+    /**
+     * MAIL MID-TURN, FOR A PROVIDER THAT REFUSES A SECOND PROMPT BUT CAN BE STEERED (Codex >= 0.163 with prism-acp
+     * 0.38.0, Tynn #440). The same full prompt Claude would be handed goes into the running turn under a FRESH client
+     * id; the model takes it at its next step (after a running tool call returns; after a pending approval). It stays
+     * held and marked until its record settles (`#steerSettled`). Only mail: the rest of what waits mid-turn is as before.
+     */
+    #steerIntoTurn(promptId: string): void {
+        const driver = this.#driver;
+        const p = this.#afterTurn.find((q) => q.id === promptId);
+        if (!p || !driver?.steer || driver.steeringState?.supported !== true) return;
+        if (!this.#inTurn || this.#held || this.#starting || this.#needsNewDriver || (p.context.mail?.length ?? 0) === 0) return;
+        const clientId = randomUUID();
+        p.steer = clientId;
+        this.#steers.set(clientId, { promptId, acceptance: 'pending', kind: null });
+        const content: readonly PromptBlock[] = p.sent?.content ?? [{ type: 'text', text: p.text }];
+        let answer: Promise<SteerAcceptanceLike>;
+        try {
+            answer = driver.steer(content, { clientId });
+        } catch {
+            // Refused before anything was sent (unsupported, invalid input): held for the turn's end.
+            this.#steerAnswered(clientId, 'not_delivered');
+            return;
+        }
+        void answer.then((a) => this.#steerAnswered(clientId, a.outcome), () => this.#steerAnswered(clientId, 'not_delivered'));
+    }
+
+    #steerAnswered(clientId: string, outcome: SteerAcceptanceLike['outcome']): void {
+        const s = this.#steers.get(clientId);
+        if (!s) return;
+        s.acceptance = outcome === 'accepted' || outcome === 'not_delivered' ? outcome : 'unknown';
+        this.#steerSettled(clientId, true);
+    }
+
+    /** A steer's record, from `onSteerUpdate` (prism-acp publishes every change). */
+    #steerRecord(record: SteerRecordLike): void {
+        const s = this.#steers.get(record.steerId);
+        if (!s) return;
+        s.kind = record.kind;
+        this.#steerSettled(record.steerId, true);
+    }
+
+    /** Act on what is known of one steer. `flush`: a prompt handed back to the queue may go now, if no turn runs. */
+    #steerSettled(clientId: string, flush: boolean): void {
+        const s = this.#steers.get(clientId);
+        if (!s) return;
+        const index = this.#afterTurn.findIndex((p) => p.id === s.promptId && p.steer === clientId);
+        if (s.kind === 'observed') {
+            // Seen in the turn: delivered, as Claude's folded prompt is. Nothing goes again at the turn's end.
+            if (index >= 0) {
+                this.#afterTurn.splice(index, 1);
+                void this.#emitRow({ kind: 'prompt_delivery', id: s.promptId, status: 'sent' });
+                this.#changed();
+            }
+            // Acknowledged only once its RPC answer is in, as prism-acp's contract asks.
+            if (s.acceptance !== 'pending') {
+                this.#steers.delete(clientId);
+                this.#driver?.acknowledgeSteer?.(clientId);
+            }
+            return;
+        }
+        if (s.acceptance === 'not_delivered' || s.kind === 'not_delivered' || s.kind === 'turn_ended_unobserved') {
+            // Not in that turn: held for the turn's end, exactly as without steering.
+            if (index >= 0) delete this.#afterTurn[index]!.steer;
+            if (s.acceptance !== 'pending') {
+                this.#steers.delete(clientId);
+                this.#driver?.acknowledgeSteer?.(clientId);
+            }
+            this.#changed();
+            if (flush && !this.#inTurn) this.#flushAfterTurn();
+            return;
+        }
+        if (s.acceptance === 'unknown' || s.kind === 'unknown') {
+            // MAYBE delivered: never sent again (it could arrive twice), never claimed delivered. A later observation
+            // only frees the record (`observed` above, with the prompt already gone from the queue).
+            if (index >= 0) {
+                this.#afterTurn.splice(index, 1);
+                void this.#emitRow({ kind: 'prompt_delivery', id: s.promptId, status: 'unconfirmed' });
+                this.#changed();
+            }
+        }
+        // `accepted`, not yet seen: it stays marked until its record settles.
+    }
+
+    /** Records read back before the queue is drained: a callback that was missed still settles its steer. */
+    #refreshSteers(): void {
+        const driver = this.#driver;
+        if (!driver?.steerState) return;
+        for (const clientId of [...this.#steers.keys()]) {
+            const record = driver.steerState(clientId);
+            const s = this.#steers.get(clientId);
+            if (!s || record.kind === 'not_known') continue;
+            s.kind = record.kind;
+            this.#steerSettled(clientId, false);
+        }
     }
 
     /** One queue holds input waiting for either a turn or a provider pause. Answers the held prompt's id. */
@@ -961,8 +1091,11 @@ export class AgentSession {
     /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
         if (this.#afterTurn.length === 0 || !this.running || this.#needsNewDriver || this.#starting || this.#approval !== null || this.#inTurn || this.#held || this.#options.mayTakeWork?.() === false) return;
+        this.#refreshSteers();
         while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
-            const next = this.#afterTurn[0]!;
+            // A prompt steered into the turn just ended is not sent again while it may still be seen (Tynn #440).
+            const next = this.#afterTurn.find((p) => p.steer === undefined);
+            if (!next) return;
             try {
                 this.#send(next.text, next.by, next.sent, false, next.context);
             } catch (error) {
@@ -972,7 +1105,7 @@ export class AgentSession {
                 void this.#emitRow({ kind: 'notice', level: 'error', message: `Queued input was not delivered: ${error instanceof Error ? error.message : String(error)}` });
                 return;
             }
-            this.#afterTurn.shift();
+            this.#afterTurn.splice(this.#afterTurn.indexOf(next), 1);
             void this.#emitRow({ kind: 'prompt_delivery', id: next.id, status: 'sent' });
         }
     }
@@ -1014,7 +1147,16 @@ export class AgentSession {
     #leaveQueuedAsDrafts(): void {
         const waiting = this.#afterTurn;
         this.#afterTurn = [];
-        for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
+        for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: this.#leftStatus(p) });
+    }
+
+    /**
+     * What a prompt leaving the queue unsent is recorded as. One steered with no answer yet may have been taken, so it
+     * is never told again; one accepted and not seen settles as before (an interrupted turn leaves accepted input unseen).
+     */
+    #leftStatus(p: { context: PromptContext; steer?: string }): 'discarded' | 'undelivered' | 'unconfirmed' {
+        if (p.steer !== undefined && this.#steers.get(p.steer)?.acceptance === 'pending') return 'unconfirmed';
+        return p.context.retold === true ? 'discarded' : 'undelivered';
     }
 
     /**
@@ -1025,7 +1167,7 @@ export class AgentSession {
         const waiting = this.#afterTurn;
         this.#afterTurn = waiting.filter((p) => p.by === 'you');
         for (const p of waiting) {
-            if (p.by !== 'you') void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
+            if (p.by !== 'you') void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: this.#leftStatus(p) });
         }
     }
 
@@ -1078,6 +1220,10 @@ export class AgentSession {
                 onUpdate: (update) => {
                     if (this.#ended) { this.#straggler(); return; }
                     void this.#ingest(update);
+                },
+                onSteerUpdate: (update) => {
+                    if (this.#ended) return;
+                    this.#steerRecord(update);
                 },
                 onProtocolError: (problem, detail) => {
                     // A stopped run's transport closing is the stop, not a fault of the agent.

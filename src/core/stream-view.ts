@@ -433,7 +433,7 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             return { ...base, icon: 'check', tone: 'muted', kind: 'finished', main: `Turn ${row.event.n} finished`, lane: null };
 
         case 'prompt_delivery':
-            return { ...base, icon: 'message-square', tone: 'muted', main: `Queued input ${row.event.status === 'sent' ? 'sent' : row.event.status === 'discarded' ? 'discarded' : 'kept as an unsent draft'}`, lane: null };
+            return { ...base, icon: 'message-square', tone: 'muted', main: `Queued input ${row.event.status === 'sent' ? 'sent' : row.event.status === 'discarded' ? 'discarded' : row.event.status === 'unconfirmed' ? 'sent, not confirmed' : 'kept as an unsent draft'}`, lane: null };
 
         case 'notice':
             // A rate-limit notice reads as its headroom line, never the provider's raw sentence with an ISO date.

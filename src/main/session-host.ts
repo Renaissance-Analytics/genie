@@ -94,6 +94,7 @@ import {
     type CancelIntent,
     type PermissionRequestLike,
     type PromptContext,
+    type SteerRecordLike,
     type SessionDriverFactory,
     type StopVerdict,
     type TurnOutcomeLike,
@@ -248,6 +249,7 @@ export function driverEvents(events: DriverEvents): {
     onProtocolError: (problem: string, detail?: { readonly recoverable: boolean }) => void;
     onStderr: (line: string) => void;
     onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+    onSteerUpdate: (update: SteerRecordLike) => void;
 } {
     return {
         onUpdate: (update) => events.onUpdate?.(update as Record<string, unknown>),
@@ -263,6 +265,8 @@ export function driverEvents(events: DriverEvents): {
         onProtocolError: (problem, detail) => events.onProtocolError?.(problem, detail),
         onStderr: (line) => events.onStderr?.(line),
         onExit: (code, signal) => events.onExit?.(code, signal),
+        // prism-acp 0.38.0: a Codex steer's record (Tynn #440) — how mail steered mid-turn becomes Delivered.
+        onSteerUpdate: (update) => events.onSteerUpdate?.(update),
     };
 }
 
