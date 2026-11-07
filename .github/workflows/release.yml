@@ -160,7 +160,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test -- --testTimeout=30000
+      # Normal CI gates the unit suite. Follow its packaging build, including build:main's Windows launcher.
       - run: npm run build
       - name: fetch the pinned Caddy runtime
         run: npx tsx scripts/fetch-caddy.ts
