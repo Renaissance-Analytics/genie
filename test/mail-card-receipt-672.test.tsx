@@ -22,9 +22,9 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-function view(rows: AgentDetail['rows'] = [], subject = recipient) {
+function view(rows: AgentDetail['rows'] = [], subject = recipient, lines?: number) {
     const detail: AgentDetail = { agent: { id: subject, name: subject === recipient ? 'atlas' : 'wren', provider: 'claude', fidelity: 'declared', cwd: '/workspace' }, session: null, turns: 0, cost: null, refusal: null, rows, comms: chatCommsOf(inbox.involving(subject)) };
-    const thread = chatThreadFrom(detail, subject, agents, () => T);
+    const thread = chatThreadFrom(detail, subject, agents, () => T, lines);
     return { thread, html: renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onOpenMail={() => {}} />) };
 }
 const cards = (html: string) => [...html.matchAll(/data-who="mail"/g)];
@@ -88,6 +88,18 @@ describe('Tynn672/6318: the recipient card is its notification, with two receipt
         ]);
         expect(html).not.toContain('collect it with agentinbox receive');
         expect(html).toContain('Please review the AgentInbox change.');
+    });
+
+    it('the live ledger window does not let a nudge hide an arriving card at a new turn boundary', async () => {
+        const mail = await inbox.send({ from: sender, to: recipient, text: 'Arriving at a quiet turn.' });
+        const { thread, html } = view([
+            { id: 'old-reply', at: T - 10, event: { kind: 'message', speaker: 'agent', peerName: null, text: 'Earlier work.' } },
+            { id: 'new-turn', at: T + 1, event: { kind: 'turn', n: 2, by: null } },
+            { id: 'provider-notice', at: T + 2, event: { kind: 'message', speaker: 'peer', peerName: 'genie', text: 'AgentInbox delivery: 1 message', mail: [{ id: mail.id, from: sender, fromName: 'wren', text: mail.text, sentAt: mail.sentAt }] } },
+        ], recipient, 1);
+        expect(thread.messages.filter(m => m.mailId === mail.id)).toHaveLength(1);
+        expect(cards(html)).toHaveLength(1);
+        expect(html).not.toContain('told atlas');
     });
 
     it('an observed recipient also sees a peer card at arrival, then delivered after its inbox receive', async () => {
