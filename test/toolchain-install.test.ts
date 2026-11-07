@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { planInstall, type PackageManager, type Platform } from '../src/core/toolchain.js';
 import { detectPackageManager, installTool, type EnvPort, type ToolchainFs, type ToolchainOpsPorts } from '../src/main/toolchain-ops.js';
 import type { CommandRunner } from '../src/main/toolchain-prober.js';
@@ -42,6 +42,9 @@ function machine(opts: { platform: Platform; tool: string; banner: string; insta
     };
     return { calls, ports, env, steps, probes: () => calls.filter(([, a]) => a.includes('--version')).length };
 }
+
+beforeEach(() => { vi.stubEnv('PATH', ''); });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('the install plan — the package manager per platform, from Genie’s own tables', () => {
     it('winget on Windows, brew on macOS, apt and dnf on Linux behind pkexec; each with its exact argv', () => {
