@@ -140,7 +140,7 @@ const IssueCard = memo(function IssueCard({ issue, onOpen }: { issue: IssueRow; 
             data-issue-card={issue.id}
             onClick={() => onOpen(issue.id)}
             style={type?.border ? { borderLeftColor: type.border } : undefined}
-            className="flex min-w-0 flex-col gap-1.5 rounded-md border border-l-4 border-[var(--border-1)] bg-[var(--bg-1)] p-2.5 text-left hover:bg-[var(--bg-2)]"
+            className="flex min-w-0 flex-col items-start justify-start gap-1.5 rounded-md border border-l-4 border-[var(--border-1)] bg-[var(--bg-1)] p-2.5 text-left hover:bg-[var(--bg-2)]"
         >
             <span className="text-[13px] font-medium text-[var(--fg-1)]">{issue.title}</span>
             {issue.description ? <div className="line-clamp-3 text-[12px] text-[var(--fg-3)]"><ContentRenderer value={issue.description} format="markdown" clipboardWriter={genieClipboardWriter} /></div> : null}
