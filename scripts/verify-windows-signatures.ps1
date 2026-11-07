@@ -36,10 +36,10 @@ if (Test-Path -LiteralPath $planFile -PathType Leaf) {
 }
 
 $ours = '(?:^|,\s*)CN=(?:"Renaissance Analytics"|Renaissance Analytics)(?:,|$)'
-# Include every shipped exe/dll, including extraResources (launcher, Caddy), native helpers,
+# Include every shipped exe/dll/node (a .node is a DLL), including extraResources (launcher, Caddy), native helpers,
 # Electron DLLs and the late-added NSIS elevate.exe. No vendor/path exclusions: a file the build does not sign is
 # checked too, for its own publisher's signature.
-$payload = @(Get-ChildItem -LiteralPath $appDir -Recurse -File | Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll') })
+$payload = @(Get-ChildItem -LiteralPath $appDir -Recurse -File | Where-Object { $_.Extension.ToLowerInvariant() -in @('.exe', '.dll', '.node') })
 $files = @($payload.FullName) + @($installers.FullName) + @($uninstaller)
 $records = foreach ($file in ($files | Sort-Object -Unique)) {
     $signature = Get-AuthenticodeSignature -LiteralPath $file

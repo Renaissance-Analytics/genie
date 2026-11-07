@@ -142,7 +142,19 @@ win:
   # the ones that ship unsigned are named here. conpty.dll and d3dcompiler_47.dll (Microsoft's) are not
   # signed again. Entries match by `endsWith`, so a name is a whole file name. A new packed DLL is
   # unsigned until it is added here; CI's it packages (windows) and the release verifier say so.
-  signExts: ['!OpenConsole.exe', 'dxcompiler.dll', 'electron_wer.dll', 'ffmpeg.dll', 'vk_swiftshader.dll', 'vulkan-1.dll', 'winpty.dll']
+  # `.node`: a Node-API addon is a DLL (node-pty's three, @napi-rs/keyring's one), and all of them ship unsigned.
+  signExts: ['!OpenConsole.exe', 'dxcompiler.dll', 'electron_wer.dll', 'ffmpeg.dll', 'vk_swiftshader.dll', 'vulkan-1.dll', 'winpty.dll', '.node']
+  # WHAT IS NOT SHIPPED (Tynn #437; scripts/packed-tree-check.mjs, run by CI's it packages): node-pty and fancy-pty
+  # carry every platform's binaries and their own build inputs. beta.60 put 150 of those files in the install
+  # directory (macOS, Linux and Arm binaries; winpty's sources and .bat/.ps1/.py scripts; node-pty's sources and
+  # tests), none ever loaded on Windows x64, and the .node files among them unsigned. The Windows build is x64 only:
+  # an Arm build drops win32-arm64 here and the check names its prebuilds as missing.
+  files:
+    - '!**/node_modules/node-pty/{deps,src,scripts,third_party}/**'
+    - '!**/node_modules/node-pty/prebuilds/{darwin-*,linux-*,win32-arm64}/**'
+    - '!**/node_modules/node-pty/lib/**/*.test.{js,js.map}'
+    - '!**/node_modules/@particle-academy/fancy-pty/bin/{darwin-*,linux-*,win32-arm64}/**'
+    - '!**/node_modules/@particle-academy/fancy-pty/native/**'
   azureSignOptions:
     publisherName: Renaissance Analytics
     endpoint: https://eus.codesigning.azure.net
