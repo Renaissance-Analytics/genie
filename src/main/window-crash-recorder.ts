@@ -39,6 +39,8 @@ export interface WindowCrashRecorderOptions {
     readonly remove: (file: string) => void;
     /** The common header (crash-records.ts `crashHeader`): this Genie's version, the host's build, OS and uptime. */
     readonly header: () => CrashHeader;
+    /** The page's last known working set, in MB (sampled with the beat): what a page that ended had grown to. */
+    readonly rendererMb?: () => number | null;
 }
 
 export class WindowCrashRecorder {
