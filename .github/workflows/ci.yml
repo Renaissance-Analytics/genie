@@ -230,6 +230,23 @@ jobs:
           path: ${{ runner.temp }}/proc-samples.log
           if-no-files-found: ignore
           retention-days: 7
+      # THE SLOWEST TESTS, observe only (scripts/ci/slow-tests.mjs; test/ci-windows-slow-tests.test.ts holds it): after
+      # every run, pass or fail, the 15 slowest tests, every test over 10 s (a third of the budget) and every file over 10 s
+      # outside its tests, from the results file the suite already writes. Rows near the 30 s budget are seen before a bad
+      # runner pushes them over it. It changes no test and no budget, and it cannot fail the job.
+      - name: the slowest tests (observe only)
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: node scripts/ci/slow-tests.mjs (Join-Path $env:RUNNER_TEMP "vitest-results.json") (Join-Path $env:RUNNER_TEMP "slow-tests.tsv")
+      - name: the slow-test table
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-windows-slow-tests
+          path: ${{ runner.temp }}/slow-tests.tsv
+          if-no-files-found: ignore
+          retention-days: 14
 
 
   # THE ZIP64 CHECK (`npm run verify:zip64`, test/zip64-acceptance/): a tree past 65,535 entries exported and read back. Not in

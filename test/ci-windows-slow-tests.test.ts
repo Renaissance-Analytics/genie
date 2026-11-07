@@ -107,7 +107,7 @@ describe('the Windows unit job runs it after the suite, whatever happened, and c
     it('after the suite, on pass or fail, and it cannot fail the job', () => {
         expect(test).toBeGreaterThan(0);
         expect(step).toBeGreaterThan(test);
-        expect(job.slice(step)).toMatch(/^name: the slowest tests[^\n]*\n\s+if: always\(\)\n\s+continue-on-error: true\n/);
+        expect(job.slice(step)).toMatch(/^name: the slowest tests[^\r\n]*\r?\n\s+if: always\(\)\r?\n\s+continue-on-error: true\r?\n/);
         expect(job.slice(step)).toMatch(/node scripts\/ci\/slow-tests\.mjs \(Join-Path \$env:RUNNER_TEMP "vitest-results\.json"\) \(Join-Path \$env:RUNNER_TEMP "slow-tests\.tsv"\)/);
     });
 
