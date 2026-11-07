@@ -201,7 +201,11 @@ describe('past it, a hook that forks hundreds of children is ended with all of t
         writeFileSync(hook, `#!/bin/sh\ni=0\nwhile [ "$i" -lt 230 ]; do sleep ${MARK} & i=$((i+1)); done\nwait\n`);
         chmodSync(hook, 0o755);
         git('config', 'core.fsmonitor', hook.replace(/\\/g, '/'));
-        GIT_READ_LIMIT.ms = 25_000;
+        // 15 s, not 25: measured (measure/fork-time, run 42369535937, 10 windows-latest jobs of this row), the hook had
+        // forked all 230 by 2.4 to 7.5 s after the read began and the CONTROL below saw them by 3.1 to 5.7 s; after the
+        // limit all of them were gone in 0.4 to 0.6 s. 15 s is twice the slowest fork. If forking ever takes longer, the
+        // CONTROL fails by name (it is bounded just under the limit), never this row passing without having seen them.
+        GIT_READ_LIMIT.ms = 15_000;
     });
     afterEach(() => {
         // This run's own sleeps only, by the mark in their command lines: whatever the limit did not end (on Windows, until
@@ -219,7 +223,7 @@ describe('past it, a hook that forks hundreds of children is ended with all of t
     it('gitTreeStatus: more than 200 of them, and at the limit none survives', async () => {
         const reading = gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message);
         // CONTROL: the table sees them, past the old cap of 200, before the limit comes.
-        await vi.waitFor(() => { expect(ours()).toBeGreaterThan(200); }, { timeout: 24_000, interval: 1_000 });
+        await vi.waitFor(() => { expect(ours()).toBeGreaterThan(200); }, { timeout: 14_000, interval: 1_000 });
         expect(await reading).toMatch(/did not answer/);
         await vi.waitFor(() => { expect(ours()).toBe(0); }, { timeout: 40_000, interval: 1_000 });
         await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 10_000, interval: 250 });
