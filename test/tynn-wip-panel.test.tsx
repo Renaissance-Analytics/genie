@@ -54,7 +54,8 @@ describe('WIP', () => {
 
     it('lists the lens\'s stories and the chosen one\'s tasks, in motion first; titles are text, never markup', () => {
         const html = render();
-        expect(html).toMatch(/data-wip-story="s1"[^>]*aria-current="true"|aria-current="true"[^>]*data-wip-story="s1"/);
+        // Sidebar.Item names the selected story with its native navigation semantics.
+        expect(html).toMatch(/data-wip-story="s1"[^>]*aria-current="page"|aria-current="page"[^>]*data-wip-story="s1"/);
         expect(html).toContain('Ship &lt;it&gt;');
         expect(html).toContain('0 of 2 done');
         expect(html.indexOf('Doing it')).toBeLessThan(html.indexOf('Queued'));

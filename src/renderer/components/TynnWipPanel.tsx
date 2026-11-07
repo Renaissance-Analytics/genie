@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon, Sidebar } from '@particle-academy/react-fancy';
 import { startPlan, type BoardActionInput, type BoardClaims, type LiveState } from '../../core/tynn-board.js';
 import { WIP_LENSES, type TynnPageState, type WipLens, type WipStory, type WipTask, type WipView } from '../../core/tynn-pages.js';
 import { Avatar, LiveMark, OpLine } from './TynnBoardPanel.js';
@@ -74,13 +74,13 @@ function Banner({ view, live }: { view: WipView; live: LiveState | undefined }) 
 
 function Rail({ view, onLens, onStory }: { view: WipView; onLens: TynnWipPanelProps['onLens']; onStory: TynnWipPanelProps['onStory'] }) {
     return (
-        <aside className="flex w-[300px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-[var(--border-1)] p-2">
+        <Sidebar embedded className="w-[300px] shrink-0 gap-1 overflow-y-auto border-r border-[var(--border-1)] p-2">
             <div role="group" aria-label="Lens" className="mb-1 flex gap-1">
                 {(Object.keys(WIP_LENSES) as WipLens[]).map((lens) => {
                     const look = LENS_LOOK[lens];
                     const on = view.lens === lens;
                     return (
-                        <button
+                        <Button variant="ghost" size="xs" labelClassName="contents"
                             key={lens}
                             type="button"
                             data-wip-lens={lens}
@@ -92,7 +92,7 @@ function Rail({ view, onLens, onStory }: { view: WipView; onLens: TynnWipPanelPr
                         >
                             <Icon name={look.icon} size="xs" />
                             <span data-wip-count={lens} className={`rounded-full px-1.5 text-[10px] font-semibold ${on ? '' : 'bg-[var(--bg-2)] text-[var(--fg-3)]'}`}>{view.counts[lens]}</span>
-                        </button>
+                        </Button>
                     );
                 })}
             </div>
@@ -107,27 +107,28 @@ function Rail({ view, onLens, onStory }: { view: WipView; onLens: TynnWipPanelPr
                 return (
                     <div key={story.id}>
                         {backlogStarts ? <div className="mt-3 mb-1 px-2 text-[10px] font-semibold tracking-wide text-[var(--fg-3)] uppercase">Backlog</div> : null}
-                        <button
-                            type="button"
+                        <Sidebar.Item
                             data-wip-story={story.id}
-                            aria-current={selected ? 'true' : undefined}
+                            active={selected}
                             onClick={() => onStory(story.slug)}
                             className={`flex w-full flex-col gap-1 rounded-md px-2 py-1.5 text-left ${selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-2)]'}`}
                         >
-                            <span className="flex items-center gap-1.5"><span className="font-mono text-[10px] text-[var(--fg-3)]">{story.number}</span><StatusChip status={story.status} /></span>
-                            <span className="text-[12px] text-[var(--fg-1)]">{story.title}</span>
-                            {story.progress ? <span className="flex items-center gap-1.5 text-[10px] text-[var(--fg-3)]"><Bar done={story.tasksDone} total={story.taskCount} />{story.progress}</span> : null}
-                        </button>
+                            <span className="flex min-w-0 flex-col gap-1 whitespace-normal">
+                                <span className="flex items-center gap-1.5"><span className="font-mono text-[10px] text-[var(--fg-3)]">{story.number}</span><StatusChip status={story.status} /></span>
+                                <span className="text-[12px] text-[var(--fg-1)]">{story.title}</span>
+                                {story.progress ? <span className="flex items-center gap-1.5 text-[10px] text-[var(--fg-3)]"><Bar done={story.tasksDone} total={story.taskCount} />{story.progress}</span> : null}
+                            </span>
+                        </Sidebar.Item>
                     </div>
                 );
             })}
-        </aside>
+        </Sidebar>
     );
 }
 
 function StepButton({ icon, label, title, disabled, step, onClick }: { icon: string; label: string; title: string; disabled: boolean; step: string; onClick: () => void }) {
     return (
-        <button
+        <Button variant="ghost" size="xs" labelClassName="contents"
             type="button"
             data-tynn-step={step}
             aria-label={label}
@@ -137,7 +138,7 @@ function StepButton({ icon, label, title, disabled, step, onClick }: { icon: str
             className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-[var(--border-1)] px-2 py-1 text-[11px] text-[var(--fg-1)] hover:bg-[var(--bg-2)] disabled:opacity-40"
         >
             <Icon name={icon} size="xs" />
-        </button>
+        </Button>
     );
 }
 
@@ -232,9 +233,9 @@ function Empty({ view, onStory }: { view: WipView; onStory: TynnWipPanelProps['o
         <div className="flex h-full flex-col items-center justify-center gap-2.5 text-center">
             <Icon name="arrow-left" size="lg" />
             <div className="text-[15px] font-semibold text-[var(--fg-2)]">Pick a story to focus on</div>
-            <button type="button" data-wip-open-first="" onClick={() => onStory(first.slug)} className="inline-flex items-center gap-1 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-medium text-[var(--accent-fg,white)]">
+            <Button size="xs" labelClassName="contents" type="button" data-wip-open-first="" onClick={() => onStory(first.slug)} className="inline-flex items-center gap-1 rounded-md bg-[var(--accent)] px-2.5 py-1 text-[12px] font-medium text-[var(--accent-fg,white)]">
                 <Icon name="arrow-right" size="xs" /> Open first story
-            </button>
+            </Button>
         </div>
     );
 }

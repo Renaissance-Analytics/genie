@@ -15,6 +15,7 @@ import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
+import { readTynnPage } from './tynn-page-client.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
@@ -693,6 +694,17 @@ async function main(): Promise<void> {
         },
         issueWatch,
         tynnBoard,
+        tynnPages: {
+            read: async (workspaceId, page, query) => {
+                // Opening has its own deadline; never mistake a pairing still opening for a signed-out owner.
+                const account = await tynnOpening;
+                return readTynnPage({
+                    signedIn: () => account.status().signedIn === true,
+                    projectFor: workspaceTynnProject,
+                    request: (path, init) => account.request(path, init),
+                }, workspaceId, page, query);
+            },
+        },
         files: {
             subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
             unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),

@@ -1,4 +1,4 @@
-import { parseTynnPage, tynnPagePath, TYNN_PAGES, type TynnPage, type TynnPageQuery, type TynnPageView } from '../core/tynn-pages.js';
+import { parseTynnPage, tynnPagePath, TYNN_PAGES, type TynnPage, type TynnPageView } from '../core/tynn-pages.js';
 import { bodyOf, NOT_LINKED, refusal, SIGNED_OUT, type TynnBoardPorts, type TynnBoardRefusal } from './tynn-board-client.js';
 
 /**
@@ -10,15 +10,18 @@ import { bodyOf, NOT_LINKED, refusal, SIGNED_OUT, type TynnBoardPorts, type Tynn
 export async function readTynnPage(
     ports: TynnBoardPorts,
     workspaceId: string,
-    page: TynnPage,
-    query: TynnPageQuery,
+    rawPage: unknown,
+    query: unknown,
 ): Promise<({ ok: true } & TynnPageView) | TynnBoardRefusal> {
-    if (!TYNN_PAGES.includes(page)) return { ok: false, state: 'error', reason: `The Tynn tab has no ${String(page)} page.` };
+    if (typeof rawPage !== 'string' || !TYNN_PAGES.includes(rawPage as TynnPage)) return { ok: false, state: 'error', reason: 'The Tynn tab does not have that page.' };
+    const page = rawPage as TynnPage;
     const projectId = ports.projectFor(workspaceId);
     if (projectId === null) return NOT_LINKED;
     if (!ports.signedIn()) return SIGNED_OUT;
     const asked: Record<string, string> = {};
-    for (const [k, v] of Object.entries(query ?? {})) if (typeof v === 'string') asked[k] = v;
+    if (typeof query === 'object' && query !== null && !Array.isArray(query)) {
+        for (const [k, v] of Object.entries(query)) if (typeof v === 'string') asked[k] = v;
+    }
     let res;
     try { res = await ports.request(tynnPagePath(projectId, page, asked), { method: 'GET' }); }
     catch (error) { return { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) }; }

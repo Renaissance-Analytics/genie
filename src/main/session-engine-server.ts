@@ -183,6 +183,8 @@ export interface EngineServerOptions {
         unwatch(owner: string, viewId: string): void;
         dropOwner(owner: string): void;
     };
+    /** Other Tynn pages, resolved and read on the host's account. Absent = refused; local windows only. */
+    readonly tynnPages?: { read(workspaceId: string, page: unknown, query: unknown): Promise<unknown> };
     readonly files?: {
         subscribe(owner: string, viewId: string, workspace: { id: string; path: string }, want: FilesWant): void;
         unsubscribe(owner: string, viewId: string): void;
@@ -701,6 +703,10 @@ export class SessionEngineServer {
                 if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
                 this.#options.tynnBoard?.unwatch(conn.id, str(0));
                 return true;
+            case 'engine.tynnPage':
+                if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
+                if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');
+                return this.#options.tynnPages.read(str(0), args[1], args[2]);
             case 'engine.configSync':
                 if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
                 return this.#options.configSync((args[0] ?? {}) as WorkspaceConfigRequest);

@@ -1,5 +1,6 @@
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -767,6 +768,12 @@ export class SessionEngineClient {
     tynnBoardUnwatch(viewId: string): Promise<boolean> {
         this.#boardViews.delete(viewId);
         return this.#value('engine.tynnBoardUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    /** The host reads the workspace's Tynn page; a disconnected or refusing host is a visible error. */
+    async tynnPage(workspaceId: string, page: unknown, query: unknown): ReturnType<typeof readTynnPage> {
+        const reply = await this.call('engine.tynnPage', [workspaceId, page, query]);
+        return reply.ok ? reply.value as Awaited<ReturnType<typeof readTynnPage>> : { ok: false, state: 'error', reason: reply.reason };
     }
 
     /** The rings and states for this window's board views. */

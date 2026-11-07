@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parseEngineFrame } from '../src/core/engine-protocol.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { TynnPage, TynnPageQuery } from '../src/core/tynn-pages.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
+import { NOT_CONNECTED, SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
 import { readTynnPage } from '../src/main/tynn-page-client.js';
@@ -42,7 +42,7 @@ async function window(local: boolean, service = true) {
         expect(parseEngineFrame(JSON.stringify({ kind: 'call', id: 42, method: 'engine.tynnPage', args: [id, page, query] }))).toMatchObject({ ok: true });
         return client.call('engine.tynnPage' as Parameters<SessionEngineClient['call']>[0], [id, page, query]);
     };
-    return { read, requests };
+    return { read, requests, client };
 }
 
 describe('WIP is read on genie-host', () => {
@@ -69,6 +69,14 @@ describe('WIP is read on genie-host', () => {
         const w = await window(true, false);
         expect(await w.read('work', 'wip', {})).toMatchObject({ ok: false, reason: expect.stringContaining('no Tynn pages') });
         expect(w.requests).toEqual([]);
+    });
+
+    it('the window client returns the host page and makes a lost link an error, with no local read', async () => {
+        const w = await window(true);
+        expect(await w.client.tynnPage('work', 'wip', { view: 'attention' })).toMatchObject({ ok: true, page: 'wip', view: { lens: 'attention' } });
+        w.client.disconnect();
+        expect(await w.client.tynnPage('work', 'wip', {})).toEqual({ ok: false, state: 'error', reason: NOT_CONNECTED });
+        expect(w.requests).toEqual([{ path: '/api/v1/projects/host-project/wip?view=attention', method: 'GET' }]);
     });
 });
 
