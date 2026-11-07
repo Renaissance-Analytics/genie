@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -107,8 +108,9 @@ describe('what is copied, as a rule', () => {
         expect(inlineCopyText({ tag: 'a', text: 'f', href: '#file:src/a.ts', inBlock: false })).toBeNull();
     });
 
+    // Read from the repo root: under happy-dom, import.meta.url is not a file URL.
     it('the button is a react-fancy Button (ChatProse draws no bare <button>)', () => {
-        const src = readFileSync(new URL('../src/renderer/components/ChatProse.tsx', import.meta.url), 'utf8');
+        const src = readFileSync(join(process.cwd(), 'src/renderer/components/ChatProse.tsx'), 'utf8');
         expect(src).not.toMatch(/<button\b/);
         expect(src).toMatch(/InlineCopyButton/);
     });
