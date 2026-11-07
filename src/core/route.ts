@@ -51,7 +51,6 @@ interface Common {
     inbox?: string | null;
 }
 
-export type DashboardGroup = 'workspace' | 'status';
 export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 'activity' | 'settings';
 export type WorkspacePanel = 'files';
 /** `tab:<id>` is a tab the person designed (Tynn #282, core/workspace-tabs.ts). */
@@ -72,7 +71,7 @@ export type HostingTab = 'sites' | 'processes' | 'services';
 const HOSTING_TABS: readonly HostingTab[] = ['sites', 'processes', 'services'];
 
 export type Route =
-    | ({ surface: 'dashboard'; group: DashboardGroup } & Common)
+    | ({ surface: 'dashboard' } & Common)
     /** The Deck, optionally opened ON one item (`?item=<id>`): where a waiting Dashboard row sends the reader (§4.1). */
     | ({ surface: 'deck'; item: string | null } & Common)
     /** `layout`: the Stream as a ledger (the default, writes nothing) or folded into `turns` cards (the board's `&layout=turns`). */
@@ -112,13 +111,13 @@ export type Route =
     /** The Genie browser; the page it shows rides the URL so back and deep links work. */
     | ({ surface: 'browser'; url: string | null } & Common);
 
-export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
+export const DEFAULT_ROUTE = 'genie://dashboard';
 
 const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity', 'settings'];
 const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows'];
 
-function dashboard(group: DashboardGroup, common: Common): Route {
-    return { surface: 'dashboard', group, ...common };
+function dashboard(common: Common): Route {
+    return { surface: 'dashboard', ...common };
 }
 
 /**
@@ -143,7 +142,7 @@ export function parseRoute(input: string): Route {
     const blank: Common = { chat: null, pin: null };
 
     const match = /^genie:\/\/([^?]*)(?:\?(.*))?$/.exec(input.trim());
-    if (!match) return dashboard('workspace', blank);
+    if (!match) return dashboard(blank);
 
     const [head = '', ...rest] = (match[1] ?? '').split('/');
     const params = new URLSearchParams(match[2] ?? '');
@@ -163,7 +162,7 @@ export function parseRoute(input: string): Route {
             // An empty id is NOT an agent. Falling through to the Dashboard is the honest
             // outcome; resolving `''` would render an empty session that looks like a bug in
             // the agent rather than in the link.
-            if (!tail) return dashboard('workspace', common);
+            if (!tail) return dashboard(common);
 
             const asked = params.get('tab');
             const tab: AgentTab = AGENT_TABS.includes(asked as AgentTab) ? (asked as AgentTab) : 'stream';
@@ -183,24 +182,24 @@ export function parseRoute(input: string): Route {
 
         case 'takeover': {
             // No id is not a window. Same honesty as an empty agent id: the Dashboard.
-            if (!tail) return dashboard('workspace', common);
+            if (!tail) return dashboard(common);
             // No chat and no pin: a TUI window has no chat to open. `login` names a provider's login window (its notice).
             const login = params.get('login');
             return { surface: 'takeover', terminalId: tail, chat: null, pin: null, ...(login ? { login } : {}) };
         }
         case 'flow': {
             // No id is not a window; `new` is a new flow, in the workspace the link names.
-            if (!tail) return dashboard('workspace', common);
+            if (!tail) return dashboard(common);
             if (tail === 'new') return { surface: 'flow', flowId: null, workspaceId: params.get('workspace') || null, chat: null, pin: null };
             return { surface: 'flow', flowId: decodeURIComponent(tail), workspaceId: null, chat: null, pin: null };
         }
         case 'files': {
             // The popped-out panel (§4.3): no id is not a window; no modifiers either.
-            if (!tail) return dashboard('workspace', common);
+            if (!tail) return dashboard(common);
             return { surface: 'files', workspaceId: tail, chat: null, pin: null };
         }
         case 'workspace': {
-            if (!tail) return dashboard('workspace', common);
+            if (!tail) return dashboard(common);
             // The board's keys: `files=<path>` (empty = open, no file; `detached` = in its own window). An old
             // `panel=files` link still opens the panel.
             const files = params.get('files');
@@ -219,7 +218,7 @@ export function parseRoute(input: string): Route {
         }
 
         case 'dashboard':
-            return dashboard(params.get('group') === 'status' ? 'status' : 'workspace', common);
+            return dashboard(common);
 
         case 'settings': {
             // `genie://settings/<section>`; an older `?group=` link lands where its settings went.
@@ -242,11 +241,11 @@ export function parseRoute(input: string): Route {
 
         // The AgentInbox is a flyout now, not a page: an old link to the page opens the flyout over the Dashboard.
         case 'inbox':
-            return dashboard('workspace', { ...common, inbox: common.inbox ?? '' });
+            return dashboard({ ...common, inbox: common.inbox ?? '' });
 
         default:
             if (PLAIN_FEATURES.includes(head as PlainFeature)) return { surface: head as PlainFeature, ...common };
-            return dashboard('workspace', common);
+            return dashboard(common);
     }
 }
 
@@ -263,7 +262,6 @@ export function formatRoute(route: Route): string {
             if (route.tab) params.set('tab', route.tab);
             break;
         case 'dashboard':
-            params.set('group', route.group);
             break;
         case 'agent':
             params.set('tab', route.tab);

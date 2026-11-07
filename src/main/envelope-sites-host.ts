@@ -148,12 +148,19 @@ export class EnvelopeSites {
             seen.add(w.id);
             const asleep = w.asleep === true;
             const before = this.#workspaces.get(w.id);
-            if (!before) {
+            if (asleep) {
+                this.#workspaces.set(w.id, { path: w.path, asleep });
+                // Keep only the workspace's identity while asleep. The global trust/run records remain intact.
+                for (const [siteId, tracked] of [...this.#tracked]) {
+                    if (tracked.workspaceId !== w.id) continue;
+                    this.#sites.remove(siteId);
+                    this.#tracked.delete(siteId);
+                }
+                continue;
+            }
+            if (!before || before.asleep) {
                 this.#workspaces.set(w.id, { path: w.path, asleep });
                 await this.#load(w, asleep, stopped);
-            } else if (before.asleep && !asleep) {
-                this.#workspaces.set(w.id, { path: w.path, asleep });
-                this.#resume(w.id, stopped);
             } else if (before.asleep !== asleep) {
                 this.#workspaces.set(w.id, { path: w.path, asleep });
             }
@@ -308,12 +315,6 @@ export class EnvelopeSites {
         }
     }
 
-    #resume(workspaceId: string, stopped: Set<string>): void {
-        for (const [siteId, t] of this.#tracked) {
-            if (t.workspaceId === workspaceId && t.servable && t.enabled && !stopped.has(`${workspaceId}/${t.key}`) && this.#sites.get(siteId)?.firstStart === undefined) this.#tryStart(siteId);
-        }
-    }
-
     /** A boot/wake start that is refused (no Caddy, a root outside the repo) is kept on the site as its problem; the others still start. */
     #tryStart(siteId: string): void {
         // SAFE MODE (Tynn #386): a launch or a wake starts no site; it is named as held, and the person's Start serves it. safe mode holds
@@ -437,7 +438,7 @@ export class EnvelopeSites {
      */
     async workspaceName(workspaceId: string): Promise<string | null> {
         const w = this.#workspaces.get(workspaceId);
-        if (!w) return null;
+        if (!w || w.asleep) return null;
         try {
             const text = await this.#ports.fs.readText(join(w.path, 'project.json'));
             const manifest: unknown = text === null ? null : JSON.parse(text);
@@ -449,7 +450,8 @@ export class EnvelopeSites {
 
     /** A registered workspace's folder, or `null`. */
     workspacePath(workspaceId: string): string | null {
-        return this.#workspaces.get(workspaceId)?.path ?? null;
+        const workspace = this.#workspaces.get(workspaceId);
+        return workspace && !workspace.asleep ? workspace.path : null;
     }
 
     /** The workspace a known site is declared in, and its folder — for scoping an Edit to the site's own workspace. */
@@ -521,6 +523,7 @@ export class EnvelopeSites {
     async #manifest(workspaceId: string): Promise<{ path: string; text: string; manifest: Record<string, unknown>; workspacePath: string }> {
         const w = this.#workspaces.get(workspaceId);
         if (!w) throw new Error(`no workspace ${workspaceId}`);
+        if (w.asleep) throw new Error('workspace is hibernated; redock it first');
         const path = join(w.path, 'project.json');
         const text = await this.#ports.fs.readText(path);
         if (text === null) throw new Error('this workspace has no project.json; a site is kept in the workspace’s envelope — convert it to an envelope first');

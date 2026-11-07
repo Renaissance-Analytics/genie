@@ -31,13 +31,7 @@ const h = (leftPct: number): Headroom => {
     return { plan: null, window: '5h', leftPct, resetsAtMs, over: false, windows: [{ window: '5h', usedPct: 100 - leftPct, leftPct, resetsAtMs, over: false }] };
 };
 const noop = () => {};
-/**
- * A react-fancy MultiSwitch (By workspace | By status) is a radio group whose options are react-fancy's own <button
- * role="radio">s: a choice between views, not a pair of action Buttons (the owner, 2026-11-01). Everything else must be a
- * react-fancy Button.
- */
-const MULTI_SWITCH = /<div[^>]*data-react-fancy-multi-switch=""[^>]*>[\s\S]*?<\/div>/g;
-const notFancy = (html: string) => buttonTags(html.replace(MULTI_SWITCH, '')).filter((t) => !/\sdata-react-fancy-button=""/.test(t));
+const notFancy = (html: string) => buttonTags(html).filter((t) => !/\sdata-react-fancy-button=""/.test(t));
 
 describe('the Dashboard draws only react-fancy Buttons', () => {
     it('first run: Add a workspace, From a git URL, From Tynn', () => {
@@ -46,13 +40,14 @@ describe('the Dashboard draws only react-fancy Buttons', () => {
         expect(notFancy(html)).toEqual([]);
     });
 
-    it('the board: header (grouping, Chat, a rate-limit pill), group headers (Open workspace, Locate repo, Add agent), a broken row’s fix, a row’s tray doors', () => {
+    it('the board: Sleeping/Stopped filters, Chat, rate limit, workspace, repo repair, Add agent, fix and tray doors', () => {
         const html = renderToStaticMarkup(
             <Dashboard
                 rows={[row(), row({ id: 'bad', name: 'bad', state: 'broken', reason: 'Provider sign-in expired', fixes: ['Sign in to kimi'] })]}
                 workspaces={[{ id: 'tynn', path: '/w/tynn' }, { id: 'moic', path: '/w/moic' }]}
                 onOpenAgent={noop}
                 onAddAgent={noop}
+                onOpenWorkspace={noop}
                 onChat={noop}
                 faults={{ tynn: { text: 'repo site not found in tynn.agi', repo: 'site' } }}
                 onLocateRepo={noop}
@@ -61,8 +56,7 @@ describe('the Dashboard draws only react-fancy Buttons', () => {
             />,
         );
         // POSITIVE CONTROL: each kind of button this state offers is in the markup.
-        expect(html.match(MULTI_SWITCH)?.[0].match(/<button[^>]*role="radio"/g)).toHaveLength(2);
-        for (const attr of ['data-group-toggle=""', 'data-action="chat-genie"', 'data-rate-limit="claude"', 'data-open-workspace="tynn"', 'data-action="locate-repo"', 'data-add-agent="moic"', 'data-fix="Sign in to kimi"', 'data-door="agent"']) {
+        for (const attr of ['data-dashboard-filter="sleeping"', 'data-dashboard-filter="stopped"', 'data-action="chat-genie"', 'data-rate-limit="claude"', 'data-open-workspace="tynn"', 'data-action="locate-repo"', 'data-add-agent="moic"', 'data-fix="Sign in to kimi"', 'data-door="agent"']) {
             expect(html, attr).toContain(attr);
         }
         expect(buttonTags(html).length).toBeGreaterThanOrEqual(9);

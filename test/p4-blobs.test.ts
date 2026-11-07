@@ -21,7 +21,7 @@ import { allowEveryPairing } from './support/allow-every-pairing.js';
 const CHUNK = 512 * 1024;
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-type Kind = 'draft-file' | 'artboard-post' | 'workspace-file';
+type Kind = import('../src/core/local-blobs.js').BlobKind;
 interface Source { size: number; sha256: string; read(offset: number, length: number): Promise<Uint8Array>; close(): Promise<void> }
 interface Blobs {
     open(kind: Kind, ref: string): Promise<{ id: string; size: number; sha256: string }>;

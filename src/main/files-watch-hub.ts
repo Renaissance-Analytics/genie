@@ -45,6 +45,8 @@ export type FilesHubEvent =
 export type WatchSource = (root: string, onPath: (rel: string) => void) => { close(): void };
 
 export interface FilesWatchHubOptions {
+    /** Late-bound metadata only: a hibernated workspace has no watcher or git reads. */
+    readonly workspaceVisible?: (workspaceId: string) => boolean;
     /** Where a batch or a git result goes: the connection (a window) that owns the views. */
     readonly send: (owner: string, event: FilesHubEvent) => void;
     /** The watcher; absent = `nodeWatchSource`. Injected so a test drives the events. */
@@ -58,7 +60,7 @@ export interface FilesWatchHubOptions {
     readonly log?: (line: string) => void;
 }
 
-interface View { readonly owner: string; readonly viewId: string; readonly workspaceId: string; readonly want: FilesWant }
+interface View { readonly owner: string; readonly viewId: string; readonly workspaceId: string; readonly workspacePath: string; readonly want: FilesWant }
 
 interface Watched {
     readonly root: string;
@@ -82,11 +84,25 @@ export class FilesWatchHub {
 
     /** A view wants this workspace's changes (again: the same owner and view id replaces what it wanted). */
     subscribe(owner: string, viewId: string, workspace: { id: string; path: string }, want: FilesWant): void {
-        this.#views.set(viewKey(owner, viewId), { owner, viewId, workspaceId: workspace.id, want: { ...(want.git ? { git: true } : {}), ...(want.repos && want.repos.length > 0 ? { repos: [...want.repos] } : {}) } });
+        this.#views.set(viewKey(owner, viewId), { owner, viewId, workspaceId: workspace.id, workspacePath: workspace.path, want: { ...(want.git ? { git: true } : {}), ...(want.repos && want.repos.length > 0 ? { repos: [...want.repos] } : {}) } });
+        this.#ensureWatch(workspace);
+    }
+
+    #ensureWatch(workspace: { id: string; path: string }): void {
+        if (this.#options.workspaceVisible?.(workspace.id) === false) return;
         if (this.#watched.has(workspace.id)) return;
         const source = this.#options.source ?? nodeWatchSource;
         const handle = source(workspace.path, (rel) => this.#seen(workspace.id, rel));
         this.#watched.set(workspace.id, { root: workspace.path, handle, pending: null, cancel: null, gitRunning: false, gitDirty: false });
+    }
+
+    /** Keep view intentions as metadata; close all IO while hidden and reopen live views on redock. */
+    visibilityChanged(): void {
+        for (const [id, watched] of [...this.#watched]) {
+            if (this.#options.workspaceVisible?.(id) !== false) continue;
+            this.#watched.delete(id); watched.cancel?.(); watched.handle.close();
+        }
+        for (const view of this.#views.values()) this.#ensureWatch({ id: view.workspaceId, path: view.workspacePath });
     }
 
     /** The view let go; the workspace's watcher closes with its last view. */
@@ -129,6 +145,7 @@ export class FilesWatchHub {
     }
 
     #seen(workspaceId: string, rel: string): void {
+        if (this.#options.workspaceVisible?.(workspaceId) === false) return;
         const w = this.#watched.get(workspaceId);
         if (!w) return;
         const at = (this.#options.now ?? Date.now)();
@@ -140,6 +157,7 @@ export class FilesWatchHub {
     }
 
     #flush(workspaceId: string): void {
+        if (this.#options.workspaceVisible?.(workspaceId) === false) return;
         const w = this.#watched.get(workspaceId);
         if (!w || !w.pending) return;
         const changes = [...w.pending].map(([path, at]) => ({ path, at }));
@@ -155,6 +173,7 @@ export class FilesWatchHub {
     }
 
     async #git(workspaceId: string): Promise<void> {
+        if (this.#options.workspaceVisible?.(workspaceId) === false) return;
         const w = this.#watched.get(workspaceId);
         if (!w) return;
         const views = [...this.#views.values()].filter((v) => v.workspaceId === workspaceId);

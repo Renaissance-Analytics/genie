@@ -10,6 +10,7 @@ import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { wireInboxPush } from '../src/main/inbox-push.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
+import { deliveryHeader, summarizeInboxPrompt } from './helpers/inbox-delivery.js';
 
 /**
  * STOP MEANS STOP UNTIL THE PERSON ACTS (genie#1565; the owner's screenshot, beta.58): Stop on a working Codex agent showed
@@ -31,7 +32,7 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * prism-acp's (Codex refuses a prompt in flight and declares `ready`; Claude takes one and folds it). Each can cancel.
  */
 
-const NOTICE_1 = 'You have 1 unread AgentInbox message; collect it with agentinbox receive.';
+const NOTICE_1 = deliveryHeader(1);
 const CANCELLED: TurnOutcomeLike = { stopReason: 'cancelled', isError: false, raw: 'cancelled' };
 const FINISHED: TurnOutcomeLike = { stopReason: 'end_turn', isError: false, raw: null };
 
@@ -109,13 +110,13 @@ afterEach(async () => {
 
 const endTurn = (id: AgentId, outcome: TurnOutcomeLike = FINISHED): void => fakes.get(id)!.events.onTurnEnd?.(outcome);
 const mail = async (to: AgentId, text: string): Promise<void> => { await services.inbox.send({ from: HUMAN as never, to, text }); };
-const promptsOf = (id: AgentId): string[] => fakes.get(id)?.prompts ?? [];
-const notices = (id: AgentId): string[] => promptsOf(id).filter((p) => p.includes('unread AgentInbox'));
+const promptsOf = (id: AgentId): string[] => (fakes.get(id)?.prompts ?? []).map(summarizeInboxPrompt);
+const notices = (id: AgentId): string[] => promptsOf(id).filter((p) => p.startsWith('AgentInbox delivery:'));
 const unread = (id: AgentId): number => services.inbox.unread(id).length;
 const deliveries = (id: AgentId): Array<[string, string]> => host.rowsFor(id).map((r) => r.event)
     .flatMap((e) => (e.kind === 'prompt_delivery' ? [[e.id, e.status] as [string, string]] : []));
 const pendingIdOf = (id: AgentId, text: string): string | null => {
-    for (const { event: e } of host.rowsFor(id)) if (e.kind === 'message' && e.text === text && e.pending) return e.pending.id;
+    for (const { event: e } of host.rowsFor(id)) if (e.kind === 'message' && summarizeInboxPrompt(e.text) === text && e.pending) return e.pending.id;
     return null;
 };
 

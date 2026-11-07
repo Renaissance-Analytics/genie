@@ -57,8 +57,8 @@ describe('the board', () => {
         expect(html).toMatch(/data-agent="atlas"[^>]*data-reveal="dim"[^>]*style="[^"]*opacity:0.32/);
         expect(html).toMatch(/data-peer-link="wren"[^>]*>↔ 14 · 8s</);
         expect(html).toMatch(/data-peer-link="moth"[^>]*>↔ 3 · 2m</);
-        expect(html).toContain('data-lane="0" data-part="start" data-live="true"');
-        expect(html).toContain('data-lane="1" data-part="end" data-live="false"');
+        expect(html).toContain('data-lane="0" data-part="start" data-live="false"');
+        expect(html).toContain('data-lane="1" data-part="end" data-live="true"');
         expect(html).not.toMatch(/role="(dialog|tooltip)"/);
     });
 

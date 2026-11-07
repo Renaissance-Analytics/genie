@@ -165,7 +165,8 @@ describe("a person's terminal and everyone else's", () => {
     });
 
     it('wired: the tab, Take Over, the scratch terminal and a remote person are personal; an agent is not', () => {
-        for (const file of ['src/main/main.ts', 'src/main/take-over-host.ts', 'src/main/scratch-terminal.ts', 'src/main/host-api.ts']) expect(readFileSync(file, 'utf8'), file).toMatch(/personal: true/);
+        expect(/localTerminals: createNativeTerminalPort\(\{/.test(readFileSync('src/main/main.ts', 'utf8'))).toBe(true);
+        for (const file of ['src/main/local-terminal-native.ts', 'src/main/take-over-host.ts', 'src/main/scratch-terminal.ts', 'src/main/host-api.ts']) expect(/personal: true/.test(readFileSync(file, 'utf8')), file).toBe(true);
         expect(readFileSync('src/main/mcp-tools-more.ts', 'utf8')).not.toMatch(/personal/);
     });
 });

@@ -1,4 +1,7 @@
 import type { Baton, PairingPins } from '../core/remote.js';
+import { isLocalTerminalMethod } from '../core/local-terminals.js';
+import { LocalTerminalServer } from './local-terminal-server.js';
+import type { NativeTerminalPort } from './local-terminal-native.js';
 import {
     AGENT_SCOPED_METHODS,
     WORKSPACE_SCOPED_METHODS,
@@ -46,6 +49,7 @@ import type { FilesHubEvent } from './files-watch-hub.js';
 
 export interface HostApi {
     readonly filesWatch?: FilesWatchPort;
+    readonly localTerminals?: NativeTerminalPort;
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
     invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
     /**
@@ -158,6 +162,7 @@ export class RemoteHost {
     /** Re-pair: the device the PIN on screen was issued to replace, if any. */
     #pinReplaces: string | null = null;
     readonly #connections = new Map<string, Connection>();
+    #localTerminals: LocalTerminalServer | null = null;
     readonly #transport: ServerTransport;
     readonly #now: () => number;
     /** Bytes a connection sent ahead of the call that uses them (genie#1346). */
@@ -210,6 +215,7 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        this.#localTerminals?.dropOwner(connection.id);
         connection.filesViews?.dispose();
         connection.content?.dispose();
         connection.blobs?.dispose();
@@ -584,6 +590,16 @@ export class RemoteHost {
         }
 
         // Staged bytes are taken only now, after every gate passed (genie#1346): never a path, never bytes inline.
+        if (isLocalTerminalMethod(method)) {
+            if (!connection.local || !this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
+            if (!this.#api.localTerminals) return refuse('the local terminal service is not available');
+            const terminals = this.#localTerminals ??= new LocalTerminalServer(this.#api.localTerminals);
+            try {
+                const value = await terminals.call(connection.id, method, args, (channel, payload) => this.#send(connection, { kind: 'event', channel, payload }));
+                if (!this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
+                return ok(this.#content(connection).terminalResult(value));
+            } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
         const materialized = this.#materialize(connection, method, args);
         if (!materialized.ok) return refuse(materialized.reason);
 

@@ -159,7 +159,6 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
             return withQuery(`${ws}/${slug}/${agentSegment(ctx, agent)}${sub}`, params);
         }
         case 'dashboard':
-            if (r.group === 'status') params.set('group', 'status');
             return withQuery(`${ws}/dashboard`, params);
         case 'deck':
             if (r.item) params.set('item', r.item);

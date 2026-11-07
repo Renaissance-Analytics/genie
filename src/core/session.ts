@@ -16,6 +16,8 @@ import { RATE_LIMIT_META, headroomFromMeta, rateLimitWarning, type Headroom } fr
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
 import { randomUUID } from 'node:crypto';
+import { SLEEPING_AFTER_IDLE_MS } from './agent-status.js';
+import { redockReorientation } from './redock.js';
 import { providerProblemWords } from './claude-cli-version.js';
 
 /**
@@ -275,6 +277,9 @@ export interface AgentSessionOptions {
      */
     carryOver?: CarryOver | null;
     onCarryOverSent?: () => void;
+    /** Independent of provider carry-over and held trust words; consumed only by an accepted first prompt. */
+    redockAt?: string;
+    onRedockSent?: (at: string) => void;
     /**
      * Notified for every ledger row, so a surface can render without re-reading the thread.
      *
@@ -383,6 +388,8 @@ export class AgentSession {
     #overloadCancel: (() => void) | null = null;
     /** The Cooling wait (COOLING_MS) after a turn that ended cleanly, while it runs; `null` = not cooling. One per session. */
     #coolingCancel: (() => void) | null = null;
+    #idleSince: number | null = null;
+    #sleepingCancel: (() => void) | null = null;
     #turnState: TurnState = 'idle';
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
@@ -535,6 +542,7 @@ export class AgentSession {
     #subagentCalls = new Map<string, string>();
     /** The carry-over waiting for the next prompt, and the one sent with the turn now running (Tynn story #380). */
     #carryOver: CarryOver | null = null;
+    #redockAt: string | null = null;
     #carryInFlight: CarryOver | null = null;
     /** Per-agent provider reading; a turn end arms delivery with the next accepted input. */
     #latestHeadroom: Headroom | null = null;
@@ -560,6 +568,7 @@ export class AgentSession {
         this.#options = options;
         this.agentId = options.agentId;
         this.#carryOver = options.carryOver ?? null;
+        this.#redockAt = options.redockAt ?? null;
         if (options.turnsBefore !== undefined && options.turnsBefore >= 0) { this.#turns = options.turnsBefore; this.#marked = options.turnsBefore; }
     }
 
@@ -631,11 +640,24 @@ export class AgentSession {
         return this.#coolingCancel !== null && this.#turnState === 'idle';
     }
 
+    /** A clock for display only; prompts and mail never wait on Sleeping. */
+    get idleSince(): number | null { return this.#turnState === 'idle' && !this.cooling ? this.#idleSince : null; }
+
+    #startIdle(): void {
+        this.#sleepingCancel?.();
+        this.#idleSince = this.#now();
+        this.#sleepingCancel = this.#later(SLEEPING_AFTER_IDLE_MS, () => {
+            this.#sleepingCancel = null;
+            if (this.#turnState === 'idle' && !this.cooling && this.running) this.#changed();
+        });
+    }
+
     /** Begin the Cooling wait, replacing one already running; its end is announced, so the board redraws it Idle. */
     #startCooling(): void {
         this.#stopCooling();
         this.#coolingCancel = this.#later(COOLING_MS, () => {
             this.#coolingCancel = null;
+            this.#startIdle();
             this.#changed();
         });
     }
@@ -643,6 +665,9 @@ export class AgentSession {
     #stopCooling(): void {
         this.#coolingCancel?.();
         this.#coolingCancel = null;
+        this.#sleepingCancel?.();
+        this.#sleepingCancel = null;
+        this.#idleSince = null;
     }
 
     /** The injected timer, or `setTimeout` — unref'd, so a wait that only redraws a status never holds the process open. */
@@ -1383,6 +1408,7 @@ export class AgentSession {
             this.#starting = true;
             const done = (): void => {
                 this.#starting = false;
+                if (this.#turnState === 'idle' && this.#idleSince === null) this.#startIdle();
                 this.#changed();
             };
             // A prompt queued while it started opens its turn in the flush. That needs no announcement of its own: the
@@ -1405,6 +1431,7 @@ export class AgentSession {
         // and never prompted showed `Turn 0 · running`, a `Stop this turn`, `Working` in the rail, and a setting change
         // waited for a turn that never came. It is idle until a prompt opens a turn or the provider starts working.
         this.#turnState = 'idle';
+        if (!this.#starting) this.#startIdle();
     }
 
     /**
@@ -1458,15 +1485,21 @@ export class AgentSession {
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
         // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
         const carry = this.#carryOver;
+        const redockAt = this.#inTurn ? null : this.#redockAt;
+        const redock = redockAt === null ? null : redockReorientation(redockAt);
         // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
         const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
-        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}`;
+        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
         const held = this.#inTurn ? null : this.#heldForNextWork;
         const handed = held === null ? text : `${held}\n\n${text}`;
         const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
         this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
+        if (redockAt !== null) {
+            this.#redockAt = null;
+            this.#options.onRedockSent?.(redockAt);
+        }
         this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
@@ -1486,6 +1519,7 @@ export class AgentSession {
             this.#limitThisTurn = false;
         }
         // What the turn carried, marked where it happened: the exact text sent, opened from the chat — never your message.
+        if (redock) void this.#emitRow({ kind: 'notice', level: 'info', message: redock });
         if (carry) void this.#emitRow({ kind: 'notice', level: 'info', message: carriedLabel(carry), carried: { from: carry.from, turns: carry.turns, text: carry.text } });
         if (rateWarning) void this.#emitRow({ kind: 'notice', level: 'warning', message: rateWarning });
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's

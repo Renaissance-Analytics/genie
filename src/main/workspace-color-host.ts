@@ -21,6 +21,7 @@ export interface WorkspaceColorFs {
 }
 
 export interface WorkspaceColorsOptions {
+    readonly mayReadFolder?: (path: string) => boolean;
     readonly fs: WorkspaceColorFs;
     /** Something a window shows changed: the registry re-emits its snapshot. */
     readonly onChanged: () => void;
@@ -39,6 +40,7 @@ function parsed(text: string | null): unknown {
 }
 
 export class WorkspaceColors {
+    readonly #mayReadFolder: (path: string) => boolean;
     readonly #fs: WorkspaceColorFs;
     readonly #onChanged: () => void;
     readonly #log: (line: string) => void;
@@ -49,6 +51,7 @@ export class WorkspaceColors {
     #again: readonly { id: string; path: string }[] | null = null;
 
     constructor(options: WorkspaceColorsOptions) {
+        this.#mayReadFolder = options.mayReadFolder ?? (() => true);
         this.#fs = options.fs;
         this.#onChanged = options.onChanged;
         this.#log = options.log ?? (() => {});
@@ -79,18 +82,21 @@ export class WorkspaceColors {
     }
 
     async #pass(workspaces: readonly { id: string; path: string }[]): Promise<void> {
+        workspaces = workspaces.filter((w) => this.#mayReadFolder(w.path));
         const texts = await Promise.all(workspaces.map((w) => this.#fs.readText(manifestPath(w.path)).catch(() => null)));
         const own = texts.map((t) => manifestColor(parsed(t)));
         const assigned = assignWorkspaceColors(workspaces.map((w, i) => ({ id: w.id, color: own[i] ?? null })));
         let changed = false;
         for (let i = 0; i < workspaces.length; i++) {
             const w = workspaces[i]!;
+            if (!this.#mayReadFolder(w.path)) continue;
             let color = assigned[w.id]!;
             if (own[i] === null) {
                 const write = colorWrite(texts[i] ?? null, color);
                 if (write.ok && write.changed) {
                     try {
                         if (write.backup) await this.#fs.writeTextAtomic(inFolder(w.path, write.backup.name), write.backup.text);
+                        if (!this.#mayReadFolder(w.path)) continue;
                         await this.#fs.writeTextAtomic(manifestPath(w.path), write.text);
                         this.#log(`[workspace-color] ${w.id}: ${color} written to project.json`);
                     } catch (error) {
@@ -109,11 +115,14 @@ export class WorkspaceColors {
     }
 
     async set(path: string, color: string): Promise<Result> {
+        if (!this.#mayReadFolder(path)) return { ok: false, reason: 'workspace is hibernated; redock it first' };
         const text = await this.#fs.readText(manifestPath(path)).catch(() => null);
+        if (!this.#mayReadFolder(path)) return { ok: false, reason: 'workspace is hibernated; redock it first' };
         const write = colorWrite(text, color);
         if (!write.ok) return write;
         if (write.changed) {
             if (write.backup) await this.#fs.writeTextAtomic(inFolder(path, write.backup.name), write.backup.text);
+            if (!this.#mayReadFolder(path)) return { ok: false, reason: 'workspace is hibernated; redock it first' };
             await this.#fs.writeTextAtomic(manifestPath(path), write.text);
         }
         const now = manifestColor(parsed(write.text))!;

@@ -25,14 +25,11 @@ const rows = [row({ id: 'a1', name: 'atlas', state: 'working', duration: '12m' }
 const render = (g: AgentRow | null) =>
     renderToStaticMarkup(<Dashboard rows={rows} genie={g} workspaces={[{ id: 'tynn', path: '/w/tynn.agi', name: 'tynn' }]} onOpenAgent={() => {}} onAddAgent={() => {}} />);
 
-describe('genie’s group on the Dashboard', () => {
-    it('comes first: genie · default agent · not in a workspace · 1 agent, then its row', () => {
+describe('genie in the flat Dashboard', () => {
+    it('sorts genie alphabetically alongside workspace agents without a section header', () => {
         const html = render(genie);
-        const header = html.indexOf('data-genie-group');
-        expect(header).toBeGreaterThan(-1);
-        expect(html).toMatch(/data-genie-group[\s\S]*?default agent · not in a workspace[\s\S]*?1 agent/);
-        expect(html.indexOf('data-agent="g"')).toBeGreaterThan(header);
-        expect(html.indexOf('data-agent="g"')).toBeLessThan(html.indexOf('data-agent="a1"'));
+        expect([...html.matchAll(/data-agent="([^"]+)"/g)].map((m) => m[1])).toEqual(['a1', 'g', 'a2']);
+        expect(html).not.toContain('data-genie-group');
     });
 
     it('the header counts genie, so every count has its row (COUNTED: 2 working)', () => {
