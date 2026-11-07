@@ -1,6 +1,6 @@
 import { winLauncherPath } from './win-launcher.js';
 import { createHash } from 'node:crypto';
-import { execFileSync, spawn as spawnChild } from 'node:child_process';
+import { execFile, spawn as spawnChild } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join } from 'node:path';
@@ -30,7 +30,7 @@ export interface EngineLaunchPorts {
     readonly env: NodeJS.ProcessEnv;
     readonly alive?: (pid: number) => boolean;
     readonly readFile?: (file: string) => string | null;
-    readonly spawnHost?: () => number | null;
+    readonly spawnHost?: () => number | null | Promise<number | null>;
     readonly connectTo?: (endpoint: string) => Promise<LineTransport>;
     /** Ask a host of another build to shut down (through a client that said its token). */
     readonly askShutdown?: (record: HostRecord) => Promise<void>;
@@ -88,17 +88,26 @@ export function hostSpawnSpec(ports: Pick<EngineLaunchPorts, 'execPath' | 'hostS
  * CI measured the first window's DevTools socket held by genie-host after that window was ended — and the launcher gives
  * it only its log and NUL. Where the launcher was not built (a dev machine with no MSVC), Node's spawn, as before.
  */
-export function spawnHostProcess(ports: Pick<EngineLaunchPorts, 'execPath' | 'hostScript' | 'logsDir' | 'env' | 'genieHome' | 'build'>, launcher: string | null = winLauncherPath()): number | null {
+export async function spawnHostProcess(
+    ports: Pick<EngineLaunchPorts, 'execPath' | 'hostScript' | 'logsDir' | 'env' | 'genieHome' | 'build'>,
+    launcher: string | null = winLauncherPath(),
+    say: (line: string) => void = () => {},
+): Promise<number | null> {
     mkdirSync(ports.logsDir, { recursive: true });
+    const spec = hostSpawnSpec(ports);
     if (launcher !== null) {
-        const spec = hostSpawnSpec(ports);
-        const said = execFileSync(launcher, ['detach', join(ports.logsDir, 'genie-host.log'), spec.file, ...spec.args], { env: spec.options.env, windowsHide: true, encoding: 'utf8', timeout: 20_000 });
+        // ASYNCHRONOUS, never execFileSync: this runs on window main, which a synchronous child start on Windows holds
+        // (#1576/#1595: 4.4 s cold). The launcher prints the host's pid and exits; the host runs on.
+        const said = await new Promise<string>((resolve, reject) => {
+            execFile(launcher, ['detach', join(ports.logsDir, 'genie-host.log'), spec.file, ...spec.args], { env: spec.options.env, windowsHide: true, encoding: 'utf8', timeout: 20_000 }, (error, stdout) => (error ? reject(error) : resolve(String(stdout))));
+        });
         const pid = Number(said.trim());
+        say(`host spawn via=genie-launch pid=${Number.isInteger(pid) && pid > 0 ? pid : '-'}`);
         return Number.isInteger(pid) && pid > 0 ? pid : null;
     }
+    say(`host spawn via=node-spawn${process.platform === 'win32' ? ' (genie-launch.exe was not found: the host inherits the window\'s handles)' : ''}`);
     const out = openSync(join(ports.logsDir, 'genie-host.log'), 'a');
     try {
-        const spec = hostSpawnSpec(ports);
         const child = spawnChild(spec.file, spec.args, { ...spec.options, stdio: ['ignore', out, out] });
         child.unref();
         return child.pid ?? null;
@@ -209,7 +218,7 @@ export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> 
         if (alive(decision.record.pid)) { log(`host pid=${decision.record.pid} did not exit; ending it`); ports.kill?.(decision.record.pid); }
     }
 
-    const pid = (ports.spawnHost ?? (() => spawnHostProcess(ports)))();
+    const pid = await (ports.spawnHost ?? (() => spawnHostProcess(ports, winLauncherPath(), log)))();
     if (pid === null) throw new Error('the host process could not be started');
     log(`host started pid=${pid} build=${ports.build}`);
     const until = now() + (ports.startTimeoutMs ?? 20_000);

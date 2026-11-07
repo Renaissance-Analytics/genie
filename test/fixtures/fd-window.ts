@@ -14,7 +14,7 @@ import { spawnHostProcess } from '../../src/main/engine-launch.js';
 const [hostScript, dir] = process.argv.slice(2);
 if (!hostScript || !dir) throw new Error('usage: fd-window.ts <hostScript> <dir>');
 const ready = join(dir, 'host.ready');
-const pid = spawnHostProcess({
+const pid = await spawnHostProcess({
     execPath: process.execPath,
     hostScript,
     logsDir: join(dir, 'logs'),
