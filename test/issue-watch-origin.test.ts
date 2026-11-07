@@ -781,7 +781,7 @@ describe('the reason reaches whoever asks', () => {
             const caller: Caller = { agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', workspacePath: '/w/tynn' };
             const tools = genieTools({
                 inbox, attention, roster: () => [atlas], resolveCaller: () => caller,
-                workspaceSetting: () => ({ scope: 'self' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+                userActive: () => true, glow: () => true, thumbsUp: () => {},
                 issueWatch: { forWorkspace: () => summary },
             });
             return JSON.parse((await tools.find((x) => x.definition.name === name)!.handler({ terminalId: 't', handoff: 'done' }, { server: 'genie', tool: name, headers: {} })).text) as Record<string, unknown>;

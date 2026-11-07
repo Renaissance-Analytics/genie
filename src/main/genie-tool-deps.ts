@@ -1,7 +1,7 @@
 import type { IssueWatchSummary } from '../core/issue-watch.js';
 import type { DrivablePage, PageAction } from './mcp-tools-pages.js';
 import type { Liveness } from '../core/liveness.js';
-import { agentAddress, inboxSettingFrom } from '../core/inbox.js';
+import { agentAddress } from '../core/inbox.js';
 import { CREATE_AGENT_ACTION, type AgentToolsDeps } from './mcp-tools-agents.js';
 import { WORKSPACE_TABS_ACTION } from './mcp-tools-workspace-tabs.js';
 import type { AgentRecord } from '../core/identity.js';
@@ -97,7 +97,6 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             ...(p.refusalForRecipient ? { refusalForRecipient: p.refusalForRecipient } : {}),
             ...(p.liveness ? { liveness: p.liveness } : {}),
             resolveCaller: p.resolveCaller,
-            workspaceSetting: (workspaceId) => inboxSettingFrom(p.settings.snapshotFor(workspaceId)),
             userActive: p.userActive,
             glow: p.glow,
             thumbsUp: p.thumbsUp,

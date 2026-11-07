@@ -124,7 +124,7 @@ setInterval(async () => {
     const box = genieTools({
         inbox: composed.inbox, attention, roster: () => roster,
         resolveCaller: (k) => { const r = roster.find((a) => a.name === k); return r ? { agentId: r.id, agentName: r.name, workspaceId: r.workspaceId, workspacePath: fancyDir } : null; },
-        workspaceSetting: () => ({ scope: 'self' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+        userActive: () => true, glow: () => true, thumbsUp: () => {},
     } as GenieToolsDeps).find((t) => t.definition.name === 'agentinbox')!;
     const agentinbox = async (caller: string, args: Record<string, unknown>): Promise<Record<string, unknown>> =>
         JSON.parse((await box.handler({ terminalId: caller, ...args } as never, { server: 'genie', tool: 'agentinbox', headers: {} })).text) as Record<string, unknown>;

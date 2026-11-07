@@ -188,7 +188,7 @@ setInterval(() => {}, 1 << 30);
         const tool = genieTools({
             inbox: composed.inbox, attention, roster: () => roster,
             resolveCaller: (k) => { const r = roster.find((a) => a.name === k); return r ? { agentId: r.id, agentName: r.name, workspaceId: r.workspaceId, workspacePath: fancy } : null; },
-            workspaceSetting: () => ({ scope: 'self' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+            userActive: () => true, glow: () => true, thumbsUp: () => {},
         } as GenieToolsDeps).find((t) => t.definition.name === 'agentinbox')!;
         const r = JSON.parse((await tool.handler({ terminalId: 'clerk', action: 'receive' } as never, { server: 'genie', tool: 'agentinbox', headers: {} })).text) as { messages: Array<Record<string, unknown>> };
         const fromSite = r.messages.find((m) => m.from === 'app:site:site_flabs');

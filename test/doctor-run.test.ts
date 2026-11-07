@@ -186,7 +186,7 @@ describe('one copy of the wiring', () => {
     it('normal Genie and doctor both build their tools with genieToolDeps — main keeps no mapping of its own', () => {
         for (const file of ['src/main/main.ts', 'src/main/doctor-run.ts']) expect(readFileSync(file, 'utf8')).toMatch(/allGenieTools\(genieToolDeps\(/);
         expect(readFileSync('src/main/main.ts', 'utf8')).not.toMatch(/workspaceSetting:/);
-        expect(readFileSync('src/main/genie-tool-deps.ts', 'utf8')).toMatch(/workspaceSetting:/);
+        expect(readFileSync('src/main/genie-tool-deps.ts', 'utf8')).not.toMatch(/workspaceSetting:/);
     });
 });
 

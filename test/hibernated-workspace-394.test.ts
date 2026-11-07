@@ -119,7 +119,7 @@ describe('story 394: a hibernated workspace supplies no data', () => {
         const inbox = await InboxStore.open(dir), attention = await AttentionStore.open(dir, inbox);
         const tools = genieTools({ inbox, attention, roster: () => host.listAgents(), workspaceSlugs: () => host.workspaceSlugs(),
             resolveCaller: () => ({ agentId: registry.osAgent()!.id, agentName: 'genie', workspaceId: registry.osAgent()!.workspaceId, workspacePath: dir }),
-            workspaceSetting: () => ({ scope: 'all' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+            userActive: () => true, glow: () => true, thumbsUp: () => {},
         });
         const answer = await tools.find((t) => t.definition.name === 'agentinbox')!.handler({ action: 'list', terminalId: 'test' }, { server: 'genie', tool: 'agentinbox', headers: {} });
         expect(answer.isError).toBe(false);
@@ -197,7 +197,7 @@ it.each(['Dormant', 'Dormant@ghost', 'id'])('story394: mail addressed to a ghost
     const inbox = await InboxStore.open(dir), attention = await AttentionStore.open(dir, inbox);
     const tools = genieTools({ inbox, attention, roster: () => host.listAgents(), workspaceSlugs: () => host.workspaceSlugs(),
         resolveCaller: () => ({ agentId: awake.id, agentName: awake.name, workspaceId: 'awake', workspacePath: dir }),
-        workspaceSetting: () => ({ scope: 'all' }), userActive: () => true, glow: () => true, thumbsUp: () => {},
+        userActive: () => true, glow: () => true, thumbsUp: () => {},
         refusalForRecipient: (text: string) => (host as unknown as { mailRefusal?: (address: string) => string | null }).mailRefusal?.(text) ?? null,
     } as never);
     const tool = tools.find((entry) => entry.definition.name === 'agentinbox')!;

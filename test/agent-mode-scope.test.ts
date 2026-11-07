@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { agentCapFrom, inboxSettingFrom } from '../src/core/inbox.js';
+import { agentCapFrom } from '../src/core/inbox.js';
 import { SETTINGS } from '../src/core/settings.js';
 import { Registry } from '../src/main/registry.js';
 import { startRefusal } from '../src/main/workspace-ops-host.js';
@@ -11,7 +11,7 @@ import { Store } from '../src/main/store.js';
 /**
  * AGENT MODE, ACCESS SCOPE, WORKSPACE CAPS AND INBOX SCOPE (§6.1/§6.2/§6.4). Mode is WORDING for the
  * agent (automated / manual), not a permission boundary — persisted on the record. Access scope is the
- * agent's own half of the two-tier inbox rule. Per workspace: `inbox_access` (the workspace's half) and
+ * only inbox permission. Per workspace:
  * `agent_cap` — a start past the cap is REFUSED with the number and the setting named, never queued.
  */
 
@@ -35,17 +35,13 @@ describe('registry: mode and access scope', () => {
     });
 });
 
-describe('workspace settings: inbox_access and agent_cap', () => {
+describe('workspace settings: agent_cap without a second access control', () => {
     it('are registered per workspace with closed enums and honest defaults', () => {
-        expect(SETTINGS.find((s) => s.key === 'inbox_access')).toMatchObject({ scope: 'workspace', type: 'enum', options: ['none', 'self', 'all'], default: 'self' });
+        expect(SETTINGS.find((s) => s.key === 'inbox_access')).toBeUndefined();
         expect(SETTINGS.find((s) => s.key === 'agent_cap')).toMatchObject({ scope: 'workspace', type: 'enum', options: ['1', '2', '4', '8', '16'], default: '8' });
     });
 
-    it('inboxSettingFrom and agentCapFrom read the values; anything unknown falls back to the default, never to open', () => {
-        expect(inboxSettingFrom({})).toEqual({ scope: 'self' });
-        expect(inboxSettingFrom({ inbox_access: 'all' })).toEqual({ scope: 'all' });
-        expect(inboxSettingFrom({ inbox_access: 'none' })).toEqual({ scope: 'none' });
-        expect(inboxSettingFrom({ inbox_access: 'everyone' })).toEqual({ scope: 'self' });
+    it('agentCapFrom reads the value; anything unknown falls back to the default', () => {
         expect(agentCapFrom({})).toBe(8);
         expect(agentCapFrom({ agent_cap: '4' })).toBe(4);
         expect(agentCapFrom({ agent_cap: 'lots' })).toBe(8);

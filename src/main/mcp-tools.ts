@@ -3,7 +3,7 @@ import { callerFrom } from './mcp-callers.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import { type Question } from '../core/attention.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
-import { HUMAN, agentAddress, reachable, resolveAddress, type Participant, type WorkspaceInboxSetting } from '../core/inbox.js';
+import { HUMAN, agentAddress, reachable, resolveAddress, type Participant } from '../core/inbox.js';
 import { framedForAgent, isAppSender } from '../core/app-inbox.js';
 import type { AttentionStore } from './attention-store.js';
 import type { InboxStore } from './inbox-store.js';
@@ -107,7 +107,6 @@ export interface GenieToolsDeps {
     /** Is that agent running, and when was it last seen (core/liveness.ts)? Read-only; absent = not reported. */
     readonly liveness?: (agentId: string) => Liveness;
     readonly resolveCaller: (terminalId: string) => Caller | null;
-    readonly workspaceSetting: (workspaceId: string) => WorkspaceInboxSetting;
     readonly userActive: () => boolean;
     /** Pulse the terminal's row. Returns whether anything received the signal. */
     readonly glow: (terminalId: string) => boolean;
@@ -328,12 +327,12 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
         ),
         handler: withCaller(async (caller, args, context) => {
             const me = deps.roster().find((r) => r.id === caller.agentId);
-            // One verdict for `list` and `send`: the two tiers, or the target wrote to the caller first.
+            // One verdict for `list` and `send`: the target's scope, or it wrote to the caller first.
             // A FLOW reaches as the person does (genie#1204; Genie 1's genie#761 — AgentInbox refused a flow caller, so a flow
-            // could not reach the agent it was built to wake): every agent. An agent reaches through the two tiers.
+            // could not reach the agent it was built to wake): every agent. An agent reaches through the target's scope.
             const mayReach = (target: AgentRecord): boolean =>
-                caller.kind === 'flow' ? reachable(HUMAN, target, deps.workspaceSetting)
-                : me !== undefined && reachable(me, target, deps.workspaceSetting, { wroteTo: (writer, reader) => deps.inbox.hasWritten(writer, reader) });
+                caller.kind === 'flow' ? reachable(HUMAN, target)
+                : me !== undefined && reachable(me, target, { wroteTo: (writer, reader) => deps.inbox.hasWritten(writer, reader) });
             const action = str(args.action) ?? '';
             switch (action) {
                 case 'list': {

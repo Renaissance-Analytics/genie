@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import type { JsonObject } from '@particle-academy/prism-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
-import type { WorkspaceInboxSetting } from '../src/core/inbox.js';
 import { AttentionStore } from '../src/main/attention-store.js';
 import * as toolDeps from '../src/main/genie-tool-deps.js';
 import { InboxStore } from '../src/main/inbox-store.js';
@@ -31,8 +30,6 @@ let dir: string;
 let registry: Registry;
 let tools: Registration[];
 const book = new CallerBook();
-// Workspace inbox settings: shop is "only this workspace", docs is open to all.
-const settings: Record<string, WorkspaceInboxSetting> = { shop: { scope: 'self' }, docs: { scope: 'all' } };
 
 type ToolRoster = (r: Pick<Registry, 'listAgents'>) => readonly AgentRecord[];
 const toolRoster = (toolDeps as Record<string, unknown>)['toolRoster'] as ToolRoster | undefined;
@@ -54,7 +51,6 @@ beforeEach(async () => {
         // THE ROSTER main.ts hands the tools.
         roster: () => (toolRoster ? toolRoster(registry) : []),
         resolveCaller: (key) => sessionCallerOf(book, key, registry, join(dir, 'osa')),
-        workspaceSetting: (id) => settings[id] ?? { scope: 'self' },
         userActive: () => true,
         glow: () => true,
         thumbsUp: () => {},

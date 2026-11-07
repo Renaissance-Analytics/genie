@@ -13,7 +13,7 @@ import { allGenieTools, type AllToolsDeps } from '../src/main/mcp-registrations.
 function deps(pluginTools: AllToolsDeps['plugins']['plugins']['tools'] = () => []): AllToolsDeps {
     const never = () => { throw new Error('not exercised'); };
     return {
-        genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller: () => null, workspaceSetting: never as never, userActive: () => true, glow: () => false, thumbsUp: () => {} },
+        genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller: () => null, userActive: () => true, glow: () => false, thumbsUp: () => {} },
         more: { knowledge: never as never, terminals: never as never, approve: async () => 'denied', resolveCaller: () => null },
         attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }) },
         hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null },

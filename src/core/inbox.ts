@@ -142,19 +142,6 @@ export function resolveAddress(text: string, roster: readonly AgentRecord[], slu
     return { kind: 'ambiguous', forms: matches.map((r) => agentAddress(r, slugs)) };
 }
 
-/** A workspace's inbox setting: who may discover and message its agents from outside. */
-export interface WorkspaceInboxSetting {
-    readonly scope: 'none' | 'self' | 'specific' | 'all';
-    /** For `specific`: the workspace ids allowed in. */
-    readonly workspaces?: readonly string[];
-}
-
-/** The workspace's half of the two-tier rule, from its settings; anything unknown falls back to `self`, never to open. */
-export function inboxSettingFrom(values: Readonly<Record<string, unknown>>): WorkspaceInboxSetting {
-    const v = values.inbox_access;
-    return { scope: v === 'none' || v === 'all' || v === 'self' ? v : 'self' };
-}
-
 /** How many agents may run in a workspace at once (§6.1 caps); the default when the value is not a number Genie offers. */
 export function agentCapFrom(values: Readonly<Record<string, unknown>>): number {
     const n = Number(values.agent_cap);
@@ -164,14 +151,14 @@ export function agentCapFrom(values: Readonly<Record<string, unknown>>): number 
 export interface ReachableOptions {
     /** For an agent whose own scope is `specific`: the workspace ids it allows. */
     readonly agentWorkspaces?: readonly string[];
-    /** Ops projects (§6.1): true when `fromWorkspace` governs `toWorkspace` — the governor then counts as the child's own workspace in both tiers. */
+    /** Ops projects (§6.1): true when `fromWorkspace` governs `toWorkspace` — the governor then counts as the child's own workspace. */
     readonly governs?: (fromWorkspace: string, toWorkspace: string) => boolean;
     /** Whether `writer` has ever messaged `reader` (the durable mail, never a cache). An agent that wrote to you can be answered. */
     readonly wroteTo?: (writer: AgentId, reader: AgentId) => boolean;
 }
 
-function tierAllows(
-    scope: WorkspaceInboxSetting['scope'],
+function scopeAllows(
+    scope: AgentRecord['accessScope'],
     fromWorkspace: string,
     toWorkspace: string,
     allowed: readonly string[],
@@ -192,20 +179,18 @@ function tierAllows(
  * Whether `from` may message `to`. **Permission, not liveness** — a reachable agent may be
  * asleep, and an unreachable one may be running; `reachable` says nothing about either.
  *
- * Two tiers, both of which must allow it: the TARGET workspace's setting, and the target
- * agent's own `accessScope`. The human reaches everyone and everyone reaches the human — DND
+ * The target agent's own `accessScope` decides. The human reaches everyone and everyone reaches the human — DND
  * is a reply, not a wall.
  *
  * **An agent that wrote to you can always be answered** (Genie 1's contract: "when one messages
  * you first, you may reply in that durable thread"; the owner: an agent "is visible to any agents
- * that it talks to"). The tiers guard who may OPEN a conversation with an agent; the agent that
+ * that it talks to"). The scope guards who may OPEN a conversation with an agent; the agent that
  * opened one gave its permission by sending. Direction is the rule — writing to someone earns the
- * writer nothing — and it lets nobody else in: the tiers still decide for every other sender.
+ * writer nothing — and it lets nobody else in: the scope still decides for every other sender.
  */
 export function reachable(
     from: AgentRecord | typeof HUMAN,
     to: AgentRecord | typeof HUMAN,
-    workspaceSetting: (workspaceId: string) => WorkspaceInboxSetting,
     options: ReachableOptions = {},
 ): boolean {
     if (from === HUMAN || to === HUMAN) return true;
@@ -214,12 +199,9 @@ export function reachable(
     if (options.wroteTo?.(to.id, from.id) === true) return true;
     if (to.accessScope === 'none') return false;
 
-    // A governor (§6.1) stands where the child's own workspace stands — in both tiers; the reverse is not implied.
+    // A governor (§6.1) stands where the child's own workspace stands; the reverse is not implied.
     const fromWorkspace = options.governs?.(from.workspaceId, to.workspaceId) === true ? to.workspaceId : from.workspaceId;
-    const ws = workspaceSetting(to.workspaceId);
-    const workspaceTier = tierAllows(ws.scope, fromWorkspace, to.workspaceId, ws.workspaces ?? []);
-    const agentTier = tierAllows(to.accessScope, fromWorkspace, to.workspaceId, options.agentWorkspaces ?? []);
-    return workspaceTier && agentTier;
+    return scopeAllows(to.accessScope, fromWorkspace, to.workspaceId, options.agentWorkspaces ?? []);
 }
 
 const MB = 1024 * 1024;
