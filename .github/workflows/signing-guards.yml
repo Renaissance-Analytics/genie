@@ -11,6 +11,9 @@ on:
       - scripts/*sign*
       - scripts/after-pack.cjs
       - test/windows-signing.test.ts
+      - test/windows-update.test.ts
+      - test/fixtures/windows-update-beta59.json
+      - scripts/verify-windows-update.cjs
 
 permissions:
   contents: read
@@ -26,4 +29,4 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npx vitest run test/windows-signing.test.ts test/release-workflow.test.ts test/release-draft.test.ts test/release-step-shells.test.ts --testTimeout=30000
+      - run: npx vitest run test/windows-signing.test.ts test/windows-update.test.ts test/release-workflow.test.ts test/release-draft.test.ts test/release-step-shells.test.ts --testTimeout=30000

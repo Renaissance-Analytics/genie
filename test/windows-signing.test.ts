@@ -67,9 +67,11 @@ describe('Windows release signing', () => {
         expect(existsSync('scripts/patch-azure-signing.cjs')).toBe(false);
     });
 
-    it('sign-test is manual, branch constrained, secretless, and verifies before artifact upload', () => {
+    it('sign-test queues only the signing branch for owner approval and also permits later manual dispatch', () => {
         const wf = yaml('.github/workflows/sign-test.yml');
-        expect(Object.keys(wf.on ?? {})).toEqual(['workflow_dispatch']);
+        expect(new Set(Object.keys(wf.on ?? {}))).toEqual(new Set(['push', 'workflow_dispatch']));
+        expect(wf.on.push.branches).toEqual(['next/release-signing']);
+        expect(wf.on.push.tags).toBeUndefined();
         const job = wf.jobs?.sign;
         expect(job).toBeDefined();
         expect(job.if).toBe("github.ref == 'refs/heads/next/release-signing'");
@@ -78,11 +80,26 @@ describe('Windows release signing', () => {
         expect(job.steps.some((s: any) => s.uses === 'azure/login@v2')).toBe(true);
         const build = job.steps.findIndex((s: any) => /electron-builder --publish never/.test(s.run ?? ''));
         const verify = job.steps.findIndex((s: any) => /verify-windows-signatures.ps1/.test(s.run ?? ''));
+        const updater = job.steps.findIndex((s: any) => /verify-windows-update.cjs/.test(s.run ?? ''));
         const upload = job.steps.findIndex((s: any) => s.uses === 'actions/upload-artifact@v4');
         expect(build).toBeGreaterThan(-1);
         expect(verify).toBeGreaterThan(build);
-        expect(upload).toBeGreaterThan(verify);
-        expect(read('.github/workflows/sign-test.yml')).not.toMatch(/secrets\.|--publish always|gh release/);
+        expect(updater).toBeGreaterThan(verify);
+        expect(upload).toBeGreaterThan(updater);
+        expect(job.steps.some((s: any) => /gh release view v2\.0\.0-beta\.59/.test(s.run ?? ''))).toBe(true);
+        expect(job.steps[upload].with.path).toContain('release/latest.yml');
+        expect(job.steps[upload].with.path).toContain('release/*-setup.exe.blockmap');
+        expect(read('.github/workflows/sign-test.yml')).not.toMatch(/secrets\.|--publish always|gh release (?:create|edit|upload|delete)/);
+    });
+
+    it('release also verifies the updater after signing and before uploading the three updater assets', () => {
+        const steps = yaml('.github/workflows/release.yml').jobs['publish-windows'].steps;
+        const verify = steps.findIndex((s: any) => /verify-windows-signatures.ps1/.test(s.run ?? ''));
+        const updater = steps.findIndex((s: any) => /verify-windows-update.cjs/.test(s.run ?? ''));
+        const upload = steps.findIndex((s: any) => /gh release upload/.test(s.run ?? ''));
+        expect(updater).toBeGreaterThan(verify);
+        expect(upload).toBeGreaterThan(updater);
+        for (const name of ['Genie-$tag-setup.exe', 'Genie-$tag-setup.exe.blockmap', 'release/latest.yml']) expect(steps[upload].run).toContain(name);
     });
 
     it('the actual Windows upload script refuses a public or unreadable release at upload time', () => {
