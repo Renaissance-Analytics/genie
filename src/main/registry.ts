@@ -16,7 +16,7 @@ export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readR
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
-import { hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
+import { WorkspaceMailVisibility, hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
 
 /**
  * THE REGISTRY — the main process's single answer to "what is going on".
@@ -56,6 +56,7 @@ export class Registry {
     #store: RegistryStore;
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
+    readonly #mailVisibility = new WorkspaceMailVisibility();
     #probe: SessionProbe = () => null;
     #observed: (id: AgentId) => TakeOverProbe | null = () => null;
     #handoff: (id: AgentId) => { text: string; at: number } | null = () => null;
@@ -737,9 +738,10 @@ export class Registry {
 
     /** Internal ownership lookup for mail. This reads metadata only, including hidden identities. */
     mailParticipantVisible(id: string): boolean {
-        const record = this.#agents.find((a) => a.id === id);
-        return !record || !this.#isHibernated(record.workspaceId);
+        return !this.mailVisibilityVersion().has(id);
     }
+
+    mailVisibilityVersion(): ReadonlySet<string> { return this.#mailVisibility.read(this.#agents, this.#workspaces); }
 
     mailRefusal(text: string, workspaceScope?: string): string | null {
         const visible = this.listAgents().filter((r) => workspaceScope === undefined || r.workspaceId === workspaceScope);

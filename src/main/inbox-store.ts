@@ -160,15 +160,28 @@ export class InboxStore {
     readonly #now: () => string;
     readonly #sessionOf: InboxSessionProbe;
     #visible: ((message: InboxMessage) => boolean) | null = null;
+    #visibilityVersion: (() => unknown) | undefined;
+    #viewVersion: unknown;
+    #viewSource: readonly InboxMessage[] | null = null;
+    #viewLength = -1;
 
     /** Host-owned view policy. Hidden mail stays stored and unacknowledged. */
-    setVisibility(test: (message: InboxMessage) => boolean): void { this.#visible = test; }
+    setVisibility(test: (message: InboxMessage) => boolean, version?: () => unknown): void {
+        this.#visible = test;
+        this.#visibilityVersion = version;
+        this.#viewSource = null;
+    }
     #view: readonly InboxMessage[] = [];
 
     #viewMessages(): readonly InboxMessage[] {
         if (!this.#visible) return this.#mail.messages;
+        const version = this.#visibilityVersion?.();
+        if (this.#visibilityVersion && this.#viewSource === this.#mail.messages && this.#viewLength === this.#mail.messages.length && this.#viewVersion === version) return this.#view;
         const next = this.#mail.messages.filter(this.#visible);
         if (next.length !== this.#view.length || next.some((m, i) => m !== this.#view[i])) this.#view = next;
+        this.#viewSource = this.#mail.messages;
+        this.#viewLength = this.#mail.messages.length;
+        this.#viewVersion = version;
         return this.#view;
     }
 

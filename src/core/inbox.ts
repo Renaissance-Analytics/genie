@@ -2,6 +2,23 @@ import type { AgentId, AgentRecord } from './identity.js';
 import type { LiveSession } from './roster.js';
 import { isOsAgent } from './os-agent.js';
 
+/** Metadata-only ownership cache. Its stable set is also the version for a filtered mail view. */
+export class WorkspaceMailVisibility {
+    #agents: readonly AgentRecord[] | null = null;
+    #workspaces: readonly { id: string; asleep?: boolean }[] | null = null;
+    #hidden: ReadonlySet<string> = new Set();
+
+    read(agents: readonly AgentRecord[], workspaces: readonly { id: string; asleep?: boolean }[]): ReadonlySet<string> {
+        if (agents !== this.#agents || workspaces !== this.#workspaces) {
+            const asleep = new Set(workspaces.filter((w) => w.asleep === true).map((w) => w.id));
+            this.#hidden = new Set(agents.filter((a) => asleep.has(a.workspaceId)).map((a) => a.id as string));
+            this.#agents = agents;
+            this.#workspaces = workspaces;
+        }
+        return this.#hidden;
+    }
+}
+
 /**
  * AGENTINBOX — the pure half (§6.4). Addressing, reachability, attachment rules.
  *

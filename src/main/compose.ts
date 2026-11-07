@@ -200,6 +200,7 @@ export interface ComposeInput extends HostingOptions {
     readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
     readonly refusalForRecipient?: (address: string) => string | null;
     readonly inboxParticipantVisible?: (id: string) => boolean;
+    readonly inboxVisibilityVersion?: () => unknown;
     /**
      * The registered workspaces (id, folder, asleep), late-bound like the roster. Their envelopes' `sites`
      * are what Hosting lists and serves (§6.6); absent = no workspaces, no declared sites.
@@ -383,7 +384,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         const hidden = new Set(hiddenWorkspaces());
         const ghosts = new Set((input.roster?.() ?? []).filter((r) => hidden.has(r.workspaceId)).map((r) => r.id as string));
         return !ghosts.has(message.from) && !ghosts.has(message.to);
-    });
+    }, input.inboxVisibilityVersion);
     // FLOWS (P3.3d): genie-host's when it runs — its scheduler fires armed flows with no window, and this window reads and
     // drives them through a replica. This window's own (its store, scheduler and file trigger) only on the emergency path.
     // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.

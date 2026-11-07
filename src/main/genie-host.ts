@@ -259,7 +259,7 @@ async function main(): Promise<void> {
     await hostRegistry.refresh();
     const hiddenWorkspaces = () => hostRegistry.workspaceStates().filter((w) => w.asleep === true).map((w) => w.id);
     own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
-    own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to));
+    own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to), () => hostRegistry.mailVisibilityVersion());
     let engineRef: SessionEngineServer | null = null;
     const approvals = new ApprovalQueue({
         autoApproved: (caller) => hostRegistry.listAgents().some((a) => a.id === caller.agentId && a.autoApprove === true),

@@ -2791,6 +2791,7 @@ async function boot(): Promise<void> {
         workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
         refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
         inboxParticipantVisible: (id) => registry?.mailParticipantVisible(id) ?? true,
+        inboxVisibilityVersion: () => registry?.mailVisibilityVersion(),
         // Each site's own app credential (genie#1345), under its workspace's switch — compose never puts it in the service env.
         appInboxEnv: (source) => appInboxEnv(source),
         // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain

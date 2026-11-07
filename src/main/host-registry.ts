@@ -2,7 +2,7 @@ import { slugsFor } from '../core/address.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { folderName } from '../core/workspace-name.js';
-import { hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
+import { WorkspaceMailVisibility, hibernatedRecipientRefusal, resolveAddress as resolveMailAddress } from '../core/inbox.js';
 import type { Store, WorkspaceRecord } from './store.js';
 
 /**
@@ -17,6 +17,7 @@ export class HostRegistry {
     readonly #store: Pick<Store, 'readWorkspaces' | 'readAgents'>;
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
+    readonly #mailVisibility = new WorkspaceMailVisibility();
     #names: ReadonlyMap<string, string> = new Map();
 
     constructor(store: Pick<Store, 'readWorkspaces' | 'readAgents'>) {
@@ -50,9 +51,10 @@ export class HostRegistry {
 
     /** Internal mail ownership lookup, including hidden records, without probing any folder. */
     mailParticipantVisible(id: string): boolean {
-        const record = this.#agents.find((a) => a.id === id);
-        return !record || this.workspace(record.workspaceId)?.asleep !== true;
+        return !this.mailVisibilityVersion().has(id);
     }
+
+    mailVisibilityVersion(): ReadonlySet<string> { return this.#mailVisibility.read(this.#agents, this.#workspaces); }
 
     mailRefusal(text: string, workspaceScope?: string): string | null {
         const visible = this.listAgents().filter((r) => workspaceScope === undefined || r.workspaceId === workspaceScope);
