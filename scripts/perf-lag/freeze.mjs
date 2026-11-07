@@ -43,7 +43,7 @@ class Cdp {
             if (typeof f?.id !== 'number' || !c.#pending.has(f.id)) return;
             const resolve = c.#pending.get(f.id);
             c.#pending.delete(f.id);
-            resolve(f);
+            if (typeof resolve === 'function') resolve(f);
         });
         await new Promise((res, rej) => { c.#ws.addEventListener('open', res, { once: true }); c.#ws.addEventListener('error', () => rej(new Error('cdp socket')), { once: true }); });
         return c;

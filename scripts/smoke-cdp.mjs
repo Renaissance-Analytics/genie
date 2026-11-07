@@ -94,7 +94,7 @@ class Cdp {
         cdp.#socket.addEventListener('message', (event) => {
             const frame = JSON.parse(event.data);
             const resolve = cdp.#pending.get(frame.id);
-            if (!resolve) return;
+            if (typeof resolve !== 'function') return;
             cdp.#pending.delete(frame.id);
             resolve(frame);
         });

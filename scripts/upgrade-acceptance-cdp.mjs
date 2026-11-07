@@ -131,7 +131,7 @@ class Cdp {
     static async connect(url) {
         const c = new Cdp();
         c.#ws = new WebSocket(url);
-        c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (r) { c.#pending.delete(f.id); r(f); } });
+        c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (typeof r === 'function') { c.#pending.delete(f.id); r(f); } });
         await new Promise((res, rej) => { c.#ws.addEventListener('open', res, { once: true }); c.#ws.addEventListener('error', () => rej(new Error('CDP socket error')), { once: true }); });
         return c;
     }
@@ -203,7 +203,10 @@ function signInCode() {
     curl('-o', NOWHERE, `${TYNN}/login`);
     const xsrf = readFileSync(jar, 'utf8').split('\n').map((l) => l.split('\t')).find((f) => f[5] === 'XSRF-TOKEN')?.[6];
     if (!xsrf) throw new Error('no XSRF cookie from /login');
-    const status = curl('-o', NOWHERE, '-w', '%{http_code}', '-H', `X-XSRF-TOKEN: ${decodeURIComponent(xsrf)}`, '-H', 'Accept: text/html', '--data-urlencode', `email=${ACCOUNT}`, `${TYNN}/dev/quick-login`);
+    // The account goes to curl in a file (`name@file` is url-encoded as name=<the file's content>), so it is never on curl's command line.
+    const account = join(work, 'account');
+    writeFileSync(account, ACCOUNT);
+    const status = curl('-o', NOWHERE, '-w', '%{http_code}', '-H', `X-XSRF-TOKEN: ${decodeURIComponent(xsrf)}`, '-H', 'Accept: text/html', '--data-urlencode', `email@${account}`, `${TYNN}/dev/quick-login`);
     if (status !== '302') throw new Error(`quick login answered ${status}: not a local Tynn, or no such seeded account`);
     const code = /token=([A-Za-z0-9]{64})/.exec(curl(`${TYNN}/genie/callback?return=genie%3A%2F%2Foauth%2Fcallback`))?.[1];
     if (!code) throw new Error('no 64-character code on the callback page');

@@ -28,6 +28,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
+import { secretNote } from './secret-note.mjs';
 
 const MODE = process.argv[2];
 if (MODE !== 'sign-in' && MODE !== 'run' && MODE !== 'install-check') { console.error('usage: github-live-cdp.mjs sign-in|run|install-check'); process.exit(2); }
@@ -86,7 +87,7 @@ class Cdp {
     static async connect(url) {
         const c = new Cdp();
         c.#ws = new WebSocket(url);
-        c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (r) { c.#pending.delete(f.id); r(f); } });
+        c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (typeof r === 'function') { c.#pending.delete(f.id); r(f); } });
         await new Promise((res, rej) => { c.#ws.addEventListener('open', res, { once: true }); c.#ws.addEventListener('error', () => rej(new Error('CDP socket error')), { once: true }); });
         return c;
     }
@@ -257,8 +258,8 @@ async function signIn() {
 async function a2() {
     const access = await held(ACCESS);
     const refresh = await held(REFRESH);
-    check(/^(ghu|gho)_/.test(access ?? ''), 'A2.1-the-keychain-holds-a-real-access-token', access ? `${access.slice(0, 4)}…, ${access.length} characters` : 'none');
-    check(refresh === null || /^ghr_/.test(refresh), 'A2.2-and-a-refresh-token-if-the-app-issues-them', refresh ? `${refresh.slice(0, 4)}…, ${refresh.length} characters` : 'none: this App issues non-expiring tokens');
+    check(/^(ghu|gho)_/.test(access ?? ''), 'A2.1-the-keychain-holds-a-real-access-token', secretNote(access));
+    check(refresh === null || /^ghr_/.test(refresh), 'A2.2-and-a-refresh-token-if-the-app-issues-them', refresh ? secretNote(refresh) : 'none: this App issues non-expiring tokens');
     const row = existsSync(githubFile) ? readFileSync(githubFile, 'utf8') : '';
     check(row !== '' && !row.includes(access ?? 'no token') && !/tokenEnc|refreshEnc/.test(row), 'A2.3-no-token-in-the-file');
     const cdp = await launch();
