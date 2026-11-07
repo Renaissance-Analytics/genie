@@ -8,6 +8,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 const runKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const hookName = 'GenieKeychainAtLogon';
 const fixtures: string[] = [];
+/** How long one PowerShell run may take before spawnSync ends it (and the row fails with spawnSync's own error). */
+const SPAWN_LIMIT_MS = 20_000;
+/*
+ * EACH ROW'S BUDGET: the spawn's own limit plus 5 s for the fixture and the assertions, so a hung PowerShell is ended and
+ * reported by the spawn, not cut off by vitest. Measured (measure/keychain-hook-time, run 42387692679, this file alone, 5
+ * runs on each system): the FIRST row carries PowerShell's cold start, 0.9 to 5.4 s on Linux (pwsh) and 3.7 to 4.7 s on
+ * Windows; every other row took at most 0.99 s (Linux) and 0.53 s (Windows). Vitest's default 5 s cut the first row off on
+ * Linux's typecheck + unit (jobs 128441347018 and 128444743188).
+ */
+const ROW_TIMEOUT_MS = SPAWN_LIMIT_MS + 5_000;
 afterEach(() => { for (const root of fixtures.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 // These tests execute PowerShell, not assertions about its source. The harness replaces
@@ -25,7 +35,7 @@ function run(phase: 'logon-install' | 'logon-read', scenario = 'ok', hasResult =
         '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
         fileURLToPath(new URL('./fixtures/keychain-logon-harness.ps1', import.meta.url)),
     ], {
-        cwd, windowsHide: true, encoding: 'utf8', timeout: 20_000,
+        cwd, windowsHide: true, encoding: 'utf8', timeout: SPAWN_LIMIT_MS,
         env: { ...process.env, PUBLIC: publicDir, HOOK_SCRIPT: resolve('scripts/perf-lag/keychain-sessions-windows.ps1'), HOOK_PHASE: phase, HOOK_CASE: scenario, HOOK_STATE: stateFile, HOOK_REPO: repo },
     });
     if (r.error) throw r.error;
@@ -39,7 +49,7 @@ function run(phase: 'logon-install' | 'logon-read', scenario = 'ok', hasResult =
     return { ...r, state, repo, publicDir };
 }
 
-describe('the Windows keychain sign-in hook, through its real phases', () => {
+describe('the Windows keychain sign-in hook, through its real phases', { timeout: ROW_TIMEOUT_MS }, () => {
     it('installs and verifies a per-user string value without needing scheduled-task permission', () => {
         const r = run('logon-install');
         expect(r.status, r.stdout + r.stderr).toBe(0);
