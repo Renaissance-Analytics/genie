@@ -72,7 +72,7 @@ const GIT_JOB_END_WAIT_MS = 5_000;
  */
 async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree, platform: NodeJS.Platform = process.platform, jobs: ReadonlySet<ChildProcess> = new Set()): Promise<void> {
     const running = children.filter((child) => child.exitCode === null && child.signalCode === null && child.pid !== undefined);
-    if (running.length > 0 || running.length === 0) return; // BREAK PROBE: nothing past the limit is ended
+    if (running.length === 0) return;
     // THE JOB FIRST, before anything in it (Windows, genie-launch.exe `job`). The launcher keeps its job's kill only while
     // git runs: when git ends, the launcher lifts the kill and exits, and what git started is left running. So git must
     // never end before its launcher. The walk below ended both at once, each by its own taskkill, and lost that race twice
