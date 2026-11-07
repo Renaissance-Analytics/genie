@@ -1,0 +1,29 @@
+name: Windows signing guards
+
+on:
+  push:
+    branches: [next/release-signing]
+  pull_request:
+    paths:
+      - electron-builder.yml
+      - package*.json
+      - .github/workflows/*
+      - scripts/*sign*
+      - scripts/after-pack.cjs
+      - test/windows-signing.test.ts
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run test/windows-signing.test.ts test/release-workflow.test.ts test/release-draft.test.ts test/release-step-shells.test.ts --testTimeout=30000
