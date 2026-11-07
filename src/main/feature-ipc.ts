@@ -65,6 +65,8 @@ export interface FeaturePorts {
     /** genie-host's safe mode (Tynn #386): "Leave safe mode". Absent = no host to leave it in (refused, said). */
     readonly safeMode?: { leave(): Promise<{ ok: true } | { ok: false; reason: string }> };
     /** The reopened-window notice (Tynn #386): Dismiss, and Stop all agents. Absent = no host to ask (refused, said). */
+    /** The brought-back page's notice: forget it. */
+    readonly rendererNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }> };
     readonly hangNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }>; stopAll(): Promise<{ ok: true } | { ok: false; reason: string }> };
     /** A part of a snapshot that took at least `ms` (genie-test-windows, job Q0: an action took 20 s with main mostly free). */
     readonly slowPart?: { readonly ms: number; log(part: string, ms: number): void };
@@ -682,6 +684,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
+        case 'rendererNotice.dismiss': {
+            if (!ports.rendererNotice) throw new Error('This window keeps no such notice.');
+            const done = await ports.rendererNotice.dismiss();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
         case 'hangNotice.dismiss':
         case 'hangNotice.stopAll': {
             if (!ports.hangNotice) throw new Error('Genie’s host is not connected.');

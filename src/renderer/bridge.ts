@@ -101,6 +101,8 @@ export interface GenieSnapshot {
     safeMode?: import('../core/safe-mode.js').SafeModeView | null;
     /** genie-host ended a hung window and started this one (Tynn #386): the notice, not safe mode. Absent/`null` = none. */
     hangNotice?: import('../core/crash-record.js').HangNotice | null;
+    /** This window's page ended and was brought back (Tynn #386): when, why, its last memory. */
+    rendererNotice?: import('../core/renderer-notice.js').RendererNotice | null;
 }
 
 /**

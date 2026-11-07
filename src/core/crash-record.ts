@@ -115,6 +115,8 @@ export type CrashRecord = CrashHeader & (
           readonly agents: readonly string[];
           /** An error's TYPE (`TypeError`), never its message. */
           readonly error?: string;
+          /** A page that ended: its last known working set, in MB (sampled with the beat). */
+          readonly rendererMb?: number | null;
       });
 
 /**
@@ -147,18 +149,22 @@ export function hangNoticeView(notice: HangNotice): SafeModeView {
 export interface WindowBeatPayload {
     readonly pid: number;
     readonly rss: number;
+    /** The main window's page (its renderer's working set), in bytes; absent = not sampled. What grew before an oom. */
+    readonly rendererRss?: number;
     readonly bye?: true;
 }
 
 /** A beat as it arrived, or `null`: a frame that is not one is ignored, never trusted. */
 export function parseBeat(value: unknown): WindowBeatPayload | null {
     if (value === null || typeof value !== 'object') return null;
-    const v = value as { pid?: unknown; rss?: unknown; bye?: unknown };
+    const v = value as { pid?: unknown; rss?: unknown; rendererRss?: unknown; bye?: unknown };
     const pid = v.pid;
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return null;
     const raw = v.rss;
     const rss = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : 0;
-    return v.bye === true ? { pid, rss, bye: true } : { pid, rss };
+    const page = v.rendererRss;
+    const rendererRss = typeof page === 'number' && Number.isFinite(page) && page >= 0 ? { rendererRss: page } : {};
+    return v.bye === true ? { pid, rss, ...rendererRss, bye: true } : { pid, rss, ...rendererRss };
 }
 
 /** Bytes as whole MB (what a lifecycle line and a record say). */

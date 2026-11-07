@@ -377,6 +377,7 @@ export type FeatureAction =
     | { kind: 'safeMode.leave' }
     // The reopened-window notice (Tynn #386): forget it, or stop every agent (the person's choice, after a second hang).
     | { kind: 'hangNotice.dismiss' }
+    | { kind: 'rendererNotice.dismiss' }
     | { kind: 'hangNotice.stopAll' }
     | { kind: 'whatsNew.close'; version: string }
     | { kind: 'knowledge.search'; query: string }
