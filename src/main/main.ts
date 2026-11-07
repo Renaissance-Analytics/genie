@@ -3574,6 +3574,10 @@ async function boot(): Promise<void> {
             void composed.inbox.markDelivered(agentId, mail.map((m) => m.id))
                 .catch((error: unknown) => console.warn('A delivered mail receipt could not be saved:', error instanceof Error ? error.message : String(error)));
         },
+        refused: (agentId, mail, refusal) => {
+            void composed.inbox.recordDeliveryRefusal(agentId, mail.map((m) => m.id), refusal)
+                .catch((error: unknown) => console.warn('A mail refusal receipt could not be saved:', error instanceof Error ? error.message : String(error)));
+        },
         wake: wakeAgent,
         // Each batch covers pending mail, so a new arrival mid-turn can be delivered at once (genie#1411).
         cumulative: true,

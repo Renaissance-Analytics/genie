@@ -57,6 +57,8 @@ export interface InboxMessage {
     readonly sentAt: string;
     /** When the recipient's acknowledged receive returned it. `null` = unread. */
     readonly readAt: string | null;
+    /** The host's last repeated handoff refusal while this mail waits; cleared when it is acknowledged. */
+    readonly deliveryRefusal?: { readonly attempts: number; readonly reason: string; readonly at: string };
     /** Genie-generated status, not an agent-authored reply or a grant of conversation-opening permission. */
     readonly automaticReply?: { readonly kind: 'paused'; readonly inReplyTo: string };
     /**
@@ -320,7 +322,8 @@ export class InboxStore {
             this.#mail.messages = this.#mail.messages.map((m) => {
                 if (!(m.to === participant && m.readAt === null && m.seq > from && m.seq <= last)) return m;
                 read.push(m.id);
-                return { ...m, readAt };
+                const { deliveryRefusal: _refusal, ...message } = m;
+                return { ...message, readAt };
             });
             await this.#flush();
             page = page.map((m) => this.#mail.messages.find((x) => x.seq === m.seq)!);
@@ -341,6 +344,19 @@ export class InboxStore {
         }
         // Idempotent when a receive or an earlier acknowledgement already read these IDs.
         if (count > 0) await this.receive({ participant, limit: count });
+    }
+
+    /** Persist a repeated refusal only on captured mail that still waits for this participant. No cursor moves. */
+    async recordDeliveryRefusal(participant: Participant, ids: readonly string[], refusal: { readonly attempts: number; readonly reason: string }): Promise<void> {
+        if (!Number.isSafeInteger(refusal.attempts) || refusal.attempts < 5 || typeof refusal.reason !== 'string') {
+            throw new Error('a delivery refusal needs a reason and at least five consecutive attempts');
+        }
+        const captured = new Set(ids);
+        const pending = new Set(this.unread(participant).filter((m) => captured.has(m.id)).map((m) => m.id));
+        if (pending.size === 0) return;
+        const deliveryRefusal = { attempts: refusal.attempts, reason: refusal.reason.slice(0, 2_000), at: this.#now() };
+        this.#mail.messages = this.#mail.messages.map((m) => pending.has(m.id) ? { ...m, deliveryRefusal } : m);
+        await this.#flush();
     }
 
     /** Mail for `participant` after their committed cursor. The UI's reminder count. */

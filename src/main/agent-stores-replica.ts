@@ -120,6 +120,10 @@ export class InboxReplica {
         await this.#call('inbox', 'markDelivered', [participant, ids]);
     }
 
+    async recordDeliveryRefusal(participant: Participant, ids: readonly string[], refusal: { readonly attempts: number; readonly reason: string }): Promise<void> {
+        await this.#call('inbox', 'recordDeliveryRefusal', [participant, ids, refusal]);
+    }
+
     async deleteThread(a: Participant, b: Participant): Promise<number> {
         return (await this.#call('inbox', 'deleteThread', [a, b])) as number;
     }

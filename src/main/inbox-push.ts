@@ -83,6 +83,8 @@ export interface InboxPushPorts {
     readonly settled: (agentId: string, delivered: boolean) => void;
     /** The provider accepted this captured mail batch, not merely a queued handoff. */
     readonly delivered?: (agentId: AgentId, mail: readonly NoticeMail[]) => void;
+    /** Five or more consecutive refusals: retain the reason on the captured pending mail, without acknowledging it. */
+    readonly refused?: (agentId: AgentId, mail: readonly NoticeMail[], refusal: { readonly attempts: number; readonly reason: string }) => void;
     /**
      * MAIL WAKES THE AGENT (the owner, 2026-10-17: "agents don't wake up from inbox pushes unless I go to their screen").
      * Start the session of an agent that has none — main's `wakeAgent` (opening an agent no longer starts it, q_04ce323c), refusing by name for an asleep workspace or
@@ -131,9 +133,27 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     const deferred = new Map<string, () => void>();
     /** A refused handoff owes its own retry, even if no further mail or session event arrives. */
     const retrying = new Map<string, () => void>();
+    const retryStates = new Map<string, { run: number | null; ready: number | null; failures: number }>();
     let disposed = false;
     const { schedule } = ports;
     const coalesceMs = ports.coalesceMs ?? 0;
+    const cancelRetry = (id: string): void => {
+        retrying.get(id)?.();
+        retrying.delete(id);
+    };
+    const retryState = (id: string) => {
+        const run = host.runOf(id as AgentId);
+        const ready = host.deliverable(id as AgentId);
+        let state = retryStates.get(id);
+        // A new run or actual ready/held transition can rescue mail immediately. Ordinary ledger rows cannot.
+        if (!state || state.run !== run || state.ready !== ready) {
+            cancelRetry(id);
+            state = { run, ready, failures: 0 };
+            if (run === null) retryStates.delete(id);
+            else retryStates.set(id, state);
+        }
+        return state;
+    };
     const acknowledge = (id: AgentId, sent: Outgoing): void => {
         if (sent.acknowledged) return;
         sent.acknowledged = true;
@@ -183,8 +203,8 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     // `arrival`: new mail, not a session event — a notice the provider already has may be overtaken (below).
     const push = (only: string, arrival = false): void => {
         if (disposed) return;
-        retrying.get(only)?.();
-        retrying.delete(only);
+        retryState(only);
+        if (retrying.has(only)) return;
         // Held mail remains due. The host's resume/start event retries it; no notice bypasses a provider pause.
         if (inboxAgentPaused(host.probe(only as AgentId))) return;
         const prior = out.get(only);
@@ -221,22 +241,30 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
                 handingOff: true, acknowledged: false, mail: r.mail ?? [] };
             out.set(id, sent);
             // What the hand-off answered: nothing took it = settled untold; taken = the turn it opens is spent.
-            const handedOff = (handed: { queued: string | null } | null): void => {
+            const handedOff = (handed: { queued: string | null } | null, refusalError?: unknown): void => {
                 // A stopped wire or a replaced batch cannot settle newer mail or arm a stale retry.
                 if (disposed || out.get(id) !== sent) return;
                 sent.handingOff = false;
                 if (handed === null) {
                     out.delete(id);
                     settled(id, false);
-                    if (schedule && host.runOf(id) === run && !retrying.has(id)) {
+                    if (host.runOf(id) !== run) return;
+                    const state = retryState(id);
+                    state.failures = Math.min(state.failures + 1, Number.MAX_SAFE_INTEGER);
+                    const detail = refusalError instanceof Error ? refusalError.message : typeof refusalError === 'string' ? refusalError : '';
+                    const reason = (detail.trim() || 'The session did not accept this mail handoff.').slice(0, 2_000);
+                    if (state.failures >= 5 && sent.mail.length > 0) ports.refused?.(id, sent.mail, { attempts: state.failures, reason });
+                    if (schedule && !retrying.has(id)) {
                         retrying.set(id, schedule(() => {
                             retrying.delete(id);
                             // A retry never starts or follows a different run. push rechecks pause/Stop/budget gates.
                             if (host.runOf(id) === run) push(id);
-                        }, 1_000));
+                        }, Math.min(1_000 * 2 ** (state.failures - 1), 60_000)));
                     }
                     return;
                 }
+                cancelRetry(id);
+                retryStates.delete(id);
                 sent.queued = handed.queued;
                 if (handed.queued === null) acknowledge(id, sent);
                 // It opens a turn when the agent was idle, or when it is held for a turn of its own.
@@ -245,15 +273,17 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
                 if (handed.queued !== null) settle(id);
             };
             let handed: { queued: string | null } | null | Promise<{ queued: string | null } | null>;
+            let refusalError: unknown;
             try {
                 // `retold`: held and then dropped, it is not kept as a draft a Restart owes — this book tells it again.
                 handed = host.handOff(id, r.text, 'genie', { ...(r.mail ? { mail: r.mail } : {}), retold: true });
-            } catch {
+            } catch (error) {
                 handed = null;
+                refusalError = error;
             }
             // In-process the answer is here now; the agent host's (the host split) arrives as a promise of the same.
-            if (handed instanceof Promise) void handed.then(handedOff, () => handedOff(null));
-            else handedOff(handed);
+            if (handed instanceof Promise) void handed.then(handedOff, (error: unknown) => handedOff(null, error));
+            else handedOff(handed, refusalError);
         }
     };
     /** Mail arrived for an agent with a session: told when the coalescing window closes (at once without one). */
@@ -283,6 +313,7 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
         offSend();
         offHost();
         for (const cancel of [...coalescing.values(), ...deferred.values(), ...retrying.values()]) cancel();
+        retryStates.clear();
         coalescing.clear();
         deferred.clear();
         retrying.clear();

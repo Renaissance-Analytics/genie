@@ -72,6 +72,10 @@ export function wireHostMailWake(p: {
             void p.inbox.markDelivered(agentId, mail.map((m) => m.id))
                 .catch((error: unknown) => p.log(`a delivered mail receipt could not be saved: ${error instanceof Error ? error.message : String(error)}`));
         },
+        refused: (agentId, mail, refusal) => {
+            void p.inbox.recordDeliveryRefusal(agentId, mail.map((m) => m.id), refusal)
+                .catch((error: unknown) => p.log(`a mail refusal receipt could not be saved: ${error instanceof Error ? error.message : String(error)}`));
+        },
         wake,
         cumulative: true,
         ...appMailPushPorts({
