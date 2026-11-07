@@ -463,7 +463,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     }
     const workspaceTrust = hosting.trust;
     /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */
-    const mayWriteInto = (folder: string): Promise<boolean> => workspaceTrust.mayWriteInto(folder);
+    const mayWriteInto = (folder: string): Promise<boolean> => workspacesNow().some((w) => w.path === folder && w.asleep === true) ? Promise.resolve(false) : workspaceTrust.mayWriteInto(folder);
     const roster = (): readonly AgentRecord[] => (input.roster?.() ?? []).filter((record) => !(input.workspaces?.() ?? []).some((workspace) => workspace.id === record.workspaceId && workspace.asleep === true));
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
     const agents = (): Map<string, { name: string; workspaceId: string }> => new Map(roster().map((r) => [r.id as string, { name: r.name, workspaceId: r.workspaceId }]));

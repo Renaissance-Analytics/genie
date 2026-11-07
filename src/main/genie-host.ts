@@ -365,9 +365,10 @@ async function main(): Promise<void> {
     /** A registered workspace's folder takes Genie's files only once trusted; with no hosting, none is. */
     const hostMayWriteInto = (folder: string): Promise<boolean> => (hostingStack
         ? hostingStack.trust.mayWriteInto(folder)
-        : Promise.resolve(!hostRegistry.listWorkspaces().some((w) => w.path === folder)));
+        : Promise.resolve(!hostRegistry.workspaceStates().some((w) => w.path === folder)));
     const hostingService = hostingStack ? new HostingService(hostingStack, {
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
+        registeredFolders: () => hostRegistry.workspaceStates().map((w) => w.path),
         elevation: hostingElevation,
         // An engine's dependents name the running processes; the workspaces are the registry's.
         onChange: (listener) => {

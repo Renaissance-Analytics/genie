@@ -2392,6 +2392,10 @@ async function boot(): Promise<void> {
      * write nothing; `confirmAdd` does the writes the plan showed.
      */
     const workspaceOps: WorkspaceOpsPorts = {
+        reverifyTrustBeforeRedock: async (id) => {
+            const view = await services?.workspaceTrust.refresh(id, 'redock');
+            if (!view) throw new Error('workspace trust is not available yet');
+        },
         fs: {
             // The same functions the first-commit test drives against a real folder and git (workspace-fs.ts).
             ...nodeWorkspaceFs(),

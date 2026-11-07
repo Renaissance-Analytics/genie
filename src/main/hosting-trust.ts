@@ -31,7 +31,7 @@ export interface TrustApi {
     /** Every workspace read, with its verdict. */
     entries(): TrustEntry[];
     /** Read the workspace's files again and answer. */
-    refresh(workspaceId: string): Promise<TrustView | null>;
+    refresh(workspaceId: string, purpose?: 'redock'): Promise<TrustView | null>;
     /** The person's yes to what the workspace says now. Recorded first: a save that fails leaves it untrusted. */
     trust(workspaceId: string): Promise<TrustView | null>;
     /** A registered workspace's folder takes Genie's files only once trusted. A folder that is no workspace is not this rule's. */
@@ -129,12 +129,13 @@ export function ownTrust(input: OwnTrustInput): OwnTrust {
         isTrustedPath: (path) => workspaceTrust.isTrustedPath(path),
         view: (id) => workspaceTrust.view(id),
         entries,
-        refresh: (id) => workspaceTrust.refresh(id),
+        refresh: (id, purpose) => workspaceTrust.refresh(id, purpose),
         trust: (id) => workspaceTrust.trust(id),
         mayWriteInto: async (folder) => {
             const workspace = input.workspaces().find((w) => w.path === folder);
             if (!workspace) return true;
-            return (await workspaceTrust.refresh(workspace.id))?.trusted !== false;
+            if (workspace.asleep) return false;
+            return (await workspaceTrust.refresh(workspace.id))?.trusted === true;
         },
         onVerdict: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     };
