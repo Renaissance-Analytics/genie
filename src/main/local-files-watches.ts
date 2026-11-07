@@ -78,12 +78,16 @@ export class LocalFilesWatches {
          * connection was sent. The window holds that tree; one it does not hold makes it refetch the whole state.
          */
         const prevTree = old?.event.git?.tree;
+        // The changes, or the whole tree when that is no bigger (a tree emptied of thousands of paths is sent as itself).
+        const treePart = (tree: NonNullable<FilesWireEvent['git']>['tree']) => {
+            if (!tree) return {};
+            if (!prevTree || !(old!.gitRevision > 0)) return { tree };
+            const changes = treeChangesOf(prevTree, tree);
+            return Object.keys(changes.set).length + changes.removed.length <= Object.keys(tree).length ? { treeChanges: { base: old!.gitRevision, ...changes } } : { tree };
+        };
         const wire: FilesWireEvent = event.kind === 'changed'
             ? { paths: next.event.paths! }
-            : { git: {
-                ...(event.tree ? (prevTree && old!.gitRevision > 0 ? { treeChanges: { base: old!.gitRevision, ...treeChangesOf(prevTree, event.tree) } } : { tree: event.tree }) : {}),
-                ...(event.repos ? { repos: event.repos } : {}),
-            } };
+            : { git: { ...treePart(event.tree), ...(event.repos ? { repos: event.repos } : {}) } };
         const push = { workspaceId: event.workspaceId, revision, state: { ...next, event: wire } };
         return Buffer.byteLength(JSON.stringify(push)) <= FILES_EVENT_BYTES ? push : { workspaceId: event.workspaceId, revision, changed: 'refetch' };
     }
