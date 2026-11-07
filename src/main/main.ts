@@ -2005,7 +2005,7 @@ async function boot(): Promise<void> {
         const record = agentFromRenderer(raw);
         if (!record || !host) return { ok: false, reason: 'not-running' };
         // Stop this turn latches the session until the person acts; Interrupt and send does not (Tynn #672 part 3).
-        return host.cancel(record.id, 'you'); // BREAK PROBE 3: the IPC handler drops the intent
+        return host.cancel(record.id, 'you', cancelIntent(intent));
     });
 
     ipcMain.handle('genie:prompt', async (_event, raw: unknown, text: unknown, files: unknown) => {
