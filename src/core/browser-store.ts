@@ -16,7 +16,7 @@ export type BrowserStoreSide = 'window' | 'browser';
  * good, and availability doesn't update in a running process. So nothing opens a store without the key, and a restart is
  * the way out.
  */
-export const STORE_LOCKED = 'Genie sites need your keyring, which isn’t available. Their logins are safe. Unlock it, then restart.';
+export const STORE_LOCKED = 'Genie sites need your keyring, which is locked. Their logins are safe. Genie is asking to unlock it, then restarts this browser to use it.';
 /** Linux with no system keyring at all (Electron's backend `basic_text`): nothing to unlock, so it says what to install. */
 export const STORE_NO_KEYRING = 'This site’s sign-in can’t be kept safely here: no system keyring is available. Install or start one (GNOME Keyring or KWallet), then restart Genie.';
 

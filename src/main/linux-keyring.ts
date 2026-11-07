@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { UNLOCK_WORDS, type UnlockOutcome } from '../core/keyring-unlock.js';
+import { parseBusAddress, unlockDefaultCollection } from './secret-service-bus.js';
 
 /**
  * A LINUX SESSION WITH NO KEYRING (the owner, 2026-11-01: "Genie needs to install this if it's not already on the
@@ -16,8 +18,10 @@ import path from 'node:path';
  *                      `gnome-keyring-daemon --start --components=secrets` if that fails.
  *  - `restart-needed`  a keyring answers, but this Genie launched on Chromium's plaintext store — Chromium picks its
  *                      store once, at launch (`--password-store`) → Restart Genie.
- *  - `refused`         the keyring is selected and gave no key (a locked collection) → Check again, after the person
- *                      unlocks it with their system's own prompt.
+ *  - `refused`         the keyring is selected and gave no key (a locked collection) → Genie asks the Secret Service to
+ *                      unlock it — at start by itself, and from the card's Unlock — and the DESKTOP shows its own dialog
+ *                      (Tynn story #388, main/secret-service-bus.ts). Genie never asks for or sees the password, and
+ *                      never shows manual steps. Unlocked, everything carries on with no restart.
  *
  * NO HYPRLAND AUTOSTART EDIT: gnome-keyring ships a D-Bus activation file for `org.freedesktop.secrets`, so the
  * Secret Service starts on demand in every session, and Genie's launch hook activates it before it picks a store
@@ -46,7 +50,7 @@ export interface KeyringFacts {
 }
 
 export type KeyringState = 'ready' | 'not-installed' | 'not-running' | 'restart-needed' | 'refused';
-export type KeyringStep = 'installing' | 'starting' | 'restarting';
+export type KeyringStep = 'installing' | 'starting' | 'restarting' | 'unlocking';
 
 /** The card, as the renderer draws it. `null` from {@link LinuxKeyring.view} = no card (ready, or not Linux). */
 export interface KeyringView {
@@ -162,6 +166,11 @@ export interface KeyringPorts {
     exec(argv: readonly string[], opts?: { timeoutMs?: number }): Promise<{ code: number; stderr: string }>;
     /** Restart Genie (main: remember the store, relaunch, quit). */
     relaunch(): void;
+    /**
+     * Ask the Secret Service to unlock the default collection (its own dialog; `signal` is the card's Cancel). Absent = this
+     * session cannot ask, and the card says the keyring is locked.
+     */
+    unlock?(signal: AbortSignal): Promise<UnlockOutcome>;
     /** The view changed (main pushes the snapshot). */
     onChange?(): void;
 }
@@ -177,15 +186,34 @@ export class LinuxKeyring {
     #failure: string | null = null;
     #manualOnFailure: string | null = null;
     #work: Promise<void> | null = null;
+    #unlocking: AbortController | null = null;
     readonly #listeners = new Set<() => void>();
 
     private constructor(ports: KeyringPorts, facts: KeyringFacts) { this.#ports = ports; this.#facts = facts; }
 
-    static async open(ports: KeyringPorts): Promise<LinuxKeyring> {
+    /** `unlockAtStart`: a locked keyring is asked to unlock at once (Tynn story #388) — the person need not know how. */
+    static async open(ports: KeyringPorts, options: { unlockAtStart?: boolean } = {}): Promise<LinuxKeyring> {
         const k = new LinuxKeyring(ports, { platform: ports.platform, ...(await ports.facts()) });
         if (k.state() === 'not-installed') k.#plan = await ports.plan();
+        if (options.unlockAtStart && k.state() === 'refused' && ports.unlock) void k.fix();
         return k;
     }
+
+    /**
+     * THE CARD'S BUTTON, as a window presses it: `fix`, answered once it is DONE or the keyring's own dialog is UP — the
+     * dialog waits on the person, and nothing should wait on the dialog (the card shows "asking" meanwhile, and Cancel).
+     */
+    press(): Promise<void> {
+        const work = this.fix();
+        if (this.#step === 'unlocking') return Promise.resolve();
+        return new Promise<void>((resolve) => {
+            const off = this.onChange(() => { if (this.#step === 'unlocking') { off(); resolve(); } });
+            void work.finally(() => { off(); resolve(); });
+        });
+    }
+
+    /** The card's Cancel while the keyring's dialog is up: the ask ends, and the card says the keyring is still locked. */
+    cancel(): void { this.#unlocking?.abort(); }
 
     state(): KeyringState { return classifyKeyring(this.#facts); }
     canKeepSecrets(): boolean { return this.state() === 'ready'; }
@@ -248,7 +276,7 @@ export class LinuxKeyring {
             case 'not-installed': if (!(await this.#install())) return; await this.#start(); return;
             case 'not-running': await this.#start(); return;
             case 'restart-needed': this.#set('restarting'); this.#ports.relaunch(); return;
-            case 'refused': this.#set(null, 'Your keyring is running but gave Genie no key — it is probably locked. Unlock it, then Check again.'); return;
+            case 'refused': await this.#unlock(); return;
         }
     }
 
@@ -273,6 +301,19 @@ export class LinuxKeyring {
         return true;
     }
 
+    /** Ask the keyring to unlock (its own dialog), then read the session again. No restart: whoever needs it reads again. */
+    async #unlock(): Promise<void> {
+        if (!this.#ports.unlock) { this.#set(null, UNLOCK_WORDS.stillLocked); return; }
+        const controller = new AbortController();
+        this.#unlocking = controller;
+        this.#set('unlocking');
+        let outcome: UnlockOutcome;
+        try { outcome = await this.#ports.unlock(controller.signal); } catch { outcome = 'failed'; } finally { this.#unlocking = null; }
+        await this.#reread();
+        if (this.state() === 'ready') { this.#set(null); return; }
+        this.#set(null, outcome === 'failed' ? UNLOCK_WORDS.failed : UNLOCK_WORDS.stillLocked);
+    }
+
     async #start(): Promise<void> {
         this.#set('starting');
         await this.#ports.exec(START_SECRET_SERVICE_ARGV, { timeoutMs: START_TIMEOUT_MS });
@@ -289,6 +330,9 @@ export class LinuxKeyring {
 export interface RealKeyringDeps {
     /** Run a program (never a shell). May throw for a missing program (ENOENT). */
     run(binary: string, args: readonly string[], timeoutMs?: number): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    /** The session bus's address and this process's uid, for the unlock (Tynn story #388); absent = this process's. */
+    busAddress?: string | undefined;
+    uid?: number | undefined;
     /** This process's store: `safeStorage.getSelectedStorageBackend()` and `isEncryptionAvailable()` in Electron. */
     storage(): { backend: string | null; available: boolean };
     relaunch(): void;
@@ -335,6 +379,13 @@ export function realKeyringPorts(deps: RealKeyringDeps): KeyringPorts {
             }
         },
         relaunch: () => deps.relaunch(),
+        // THE KEYRING'S OWN UNLOCK DIALOG (Tynn story #388): over the session bus, by Genie's own minimal client.
+        unlock: async (signal) => {
+            const where = parseBusAddress(deps.busAddress ?? process.env['DBUS_SESSION_BUS_ADDRESS']);
+            const uid = deps.uid ?? process.getuid?.();
+            if ('error' in where || uid === undefined) return 'failed';
+            return (await unlockDefaultCollection({ socketPath: where.path, uid, signal })).outcome;
+        },
         ...(deps.onChange ? { onChange: deps.onChange } : {}),
     };
 }
@@ -358,4 +409,19 @@ export function takeResumeSignIn(dir: string): ResumeSignIn | null {
     } catch {
         return null;
     }
+}
+
+/**
+ * THE WINDOW'S OWN ASK, BEFORE IT READS ITS STORE (Tynn story #388): Electron reads safeStorage's availability once per
+ * process, so a window that started on a locked keyring could not use it until a restart. Unlock on an unlocked collection
+ * answers at once with no dialog, and a session with no Secret Service fails at once, so this costs nothing when nothing
+ * is locked. Never throws.
+ */
+export async function unlockKeyringBeforeStores(log: (line: string) => void, env: NodeJS.ProcessEnv = process.env): Promise<UnlockOutcome> {
+    const where = parseBusAddress(env['DBUS_SESSION_BUS_ADDRESS']);
+    const uid = process.getuid?.();
+    if ('error' in where || uid === undefined) return 'failed';
+    const r = await unlockDefaultCollection({ socketPath: where.path, uid, stepTimeoutMs: 3_000 });
+    log(`keyring: unlock at start ${r.outcome}${r.detail ? ` (${r.detail})` : ''}`);
+    return r.outcome;
 }

@@ -207,6 +207,7 @@ export function agentRowFor(
         signedOut: session?.signedOut === true,
         accountPaused: session?.accountPaused ?? null,
         designLogin: session?.designLogin === true,
-        background: session?.background ?? null,
+        // Only a running process has work running: a process that exited leaves its last count behind, until its next `run`.
+        background: session?.running ? session.background ?? null : null,
     };
 }

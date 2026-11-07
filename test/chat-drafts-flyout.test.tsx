@@ -129,18 +129,20 @@ describe('a restored draft never takes the caret (genie#1235)', () => {
         const [major, minor] = pkg.version.split('.').map(Number) as [number, number];
         expect(major > 5 || (major === 5 && minor >= 65), pkg.version).toBe(true);
         const ours = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dependencies: Record<string, string> };
-        expect(ours.dependencies['@particle-academy/react-fancy']).toBe('6.3.0');
+        expect(ours.dependencies['@particle-academy/react-fancy']).toBe('6.7.2');
     });
 });
 
 describe('wiring', () => {
     const strip = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-    it('main keeps the drafts: opens the store after the registry has loaded, prunes deleted agents on every change, answers the window', () => {
+    it('main keeps the drafts: opens the store after the registry has loaded, prunes deleted agents when the roster changes, answers the window', () => {
         const main = strip('../src/main/main.ts');
         expect(main).toMatch(/ChatDraftStore\.open\(genieRoot\(\)\)/);
         expect(main.indexOf('ChatDraftStore.open(')).toBeGreaterThan(main.indexOf('await registry.load('));
-        expect(main).toMatch(/registry\.subscribe\(\(\) => \{ void drafts\.prune\(/);
+        // On a roster change, not every snapshot (beta.60): test/drafts-prune-on-roster-change.test.ts counts the calls.
+        expect(main).toMatch(/rosterPruner\(\{ ids: draftAgents, prune: \(ids\) => drafts\.prune\(ids\)/);
+        expect(main).toMatch(/registry\.subscribe\(\(\) => draftPruner\.changed\(\)\)/);
         for (const ch of ['load', 'save', 'put-file', 'read-file', 'release']) expect(main).not.toContain(`'genie:chat-drafts-${ch}'`);
         expect(main).toMatch(/chatDrafts:\s*engineDraftsPort\(drafts,/);
     });

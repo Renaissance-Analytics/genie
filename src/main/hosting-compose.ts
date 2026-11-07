@@ -26,7 +26,8 @@ import type { SupervisorApi } from './process-supervisor.js';
 import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
 import { ServiceDriver, dockerRunnerOver, type DockerEventsPort, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
-import { DotEnvSync, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
+import { DotEnvSync, envFileSites, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
+import { ownTrust, type TrustApi } from './hosting-trust.js';
 import { SiteManager, type PhpCgiResolution } from './site-manager.js';
 import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sites-host.js';
 import { readJson, writeJsonAtomic } from './store.js';
@@ -143,6 +144,10 @@ export interface HostingOptions {
 
 export interface HostingComposeInput extends HostingOptions {
     readonly userData: string;
+    /** SAFE MODE (Tynn #386; genie-host's): while on, no site and no stopped engine is started by a launch or a wake. */
+    readonly safeMode?: () => boolean;
+    /** A site safe mode held down, with the name the banner shows it by. */
+    readonly heldSite?: (siteId: string, name: string) => void;
     readonly now?: () => number;
     /** The registered workspaces (id, folder, asleep), late-bound: their envelopes' `sites` are what Hosting lists and serves. */
     readonly workspaces?: () => readonly WorkspaceRef[];
@@ -154,6 +159,12 @@ export interface HostingComposeInput extends HostingOptions {
     readonly settings: Pick<SettingsApi, 'onChange'>;
     /** A source's app credential (genie#1345) under its workspace's switch — laid over that site's env only. */
     readonly appEnv: (source: AppEnvSource) => Readonly<Record<string, string>>;
+    /** A workspace's trust verdict moved (genie#1519): told after the record is updated. */
+    readonly onTrustVerdict?: ((workspaceId: string) => void) | undefined;
+    /** The slow pass over what a verdict reads. Absent = `TRUST_PASS_MS`. */
+    readonly trustWatchEveryMs?: number | undefined;
+    /** False = no folder watchers, the slow pass alone. Absent = watch. */
+    readonly trustWatchFolders?: boolean | undefined;
 }
 
 /** The hosting as its builder holds it: the API, and its shutdown in the steps a quit interleaves with stopping every supervised process. */
@@ -166,12 +177,16 @@ export interface HostingStack extends HostingApi {
     readonly envFiles: DotEnvSync;
     /** The in-app browser's front door (S7). */
     readonly frontDoor: GenRouterServer;
+    /** The workspaces' trust (genie#1519): its record and verdicts, owned where the hosting is. */
+    readonly trust: TrustApi;
     /** Nothing more is started or synced: the hosts sync and the port probe, the docker watch, the workspace watch. */
     quiesce(): void;
     /** The `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short. */
     drainEnvFiles(): Promise<void>;
     /** The in-app front door's connections closed. */
     closeFrontDoor(): Promise<void>;
+    /** No trust pass starts from here; the one in flight is waited for, and this process's git policy goes (genie#1519). */
+    closeTrust(): Promise<void>;
     /** The port allocator's last write landed. */
     settled(): Promise<void>;
 }
@@ -535,6 +550,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         {
             ...enginePorts,
             personStopped: () => engineStopped,
+            ...(input.safeMode ? { safeMode: input.safeMode } : {}),
             // A hibernated workspace stays asleep through a restart: an engine only sleeping workspaces use is not started.
             asleepOnly: (i) => asleepOnlyEngine(i, { chosen: engineUse.chosen, workspaces: engineUse.workspaces() }),
             start: (id) => engines.start(id),
@@ -618,6 +634,8 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         },
         envFor: (workspaceId) => engines.envFor(workspaceId),
         log: (line) => console.error(line),
+        ...(input.safeMode ? { safeMode: input.safeMode } : {}),
+        held: (siteId) => input.heldSite?.(siteId, sites.get(siteId)?.host ?? siteId),
     });
     // A site waiting for its first start here is not configured yet: the person's Start is what asks for its name.
     // CONFIGURED, not running (genie#624): a site that exists resolves whether or not it is up, so a start or a stop never
@@ -672,10 +690,20 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     // Only now does the hosts file follow the sites: the boot's declare-and-start burst is ONE sync of the whole
     // configured set, never a write of a half-loaded list (which would drop names, then prompt again to add them).
     frontDoorCtl.beginHosts();
+    // ONE VERDICT FOR EACH WORKSPACE (genie#1519), beside the sites that read the same record. Until a workspace has been
+    // read it is not trusted, so git reads there check its config first.
+    const trust = ownTrust({
+        workspaces: workspacesNow,
+        envelopeSites,
+        readText: nodeEnvelopeFs().readText,
+        everyMs: input.trustWatchEveryMs,
+        watchFolders: input.trustWatchFolders,
+        verdictMoved: input.onTrustVerdict,
+    });
     // Each site repo's `.env` follows the workspace's engines: after the sites are known, and on every engine or site change.
     const envFiles = new DotEnvSync({
         envFor: (workspaceId) => engines.envFor(workspaceId),
-        sites: () => sites.list(),
+        sites: () => envFileSites(sites.list()),
         fs: nodeEnvelopeFs(),
         gitIgnored: input.gitIgnored ?? gitIgnoredOver(execFileRunner),
         // The name each workspace was registered with (Settings → General "Env file name"); none recorded is `.env`.
@@ -687,7 +715,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     engines.onChange(syncEnvFiles);
     sites.onChange(syncEnvFiles);
     const stopWatchingWorkspaces = input.onWorkspacesChange?.(() => {
-        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`));
+        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`)).finally(() => trust.workspacesChanged());
     }) ?? (() => {});
     const quiesce = () => {
         stopWatchingWorkspaces();
@@ -754,6 +782,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
             if (engineStopped.delete(id)) await saveEngineStopped();
         },
         frontDoor,
+        trust: trust.api,
         frontDoorPort,
         browserTrust: () => {
             const opened = genCa();
@@ -779,11 +808,13 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         quiesce,
         drainEnvFiles,
         closeFrontDoor,
+        closeTrust: () => trust.close(),
         settled,
         // Its own part only: supervised processes (the sites, Caddy) are the supervisor's owner's to stop.
         shutdown: () => down ??= (async () => {
             quiesce();
             await drainEnvFiles();
+            await trust.close();
             await closeFrontDoor();
             await settled();
         })(),

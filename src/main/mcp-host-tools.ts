@@ -1,6 +1,7 @@
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { callerFrom } from './mcp-callers.js';
 import type { Caller, McpCall, Registration, ToolContext } from './mcp-tools.js';
+import { NO_PAGES_HERE, notAvailableHere, type HostCapabilities } from '../core/host-runtime.js';
 
 /**
  * WHICH OF GENIE'S TOOLS RUN IN GENIE-HOST, AND WHAT THE REST DO (the host split, P3.1: plan §11d).
@@ -38,6 +39,11 @@ export interface HostToolsOptions {
     readonly openFileLater: (call: ForwardedToolCall) => void;
     /** The agent's calls while they are forwarded, by id: an approval the window's tool asks is tied to its call. */
     readonly forwardedCalls?: Map<string, McpCall>;
+    /**
+     * What this host can have (core/host-runtime.ts hostCapabilities, P10.1d). Absent = a window and a browser, as in the
+     * app. With no window every forwarded tool answers "not available on this host"; with no browser, `pages` does.
+     */
+    readonly capabilities?: Pick<HostCapabilities, 'window' | 'browser'>;
 }
 
 /** What a window tool answers when there is no window. The agent reads it; nothing was done. */
@@ -52,12 +58,16 @@ function windowLostRefusal(name: string, why: string): string {
 /** Every registration as the host serves it: the host's own tools as they are, every other one forwarded to the window. */
 export function hostRegistrations(all: readonly Registration[], options: HostToolsOptions): Registration[] {
     let seq = 0;
+    const can = options.capabilities ?? { window: true, browser: true };
     return all.map((r) => {
         const name = r.definition.name;
         if (HOST_NATIVE_TOOLS.has(name)) return r;
         const handler = async (args: JsonObject, context: ToolContext): Promise<McpToolResult> => {
             const resolved = callerFrom(args, context.headers, options.resolveCaller);
             const call: ForwardedToolCall = { name, args, headers: { ...context.headers }, caller: typeof resolved === 'string' ? null : resolved };
+            // Never on this host (P10.1d): nothing is forwarded, run or kept, and never "open Genie" — there is none to open.
+            if (name === 'pages' && !can.browser) return { text: NO_PAGES_HERE, isError: true };
+            if (!can.window) return { text: notAvailableHere(name, 'a Genie window'), isError: true };
             if (!options.window.connected()) {
                 if (name === 'openFileForUser') {
                     options.openFileLater(call);

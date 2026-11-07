@@ -11,7 +11,8 @@ import { describe, expect, it } from 'vitest';
  *  - the spawn host's own implementation (`spawn-exec.ts`: what the child runs; in main only as the logged fallback
  *    when the child cannot start), or the client that forks the child (`spawn-host-client.ts`: one spawn, at boot);
  *  - the launcher of the agent host (`engine-launch.ts`, the host split #1387: one DETACHED spawn of genie-host at boot,
- *    again only when the host was lost). It cannot go through the spawn host: that child ends every process it made
+ *    again only when the host was lost; on Windows through genie-launch.exe, asynchronously, #1628 — test/host-spawn-async
+ *    holds that no synchronous child start is ever made there). It cannot go through the spawn host: that child ends every process it made
  *    when the window ends, and genie-host must outlive the window;
  *  - on the KNOWN list below: modules that still spawn on main, each with its reason and owner. The list may only
  *    SHRINK. A new module that spawns goes through `execFileRunner` (or the spawn host) instead.
@@ -31,7 +32,6 @@ const KNOWN: Readonly<Record<string, string>> = {
     'src/main/private-credentials.ts': "agents' private credential helper: the agent engine (#1387 P1/P3)",
     'src/main/leftover-sweep.ts': 'boot-time leftover provider sweep (asynchronous listing since #1390)',
     'src/main/process-list.ts': 'the OS process table, read off the loop since #1390',
-    'src/main/envelope-fs.ts': 'git reads for a workspace envelope (files host, #1387 P2)',
     'src/main/git-ports.ts': 'repo panel git calls (files host, #1387 P2)',
     'src/main/repo-git.ts': 'repo panel git calls (files host, #1387 P2)',
     'src/main/service-exec.ts': "a person's or an agent's `services exec` command, streamed (#1387 P5)",

@@ -10,7 +10,7 @@ import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
-import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
+import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { OS_WORKSPACE } from '../core/os-agent.js';
@@ -54,6 +54,9 @@ import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import { DeviceStore } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
+import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
+import { writeGenieInstructions } from './genie-instructions.js';
+import { trustSteps, type TrustApi } from './hosting-trust.js';
 import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
 import type { PtyPort } from './terminal-host.js';
@@ -78,11 +81,23 @@ import type { GenRouterServer } from './gen-router-server.js';
  */
 
 export interface ComposeInput extends HostingOptions {
+    /**
+     * SAFE MODE (Tynn #386), on the emergency no-host path: this window's own flows, sites and engines start nothing by
+     * themselves while it is on (window-safe-mode.ts reads it from the runtime files). `heldSite` names a site it held;
+     * `safeModeLeft` is told when the person leaves it, so the own flow clock plans again.
+     */
+    readonly safeMode?: () => boolean;
+    readonly heldSite?: (siteId: string, name: string) => void;
+    readonly safeModeLeft?: (listener: () => void) => void;
+    /** This Genie's build, said in the remote `welcome` (P10.1e). Absent = 'dev'. */
+    readonly build?: string;
     /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
     readonly onComposeStage?: (sample: ComposeStageSample) => void;
     /** Internal scheduling port: maintenance runs after ready, and the returned callback cancels a pending sweep. */
     readonly scheduleStagingSweep?: (work: () => Promise<void>) => () => void;
     readonly userData: string;
+    /** Read-only live pause state for AgentInbox's automatic replies; no session is started by this probe. */
+    readonly inboxSession?: InboxSessionProbe;
     readonly pty: PtyPort;
     /**
      * The supervisor's pty engine (sites, queue workers, the front door), when it is not `pty`: in Electron, the spawn
@@ -170,6 +185,12 @@ export interface ComposeInput extends HostingOptions {
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
     readonly mcpTools?: () => readonly { name: string; description: string }[];
+    /** A workspace's trust verdict moved. */
+    readonly onTrustVerdict?: (workspaceId: string) => void;
+    /** The slow pass over what a verdict reads. Absent = `TRUST_PASS_MS`. */
+    readonly trustWatchEveryMs?: number;
+    /** False = no folder watchers, the slow pass alone. Absent = watch. */
+    readonly trustWatchFolders?: boolean;
     /**
      * The live agent roster — the same one the agents' own inbox tool resolves against. Late-bound: the registry
      * exists after composition. Addresses, names, uncollected mail and reminders all derive from it; absent = none.
@@ -209,7 +230,7 @@ export type { FrontDoorStatus } from './hosting-compose.js';
 /** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
 type S_Settings = NonNullable<WindowAgentStores['settings']>;
 
-export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown' | 'sites' | 'engines' | 'envelopeSites'> {
+export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown' | 'sites' | 'engines' | 'envelopeSites' | 'trust'> {
     /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
     prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
     /** Why this agent's last start went without its Tynn server, for a note in its chat; `null` when it has it (genie#1234). */
@@ -232,6 +253,18 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly ownFlows: FlowStore | null;
     readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
     readonly supervisor: SupervisorApi;
+    /**
+     * WHAT EACH WORKSPACE'S OWN FILES SAY WOULD RUN, AND WHETHER THE PERSON HAS SAID YES TO IT (genie#1519). The host owns
+     * it: genie-host's verdicts through this window's replica (failing closed before the first dump and after the link
+     * drops), or this window's own hosting's on the emergency path, until P6.
+     */
+    readonly workspaceTrust: TrustApi;
+    /** Genie's own files for an agent whose workspace is not trusted, or `null`. */
+    untrustedFilesFor(record: { readonly workspaceId: string }): Promise<import('./session-host.js').GenieInstructionFiles | null>;
+    /** The workspaces read and not trusted, with what would run: the person's trust step. */
+    trustSteps(): readonly { readonly workspaceId: string; readonly changed: boolean; readonly list: import('../core/workspace-trust.js').TrustList }[];
+    /** The verdict as last read, without reading: for a shell call. A workspace not read yet is not trusted. */
+    untrustedNow(record: { readonly workspaceId: string }): boolean;
     /**
      * Genie's hosting (P5a): the classes themselves when THIS window built it (the emergency path, and every test that
      * composes alone); the narrow surface a window uses (hosting-host.ts) when it is genie-host's, through the replica.
@@ -330,7 +363,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
     stage?.begin('agent-stores');
     if (!input.agentStores) {
-        ownStores = await openAgentStores(input.userData, iso);
+        ownStores = await openAgentStores(input.userData, iso, input.inboxSession);
         stage?.end(); stage?.begin('agent-store-imports');
         importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
         await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
@@ -399,6 +432,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         confirm: pairing,
         transport: input.remoteTransport ?? { onConnection: () => () => {} },
         now,
+        ...(input.build ? { build: input.build } : {}),
     });
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
     // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA. Its own
@@ -408,6 +442,15 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     stage?.end();
     const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
+    // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With genie-host's, this window's own git reads follow the host's
+    // verdicts through the replica, which fails closed; the emergency path's own hosting set this process's policy itself.
+    if (!ownHosting) {
+        setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.isTrustedPath(path)));
+        hosting.trust.onVerdict((id) => input.onTrustVerdict?.(id));
+    }
+    const workspaceTrust = hosting.trust;
+    /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */
+    const mayWriteInto = (folder: string): Promise<boolean> => workspaceTrust.mayWriteInto(folder);
     const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
     const agents = (): Map<string, { name: string; workspaceId: string }> => new Map(roster().map((r) => [r.id as string, { name: r.name, workspaceId: r.workspaceId }]));
@@ -480,7 +523,19 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         envFor: (id) => hosting.engines.envFor(id),
         addKnowledge: async (entry) => ({ id: (await knowledge.add(entry as never)).id }),
         attention,
+        ...(input.safeMode ? { safeMode: input.safeMode } : {}),
+        // A Codex agent in a workspace not trusted gets a flow's values with Genie's skill names escaped (genie#1519).
+        escapesPromptValues: (address) => {
+            const found = resolveOnRoster(address, roster(), input.workspaceSlugs?.());
+            if (found.kind !== 'one') return false;
+            const agent = roster().find((r) => r.id === found.id);
+            if (agent?.provider !== 'codex') return false;
+            const workspace = workspacesNow().find((w) => w.id === agent.workspaceId);
+            return workspace !== undefined && hosting.trust.view(workspace.id)?.trusted !== true;
+        },
     }) : null;
+    // Leaving safe mode arms the own flow clock again; it starts nothing by itself.
+    if (ownEngine) input.safeModeLeft?.(() => { ownEngine.scheduler.plan(); });
     const flowScheduler: FlowSchedulerApi = input.flowsEngine?.scheduler ?? ownEngine!.scheduler;
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
@@ -524,6 +579,21 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         updateEngine: (id, options) => hosting.updateEngine(id, options),
         hostingProblems: () => hosting.hostingProblems(),
         frontDoor: ownHosting?.frontDoor ?? null,
+        workspaceTrust,
+        untrustedFilesFor: async (record) => {
+            const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
+            // Not in a workspace: the built-in Genie agent, in a folder of Genie's own.
+            if (!workspace) return null;
+            const view = await workspaceTrust.refresh(workspace.id).catch(() => null);
+            if (view !== null && view.trusted) return null;
+            return writeGenieInstructions(join(runtimeDir(input.userData), 'untrusted-agent'), input.mcpTools?.() ?? []);
+        },
+        trustSteps: () => trustSteps(workspaceTrust.entries()),
+        untrustedNow(record) {
+            const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
+            if (!workspace) return false;
+            return workspaceTrust.view(workspace.id)?.trusted !== true;
+        },
         approvals,
         remote,
         pairing,
@@ -585,6 +655,8 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         pluginsDir,
         pluginsRefresh: async () => { plugins = await openPlugins(); },
         syncConfig: async (workspacePath, source = 'start') => {
+            // Nothing of Genie's goes into a folder the person has not trusted, its token above all.
+            if (!(await mayWriteInto(workspacePath))) return [];
             const endpoint = input.mcpEndpoint?.() ?? null;
             if (!endpoint) {
                 const reason = 'Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace';
@@ -601,6 +673,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
             return results;
         },
         syncAgentDocs: async (workspacePath, source = 'start') => {
+            if (!(await mayWriteInto(workspacePath))) return;
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const on = settings.snapshot().mcp_sync_agents !== false;
             // One node fs for every step; each write and removal is reported to the health record Settings reads.
@@ -635,6 +708,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         setFlowToolCaller: (call) => { ownEngine?.setToolCaller(call); },
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
+            setGitReadPolicy(null);
             down ??= (async () => {
                 stagingSweep.abort(); stopStagingSweep();
                 ownApprovals?.cancelAll('Genie is shutting down');
@@ -652,6 +726,9 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 if (!input.supervisor) for (const p of supervisor.list()) supervisor.stop(p.id);
                 // Then the `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short.
                 await ownHosting?.drainEnvFiles();
+                // The trust passes end before the front door: a pass in flight reads git in a workspace and writes the record.
+                await ownHosting?.closeTrust();
+                if (!ownHosting) setGitReadPolicy(null);
                 await ownHosting?.closeFrontDoor();
                 // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
                 // soon, and a quit does not wait on an agent — bounded, then the run is left unrecorded.

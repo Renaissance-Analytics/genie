@@ -3,6 +3,7 @@ import type { UpdateChannel } from '../src/core/update-channel.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { windowLaunchFlags } from '../src/core/launch-flags.js';
 import { entryFor } from '../src/core/entry-mode.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
@@ -419,7 +420,9 @@ describe('the helper process', () => {
         // Measured on CI (run 42079934150): the app runs with --no-sandbox there; a helper started without it never linked,
         // and the window's automatic and forced checks never settled.
         const main = strip('src/main/main.ts');
-        expect(main).toMatch(/publishLaunch\(\{ file: process\.execPath, args: \[\.\.\.\(app\.isPackaged \? \[\] : \[app\.getAppPath\(\)\]\), '--updater', \.\.\.process\.argv\.filter\(\(a\) => \/\^--\(no-sandbox\|ozone-platform=\|password-store=\)\/\.test\(a\)\)\] \}\)/);
+        expect(main).toMatch(/publishLaunch\(\{ file: process\.execPath, args: \[\.\.\.\(app\.isPackaged \? \[\] : \[app\.getAppPath\(\)\]\), '--updater', \.\.\.windowLaunchFlags\(process\.argv\)\] \}\)/);
+        // The switches themselves (core/launch-flags.ts): the sandbox, the display and the password store are still among them.
+        expect(windowLaunchFlags(['/genie', '--no-sandbox', '--ozone-platform=wayland', '--password-store=basic', '--other'])).toEqual(['--no-sandbox', '--ozone-platform=wayland', '--password-store=basic']);
     });
 
     it('APPIMAGE: the variable and the AppImage’s environment reach the helper from the host’s', () => {
@@ -427,7 +430,8 @@ describe('the helper process', () => {
         expect(env).toMatchObject({ APPIMAGE: '/home/w/Genie.AppImage', APPDIR: '/tmp/.mount_Genie', ARGV0: 'Genie.AppImage', OWD: '/home/w', GENIE_HOME: '/home/w/.genie', PATH: '/usr/bin' });
         expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
         // The host has it from the window that started it, and starts the helper with it.
-        expect(strip('src/main/main.ts')).toMatch(/hostScript: join\(here, 'host\.js'\)[\s\S]{0,600}env: \{ \.\.\.process\.env,/);
+        // P6: the host script and executable are the runtime copy's (host-runtime.ts); the env is still the window's own.
+        expect(strip('src/main/main.ts')).toMatch(/hostScript: hostRuntime\.hostScript,\s+execPath: hostRuntime\.execPath,[\s\S]{0,600}env: \{ \.\.\.process\.env,/);
         const host = strip('src/main/genie-host.ts');
         expect(host).toMatch(/spawnUpdaterProcess\([\s\S]{0,200}updaterHelperEnv\(process\.env, home\)/);
         expect(host).toMatch(/new UpdatesService\(/);

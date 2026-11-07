@@ -1,9 +1,142 @@
-import { execFile } from 'node:child_process';
+import { execFile, type ChildProcess, type ExecFileOptions } from 'node:child_process';
 import { join } from 'node:path';
 import { redactSecrets } from '../core/github.js';
 import { commitIdentityConfig } from '../core/add-workspace.js';
 import { isLocalPathLike } from '../core/envelope-plan.js';
+import { findIn, systemProcessTree, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
 import { resolveProgram } from '../core/program-lookup.js';
+import { gitMayRun } from './git-read-policy.js';
+import { winLauncherPath } from './win-launcher.js';
+
+/**
+ * HOW LONG A GIT READ MAY TAKE. Long enough that a slow real repository doesn't reach it: a status on a huge tree, with a scanner in the way, takes tens of seconds. A read past it is a failure the person sees, with a Retry, never an empty list that reads as "nothing changed".
+ * A hook's child can hold git's output open after git is gone, so the wait itself ends at the limit, whatever the process does.
+ */
+export const GIT_READ_LIMIT = { ms: 120_000 };
+
+export class GitDidNotAnswer extends Error {
+    constructor() {
+        super(`git did not answer within ${Math.round(GIT_READ_LIMIT.ms / 1000)} s`);
+    }
+}
+
+/** A read inside the limit runs its git through this, so the limit knows what to end. */
+export interface GitLimit {
+    /** The child, for what writes to it; `null` when the limit has already passed and `callback` has been told. */
+    git(args: readonly string[], options: ExecFileOptions, callback: (error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => void): ChildProcess | null;
+}
+
+/**
+ * Of `table`, every process that is ours: started by one of `ours` (by its parent's pid, and no earlier than that parent,
+ * so a reused pid is not taken for a child) — whether or not that parent is still running, since Windows keeps a process's
+ * parent id after the parent is gone. Added to `ours`; the newcomers are returned.
+ */
+function growOurs(ours: Map<number, ProcessInfo>, table: readonly ProcessInfo[]): ProcessInfo[] {
+    const added: ProcessInfo[] = [];
+    for (let changed = true; changed;) {
+        changed = false;
+        for (const p of table) {
+            if (ours.has(p.pid)) continue;
+            const parent = ours.get(p.ppid);
+            if (parent && p.pid !== parent.pid && p.started >= parent.started) { ours.set(p.pid, p); added.push(p); changed = true; }
+        }
+    }
+    return added;
+}
+
+/**
+ * Readings taken while ending one read's tree, for what it started meanwhile, and the wall time they may take: a SAFETY
+ * STOP on the walk, never a cap on how many are ended. Every process the walk finds is a descendant of our git by pid,
+ * start time and name, so a big tree is still ours: a cap on the count would let a hook that forks past it keep running
+ * in the repository (#1638's review).
+ */
+const GIT_TREE_ROUNDS = 8;
+const GIT_TREE_WALL_MS = 10_000;
+
+/**
+ * What the limit ends: git, and what git started under it, a hook's child above all, which keeps the folder open and
+ * would never end by itself. NOTHING IT STARTED ESCAPES, even what it starts while it is being ended (the line's run after
+ * #1637: git gone, and its hook's sh chain — git's second call of the hook — still running in the repository). One
+ * reading, then the kill, left that window: whatever started between the two was in no reading.
+ *
+ * So the tree is taken from a first reading (git and every descendant, by parent pid and start time), then read AGAIN
+ * after each round, and anything a process of ours started is ours too — until a reading finds nothing new. On Windows
+ * each round ENDS what is known: a process keeps its parent's id when that parent is gone, so a child started at the last
+ * moment is still found by it. Elsewhere each round STOPS what is known first (SIGSTOP: a stopped process starts nothing,
+ * and its children keep their parent, where a killed parent's would be handed to init and lost to the walk); then all of
+ * it ends together. Always through the tree's rules (`core/process-tree.ts`): the same process by pid, start time and
+ * name, no `/T`. A child that a hook detached before the first reading is not found. A job object would close even that
+ * (noted for #1628's launcher).
+ */
+async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree, platform: NodeJS.Platform = process.platform): Promise<void> {
+    const running = children.filter((child) => child.exitCode === null && child.signalCode === null && child.pid !== undefined);
+    if (running.length === 0) return;
+    const read = async (): Promise<readonly ProcessInfo[] | null> => (tree.read ? tree.read() : tree.snapshot());
+    // Every one identified is ended: the tree's count limit is lifted (it guards a session's guess, not a verified walk).
+    const end = async (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]): Promise<void> => {
+        if (targets.length === 0) return;
+        if (tree.reap) await tree.reap(targets, now, Number.MAX_SAFE_INTEGER);
+        else tree.killTree(targets, now, Number.MAX_SAFE_INTEGER);
+    };
+    const stop = (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]): void => {
+        for (const p of targets) { if (findIn(now, p)) { try { process.kill(p.pid, 'SIGSTOP'); } catch { /* gone */ } } }
+    };
+    const ours = new Map<number, ProcessInfo>();
+    try {
+        let table = await read();
+        if (table === null) return;
+        const pids = new Set(running.map((child) => child.pid));
+        for (const p of table) if (pids.has(p.pid)) ours.set(p.pid, p);
+        growOurs(ours, table);
+        const until = Date.now() + GIT_TREE_WALL_MS;
+        for (let round = 0; round < GIT_TREE_ROUNDS && Date.now() < until; round += 1) {
+            const known = [...ours.values()];
+            if (platform === 'win32') await end(known, table);
+            else stop(known, table);
+            const next = await read();
+            if (next === null) break;
+            table = next;
+            if (growOurs(ours, table).length === 0) break;
+        }
+        // Whatever of ours is still there, ended together (on Windows, what the last round missed; elsewhere, all of it).
+        const left = [...ours.values()].filter((p) => findIn(table!, p));
+        await end(left, table);
+        if (ours.size > 24) console.error(`[git] a read past its limit had started ${ours.size} processes; all of them were ended`);
+    } finally {
+        // Whatever the readings could not find or refused: git itself still ends.
+        for (const child of running) child.kill();
+    }
+}
+
+/** The read, or a {@link GitDidNotAnswer} at the limit, and then what it started is ended. */
+export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: ProcessTree = systemProcessTree): Promise<T> {
+    const children: ChildProcess[] = [];
+    let over = false;
+    const limit: GitLimit = {
+        git: (args, options, callback) => {
+            if (over) { callback(new GitDidNotAnswer(), '', ''); return null; }
+            // On Windows inside a kill-on-close job (genie-launch.exe, #1639): what git or a hook starts — MSYS background
+            // children whose fork parent is gone included — is in the job, and ending the read ends the job.
+            const launcher = winLauncherPath();
+            const child = launcher !== null
+                ? execFile(launcher, ['job', resolveProgram('git'), ...args], { windowsHide: true, ...options }, callback)
+                : execFile(resolveProgram('git'), [...args], { windowsHide: true, ...options }, callback);
+            children.push(child);
+            return child;
+        },
+    };
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            over = true;
+            reject(new GitDidNotAnswer());
+            void endGitTrees(children, tree).catch((error: unknown) => console.error(`[git] what a read started could not be ended: ${error instanceof Error ? error.message : String(error)}`));
+        }, GIT_READ_LIMIT.ms);
+        run(limit).then(
+            (value) => { clearTimeout(timer); resolve(value); },
+            (error: unknown) => { clearTimeout(timer); reject(error); },
+        );
+    });
+}
 
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
@@ -148,9 +281,9 @@ export function gitShowHead(root: string, rel: string): Promise<string | null> {
     const parts = rel.split('/');
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
-    return new Promise<string | null>((resolve) => {
-        execFile(resolveProgram('git'), ['show', `HEAD:./${name}`], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
-    });
+    return gitMayRun(cwd).then((may) => (!may ? null : withinGitLimit((limit) => new Promise<string | null>((resolve) => {
+        limit.git(['show', `HEAD:./${name}`], { cwd, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
+    }))));
 }
 
 /**
@@ -162,14 +295,14 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
     const parts = rel.split('/');
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
-    return new Promise<GitFileState | null>((resolve) => {
-        execFile(resolveProgram('git'), ['status', '--porcelain=v1', '--', name], { cwd, windowsHide: true }, (error, stdout) => {
+    return gitMayRun(cwd).then((may) => (!may ? null : withinGitLimit((limit) => new Promise<GitFileState | null>((resolve) => {
+        limit.git(['status', '--porcelain=v1', '--', name], { cwd }, (error, stdout) => {
             if (error) { resolve(null); return; }
             const line = String(stdout).split('\n').find((l) => l.length > 0);
             if (line !== undefined) { resolve(line.startsWith('??') ? 'untracked' : 'modified'); return; }
-            execFile(resolveProgram('git'), ['ls-files', '--error-unmatch', '--', name], { cwd, windowsHide: true }, (e2) => resolve(e2 ? null : 'committed'));
+            limit.git(['ls-files', '--error-unmatch', '--', name], { cwd }, (e2) => resolve(e2 ? null : 'committed'));
         });
-    });
+    }))));
 }
 
 /**
@@ -178,15 +311,16 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
  * "nothing to show" is the honest answer there.
  */
 export function gitLogSince(path: string, sinceMs: number): Promise<GitCommit[]> {
-    return new Promise<GitCommit[]>((resolve) => {
-        execFile(resolveProgram('git'), ['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x1f%s%x1f%an%x1f%ct'], { cwd: path, windowsHide: true }, (error, stdout) => {
+    return gitMayRun(path).then((may) => (!may ? [] : withinGitLimit((limit) => new Promise<GitCommit[]>((resolve) => {
+        limit.git(['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x00%s%x00%an%x00%ct%x00'], { cwd: path }, (error, stdout) => {
             if (error) { resolve([]); return; }
-            resolve(String(stdout).split('\n').filter((line) => line.length > 0).map((line) => {
-                const [sha, subject, author, ct] = line.split('\x1f');
-                return { sha: sha ?? '', subject: subject ?? '', author: author ?? '', at: Number(ct ?? 0) * 1000 };
-            }));
+            // NUL between fields: a commit's text cannot hold one, so a subject cannot shift the fields after it.
+            const fields = String(stdout).split('\0');
+            const commits: GitCommit[] = [];
+            for (let i = 0; i + 3 < fields.length; i += 4) commits.push({ sha: fields[i]!.trim(), subject: fields[i + 1]!, author: fields[i + 2]!, at: Number(fields[i + 3]!) * 1000 });
+            resolve(commits);
         });
-    });
+    }))));
 }
 
 /** A changed file's state, as the tree colours it (beta.33 item 15; Genie 1 FileTree's git colours). */
@@ -198,11 +332,11 @@ export type GitTreeState = 'modified' | 'added' | 'deleted' | 'untracked';
  * workspace's prefix and anything outside it is dropped. Not a repository: an empty map, "nothing to show".
  */
 export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState>> {
-    return new Promise((resolve) => {
-        execFile(resolveProgram('git'), ['rev-parse', '--show-prefix'], { cwd: root, windowsHide: true }, (error, prefixOut) => {
+    return gitMayRun(root).then((may) => (!may ? {} : withinGitLimit((limit) => new Promise((resolve) => {
+        limit.git(['rev-parse', '--show-prefix'], { cwd: root }, (error, prefixOut) => {
             if (error) { resolve({}); return; }
             const prefix = String(prefixOut).trim();
-            execFile(resolveProgram('git'), ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
+            limit.git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
                 if (e2) { resolve({}); return; }
                 const out: Record<string, GitTreeState> = {};
                 const fields = String(stdout).split('\0');
@@ -222,5 +356,5 @@ export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState
                 resolve(out);
             });
         });
-    });
+    }))));
 }

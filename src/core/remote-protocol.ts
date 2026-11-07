@@ -16,6 +16,12 @@ import { LOCAL_ARTBOARD_METHODS, type LocalArtboardMethod } from './local-artboa
  * Everything else derives from it.
  */
 
+/**
+ * The remote wire's version, said in `welcome` with the host's build (P10.1e): a client sees what it is talking to. Raised
+ * only for a change an older client cannot read; a new field an old client ignores is not one.
+ */
+export const REMOTE_PROTOCOL = 1;
+
 export const REMOTE_METHODS = [
     'snapshot',
     'agentDetail',
@@ -47,6 +53,8 @@ export const REMOTE_METHODS = [
     'agents.setModel',
     'agents.models',
     'agents.diagnose',
+    // A tool row's whole output, read when a person opens the row (Tynn story #386).
+    'agents.toolOutput',
     'workspaces.previewAdd',
     'workspaces.confirmAdd',
     'workspaces.create',
@@ -182,6 +190,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // The provider's own model list for an agent's picker (the owner, 2026-10-21): a read, agent-scoped.
     'agents.models': 'read',
     'agents.diagnose': 'read',
+    'agents.toolOutput': 'read',
     // Tynn #835: the folder is picked IN THE WINDOW (a FileBrowser over the host's own disk); the preview reads a path.
     'workspaces.previewAdd': 'read',
     // One folder of the host, for every file and folder picker (main/host-fs.ts); a guest only inside its workspace(s).
@@ -275,7 +284,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.toolOutput', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
 export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 
@@ -310,7 +319,7 @@ export type ClientProfile = 'mobile';
 
 export type WireMessage =
     | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile }
-    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string }
+    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
     /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
     | { kind: 'pairing'; host: string; expiresAt: number }

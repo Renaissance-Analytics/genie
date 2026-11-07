@@ -10,6 +10,7 @@ import type { ProcessSpec, ProcessStatus, SupervisorApi } from '../src/main/proc
 import type { DockerRunner } from '../src/main/service-driver.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { hostingRig, tick, type HostingRig } from './helpers/hosting-rig.js';
+import { closedTrust } from './helpers/closed-trust.js';
 
 /**
  * P5a.3 (the host split): WHAT A QUIT STOPS, NOW THAT THE HOSTING IS GENIE-HOST'S.
@@ -125,7 +126,7 @@ describe('(c)+(e) the window’s quit', () => {
 
     it('(c) a linked window — handed the host’s hosting and supervisor — stops none of them and closes none of the hosting', async () => {
         const called: string[] = [];
-        const hosting = new Proxy({ frontDoorPort: 47111, routes: () => [], configuredHosts: () => [], browserTrust: () => ({ caPem: null, reason: 'x' }), externalFrontDoor: { running: false, reason: 'x' }, onFrontDoorChange: () => () => {}, engines: { envFor: () => ({}) } } as Record<string, unknown>, {
+        const hosting = new Proxy({ trust: closedTrust(), frontDoorPort: 47111, routes: () => [], configuredHosts: () => [], browserTrust: () => ({ caPem: null, reason: 'x' }), externalFrontDoor: { running: false, reason: 'x' }, onFrontDoorChange: () => () => {}, engines: { envFor: () => ({}) } } as Record<string, unknown>, {
             get: (target, key: string) => (key in target ? target[key] : (...args: unknown[]) => { called.push(key); return args; }),
         }) as unknown as HostingApi;
         const { supervisor, stops } = hostSupervisor();

@@ -62,6 +62,12 @@ import type { AskedRecord } from './attention-store.js';
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /** genie-host's safe mode (Tynn #386): "Leave safe mode". Absent = no host to leave it in (refused, said). */
+    readonly safeMode?: { leave(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    /** The reopened-window notice (Tynn #386): Dismiss, and Stop all agents. Absent = no host to ask (refused, said). */
+    /** The brought-back page's notice: forget it. */
+    readonly rendererNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }> };
+    readonly hangNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }>; stopAll(): Promise<{ ok: true } | { ok: false; reason: string }> };
     /** A part of a snapshot that took at least `ms` (genie-test-windows, job Q0: an action took 20 s with main mostly free). */
     readonly slowPart?: { readonly ms: number; log(part: string, ms: number): void };
     /**
@@ -96,7 +102,7 @@ export interface FeaturePorts {
      * Linux with no keyring (main/linux-keyring.ts, the owner 2026-11-01): the card's view (null = fine, or not Linux) and
      * its one button. Absent = no card (doctor mode, tests that do not wire it).
      */
-    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void> };
+    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void>; press?(): Promise<void>; cancel?(): void | Promise<void>; notice?(): string | null };
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: import('./processes-host.js').ProcessBookApi;
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
@@ -534,7 +540,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     // 108 memories and drew skeletons until a search). A query searches.
     const hits = await timed('knowledge', async () => state.knowledgeQuery
         ? (await services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' })).hits
-        : (await services.knowledge.list({ scopes: 'all', limit: 200 })).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class })));
+        : (await services.knowledge.summaries({ scopes: 'all', limit: 200 })).hits);
     const roster = services.agentAddresses();
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
@@ -547,6 +553,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}), toolKinds: flowToolDefinitions() },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
+        trust: services.trustSteps(),
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems() },
         // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
         // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
@@ -563,7 +570,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         // GitHub as the account read it from GitHub (beta.33 item 25) — never a value a window sent.
-        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null },
+        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null, ...(ports.keyring?.notice?.() ? { keyringNotice: ports.keyring.notice!() } : {}) },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
@@ -677,6 +684,25 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
+        case 'rendererNotice.dismiss': {
+            if (!ports.rendererNotice) throw new Error('This window keeps no such notice.');
+            const done = await ports.rendererNotice.dismiss();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
+        case 'hangNotice.dismiss':
+        case 'hangNotice.stopAll': {
+            if (!ports.hangNotice) throw new Error('Genie’s host is not connected.');
+            const done = action.kind === 'hangNotice.dismiss' ? await ports.hangNotice.dismiss() : await ports.hangNotice.stopAll();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
+        case 'safeMode.leave': {
+            if (!ports.safeMode) throw new Error('Genie’s host is not connected, so safe mode cannot be left from here.');
+            const left = await ports.safeMode.leave();
+            if (!left.ok) throw new Error(left.reason);
+            break;
+        }
         case 'whatsNew.show':
             next.whatsNewShown = true;
             break;
@@ -1677,7 +1703,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         // THE KEYRING CARD'S ONE BUTTON: install, start, restart or check again, whichever the session needs next.
         case 'keyring.fix': {
             if (!ports.keyring) throw new Error('this Genie has no keyring to set up here');
-            await ports.keyring.fix();
+            // Answered once the step is done, or the keyring's own unlock dialog is up (it waits on the person, not on this).
+            await (ports.keyring.press ? ports.keyring.press() : ports.keyring.fix());
+            break;
+        }
+        // THE CARD'S CANCEL while the keyring's unlock dialog is up (Tynn story #388).
+        case 'keyring.cancel': {
+            await ports.keyring?.cancel?.();
             break;
         }
         case 'integrations.tynnCode': {
@@ -1716,6 +1748,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.syncAgentDocs(action.workspacePath, 'you');
             next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
             break;
+        case 'workspace.trust': {
+            // The person's yes: recorded first, then what it now allows. Genie's files go in, by you, as Sync now does.
+            const trusted = await services.workspaceTrust.trust(action.workspaceId);
+            if (trusted === null) throw new Error(`There is no workspace "${action.workspaceId}" to trust.`);
+            await services.syncAgentDocs(action.workspacePath, 'you');
+            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
+            break;
+        }
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());
             if (nav.kind === 'refused') throw new Error(nav.reason);

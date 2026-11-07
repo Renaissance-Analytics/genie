@@ -28,6 +28,7 @@ import type { FilesWatchPort } from './local-files-watches.js';
 import { isLocalDraftMethod } from '../core/local-drafts.js';
 import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js';
 import { isLocalArtboardMethod } from '../core/local-artboard.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
@@ -89,6 +90,11 @@ export interface HostApiDeps {
      */
     /** May answer later: the agent engine in genie-host answers its start asynchronously (main/start-on-demand.ts). */
     startForWork?(record: AgentRecord): StartForWorkAnswer | Promise<StartForWorkAnswer>;
+    /**
+     * THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): `startForWork`, and a new driver on the same
+     * conversation when the run's own stopped itself (prism-acp 0.37.0). Absent = `startForWork`.
+     */
+    startForYourMessage?(record: AgentRecord): Promise<StartForWorkAnswer>;
     host: Pick<RestartPorts, 'prompt'> & {
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
@@ -203,6 +209,8 @@ export interface HostApiDeps {
         /** The provider's models for the agent's picker; `refresh` asks the provider again. */
         models(agentId: string, refresh: boolean): Promise<unknown>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+        /** A tool row's whole output, from the host's store, bounded (Tynn story #386). Absent = previews only. */
+        toolOutput?(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
     };
     /** Every agent's activity feed (the Dashboard's lanes, beta.33 item 10): one workspace's, and each as it changes. */
     activity?: {
@@ -333,8 +341,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const r = agent(args[0]);
                 const text = str(args[1]);
                 // THE FIRST MESSAGE STARTS IT (q_04ce323c), as the composer's does; a refused start is said, nothing sent.
-                if (r && deps.startForWork && (text.length > 0 || Array.isArray(args[2]))) {
-                    const started = await deps.startForWork(r);
+                if (r && (deps.startForYourMessage || deps.startForWork) && (text.length > 0 || Array.isArray(args[2]))) {
+                    const started = deps.startForYourMessage ? await deps.startForYourMessage(r) : await deps.startForWork!(r);
                     if (!started.ok) return { ok: false, reason: started.reason };
                 }
                 // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
@@ -417,6 +425,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.diagnose':
                 if (typeof args[0] !== 'string') return { ok: false, reason: 'diagnose names an agent' };
                 return deps.agentOps.diagnose(args[0]);
+            case 'agents.toolOutput':
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'toolOutput names an agent and a tool call' };
+                return deps.agentOps.toolOutput ? deps.agentOps.toolOutput(args[0], args[1]) : { ok: false, reason: 'this host keeps no tool outputs' };
             case 'workspaces.previewAdd':
                 // Preserve the retired native wizard's early refusals before any coercion or disk operation.
                 if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };

@@ -59,6 +59,41 @@ describe('genie-host times the calls a window makes', () => {
         expect(src).toMatch(/timeCall: \(method\) => hostWatchdog\.ipc\(method\)/);
         expect(src).toMatch(/hostWatchdog\.start\(\);/);
     });
+
+    it('names the store and allowed operation without logging call payloads or unknown names', async () => {
+        dir = await mkdtemp(join(tmpdir(), 'slow-store-names-'));
+        const timed: string[] = [];
+        const server = new SessionEngineServer({ token: TOKEN, build: 't', timeCall: (label) => { timed.push(label); return () => {}; } });
+        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: noProcessTree, ...server.hostOptions() });
+        server.attach(host);
+        const [hostSide, windowSide] = memoryPair();
+        server.accept(hostSide);
+        const client = new SessionEngineClient();
+        try {
+            expect(await client.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
+            // No stores attached: even refused calls must identify the allowed operation they attempted.
+            for (const [store, method] of [['knowledge', 'list'], ['attention', 'markSeen'], ['registry', 'readAgents']]) {
+                expect((await client.call('engine.stores', [store, method, [{ query: 'private-content' }]])).ok).toBe(false);
+            }
+            expect(timed.filter((s) => s.startsWith('engine.stores'))).toEqual([
+                'engine.stores store=knowledge method=list',
+                'engine.stores store=attention method=markSeen',
+                'engine.stores store=registry method=readAgents',
+            ]);
+            timed.length = 0;
+            await client.call('engine.stores', ['unknown\nprivate-content', 'private-content', []]);
+            await client.call('engine.stores', ['knowledge', 'private-content', []]);
+            // Object prototype properties are not store or operation names either.
+            await client.call('engine.stores', ['constructor', 'toString', []]);
+            expect(timed).toEqual([
+                'engine.stores store=? method=?',
+                'engine.stores store=knowledge method=?',
+                'engine.stores store=? method=?',
+            ]);
+        } finally {
+            client.disconnect();
+        }
+    });
 });
 
 function fakePty(): PtyPort {
@@ -74,7 +109,7 @@ describe('the features snapshot names its slow part', () => {
         dir = await mkdtemp(join(tmpdir(), 'slow-snapshot-'));
         services = await composeServices({ userData: dir, pty: fakePty(), v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
         const real = services.knowledge;
-        const slow = { ...services, knowledge: Object.assign(Object.create(Object.getPrototypeOf(real)), real, { list: async (...a: Parameters<typeof real.list>) => { await new Promise((r) => setTimeout(r, 60)); return real.list(...a); } }) } as ComposedServices;
+        const slow = { ...services, knowledge: Object.assign(Object.create(Object.getPrototypeOf(real)), real, { summaries: async (...a: Parameters<typeof real.summaries>) => { await new Promise((r) => setTimeout(r, 60)); return real.summaries(...a); } }) } as ComposedServices;
         const said: string[] = [];
         await featureSnapshot(slow, { toolStatuses: null, knowledgeQuery: '' }, { slowPart: { ms: 40, log: (part, ms) => said.push(`${part} ${ms >= 40 ? 'over' : 'under'}`) } });
         expect(said).toContain('knowledge over');

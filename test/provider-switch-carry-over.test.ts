@@ -58,6 +58,9 @@ function opsPorts(history: () => readonly TimedEvent[], manifestReads: string[])
         host: { stop: () => true, ended: async () => null, probe: () => null, start: () => ({ ok: true }) },
         readManifest: async (record: AgentRecord) => { manifestReads.push(record.name); return '---\nname: atlas\ntuis: [claude]\n---\nYou are atlas.\n'; },
         history: async () => history(),
+        // #1571 (merged from main): a switch asks first whether the provider is installed and signed in; here both are.
+        providerInstalled: () => true,
+        signedIn: () => true,
     };
     return ports as unknown as AgentOpsPorts;
 }

@@ -69,6 +69,52 @@ function fakes(over: { entries?: Record<string, string[]>; files?: Record<string
     return { ports, calls, files, workspaces: () => [...workspaces.values()], agents: () => agents };
 }
 
+describe('adding a folder that already has a project.json', () => {
+    const SITES = { k1: { name: 'web', repo: '', runMode: 'host', kind: 'http', enabled: true } };
+    const theirs = { name: 'Theirs', sites: SITES, owner: 'someone' };
+    const folder = (kind: 'plain' | 'repo', manifest: unknown) => fakes({ entries: { '/w/app': kind === 'repo' ? ['project.json', '.git', 'src'] : ['project.json', 'src'] }, files: { '/w/app/project.json': manifest } } as never);
+
+    it.each(['plain', 'repo'] as const)('%s folder: what it says stays, what is missing is added, and a copy of the original is kept', async (kind) => {
+        const f = folder(kind, theirs);
+        expect(await addWorkspace(f.ports, '/w/app')).toMatchObject({ ok: true });
+        expect(f.files['/w/app/project.json']).toMatchObject({ name: 'Theirs', sites: SITES, owner: 'someone', $schema: SCHEMA, type: 'agi' });
+        expect((f.files['/w/app/project.json'] as { repos?: unknown }).repos).toBeDefined();
+        expect(f.files['/w/app/project.json.pre-add.bak']).toEqual(theirs);
+    });
+
+    it('its own repos stay as it wrote them', async () => {
+        const repos = [{ name: 'one', slug: 'one', path: 'repos/one' }];
+        const f = folder('repo', { ...theirs, repos });
+        await addWorkspace(f.ports, '/w/app');
+        expect((f.files['/w/app/project.json'] as { repos: unknown }).repos).toEqual(repos);
+    });
+
+    it("what the source says goes on top: a link from Tynn, on a folder's name", async () => {
+        const f = folder('plain', theirs);
+        await addWorkspace(f.ports, '/w/app', { tynn: { projectId: 'p1' } });
+        expect(f.files['/w/app/project.json']).toMatchObject({ name: 'Theirs', sites: SITES, tynn: { projectId: 'p1' } });
+    });
+
+    it.each([['not JSON', null], ['a list', [1]], ['a number', 3]])('%s: refused, nothing written, nothing made, nothing registered', async (_name, manifest) => {
+        const f = folder('plain', manifest);
+        const result = await addWorkspace(f.ports, '/w/app');
+        expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('project.json') });
+        expect(f.calls.filter((c: string) => /^(writeJson|mkdir|addWorkspace)/.test(c))).toEqual([]);
+    });
+
+    it('a newer schema than this Genie writes: refused, as an envelope is', async () => {
+        const f = folder('plain', { ...theirs, $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v9.0.0/schemas/workspace/project.schema.json' });
+        expect(await addWorkspace(f.ports, '/w/app')).toMatchObject({ ok: false, reason: expect.stringContaining('newer') });
+    });
+
+    it('the preview says it keeps the file, and CONTROL: without one it says it writes one', async () => {
+        const kept = await previewAddWorkspace(folder('plain', theirs).ports, '/w/app');
+        expect(kept.ok && kept.steps.map((s) => s.action)).toContain('keep project.json, adding what it lacks (a copy stays beside it)');
+        const none = await previewAddWorkspace(fakes({ entries: { '/w/app': ['src'] } } as never).ports, '/w/app');
+        expect(none.ok && none.steps.map((s) => s.action)).toContain('write project.json');
+    });
+});
+
 describe('adding a workspace', () => {
     it('previews: an empty folder, a simple repo, a pre-init folder and a full envelope each get their plan; a missing or unknowable folder is refused', async () => {
         const f = fakes({ entries: { '/w/empty': [], '/w/repo': ['.git', 'src'], '/w/pre': ['repos'], '/w/env': ['project.json', 'repos', '.ai'], '/w/other': ['notes.txt'] } });

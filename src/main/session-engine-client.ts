@@ -1,4 +1,5 @@
 import type { StreamEvent } from '../core/stream-event.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -34,7 +35,7 @@ import type { ClientTransport } from '../core/remote-protocol.js';
 import type { LiveSession } from '../core/roster.js';
 import type { CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
-import { commsFields } from './session-host.js';
+import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
@@ -56,6 +57,8 @@ import type { UpdateState } from './updater.js';
 import type { UpdateFailedRecord } from './updates-host.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
+import type { SafeModeView } from '../core/safe-mode.js';
+import type { CrashStateView } from '../core/crash-record.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -78,6 +81,8 @@ export type Awaitable<T> = T | Promise<T>;
 export interface EngineClientOptions {
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
     readonly onCarryOverSent?: (agentId: AgentId) => void;
+    /** Genie's own words are in this agent's thread now (genie#1519). */
+    readonly markGenieWords?: (agentId: AgentId) => void;
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
     readonly onTurnNumbered?: (agentId: AgentId, n: number) => void;
     readonly onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
@@ -247,6 +252,8 @@ export class SessionEngineClient {
                 this.#welcome = null;
                 for (const p of this.#pending.values()) p({ ok: false, reason: NOT_CONNECTED });
                 this.#pending.clear();
+                // Trust first (genie#1519): from here the window believes no verdict until the next dump.
+                this.#hosting?.linkDown();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
                 this.#deviceLink?.lost('the host closed the connection');
                 this.#options.onDisconnected?.('the host closed the connection');
@@ -355,6 +362,13 @@ export class SessionEngineClient {
                 this.hosting().rebase(payload as HostingDump);
                 return;
             // genie-host's updater (P5b): its whole state, on this window's local link only.
+            case 'safeMode.event':
+                this.#setSafeMode(payload as SafeModeView);
+                return;
+            // The latest crash record and the reopened-window notice (Tynn #386), on this window's local link only.
+            case 'crash.event':
+                this.#setCrashState(payload as CrashStateView);
+                return;
             case 'updates.dump':
             case 'updates.event':
                 this.updates().rebase(payload as UpdateState);
@@ -431,6 +445,7 @@ export class SessionEngineClient {
         switch (c.name) {
             case 'threadId': o.onThreadId?.(c.agentId as AgentId, c.threadId); return;
             case 'carryOverSent': o.onCarryOverSent?.(c.agentId as AgentId); return;
+            case 'genieWords': o.markGenieWords?.(c.agentId as AgentId); return;
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;
             case 'action': o.onAction?.(c.agentId as AgentId, c.kind as AgentActionKind); return;
@@ -559,6 +574,32 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#appInbox;
+    }
+
+    /** genie-host's safe mode (Tynn #386), as this window last heard it; `null` = the host has said nothing (an older host). */
+    safeModeView(): SafeModeView | null { return this.#safeMode; }
+
+    onSafeMode(listener: (view: SafeModeView) => void): () => void {
+        this.#safeModeListeners.add(listener);
+        return () => { this.#safeModeListeners.delete(listener); };
+    }
+
+    /** "Leave safe mode": the host's leave. It starts nothing; it lets the automatic behaviour run again. */
+    async leaveSafeMode(): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.safeMode', ['leave']);
+        if (!reply.ok) return reply;
+        this.#setSafeMode(reply.value as SafeModeView);
+        return { ok: true };
+    }
+
+    #safeMode: SafeModeView | null = null;
+    readonly #safeModeListeners = new Set<(view: SafeModeView) => void>();
+
+    #setSafeMode(view: SafeModeView): void {
+        const was = this.#safeMode;
+        this.#safeMode = view;
+        if (was !== null && JSON.stringify(was) === JSON.stringify(view)) return;
+        for (const l of [...this.#safeModeListeners]) l(view);
     }
 
     #updates: UpdatesReplica | null = null;
@@ -822,6 +863,12 @@ export class SessionEngineClient {
         return this.#agents.get(agentId)?.view ?? EMPTY_VIEW;
     }
 
+    /** Is it running, and since when, from the pushed view: never the comms cell (see SessionHost.liveness). */
+    liveness(agentId: AgentId): EngineLiveness | null {
+        const probe = this.#view(agentId).probe;
+        return probe === null ? null : { running: probe.running, startedAt: probe.startedAt ?? null };
+    }
+
     probe(agentId: AgentId): LiveSession | null {
         const probe = this.#view(agentId).probe;
         if (probe === null) return null;
@@ -844,6 +891,11 @@ export class SessionEngineClient {
 
     inTurn(agentId: AgentId): boolean {
         return this.#view(agentId).inTurn;
+    }
+
+    /** The host's answer as pushed: the run's driver stopped itself and must be replaced before it takes work. */
+    needsNewDriver(agentId: AgentId): boolean {
+        return this.#view(agentId).needsNewDriver ?? false;
     }
 
     hasQueuedPrompt(agentId: AgentId, id: string): boolean {
@@ -957,6 +1009,11 @@ export class SessionEngineClient {
         return this.#value<{ rows: readonly { event: StreamEvent; at: number | null }[]; cut: boolean }>('engine.historyRows', [agentId, { limit: options.limit, maxBytes: options.maxBytes }], { rows: [], cut: false });
     }
 
+    /** A tool row's whole output, read by the host from its own store, bounded (`SessionHost.toolOutput`, Tynn story #386). */
+    toolOutput(agentId: AgentId, toolCallId: string): Promise<ToolOutputReply> {
+        return this.#value<ToolOutputReply>('engine.toolOutput', [agentId, toolCallId], { ok: false, reason: 'Genie’s agents are not running yet' });
+    }
+
     async settled(): Promise<void> {
         await this.#value('engine.settled', [], false);
     }
@@ -989,6 +1046,39 @@ export class SessionEngineClient {
         } finally {
             this.#stopAllLeft = null;
         }
+    }
+
+    /** Window main's heartbeat to genie-host's hang watchdog (Tynn #386): a notification (call id 0), no reply. Nothing while not linked. */
+    heartbeat(beat: { pid: number; rss: number; bye?: true }): void {
+        const t = this.#transport;
+        if (t === null || this.#welcome === null) return;
+        t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.heartbeat', args: [beat] }));
+    }
+
+    /** The latest crash record and the reopened-window notice, as the host last said (local windows); `null` = told nothing. */
+    crashStateView(): CrashStateView | null { return this.#crashState; }
+
+    onCrashState(listener: (view: CrashStateView) => void): () => void {
+        this.#crashListeners.add(listener);
+        return () => { this.#crashListeners.delete(listener); };
+    }
+
+    /** The person dismissed the reopened-window notice: the host forgets it, for every window. */
+    async dismissHangNotice(): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const reply = await this.call('engine.crash', ['dismiss']);
+        if (!reply.ok) return reply;
+        this.#setCrashState(reply.value as CrashStateView);
+        return { ok: true };
+    }
+
+    #crashState: CrashStateView | null = null;
+    readonly #crashListeners = new Set<(view: CrashStateView) => void>();
+
+    #setCrashState(view: CrashStateView): void {
+        const was = this.#crashState;
+        this.#crashState = view;
+        if (was !== null && JSON.stringify(was) === JSON.stringify(view)) return;
+        for (const l of [...this.#crashListeners]) l(view);
     }
 
     /** Liveness: `true` when the host answered. */

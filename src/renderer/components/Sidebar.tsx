@@ -280,7 +280,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             {...(w.asleep === true ? { 'data-asleep': 'true' } : {})}
                             active={active}
                             {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
-                            // THE PULSE (Genie 1's glow): its agents are mid-turn — their sessions say so, not a terminal.
+                            // THE PULSE (Genie 1's glow): its agents are working — their sessions say so, not a terminal.
                             {...(working ? { 'data-agent-active': 'true' } : {})}
                             {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
                             onClick={() => onNavigate(route_)}
@@ -433,7 +433,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         }
                         className={`${RAIL_ITEM}${pulsed ? ` ${WORKSPACE_PULSE}` : ''}`}
                     >
-                        {/* THE PULSE (Genie 1's): lit while this workspace's agents are mid-turn — by their sessions, never terminal output. */}
+                        {/* THE PULSE (Genie 1's): lit while this workspace's agents are working — by their sessions, never terminal output. */}
                         {(w.working ?? 0) > 0 ? <span data-pulse="" aria-label={workingLabel(w.working ?? 0)} className="absolute inset-y-1 left-0 w-0.5 animate-pulse rounded-full bg-[var(--accent)]" /> : null}
                         {/* Its colour (genie#1300), beside its name: the name stays the cue. Its path (or what its agents are doing) on hover. */}
                         <span title={pulsed ? `${w.path} · ${PULSE_TITLE}` : (w.working ?? 0) > 0 ? `${w.path} · ${workingLabel(w.working ?? 0)}` : w.path} className="flex min-w-0 items-center gap-2">

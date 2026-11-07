@@ -35,6 +35,8 @@ export function wireHostMailWake(p: {
      * for it to run. Absent = mail only.
      */
     readonly issueWatch?: IssueWatchQueue;
+    /** SAFE MODE (Tynn #386): while on, no stopped agent is started for its mail or IssueWatch's push; the notice waits. */
+    readonly safeMode?: () => boolean;
 }): () => void {
     const reminders = new ReminderBook();
     const cwdFor = (record: AgentRecord): string => (record.workspaceId === OS_WORKSPACE ? p.osaDir : p.registry.workspace(record.workspaceId)?.path ?? p.osaDir);
@@ -46,6 +48,12 @@ export function wireHostMailWake(p: {
     const wake = async (agentId: string): Promise<boolean> => {
         const record = p.registry.find(agentId);
         if (!record) return false;
+        // SAFE MODE (Tynn #386): no stopped agent is started for its mail or IssueWatch's push. A running one (the person
+        // started it) is told as ever; for a stopped one the notice waits.
+        if (p.safeMode?.() === true && p.host.probe(record.id as AgentId)?.running !== true) {
+            p.log(`a notice for ${record.name} waits: Genie is in safe mode, so nothing is started by itself`);
+            return false;
+        }
         const started = await startForWork({ probe: (id) => p.host.probe(id), start: (r, cwd) => p.host.start(r, cwd), cwdFor, startRefusal: refusal }, record);
         if (!started.ok) { p.log(`a notice for ${record.name} waits: ${started.reason}`); return false; }
         return started.started || p.host.probe(record.id as AgentId)?.running === true;

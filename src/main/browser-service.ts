@@ -62,6 +62,8 @@ function isFacts(value: unknown): value is BrowserFacts {
 
 export interface BrowserServicePorts {
     readonly startBrowser?: (launch: BrowserFacts['launch']) => void;
+    /** Why this host has no Genie browser (P10.1d: plain Node, no Electron to start it with). Absent = it has one. */
+    readonly unavailable?: string;
     readonly now?: () => number;
 }
 
@@ -84,7 +86,7 @@ export class BrowserService {
 
     /** Something is waiting for a browser and none is linked: start one, not twice while one is on its way. */
     #startIfWanted(): void {
-        if (this.#browser !== null || this.#held.length === 0 || this.#facts === null || !this.#ports.startBrowser) return;
+        if (this.#ports.unavailable !== undefined || this.#browser !== null || this.#held.length === 0 || this.#facts === null || !this.#ports.startBrowser) return;
         const now = (this.#ports.now ?? Date.now)();
         if (this.#startedAt !== null && now - this.#startedAt < START_PATIENCE_MS) return;
         this.#startedAt = now;
@@ -114,6 +116,7 @@ export class BrowserService {
                 return null;
             }
             case 'open': {
+                if (this.#ports.unavailable !== undefined) throw new Error(this.#ports.unavailable);
                 if (typeof args[0] !== 'string' && args[0] !== null && args[0] !== undefined) throw new Error('an address to open has to be text');
                 const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const };
                 if (this.#browser === null) {
@@ -147,6 +150,7 @@ export class BrowserService {
                 this.#emit({ kind: 'cookiesWanted', from, workspaceId: String(args[0]) });
                 return null;
             case 'popOut': {
+                if (this.#ports.unavailable !== undefined) throw new Error(this.#ports.unavailable);
                 const [panelKey, host] = [String(args[0]), String(args[1]).toLowerCase()];
                 if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*\.gen$/.test(host)) throw new Error('that is not a Genie site');
                 this.#popped.set(panelKey, host);
@@ -179,6 +183,7 @@ export class BrowserService {
             case 'pagesNow':
                 return this.#pages;
             case 'pageCall': {
+                if (this.#ports.unavailable !== undefined) throw new Error(this.#ports.unavailable);
                 if (this.#browser === null) throw new Error('the Genie browser is not running');
                 const requestId = String(this.#nextCall++);
                 return new Promise((resolve, reject) => {
@@ -206,6 +211,17 @@ export class BrowserService {
     /** The host is ending. */
     quit(): void {
         this.#emit({ kind: 'quit' });
+    }
+
+    /**
+     * THE KEYRING WAS UNLOCKED WHILE A GENIE BROWSER RUNS (Tynn story #388): that browser read "locked" at its own start and
+     * Electron never reads it again, so it is ended — the next site opened starts a fresh one that can use the keyring.
+     * Answers whether one was running.
+     */
+    restartForKeyring(): boolean {
+        if (this.#browser === null) return false;
+        this.#emit({ kind: 'quit' });
+        return true;
     }
 
     /** A connection went. Only the browser's own going means there is no browser. */

@@ -36,6 +36,7 @@ import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../cor
 import { chatAgentsKey, chatSendFor, chatThreadFrom, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
+import { copyToClipboard } from './clipboard.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
@@ -85,7 +86,7 @@ import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import { addConfirmer } from './add-confirm.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
-import { applyOutcome, switchOutcome, type DeletePlan } from '../core/agent-ops.js';
+import { applyOutcome, providerSwitchAfter, switchOutcome, type DeletePlan, type ProviderSwitchState } from '../core/agent-ops.js';
 import type { ModelChoices } from '../core/provider-models.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
@@ -1334,6 +1335,8 @@ function DesktopApp({ bridge }: AppProps) {
 
     const [opsView, setOpsView] = useState<{ deletePreview: DeletePlan | null; diagnosis: Diagnosis | null; lastOutcome: string | null }>({ deletePreview: null, diagnosis: null, lastOutcome: null });
     useEffect(() => { setOpsView({ deletePreview: null, diagnosis: null, lastOutcome: null }); }, [agentId]);
+    // Where the Provider control's switch stands (genie#1569): in flight, done, or refused with Retry — drawn beside it.
+    const [providerSwitch, setProviderSwitch] = useState<{ agentId: string | null; state: ProviderSwitchState }>({ agentId, state: { kind: 'idle' } });
     /*
      * THE PROVIDER'S MODELS for the agent's picker (the owner, 2026-10-21: "make sure that the model selection for agents
      * is using actual available options from the providers"). Asked when the agent's Settings are on screen — main keeps
@@ -1395,7 +1398,20 @@ function DesktopApp({ bridge }: AppProps) {
                   void resolvedBridge.agents.restart(agentId, 'fresh').then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted on the same conversation') : r.reason })));
               },
               // A switch carries the conversation and keeps the old provider's to resume (Tynn story #380); switchOutcome says so.
-              onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: switchOutcome(detail?.agent.name ?? 'the agent', r) })); if (r.ok && !r.noop) setModelsAsked((n) => n + 1); }); },
+              providerSwitch: providerSwitch.agentId === agentId ? providerSwitch.state : { kind: 'idle' },
+              onSwitchDriver: (to) => {
+                  const name = detail?.agent.name ?? 'the agent';
+                  setProviderSwitch({ agentId, state: { kind: 'working', to } });
+                  void resolvedBridge.agents.switchDriver(agentId, to).then(
+                      (r) => {
+                          setProviderSwitch({ agentId, state: providerSwitchAfter(name, to, r) });
+                          setOpsView((v) => ({ ...v, lastOutcome: switchOutcome(name, r) }));
+                          if (r.ok && !r.noop) setModelsAsked((n) => n + 1);
+                      },
+                      // A switch that never answered (the host gone, the bridge broken) is a refusal too: said, with Retry.
+                      (error: unknown) => setProviderSwitch({ agentId, state: { kind: 'failed', to, reason: `The switch to ${to} did not answer: ${error instanceof Error ? error.message : String(error)}` } }),
+                  );
+              },
               onDiagnose: () => { void resolvedBridge.agents.diagnose(agentId).then((r) => setOpsView((v) => (r.ok ? { ...v, diagnosis: r.diagnosis } : { ...v, lastOutcome: r.reason }))); },
               onPreviewDelete: (outcome) => { void resolvedBridge.agents.previewDelete(agentId, outcome, []).then((r) => setOpsView((v) => (r.ok ? { ...v, deletePreview: r.plan } : { ...v, lastOutcome: r.reason }))); },
               onConfirmDelete: (outcome, also, handoff) => {
@@ -1929,7 +1945,13 @@ function DesktopApp({ bridge }: AppProps) {
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
             tynnBoard={tynnBoardHost}
-            readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
+            readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => {
+                if (r.ok) return r.commits;
+                // A workspace with nothing to read is an empty list. Git not answering is a failure the view shows.
+                if (r.gitDidNotAnswer) throw new Error(r.reason);
+                return [];
+            }) : undefined}
+            loadToolOutput={resolvedBridge ? (agentId, toolCallId) => resolvedBridge.agents.toolOutput(agentId, toolCallId) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}
             filesPopped={filesPopped}
@@ -1952,6 +1974,7 @@ function DesktopApp({ bridge }: AppProps) {
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
+            {...(resolvedBridge?.crashReport ? { crashReport: { draft: () => resolvedBridge.crashReport!.draft(), send: (text: string, notes: string) => resolvedBridge.crashReport!.send(text, notes), copy: (text: string) => copyToClipboard({ plain: text }) } } : {})}
             {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
             onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] restart refused:', r.reason); }); }}
@@ -1962,6 +1985,7 @@ function DesktopApp({ bridge }: AppProps) {
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId); }}
             onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] start refused:', r.reason); }); }}
+            onSafeModeStartAgent={restartOne}
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
             onOpenPalette={() => setPaletteOpen(true)}

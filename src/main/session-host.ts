@@ -72,6 +72,8 @@ export interface SessionLifecycle {
 export const HISTORY_LIMIT = 3000;
 /** The most one `historyRows` reply carries, in bytes of JSON, whatever the caller asks (Tynn story #380). */
 export const HISTORY_ROWS_MAX_BYTES = 256 * 1024;
+/** The most one `toolOutput` reply carries, in bytes, whatever the output's size (Tynn story #386): the rest is said cut. */
+export const TOOL_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
 
 export { permissionDecisionFor } from '../core/agent-ops.js';
 
@@ -80,7 +82,7 @@ export function raisesApprovals(provider: string, permissions?: AgentPermissions
     if (provider === 'codex') return CODEX_DRIVER_CAPABILITIES.permissionRequests;
     return null;
 }
-import { threadIdIsResumable, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
+import { threadIdIsResumable, threadKeyFor, type AgentId, type AgentPermissions, type AgentRecord } from '../core/identity.js';
 import { promptContent, type Attachment, type PromptAccepts } from '../core/prompt-content.js';
 import type { LiveSession } from '../core/roster.js';
 import { describeProcesses, stillRunning, systemProcessTree, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
@@ -98,7 +100,8 @@ import {
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
-import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD } from '../core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
+import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
@@ -127,7 +130,7 @@ import { sessionsDir } from './paths.js';
 
 /** Injected so a test can run this host without spawning a provider CLI. */
 /** `extras.mcpServers`: the MCP servers this session starts with (Genie's own, with the agent's caller key). */
-export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; serviceEnv?: Readonly<Record<string, string>> }) => SessionDriverFactory | null;
+export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>> }) => SessionDriverFactory | null;
 
 /**
  * THE AGENT'S SERVICE VARIABLES, AS PRISM-ACP TAKES THEM (the owner, 2026-10-16: "ONLY let through Genie-managed
@@ -358,6 +361,38 @@ export const realListModels: ListProviderModels = (provider) =>
 /** How often a held login is read again while it waits (genie#1195). */
 export const LIMIT_REREAD_MS = 15 * 60_000;
 
+/** Genie's own instructions and skills, on this machine, for an agent whose workspace is not trusted. */
+export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string; readonly promptText: string; readonly codexPromptText?: string }
+
+/**
+ * A CLAUDE AGENT IN AN UNTRUSTED WORKSPACE: the person's own settings and no project's, Genie's own MCP servers and no folder's, and Genie's words from files of its own. Measured against a stand-in API (CLI 2.1.317), through a fresh launch and
+ * --resume, and by prism against real CLIs: hooks given by --settings and servers given by --mcp-config stay. Every construction carries these: nothing sticks between launches.
+ */
+export function claudeTrustOptions(untrusted: GenieInstructionFiles | null): { settingSources?: readonly ('user' | 'project' | 'local')[]; strictMcpConfig?: boolean; appendSystemPromptFile?: string; pluginDirs?: readonly string[] } {
+    if (untrusted === null) return {};
+    return {
+        settingSources: ['user'],
+        strictMcpConfig: true,
+        appendSystemPromptFile: untrusted.promptFile,
+        pluginDirs: [untrusted.pluginDir],
+    };
+}
+
+/**
+ * A CODEX AGENT IN AN UNTRUSTED WORKSPACE (measured, CLI 0.166.0, app-server mode, against a stand-in API). Marking a folder untrusted
+ * stops neither its AGENTS.md nor its skills: these two settings do, a skill added during the session included. They stop the person's
+ * own skills too, and a skill named in a message still loads. Per thread, through prism-acp's option, on every launch of it.
+ */
+export function codexTrustOptions(untrusted: GenieInstructionFiles | null): { config?: { readonly project_doc_max_bytes: 0; readonly 'skills.include_instructions': false } } {
+    if (untrusted === null) return {};
+    return { config: { project_doc_max_bytes: 0, 'skills.include_instructions': false } };
+}
+
+/** A Codex agent set to run unasked does not, in an untrusted workspace: Codex keeps its own approvals and sandbox. */
+export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(record: T, untrusted: GenieInstructionFiles | null): T {
+    return untrusted === null ? record : { ...record, autoApprove: false };
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
@@ -369,10 +404,10 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...mcp, ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...inheritedPolicy }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(record, cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...inheritedPolicy }, driverEvents(options.events));
 
         default:
             return null;
@@ -381,6 +416,8 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
 interface Running {
     session: AgentSession;
+    /** What this run's launch read of the workspace's verdict; unset until it has. */
+    launchedUntrusted?: boolean;
     /** The provider it runs on: whose rate-limit login holds it (Tynn #793). */
     provider: string;
     /** The ledger, with arrival times. Timestamps are recorded HERE because this is where the
@@ -424,6 +461,9 @@ export class SessionHost {
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
+    readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
+    readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
+    readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
@@ -508,6 +548,12 @@ export class SessionHost {
          * the MCP server starts after the host. Absent = none.
          */
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
+        /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
+        untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
+        /** Genie's own words are in this agent's thread now (`AgentRecord.genieWordsInThread`). */
+        markGenieWords?: (agentId: AgentId) => void;
+        /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
+        untrustedNow?: (record: AgentRecord) => boolean;
         /** Private session credentials, prepared before constructing or starting either provider. */
         prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
         /**
@@ -563,6 +609,9 @@ export class SessionHost {
         this.#store = options.store ?? (() => (shared ??= openDurableStore(sessionsDir(this.#userData))));
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
+        this.#untrustedFilesFor = options.untrustedFilesFor;
+        this.#untrustedNow = options.untrustedNow;
+        this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
@@ -781,13 +830,25 @@ export class SessionHost {
 
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
-        const driverFactory = this.#prepareMcpServers ? deferredDriverFactory(async (signal) => {
-            const prepared = await this.#prepareMcpServers!(record, cwd, signal);
+        // Read before each launch, not kept: a workspace trusted or changed since the last one counts now. A failure here starts nothing.
+        const driverFactory = this.#prepareMcpServers || this.#untrustedFilesFor ? deferredDriverFactory(async (signal) => {
+            const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv });
+            const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
+            if (signal.aborted) throw new Error('Preparation was cancelled.');
+            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);
-            if (current) current.mcp = prepared.map((server) => server.name);
+            if (current) {
+                current.mcp = prepared.map((server) => server.name);
+                current.launchedUntrusted = untrusted !== null;
+                // A prompt file does not reach a resumed thread (measured): one that began without Genie's words is given them with its next work, once.
+                if (untrusted) {
+                    if (record.provider === 'claude' && record.threadId === null) this.#markGenieWords?.(record.id);
+                    else if ((this.#currentRecord?.(record.id) ?? record).genieWordsInThread !== true) current.session.holdForNextWork(record.provider === 'codex' ? untrusted.codexPromptText ?? untrusted.promptText : untrusted.promptText, () => this.#markGenieWords?.(record.id));
+                }
+                this.#emit(record.id);
+            }
             return factory;
         }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
         if (!driverFactory) {
@@ -881,7 +942,9 @@ export class SessionHost {
             ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
-            ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions) } : {}),
+            ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions, { untrusted: this.#untrustedNow?.(record) ?? this.#running.get(record.id)?.launchedUntrusted === true }) } : {}),
+            // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
+            mayTakeWork: () => !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
             onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
@@ -1103,6 +1166,8 @@ export class SessionHost {
             if (action === 'send') {
                 if (!session?.running) return { ok: false, reason: 'Restart the agent before sending this draft.' };
                 if (session.hasQueuedPrompt(id)) return { ok: false, reason: 'This message is already queued for the current turn.' };
+                // The person's Send is the person acting, whoever wrote the draft: a Stop's pause ends (genie#1565).
+                session.resumeAfterStop();
                 try {
                     session.deliver(row.text, row.speaker === 'you' ? 'you' : row.peerName,
                         row.pending.content ? { content: row.pending.content, attachments: row.attachments ?? [] } : null,
@@ -1208,6 +1273,7 @@ export class SessionHost {
     /**
      * The agent's RUN when a message handed over now reaches it at its next step, as typed input does
      * (`AgentSession.deliverable`; mid-turn included), else `null` — not running, still starting, held on a limit, broken,
+     * paused by the person's Stop until they act (genie#1565),
      * stopped. What the inbox push asks before it sends a notice (genie#1411).
      */
     deliverable(agentId: AgentId): number | null {
@@ -1230,6 +1296,39 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.hasQueuedPrompt(id) ?? false;
     }
 
+    /** What this run was launched under; `null` = no session, or its launch has not read the verdict yet. */
+    launchedUntrusted(agentId: AgentId): boolean | null {
+        return this.#running.get(agentId)?.launchedUntrusted ?? null;
+    }
+
+    /** A word held for the next turn this run opens (`AgentSession.holdForNextWork`); `false` = no session to hold it. */
+    holdForNextWork(agentId: AgentId, text: string): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry || !entry.session.running) return false;
+        entry.session.holdForNextWork(text);
+        return true;
+    }
+
+    /** True = it was still held, and now it is not. */
+    withdrawHeld(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.withdrawHeld() ?? false;
+    }
+
+    /** Work this run is holding (`AgentSession.workWaiting`); `false` when the agent has no session. */
+    workWaiting(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.workWaiting ?? false;
+    }
+
+    /** This run may take work again. */
+    releaseWork(agentId: AgentId): void {
+        this.#running.get(agentId)?.session.releaseWork();
+    }
+
+    /** A restart now would cut nothing (`AgentSession.quiet`); `false` when the agent has no session. */
+    quiet(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.quiet ?? false;
+    }
+
     /** The agent's current RUN while it has a session, promptable or not; `null` when it has none. */
     runOf(agentId: AgentId): number | null {
         return this.#running.get(agentId)?.run ?? null;
@@ -1242,6 +1341,14 @@ export class SessionHost {
         entry.session.reportPlan(steps);
         this.#emit(agentId);
         return true;
+    }
+
+    /**
+     * The run's driver stopped itself and cannot take another prompt (`AgentSession.needsNewDriver`: Claude's cancel state
+     * uncertain, prism-acp 0.37.0): the person's next message starts a new one (main/start-on-demand.ts).
+     */
+    needsNewDriver(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.needsNewDriver ?? false;
     }
 
     /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */
@@ -1404,6 +1511,24 @@ export class SessionHost {
     }
 
     /**
+     * A TOOL ROW'S WHOLE OUTPUT, when a person opens the row (Tynn story #386). The row the window holds is a 16 KB
+     * preview; the whole is the sidecar the session wrote beside the ledger, read here from this host's own store and
+     * held to {@link TOOL_OUTPUT_MAX_BYTES}. A call with none kept (an older ledger's, or a store that keeps no files)
+     * is a refusal with its reason.
+     */
+    async toolOutput(agentId: AgentId, toolCallId: string): Promise<ToolOutputReply> {
+        await this.settled();
+        const store = this.#store();
+        if (!(store instanceof ThreadStore)) return { ok: false, reason: 'this agent’s history keeps no tool outputs' };
+        try {
+            const kept = await store.readToolOutput(threadKeyFor(agentId), toolCallId, TOOL_OUTPUT_MAX_BYTES);
+            return kept === null ? { ok: false, reason: 'the whole output of this call was not kept' } : { ok: true, ...kept };
+        } catch (error) {
+            return { ok: false, reason: `the output file could not be read (${error instanceof Error ? error.message : String(error)})` };
+        }
+    }
+
+    /**
      * WHAT THE AGENT VIEW AND THE CHAT SHOW: the agent's recorded history, then this run. Claude resumes a conversation
      * without replaying it, so this run alone showed one turn of an agent holding 740k tokens of context (the owner,
      * beta.21) — and a stopped agent showed nothing at all. The history is read from the thread the session writes,
@@ -1480,6 +1605,15 @@ export class SessionHost {
     /** Switch the running agent's model without a restart, or `null`: not running here, or its driver cannot. */
     switchModel(agentId: AgentId, modelId: string): Promise<void> | null {
         return this.#running.get(agentId)?.session.switchModel(modelId) ?? null;
+    }
+
+    /**
+     * Is it running, and since when: all the Deck asks of every asker on every refresh. Never the Dashboard's comms cell
+     * (beta.59: `probe` scanned up to 2000 mails per Deck item, 1-2 s window-main stalls).
+     */
+    liveness(agentId: AgentId): EngineLiveness | null {
+        const entry = this.#running.get(agentId);
+        return entry ? { running: entry.session.running, startedAt: entry.startedAt } : null;
     }
 
     probe(agentId: AgentId): LiveSession | null {
@@ -1643,6 +1777,12 @@ function rowReplaced(entry: Running, before: StreamEvent): void {
 }
 
 /** A measured comms reading as the row fields; `null` (not measured) leaves all three `null`, never `0`. */
+/** An agent's liveness, as the engine knows it: whether its session runs, and when that session started. */
+export interface EngineLiveness {
+    readonly running: boolean;
+    readonly startedAt: number | null;
+}
+
 export function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
     return { collaborators: c?.collaborators ?? null, commsAgeSeconds: c?.commsAgeSeconds ?? null, links: c?.links ?? null };
 }

@@ -2,6 +2,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { PromptContext } from '../core/session.js';
 import type { NoticeMail } from '../core/stream-event.js';
+import { inboxAgentPaused } from '../core/inbox.js';
 import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery } from '../core/app-inbox.js';
 
 /**
@@ -48,7 +49,8 @@ export interface InboxPushPorts {
         subscribe(listener: (agentId: AgentId) => void): () => void;
         /**
          * The agent's run when a message handed over now reaches it at its next step, mid-turn included, else `null`
-         * (SessionHost.deliverable: not running, starting, held on a limit, broken, stopped).
+         * (SessionHost.deliverable: not running, starting, held on a limit, broken, stopped, or paused by the person's Stop
+         * until they act, genie#1565).
          */
         deliverable(agentId: AgentId): number | null;
         /** The agent's current run while it has a session at all, else `null`. */
@@ -60,6 +62,8 @@ export interface InboxPushPorts {
         /** The prompt held under `id` is still waiting in the agent's current run (SessionHost.hasQueuedPrompt). */
         hasQueuedPrompt(agentId: AgentId, id: string): boolean;
         probe(agentId: AgentId): LiveSession | null;
+        /** How the agent's last turn ended (SessionHost.lastTurnEnd): a notice whose turn was STOPPED was not told. */
+        lastTurnEnd?(agentId: AgentId): 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null;
         /**
          * The typed-input path (SessionHost.handOff → AgentSession.deliver): `{ queued: null }` = the provider has it now;
          * `{ queued: id }` = held for the turn's end; `null` = no session. Throws when the provider refuses it outright.
@@ -150,13 +154,17 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
         // it opened. That turn ending cleanly is the notice told, so the turn's end never sends the same batch again.
         if (host.turnsEndedThisRun(id) <= sent.endedBefore) return true;
         out.delete(id);
-        settled(id, host.probe(id)?.turnState !== 'failed');
+        // Not a turn that was STOPPED either: since prism-acp 0.37.0 a notice Claude took mid-turn is dropped by the Stop
+        // (genie#1565), so it is told again once the person acts.
+        settled(id, host.probe(id)?.turnState !== 'failed' && host.lastTurnEnd?.(id) !== 'stopped');
         return false;
     };
 
     // Only the agent the event is about is considered: another agent's batch is told on ITS events, not on this one's.
     // `arrival`: new mail, not a session event — a notice the provider already has may be overtaken (below).
     const push = (only: string, arrival = false): void => {
+        // Held mail remains due. The host's resume/start event retries it; no notice bypasses a provider pause.
+        if (inboxAgentPaused(host.probe(only as AgentId))) return;
         const prior = out.get(only);
         if (settle(only as AgentId)) {
             // NEW MAIL ON TOP OF A NOTICE THE PROVIDER HAS (Claude folded it, or its turn is running): told now, as typed
@@ -221,6 +229,7 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     // Only an ARRIVAL wakes an agent with no session: on the host's own events (its stop among them) it is not restarted.
     const offSend = inbox.onSend((to, message) => {
         if (to === 'human') return;
+        if (inboxAgentPaused(host.probe(to as AgentId))) return;
         const app = message ? ports.appMail?.(to as AgentId, message) ?? null : null;
         // Only WHETHER a stopped agent is started differs for an app's message; one with a session is told as for any.
         if (host.runOf(to as AgentId) === null && ports.wake && app !== 'push-no-wake') {

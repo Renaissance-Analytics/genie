@@ -17,6 +17,7 @@ import {
     fixRoute,
     groupByStatus,
     groupByWorkspace,
+    shownState,
     statusOf,
     type FixRoute,
     summaryChips,
@@ -249,7 +250,7 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
         >
             <Lanes segments={lanes} />
             <div className="flex min-w-0 items-center gap-2">
-                <FidelityDot fidelity={row.fidelity} state={row.state} />
+                <FidelityDot fidelity={row.fidelity} state={shownState(row)} />
                 <span className="truncate font-medium">{row.name}</span>
                 {emoji ? <span data-row-emoji={emoji} className="shrink-0 animate-pulse" aria-label="what it just did">{emoji}</span> : null}
                 <ProviderLogo provider={row.provider} />

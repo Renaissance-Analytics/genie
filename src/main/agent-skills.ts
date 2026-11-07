@@ -128,7 +128,7 @@ const RETIRED = ['genie-orientation', 'genie-handoff', 'genie-issuewatch', 'geni
 
 const SKILL_ROOTS = [{ dir: '.claude/skills', key: 'claude' }, { dir: '.agents/skills', key: 'agents' }];
 
-function skillFile(s: GenieSkill): string {
+export function skillFile(s: GenieSkill): string {
     return `---\nname: ${s.name}\ndescription: ${s.description}\n---\n\n${s.body}`;
 }
 

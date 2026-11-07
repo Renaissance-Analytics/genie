@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, switchOutcome } from '../src/core/agent-ops.js';
+import { budgetDecision, deletePlan, providerSwitchAfter, restartPlan, switchDriverDecision, switchOutcome } from '../src/core/agent-ops.js';
 
 /**
  * AGENT OPERATIONS (§6.2) — the pure half of the operations that were still missing.
@@ -75,6 +75,12 @@ describe('switch provider — what the view says afterwards (Tynn story #380)', 
     it('a never-run agent had no conversation: nothing is said to come along, or to resume', () => {
         const text = switchOutcome('atlas', { ...switched, carried: null, left: null, droppedModel: null });
         expect(text).toBe('atlas switched claude → codex.');
+    });
+
+    it('the Provider control’s state after a switch: refused keeps the provider asked for, so Retry asks for it again', () => {
+        expect(providerSwitchAfter('atlas', 'codex', { ok: false, reason: 'Codex is not installed' })).toEqual({ kind: 'failed', to: 'codex', reason: 'Codex is not installed' });
+        const done = { ...switched, carried: { turns: 2, of: 2, plan: false }, left: 'sess-1', droppedModel: null };
+        expect(providerSwitchAfter('atlas', 'codex', done)).toEqual({ kind: 'done', text: 'atlas switched claude → codex. Its conversation comes with it (the last 2 turns). Switching back to claude resumes its claude conversation.' });
     });
 
     it('a no-op and a refusal are said as they are', () => {

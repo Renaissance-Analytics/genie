@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { READ_BACK_WAIT } from './helpers/read-back.js';
 import { SettingsStore } from '../src/main/settings-store.js';
 import { applyLoginItem, wireCloseToTray, wireLoginItem, type ClosableWindow, type LoginItemEnv, type LoginItemPort, type ResidenceSettings } from '../src/main/tray-residence.js';
 
@@ -43,7 +44,7 @@ describe('wireCloseToTray', () => {
         expect(notify).toHaveBeenCalledTimes(1);
         expect(notify.mock.calls[0]![0]).toMatchObject({ title: 'Genie is still running in the tray' });
         // The marker reaches the file (and the write settles before the directory is removed).
-        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true));
+        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true), READ_BACK_WAIT);
     });
 
     it('the notice stays shown across a restart: the marker is a setting, so the next Genie says nothing', async () => {
@@ -53,7 +54,7 @@ describe('wireCloseToTray', () => {
         wireCloseToTray(a.win, { platform: 'linux', quitting: () => false, settings: first, notify: notifyA });
         a.close();
         expect(notifyA).toHaveBeenCalledTimes(1);
-        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true));
+        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true), READ_BACK_WAIT);
         const reopened = await SettingsStore.open(dir);
         const b = fakeWindow();
         const notifyB = vi.fn();
@@ -74,7 +75,7 @@ describe('wireCloseToTray', () => {
         close();
         expect(counts).toEqual({ hide: 1, prevented: 1, closed: 1 });
         expect(notify).toHaveBeenCalledTimes(1);
-        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true));
+        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true), READ_BACK_WAIT);
     });
 
     it('macOS: the close is the platform’s own — nothing prevented, nothing hidden, no notice', async () => {
