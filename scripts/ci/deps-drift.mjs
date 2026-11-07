@@ -86,7 +86,8 @@ export function advisories(pins, audit, ghsa) {
 }
 
 const ghsaId = (url) => /GHSA-[\w-]+/.exec(url)?.[0] ?? url;
-const cell = (s) => String(s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+// Backslashes FIRST, then pipes, then newlines: an input "\|" must not turn into "\\|", an escaped backslash and a live pipe.
+const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 export function report({ pkg, lock, latest, audit, ghsa }) {
     const pins = pinned(pkg, lock);

@@ -124,6 +124,19 @@ describe('the fancy + prism drift watcher', () => {
         expect(md).toContain('XSS in a thing');
     });
 
+    it('a backslash in an advisory, alone or before a pipe, renders as a literal cell and never breaks out of it', () => {
+        const summary = String.raw`C:\tmp\x a\|b` + '\nsecond line';
+        const ghsa = { '@particle-academy/react-fancy@6.7.2': [{ ghsa_id: 'GHSA-1111-2222-3333', summary, severity: 'medium', html_url: 'https://github.com/advisories/GHSA-1111-2222-3333' }] };
+        const { code, md } = run({ latest: upToDate, ghsa });
+        expect(code).toBe(1);
+        // Backslashes first, then pipes, then newlines: each backslash doubles, the pipe is escaped on its own.
+        expect(md).toContain(String.raw`C:\\tmp\\x a\\\|b second line`);
+        // The row keeps its four columns: five pipes that are not escaped (an even run of backslashes before one is no escape).
+        const row = md.split('\n').find((l) => l.includes('GHSA-1111-2222-3333')) ?? '';
+        const unescaped = [...row.matchAll(/(\\*)\|/g)].filter((m) => (m[1] ?? '').length % 2 === 0).length;
+        expect(unescaped).toBe(5);
+    });
+
     it('a package npm could not answer for is reported as unknown, never as up to date', () => {
         const latest: Record<string, string> = { ...upToDate };
         delete latest['@particle-academy/prism-acp'];
