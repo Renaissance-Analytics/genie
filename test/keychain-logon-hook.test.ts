@@ -15,21 +15,23 @@ afterEach(() => { for (const root of fixtures.splice(0)) rmSync(root, { recursiv
 function run(phase: 'logon-install' | 'logon-read', scenario = 'ok', hasResult = false) {
     const root = mkdtempSync(join(tmpdir(), 'genie-logon-'));
     fixtures.push(root);
-    const repo = join(root, "repo space & O'Brien");
+    const cwd = join(root, 'repo space');
+    const repo = scenario === 'long-command' ? `C:\\${'long-directory'.repeat(30)}` : "C:\\repo space & O'Brien";
     const publicDir = join(root, 'public space');
-    mkdirSync(repo); mkdirSync(publicDir);
+    mkdirSync(cwd); mkdirSync(publicDir);
     if (hasResult) writeFileSync(join(publicDir, 'genie-keychain-at-logon.txt'), 'fixture result\n');
     const stateFile = join(root, 'state.json');
     const r = spawnSync(process.platform === 'win32' ? 'powershell.exe' : 'pwsh', [
         '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
         fileURLToPath(new URL('./fixtures/keychain-logon-harness.ps1', import.meta.url)),
     ], {
-        cwd: repo, windowsHide: true, encoding: 'utf8', timeout: 20_000,
-        env: { ...process.env, PUBLIC: publicDir, HOOK_SCRIPT: resolve('scripts/perf-lag/keychain-sessions-windows.ps1'), HOOK_PHASE: phase, HOOK_CASE: scenario, HOOK_STATE: stateFile },
+        cwd, windowsHide: true, encoding: 'utf8', timeout: 20_000,
+        env: { ...process.env, PUBLIC: publicDir, HOOK_SCRIPT: resolve('scripts/perf-lag/keychain-sessions-windows.ps1'), HOOK_PHASE: phase, HOOK_CASE: scenario, HOOK_STATE: stateFile, HOOK_REPO: repo },
     });
     if (r.error) throw r.error;
     const state = JSON.parse(readFileSync(stateFile, 'utf8')) as {
         value: string | null; otherValue: string;
+        keyExists: boolean; creates: { path: string; force: boolean }[];
         writes: { path: string; name: string; value: string; type: string; force: boolean }[];
         reads: { path: string; name: string }[];
         removals: { path: string; name: string }[]; tasks: string[][];
@@ -47,9 +49,18 @@ describe('the Windows keychain sign-in hook, through its real phases', () => {
         expect(r.state.writes[0]).toMatchObject({ path: runKey, name: hookName, type: 'String', force: true });
         // Direct executable invocation: spaces, ampersands and apostrophes remain path characters.
         // No cmd wrapper in the public directory, and no shell metacharacter interpretation.
-        expect(r.state.value).toBe(`"${process.execPath}" "${r.repo}\\scripts\\perf-lag\\keychain-at-logon.mjs" "${join(r.publicDir, 'genie-keychain-at-logon.txt')}" "${r.repo}"`);
+        expect(r.state.value).toBe(`"C:\\Program Files\\nodejs\\node.exe" "${r.repo}\\scripts\\perf-lag\\keychain-at-logon.mjs" "${join(r.publicDir, 'genie-keychain-at-logon.txt')}" "${r.repo}"`);
         expect(r.state.reads).toEqual([{ path: runKey, name: hookName }]);
         expect(r.state.otherValue).toBe('leave this alone');
+        expect(r.state.creates).toEqual([]);
+    });
+
+    it('creates a missing Run key without replacing an existing key', () => {
+        const r = run('logon-install', 'new-key');
+        expect(r.status, r.stdout + r.stderr).toBe(0);
+        expect(r.state.creates).toEqual([{ path: runKey, force: false }]);
+        expect(r.state.reads).toEqual([{ path: runKey, name: hookName }]);
+        expect(r.state.writes).toHaveLength(1);
     });
 
     it.each(['key-denied', 'write-denied', 'write-ignored', 'read-denied', 'read-missing', 'read-mismatch'])(
@@ -60,6 +71,14 @@ describe('the Windows keychain sign-in hook, through its real phases', () => {
             expect(r.stdout).not.toContain('logon-install=PASS');
         },
     );
+
+    it('refuses a command longer than the Run key limit before writing it', () => {
+        const r = run('logon-install', 'long-command');
+        expect(r.status).not.toBe(0);
+        expect(r.stdout).toContain('logon-install=FAIL');
+        expect(r.stdout).toContain('260');
+        expect(r.state.writes).toEqual([]);
+    });
 
     it('reads the result and removes only its own Run value', () => {
         const r = run('logon-read', 'ok', true);
@@ -79,10 +98,18 @@ describe('the Windows keychain sign-in hook, through its real phases', () => {
         expect(r.state.value).toBeNull();
     });
 
-    it('reports cleanup failure instead of leaving an unnoticed persistent hook', () => {
-        const r = run('logon-read', 'remove-denied', true);
+    it.each(['remove-denied', 'remove-ignored', 'cleanup-read-denied'])('reports cleanup failure (%s) instead of leaving an unnoticed persistent hook', (scenario) => {
+        const r = run('logon-read', scenario, true);
         expect(r.status, r.stdout + r.stderr).not.toBe(0);
         expect(r.stdout).toContain('logon-read=FAIL');
         expect(r.state.value).toBe('old hook');
+    });
+
+    it('allows reading the result again after the hook was removed', () => {
+        const r = run('logon-read', 'already-removed', true);
+        expect(r.status, r.stdout + r.stderr).toBe(0);
+        expect(r.stdout).toContain('fixture result');
+        expect(r.state.removals).toEqual([]);
+        expect(r.state.otherValue).toBe('leave this alone');
     });
 });
