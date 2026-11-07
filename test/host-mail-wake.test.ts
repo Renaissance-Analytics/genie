@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId, type AgentId } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
@@ -59,6 +59,60 @@ async function rig(options: { asleep?: boolean; cap?: string } = {}) {
 }
 
 describe('mail wakes an agent in genie-host', () => {
+    it('Tynn #672: IDLE, one refused handoff, then timers alone deliver the actual message within 5 s exactly once', async () => {
+        const r = await rig();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        const handOff = vi.spyOn(r.host, 'handOff');
+        try {
+            expect(r.host.start(r.atlas, process.cwd())).toEqual({ ok: true });
+            expect(r.host.prompt(r.atlas.id, 'warm up', 'you')).toBe(true);
+            const fake = fakes.get(r.atlas.id)!;
+            fake.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+            // Let Cooling finish BEFORE arrival: even its session-change event cannot rescue the refused handoff.
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(r.host.probe(r.atlas.id)?.turnState).toBe('idle');
+            expect(r.host.probe(r.atlas.id)?.cooling).toBe(false);
+            expect(r.host.inTurn(r.atlas.id)).toBe(false);
+            expect(r.host.deliverable(r.atlas.id)).not.toBeNull();
+            expect(fake.prompts).toEqual(['warm up']);
+
+            // Refuse exactly ONE handoff, before it reaches the provider; subsequent calls use the real SessionHost.
+            handOff.mockImplementationOnce(() => { throw new Error('injected transient handoff refusal'); });
+            const text = 'The deployment finished; the requested result is ready.';
+            const arrivedAt = Date.now();
+            const message = await r.inbox.send({ from: r.other.id, to: r.atlas.id, text });
+            await vi.advanceTimersByTimeAsync(1_500);
+            expect(handOff).toHaveBeenCalledTimes(1);
+            expect(handOff.mock.results[0]?.type).toBe('throw');
+            expect(fake.prompts).toEqual(['warm up']);
+            expect(r.host.inTurn(r.atlas.id)).toBe(false);
+            expect(r.host.deliverable(r.atlas.id)).not.toBeNull();
+
+            // From arrival onward there is NO further mail, input, receive, readiness or turn/session event.
+            // Only the clock advances. A timer owned by the real mail wake must make the second attempt.
+            await vi.advanceTimersByTimeAsync(3_500);
+            expect(Date.now() - arrivedAt).toBe(5_000);
+            expect({ handOffAttempts: handOff.mock.calls.length, deliveredPrompts: fake.prompts.slice(1) }).toEqual({
+                handOffAttempts: 2,
+                deliveredPrompts: [expect.stringContaining(text)],
+            });
+            // The card IS the message: its sender/body/identity reach the chat as well as the provider, with no nudge.
+            expect(fake.prompts.slice(1).join('\n')).not.toMatch(/unread AgentInbox|collect .*agentinbox receive/);
+            const deliveredMail = () => r.host.rowsFor(r.atlas.id).flatMap(({ event }) =>
+                event.kind === 'message' && event.speaker === 'peer' && event.peerName === 'genie' ? event.mail ?? [] : []);
+            expect(deliveredMail()).toEqual([expect.objectContaining({ id: message.id, from: r.other.id, fromName: 'other', text })]);
+
+            // Continue with timers alone: neither another attempt nor a duplicate card/provider prompt may appear.
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(handOff).toHaveBeenCalledTimes(2);
+            expect(fake.prompts.slice(1)).toEqual([expect.stringContaining(text)]);
+            expect(deliveredMail()).toHaveLength(1);
+        } finally {
+            handOff.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
     it('a STOPPED agent is started for its mail and told — with no window and nobody typing', async () => {
         const r = await rig();
         expect(r.host.probe(r.atlas.id as AgentId)).toBeNull(); // CONTROL: not running before the mail
