@@ -29,9 +29,15 @@ interface Fake { prompts: string[]; events: DriverEvents }
 const fakes = new Map<string, Fake>();
 const driverFor: DriverFor = (record) => {
     const factory: SessionDriverFactory = (options) => {
-        const fake: Fake = { prompts: [], events: options.events };
+        let inFlight = false;
+        const fake: Fake = { prompts: [], events: { ...options.events,
+            onTurnEnd: (outcome) => { inFlight = false; options.events.onTurnEnd?.(outcome); } } };
         fakes.set(record.id, fake);
-        return { start: () => {}, prompt: (content: unknown) => { fake.prompts.push(typeof content === 'string' ? content : JSON.stringify(content)); }, kill: () => {}, cliSessionId: null };
+        return { start: () => {}, prompt: (content: unknown) => {
+            if (record.provider === 'codex' && inFlight) throw new Error('Codex turn already in flight');
+            inFlight = true;
+            fake.prompts.push(typeof content === 'string' ? content : JSON.stringify(content));
+        }, kill: () => {}, cliSessionId: null };
     };
     return factory;
 };
@@ -39,11 +45,11 @@ const driverFor: DriverFor = (record) => {
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); fakes.clear(); });
 
-async function rig(options: { asleep?: boolean; cap?: string; sessionEvents?: boolean } = {}) {
+async function rig(options: { asleep?: boolean; cap?: string; sessionEvents?: boolean; provider?: 'claude' | 'codex' } = {}) {
     const dir = await mkdtemp(join(tmpdir(), 'host-wake-'));
     const ws = await mkdtemp(join(tmpdir(), 'host-wake-ws-'));
     const store = new Store(dir);
-    const atlas = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: 'atlas' });
+    const atlas = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: options.provider ?? 'claude', name: 'atlas' });
     const other = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: 'other' });
     await store.writeWorkspaces([{ id: 'ws', path: ws, ...(options.asleep ? { asleep: true } : {}) }]);
     await store.writeAgents([atlas, other]);
@@ -58,7 +64,7 @@ async function rig(options: { asleep?: boolean; cap?: string; sessionEvents?: bo
     const log: string[] = [];
     const off = wireHostMailWake({ inbox, host, registry, settings, osaDir: dir, log: (l) => log.push(l) });
     cleanups.push(async () => { off(); subscribe?.mockRestore(); host.stopAll(); await host.settled(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); await rm(ws, { recursive: true, force: true }); });
-    return { inbox, host, atlas, other, log };
+    return { dir, inbox, host, atlas, other, log };
 }
 
 describe('mail wakes an agent in genie-host', () => {
@@ -88,6 +94,7 @@ describe('mail wakes an agent in genie-host', () => {
             await vi.advanceTimersByTimeAsync(1_500);
             expect(handOff.mock.results[0]?.type).toBe('throw');
             expect(handOff.mock.results[0]?.value).toEqual(new Error('injected transient handoff refusal'));
+            expect(r.inbox.receipts(r.other.id)[0]!.readAt).toBeNull(); // refusal is not delivery
 
             // Only timer progression follows the one arrival; no input, receive, ready or session event can rescue it.
             await vi.advanceTimersByTimeAsync(3_500);
@@ -100,6 +107,8 @@ describe('mail wakes an agent in genie-host', () => {
             expect(handOff).toHaveBeenCalledTimes(2);
             expect(successfulForMessage()).toHaveLength(1);
             expect(fake.prompts.slice(1)).toHaveLength(1); // the fake provider actually accepted the retry
+            expect(r.inbox.receipts(r.other.id)[0]!.readAt).not.toBeNull();
+            expect(r.inbox.unread(r.atlas.id)).toEqual([]);
 
             const deliveredMail = () => r.host.rowsFor(r.atlas.id).flatMap(({ event }) =>
                 event.kind === 'message' && event.speaker === 'peer' && event.peerName === 'genie' ? event.mail ?? [] : []);
@@ -123,8 +132,7 @@ describe('mail wakes an agent in genie-host', () => {
         }
     });
 
-    // NEXT CHUNK: deliberately plain RED until the provider gets the sender/body instead of an unread/collect nudge.
-    it('Tynn #672 (B) BODY / no-nudge — NEXT CHUNK: actual sender and body reach the provider within 5 s exactly once', async () => {
+    it('Tynn #672 (B) BODY / no-nudge: actual sender and body reach the provider within 5 s exactly once', async () => {
         const r = await rig({ sessionEvents: false });
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
         const handOff = vi.spyOn(r.host, 'handOff');
@@ -177,6 +185,67 @@ describe('mail wakes an agent in genie-host', () => {
             handOff.mockRestore();
             vi.useRealTimers();
         }
+    });
+
+    it('marks queued mail read only when the provider accepts it, persists that receipt, and leaves dropped queued mail unread', async () => {
+        const r = await rig({ provider: 'codex' });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        try {
+            expect(r.host.start(r.atlas, process.cwd())).toEqual({ ok: true });
+            expect(r.host.prompt(r.atlas.id, 'active work', 'you')).toBe(true);
+            const fake = fakes.get(r.atlas.id)!;
+            const first = await r.inbox.send({ from: r.other.id, to: r.atlas.id, text: 'the queued result' });
+            await vi.advanceTimersByTimeAsync(1_500);
+            expect(fake.prompts).toEqual(['active work']);
+            expect(r.inbox.receipts(r.other.id)[0]!.readAt).toBeNull();
+            const read = new Promise<void>((resolve) => {
+                const off = r.inbox.onRead((id) => { if (id === r.atlas.id) { off(); resolve(); } });
+            });
+            fake.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+            expect(fake.prompts).toHaveLength(2);
+            expect(fake.prompts[1]).toContain('the queued result');
+            expect(r.inbox.receipts(r.other.id)[0]!.readAt).not.toBeNull();
+            await read;
+            const reopened = await InboxStore.open(r.dir);
+            expect(reopened.receipts(r.other.id).find((receipt) => receipt.message.id === first.id)!.readAt).not.toBeNull();
+            expect(reopened.unread(r.atlas.id)).toEqual([]);
+
+            const dropped = await r.inbox.send({ from: r.other.id, to: r.atlas.id, text: 'must wait if the queued prompt is dropped' });
+            await vi.advanceTimersByTimeAsync(1_500);
+            expect(fake.prompts).toHaveLength(2);
+            expect(r.inbox.receipts(r.other.id)[0]!.readAt).toBeNull();
+            r.host.stop(r.atlas.id);
+            await r.host.settled();
+            expect(r.inbox.receipts(r.other.id)[0]!.readAt).toBeNull();
+            expect(r.inbox.unread(r.atlas.id).map((m) => m.id)).toEqual([dropped.id]);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('marks only the accepted batch read, leaving a later arrival unread until its own delivery', async () => {
+        const r = await rig();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        const original = r.host.handOff.bind(r.host);
+        const handOff = vi.spyOn(r.host, 'handOff');
+        let later: ReturnType<typeof r.inbox.send> | undefined;
+        try {
+            expect(r.host.start(r.atlas, process.cwd())).toEqual({ ok: true });
+            const read = new Promise<void>((resolve) => {
+                const off = r.inbox.onRead((id) => { if (id === r.atlas.id) { off(); resolve(); } });
+            });
+            handOff.mockImplementationOnce((...args) => {
+                const accepted = original(...args);
+                later = r.inbox.send({ from: r.other.id, to: r.atlas.id, text: 'later, outside the accepted batch' });
+                return accepted;
+            });
+            const first = await r.inbox.send({ from: r.other.id, to: r.atlas.id, text: 'first accepted body' });
+            await vi.advanceTimersByTimeAsync(1_500);
+            expect(r.inbox.receipts(r.other.id).find((receipt) => receipt.message.id === first.id)!.readAt).not.toBeNull();
+            await read;
+            const next = await later!;
+            expect(r.inbox.unread(r.atlas.id).map((m) => m.id)).toEqual([next.id]);
+            expect(r.inbox.receipts(r.other.id).find((receipt) => receipt.message.id === next.id)!.readAt).toBeNull();
+            expect(fakes.get(r.atlas.id)!.prompts).toHaveLength(1);
+        } finally { handOff.mockRestore(); vi.useRealTimers(); }
     });
 
     it('a STOPPED agent is started for its mail and told — with no window and nobody typing', async () => {
