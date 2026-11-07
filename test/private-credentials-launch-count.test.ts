@@ -78,7 +78,7 @@ vi.mock('node:fs/promises', async (original) => {
     return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
         const handle = await actual.open(...args);
         if (String(args[0]).endsWith('.tmp')) {
-            if (observed.fault !== 'die-after-staging') observed.stagingOpened = true; // BREAK PROBE
+            observed.stagingOpened = true;
             if (observed.fault === 'closed-stdin' || observed.fault === 'stdin-eof') {
                 const close = handle.close.bind(handle);
                 handle.close = async () => {
