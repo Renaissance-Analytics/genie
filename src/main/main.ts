@@ -4166,7 +4166,7 @@ function bringBackItsPage(win: BrowserWindow): void {
         onGaveUp: (notice) => { rendererNotice = notice; },
         errorPage: rendererErrorPage,
         recreate: () => { rebuild('renderer recovery: the reload failed'); },
-        log: lifecycleLog,
+        log: (line) => { rendererErrorLog?.(line); },
     });
     win.webContents.on('will-navigate', (event, url) => {
         if (url !== RECOVER_RESTART && url !== RECOVER_REPORT) return;
