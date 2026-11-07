@@ -1,5 +1,6 @@
+import { winLauncherPath } from './win-launcher.js';
 import { createHash } from 'node:crypto';
-import { spawn as spawnChild } from 'node:child_process';
+import { execFileSync, spawn as spawnChild } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join } from 'node:path';
@@ -81,9 +82,20 @@ export function hostSpawnSpec(ports: Pick<EngineLaunchPorts, 'execPath' | 'hostS
     };
 }
 
-/** The host, detached from the window: it must outlive the window's process (a crash, a restart). */
-export function spawnHostProcess(ports: Pick<EngineLaunchPorts, 'execPath' | 'hostScript' | 'logsDir' | 'env' | 'genieHome' | 'build'>): number | null {
+/**
+ * The host, detached from the window: it must outlive the window's process (a crash, a restart). On Windows through
+ * genie-launch.exe (win-launcher.ts, #1628): Node's spawn would hand the host every inheritable handle of the window's —
+ * CI measured the first window's DevTools socket held by genie-host after that window was ended — and the launcher gives
+ * it only its log and NUL. Where the launcher was not built (a dev machine with no MSVC), Node's spawn, as before.
+ */
+export function spawnHostProcess(ports: Pick<EngineLaunchPorts, 'execPath' | 'hostScript' | 'logsDir' | 'env' | 'genieHome' | 'build'>, launcher: string | null = winLauncherPath()): number | null {
     mkdirSync(ports.logsDir, { recursive: true });
+    if (launcher !== null) {
+        const spec = hostSpawnSpec(ports);
+        const said = execFileSync(launcher, ['detach', join(ports.logsDir, 'genie-host.log'), spec.file, ...spec.args], { env: spec.options.env, windowsHide: true, encoding: 'utf8', timeout: 20_000 });
+        const pid = Number(said.trim());
+        return Number.isInteger(pid) && pid > 0 ? pid : null;
+    }
     const out = openSync(join(ports.logsDir, 'genie-host.log'), 'a');
     try {
         const spec = hostSpawnSpec(ports);
