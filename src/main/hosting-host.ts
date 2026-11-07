@@ -434,7 +434,7 @@ export class HostingReplica implements HostingApi {
             return entry ? { trusted: entry.trusted, changed: entry.changed, list: entry.list } : null;
         },
         entries: () => [...this.#trustEntries()],
-        refresh: (workspaceId: string) => this.#ask<TrustView | null>('trust.refresh', workspaceId),
+        refresh: (workspaceId: string, purpose?: 'redock') => purpose === undefined ? this.#ask<TrustView | null>('trust.refresh', workspaceId) : this.#ask<TrustView | null>('trust.refresh', workspaceId, purpose),
         trust: (workspaceId: string) => this.#ask<TrustView | null>('trust.trust', workspaceId),
         mayWriteInto: async (folder: string) => {
             const dump = this.#dump;
