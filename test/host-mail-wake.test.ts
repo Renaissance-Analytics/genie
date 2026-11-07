@@ -245,7 +245,7 @@ describe('mail wakes an agent in genie-host', () => {
             expect(r.inbox.unread(r.atlas.id).map((m) => m.id)).toEqual([next.id]);
             expect(r.inbox.receipts(r.other.id).find((receipt) => receipt.message.id === next.id)!.readAt).toBeNull();
             expect(fakes.get(r.atlas.id)!.prompts).toHaveLength(1);
-        } finally { handOff.mockRestore(); vi.useRealTimers(); }
+        } finally { handOff.mockRestore(); vi.useRealTimers(); await later; }
     });
 
     it('a STOPPED agent is started for its mail and told — with no window and nobody typing', async () => {

@@ -67,7 +67,7 @@ export type StoreName = 'inbox' | 'attention' | 'knowledge' | 'approvals' | 'set
 
 /** What a window may call, per store. Everything else is the host's own (an agent's tools run here). */
 export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
-    inbox: ['send', 'receive', 'deleteThread', 'attachmentForPerson'],
+    inbox: ['send', 'receive', 'markDelivered', 'deleteThread', 'attachmentForPerson'],
     attention: ['answer', 'dismiss', 'dismissMany', 'dismissOlderThan', 'markSeen', 'withdraw', 'lists.add', 'lists.done', 'lists.clear'],
     knowledge: ['add', 'get', 'update', 'remove', 'link', 'search', 'list', 'summaries'],
     approvals: ['resolve', 'gate'],

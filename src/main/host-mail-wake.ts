@@ -68,6 +68,10 @@ export function wireHostMailWake(p: {
             run,
         }),
         settled: (agentId, delivered) => reminders.settled(agentId, delivered),
+        delivered: (agentId, mail) => {
+            void p.inbox.markDelivered(agentId, mail.map((m) => m.id))
+                .catch((error: unknown) => p.log(`a delivered mail receipt could not be saved: ${error instanceof Error ? error.message : String(error)}`));
+        },
         wake,
         cumulative: true,
         ...appMailPushPorts({

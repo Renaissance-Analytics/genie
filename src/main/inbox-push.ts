@@ -79,6 +79,8 @@ export interface InboxPushPorts {
     readonly reminders: (input: { run: (agentId: string) => number | null }) => Array<{ agentId: string; text: string; mail?: readonly NoticeMail[] }>;
     /** A notice settled (compose's `inboxNoticeSettled`): delivered, or its batch untold. */
     readonly settled: (agentId: string, delivered: boolean) => void;
+    /** The provider accepted this captured mail batch, not merely a queued handoff. */
+    readonly delivered?: (agentId: AgentId, mail: readonly NoticeMail[]) => void;
     /**
      * MAIL WAKES THE AGENT (the owner, 2026-10-17: "agents don't wake up from inbox pushes unless I go to their screen").
      * Start the session of an agent that has none — main's `wakeAgent` (opening an agent no longer starts it, q_04ce323c), refusing by name for an asleep workspace or
@@ -106,7 +108,7 @@ export interface InboxPushPorts {
      */
     readonly coalesceMs?: number | undefined;
     /**
-     * EACH NOTICE COUNTS EVERYTHING STILL UNREAD (the mail push: "You have N unread"), so a newer notice covers the one
+     * EACH NOTICE COVERS EVERYTHING STILL UNREAD (the mail push), so a newer notice covers the one
      * before it. Then new mail arriving while a notice the provider already has is in flight is told at once, and the one
      * before is settled told. Absent (IssueWatch, whose notice names only what is new) = new mail waits for that turn's end.
      */
@@ -119,7 +121,8 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
      * The notice out per agent: the run it went to, how many of that run's turns had ended when the provider got it, and,
      * while it is HELD for the turn's end (Codex), the id it is held under.
      */
-    const out = new Map<string, { run: number; endedBefore: number; queued: string | null }>();
+    type Outgoing = { run: number; endedBefore: number; queued: string | null; handingOff: boolean; acknowledged: boolean; mail: readonly NoticeMail[] };
+    const out = new Map<string, Outgoing>();
     /** An arrival's coalescing window, per agent: while one is open the agent is told when it closes, not before. */
     const coalescing = new Map<string, () => void>();
     /** An app-only notice held by the app wake cap, per agent: told when the window allows. */
@@ -129,6 +132,11 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     let disposed = false;
     const { schedule } = ports;
     const coalesceMs = ports.coalesceMs ?? 0;
+    const acknowledge = (id: AgentId, sent: Outgoing): void => {
+        if (sent.acknowledged) return;
+        sent.acknowledged = true;
+        if (sent.mail.length > 0) ports.delivered?.(id, sent.mail);
+    };
 
     /** Settle the agent's notice if its fate is known now. Answers whether one is still out. */
     const settle = (id: AgentId): boolean => {
@@ -140,6 +148,7 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             settled(id, false);
             return false;
         }
+        if (sent.handingOff) return true;
         if (sent.queued !== null) {
             // HELD for the turn's end (Codex refuses a prompt mid-turn): still waiting, nothing to settle yet.
             if (host.hasQueuedPrompt(id, sent.queued)) return true;
@@ -152,6 +161,7 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             }
             sent.queued = null;
             sent.endedBefore = host.turnsEndedThisRun(id);
+            acknowledge(id, sent);
             return true;
         }
         // The provider has it: the next turn to end in that run took it — the running turn it was folded into, or the one
@@ -178,7 +188,7 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             // input would be, not at that turn's end. The newer notice counts everything still unread, so the one before
             // it is settled told — if the newer one is not delivered, its batch is untold and covers both. A notice still
             // HELD (Codex) is not overtaken: a second held notice would be a second turn.
-            if (!ports.cumulative || !arrival || prior === undefined || prior.queued !== null || host.deliverable(only as AgentId) === null) return;
+            if (!ports.cumulative || !arrival || prior === undefined || prior.handingOff || prior.queued !== null || host.deliverable(only as AgentId) === null) return;
             out.delete(only);
             settled(only, true);
         }
@@ -202,12 +212,14 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             }
             const midTurn = host.inTurn(id);
             // Out BEFORE the prompt: the prompt itself announces a change, and that re-entry must see it in flight.
-            const sent = { run, endedBefore: host.turnsEndedThisRun(id), queued: null as string | null };
+            const sent: Outgoing = { run, endedBefore: host.turnsEndedThisRun(id), queued: null,
+                handingOff: true, acknowledged: false, mail: r.mail ?? [] };
             out.set(id, sent);
             // What the hand-off answered: nothing took it = settled untold; taken = the turn it opens is spent.
             const handedOff = (handed: { queued: string | null } | null): void => {
                 // A stopped wire or a replaced batch cannot settle newer mail or arm a stale retry.
                 if (disposed || out.get(id) !== sent) return;
+                sent.handingOff = false;
                 if (handed === null) {
                     out.delete(id);
                     settled(id, false);
@@ -221,8 +233,11 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
                     return;
                 }
                 sent.queued = handed.queued;
+                if (handed.queued === null) acknowledge(id, sent);
                 // It opens a turn when the agent was idle, or when it is held for a turn of its own.
                 if (appCaused && (!midTurn || handed.queued !== null)) ports.appBudget!.spend(id);
+                // Across a host link the queued prompt may already have left the queue before the answer arrived.
+                if (handed.queued !== null) settle(id);
             };
             let handed: { queued: string | null } | null | Promise<{ queued: string | null } | null>;
             try {

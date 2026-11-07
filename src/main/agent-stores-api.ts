@@ -11,7 +11,7 @@ import type { SettingsStore } from './settings-store.js';
  * genie-host's stores (agent-stores-replica.ts); on the emergency path they are the stores themselves. Compose, the Deck,
  * the snapshots and the person's actions are written against these, never against a store class, so either fits.
  */
-export type InboxApi = Pick<InboxStore, 'onSend' | 'onRead' | 'involving' | 'all' | 'hasWritten' | 'unread' | 'unreadCount' | 'receipts' | 'send' | 'receive' | 'deleteThread' | 'attachmentForPerson'>;
+export type InboxApi = Pick<InboxStore, 'onSend' | 'onRead' | 'involving' | 'all' | 'hasWritten' | 'unread' | 'unreadCount' | 'receipts' | 'send' | 'receive' | 'markDelivered' | 'deleteThread' | 'attachmentForPerson'>;
 
 export type AttentionApi = Pick<AttentionStore, 'pending' | 'finished' | 'allUserItems' | 'lastHandoff' | 'asked' | 'leftOutcome' | 'answer' | 'dismiss' | 'dismissMany' | 'dismissOlderThan' | 'markSeen' | 'onChange' | 'onLeave' | 'lists' | 'withdraw'>;
 

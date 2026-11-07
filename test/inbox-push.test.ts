@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { appSenderId, type AppMessageMeta } from '../src/core/app-inbox.js';
 import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
-import { reminderText } from '../src/core/inbox-reminders.js';
+import { deliveryHeader as reminderText, summarizeInboxPrompt } from './helpers/inbox-delivery.js';
 import { openDurableStore, readHistory } from '../src/core/thread-store.js';
 import { sessionsDir } from '../src/main/paths.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
@@ -29,8 +29,8 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * The fakes are shaped like prism-acp's real drivers: Codex declares `ready` (its thread is started), Claude does not.
  */
 
-const NOTICE_1 = 'You have 1 unread AgentInbox message; collect it with agentinbox receive.';
-const notice = (n: number): string => (n === 1 ? NOTICE_1 : `You have ${n} unread AgentInbox messages; collect them with agentinbox receive.`);
+const NOTICE_1 = reminderText(1);
+const notice = (n: number): string => reminderText(n);
 
 const pty: PtyPort = {
     open: (o) => ({ id: 'term_x', pid: 1, shell: o.command ?? 'sh', scrollback: '' }),
@@ -136,8 +136,8 @@ const site: AppMessageMeta = { source: { kind: 'site', id: 'site_flabs', name: '
 const APP_FROM = appSenderId(site.source);
 const appMail = async (to: AgentId, text = 'petition #42 queued'): Promise<void> => { await services.inbox.send({ from: APP_FROM, to, text, app: site }); };
 const mail = async (to: AgentId, text: string, from: string = HUMAN): Promise<void> => { await services.inbox.send({ from: from as never, to, text }); };
-const promptsOf = (id: AgentId): string[] => fakes.get(id)?.prompts ?? [];
-const notices = (id: AgentId): string[] => promptsOf(id).filter((p) => p.includes('unread AgentInbox'));
+const promptsOf = (id: AgentId): string[] => (fakes.get(id)?.prompts ?? []).map(summarizeInboxPrompt);
+const notices = (id: AgentId): string[] => promptsOf(id).filter((p) => p.startsWith('AgentInbox delivery:'));
 
 describe.each(['claude', 'codex'] as const)('the inbox push — a %s agent', (provider) => {
     const register = (): AgentRecord => {
@@ -216,7 +216,7 @@ describe.each(['claude', 'codex'] as const)('the inbox push — a %s agent', (pr
         timer.fire();
         endTurn(record.id);
         const notices = host.rowsFor(record.id).map((r) => r.event).filter((e) => e.kind === 'message' && e.speaker === 'peer' && e.peerName === 'genie');
-        expect(notices.map((e) => (e.kind === 'message' ? e.text : ''))).toEqual([NOTICE_1, notice(2)]);
+        expect(notices.map((e) => (e.kind === 'message' ? summarizeInboxPrompt(e.text) : ''))).toEqual([NOTICE_1, notice(2)]);
         const told = notices.map((e) => (e.kind === 'message' ? (e.mail ?? []).map((m) => [m.from, m.fromName, m.text]) : []));
         expect(told).toEqual([
             [[HUMAN, null, 'Answer to your question q_1:\n- **Deploy** — Ship it?\n  → Yes']],
@@ -282,7 +282,7 @@ describe.each(['claude', 'codex'] as const)('the inbox push — a %s agent', (pr
         if (provider === 'claude') expect(notices(record.id)).toEqual([NOTICE_1]);
         endTurn(record.id);
         const rows = host.rowsFor(record.id).map((r) => r.event);
-        const told = rows.filter((e) => e.kind === 'message' && e.text === NOTICE_1);
+        const told = rows.filter((e) => e.kind === 'message' && summarizeInboxPrompt(e.text) === NOTICE_1);
         expect(told).toHaveLength(1);
         expect(told[0]).toMatchObject({ speaker: 'peer', peerName: 'genie' });
         expect(told[0]!.kind === 'message' ? (told[0]!.mail ?? []).map((m) => m.text) : []).toEqual(['one']);

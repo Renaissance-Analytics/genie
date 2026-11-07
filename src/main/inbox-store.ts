@@ -22,10 +22,9 @@ import { confineRead, confineWrite } from './workspace-confine.js';
  * ## Read semantics, which are the whole point
  *
  * - A participant's cursor is the `seq` of the last message they ACKNOWLEDGED. `receive` with
- *   the default `acknowledge: true` advances it to the last message of the page it returned —
- *   and that is the only operation that does. Nothing marks mail read on your behalf: not a
- *   send, not a listing, not the Deck. v1 lost messages exactly where a surface "helpfully"
- *   committed a cursor for a reader that never saw the page.
+ *   the default `acknowledge: true` advances it to the last message of the page it returned.
+ *   The host also acknowledges a captured batch after the provider
+ *   accepts the actual mail (markDelivered); a queued or refused prompt is never acknowledged.
  * - The cursor REWINDS. `receive({ cursor: n })` pages from `n` regardless of the committed
  *   position, and acknowledging that page recommits from there — possibly backwards. That is
  *   the recovery path for mail marked read that did not reach you.
@@ -331,6 +330,19 @@ export class InboxStore {
         return { messages: page, cursor: this.#cursorOf(participant) };
     }
 
+    /** A provider accepted these message IDs. Never skip unread mail or acknowledge a later arrival. */
+    async markDelivered(participant: Participant, ids: readonly string[]): Promise<void> {
+        const captured = new Set(ids);
+        const pending = this.unread(participant);
+        let count = 0;
+        while (count < pending.length && captured.has(pending[count]!.id)) count += 1;
+        if (pending.slice(count).some((m) => captured.has(m.id))) {
+            throw new Error('the delivered batch is not the next pending mail; no receipt was changed');
+        }
+        // Idempotent when a receive or an earlier acknowledgement already read these IDs.
+        if (count > 0) await this.receive({ participant, limit: count });
+    }
+
     /** Mail for `participant` after their committed cursor. The UI's reminder count. */
     unreadCount(participant: Participant): number {
         return this.unread(participant).length;
@@ -338,7 +350,7 @@ export class InboxStore {
 
     /**
      * The unread mail itself, WITHOUT committing anything — what the Deck's unread-dm source and the
-     * chat flyout read. Only the participant's own `receive` marks it read.
+     * chat flyout read. Explicit receive or actual provider delivery acknowledges it.
      */
     unread(participant: Participant): InboxMessage[] {
         return unreadOf(this.#mail, participant);

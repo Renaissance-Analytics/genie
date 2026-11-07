@@ -16,7 +16,7 @@ import { isOsAgent } from './os-agent.js';
  *   rationale: `from` is the one sender fact every consumer already reads).
  * - WHERE IT MAY GO is the app's own workspace, and only there (the owner's D4). Another workspace's agent is NOT FOUND,
  *   never "refused" — its name is not confirmed to an app that is not allowed to know it.
- * - WHAT THE AGENT READS is data: the push says only how many; `receive` fences the body with a fixed note.
+ * - WHAT THE AGENT READS is data: direct delivery and `receive` both keep the fixed app-origin warning around the body.
  * - Apps cannot be replied to: no agent can write to an `app:` address.
  */
 

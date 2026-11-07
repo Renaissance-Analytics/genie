@@ -54,5 +54,8 @@ describe('Tynn #672: the provider receives the actual inbox batch', () => {
         const delivered = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1));
         expect(delivered).toHaveLength(1);
         expect(delivered[0]).toMatchObject({ id: m.id, text, app: { note: appMailNote(app.label) } });
+        const legacy = message({ from: m.from, text }); // app identity stays data even without historical app metadata
+        const legacyPrompt = noticesFor([legacy])[0]!.text;
+        expect(legacyPrompt).toContain(appMailNote(String(m.from)));
     });
 });
