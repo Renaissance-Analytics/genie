@@ -96,9 +96,36 @@ export interface PageMemorySampler {
     mb(): number | null;
 }
 
-/** The page's working set as last read. Not yet: whatever the last reading was, 0 included. */
+/** Tries at a page's load for a real reading, this far apart (the renderer may not be listed, or read 0, at first). */
+export const PAGE_MEMORY_TRIES = 20;
+
+/**
+ * THE PAGE'S WORKING SET, AS LAST REALLY READ (the line's run on 3db9bc94: a crash record said `rendererMb: 0`). At a
+ * page's load `app.getAppMetrics()` may not list its new renderer yet, or list it at 0; such a reading never overwrites a
+ * real one. `loaded()` reads again, through `later` (a few hundred ms apart), until a real value comes, at most
+ * {@link PAGE_MEMORY_TRIES} times. What the beat and a crash record take is the last real reading, or `null`.
+ */
 export function pageMemorySampler(o: { read: () => number | null; later: (fn: () => void) => void }): PageMemorySampler {
     let last: number | null = null;
-    const sample = (): void => { last = o.read(); };
-    return { sample, loaded: sample, bytes: () => last, mb: () => (last === null ? null : Math.round(last / (1024 * 1024))) };
+    /** True when this reading was real (and kept). */
+    const sample = (): boolean => {
+        let bytes: number | null = null;
+        try { bytes = o.read(); } catch { bytes = null; }
+        if (bytes === null || !Number.isFinite(bytes) || bytes <= 0) return false;
+        last = bytes;
+        return true;
+    };
+    let trying = 0;
+    const loaded = (): void => {
+        const generation = ++trying;
+        let tries = 0;
+        const attempt = (): void => {
+            if (generation !== trying) return;
+            tries += 1;
+            if (sample() || tries >= PAGE_MEMORY_TRIES) return;
+            o.later(attempt);
+        };
+        attempt();
+    };
+    return { sample: () => { sample(); }, loaded, bytes: () => last, mb: () => (last === null ? null : Math.round(last / (1024 * 1024))) };
 }
