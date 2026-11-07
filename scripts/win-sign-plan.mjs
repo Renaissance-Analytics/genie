@@ -84,7 +84,11 @@ function signatures(root, files) {
     const list = join(root, '..', 'win-sign-plan.files.txt');
     writeFileSync(list, files.map((f) => join(root, f)).join('\n'));
     const script = `$ErrorActionPreference = 'Stop'; Get-Content -LiteralPath '${list.replace(/'/g, "''")}' | ForEach-Object { $s = Get-AuthenticodeSignature -LiteralPath $_; [pscustomobject]@{ path = $_; status = [string]$s.Status; subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { '' } } } | ConvertTo-Json -Compress`;
-    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    // Without the caller's PSModulePath: started from pwsh 7, Windows PowerShell 5.1 inherits pwsh's module path and
+    // cannot load Microsoft.PowerShell.Security, where Get-AuthenticodeSignature lives (measure run 42376824533).
+    const env = { ...process.env };
+    delete env.PSModulePath;
+    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env });
     const rows = JSON.parse(out || '[]');
     return (Array.isArray(rows) ? rows : [rows]).map((r) => ({ file: relative(root, r.path).replace(/\\/g, '/'), ...classify(r.status, r.subject) }));
 }
