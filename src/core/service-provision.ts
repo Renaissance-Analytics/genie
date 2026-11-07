@@ -186,6 +186,56 @@ function postgresExtensionSteps(admin: EngineAdmin, database: string, extensions
     });
 }
 
+/**
+ * A database a workspace may ask Genie to create on a shared Postgres (`services createDatabase`, Tynn #403). A bare
+ * lower-case identifier, so it is a quoted identifier with nothing to escape. Not `ws_…`: those are the names Genie gives
+ * workspaces' own databases, and a workspace that took one would be handed the database another workspace is given later.
+ * Not `pg_…`: Postgres reserves that prefix for its own names.
+ */
+const DATABASE_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
+
+/** Why a database name cannot be asked for, in words — or null when it can. */
+export function databaseNameProblem(value: string): string | null {
+    if (!DATABASE_NAME.test(value)) return `${JSON.stringify(value)} is not a database name Genie creates: lower-case letters, digits and underscores, starting with a letter or underscore, at most 63 characters`;
+    if (value.startsWith('ws_')) return `${JSON.stringify(value)} is not a database name Genie creates: names starting ws_ are the ones Genie gives each workspace’s own database`;
+    if (value.startsWith('pg_')) return `${JSON.stringify(value)} is not a database name Genie creates: Postgres reserves names starting pg_`;
+    return null;
+}
+
+export function assertDatabaseName(value: string): string {
+    const problem = databaseNameProblem(value);
+    if (problem) throw new Error(`refusing to create the database: ${problem}`);
+    return value;
+}
+
+const superuserPsql = (admin: EngineAdmin, database: string) => (sql: string): string[] =>
+    ['psql', `postgresql://${admin.user}:${assertGeneratedPassword(admin.password, 'admin')}@127.0.0.1:5432/${database}`, '-v', 'ON_ERROR_STOP=1', '-q', '-tAc', sql];
+
+/** Is there a database by this name on the engine? Prints `1` when there is, nothing when there is not. */
+export function databaseExistsStep(admin: EngineAdmin, database: string): ProvisionStep {
+    const name = assertDatabaseName(database);
+    return { label: 'database check', argv: superuserPsql(admin, 'postgres')(`SELECT 1 FROM pg_database WHERE datname = '${name}'`) };
+}
+
+/**
+ * A second database for a workspace on a SHARED Postgres, as the engine's SUPERUSER — the workspace's role cannot create a
+ * database on an engine other workspaces share, and is not made able to. OWNED by the workspace's role (`ws_<slug>`), and
+ * CONNECT revoked from PUBLIC (Postgres grants it to every role on a new database), so the workspace's role reaches it and
+ * no other workspace's does — the same isolation as its slice database (`postgresSteps`). Then the variant's extensions
+ * IN it (pgvector's `vector`), as `postgresExtensionSteps` does for the slice. "Already exists" is NOT tolerated: a
+ * database the workspace did not make is never handed to it.
+ */
+export function createDatabaseSteps(admin: EngineAdmin, database: string, owner: string, extensions: readonly string[] = []): ProvisionStep[] {
+    const name = assertDatabaseName(database);
+    const role = assertSliceIdentifier(owner);
+    const psql = superuserPsql(admin, 'postgres');
+    return [
+        { label: `database ${name}`, argv: psql(`CREATE DATABASE "${name}" OWNER "${role}"`) },
+        { label: `grants on ${name}`, argv: psql(`REVOKE CONNECT ON DATABASE "${name}" FROM PUBLIC; GRANT ALL PRIVILEGES ON DATABASE "${name}" TO "${role}";`) },
+        ...postgresExtensionSteps(admin, name, extensions),
+    ];
+}
+
 function postgresSteps(admin: EngineAdmin, name: string, password: string, extensions: readonly string[] = []): ProvisionStep[] {
     // A URI rather than the unix socket: no assumption about the image's pg_hba.conf; base64url needs no escaping.
     const uri = `postgresql://${admin.user}:${admin.password}@127.0.0.1:5432/postgres`;

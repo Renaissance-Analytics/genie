@@ -972,6 +972,23 @@ async function main(): Promise<void> {
             return { ...engine.serviceEnvFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
         },
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
+        // THE AGENTS' `sites` AND `services` (Tynn #444): this host's own hosting (P5a) under its own supervisor — what the
+        // Hosting and Services tabs show. Only `sites open` and `services exec` still go to a window.
+        ...(hostingStack ? {
+            hosting: {
+                sites: hostingStack.sites,
+                envelopeSites: hostingStack.envelopeSites,
+                engines: hostingStack.engines,
+                supervisor: processSupervisor,
+                routes: () => hostingStack.routes(),
+                engineStatuses: () => hostingStack.engineStatuses(),
+                startEngine: (id: string) => hostingStack.startEngine(id),
+                stopEngine: (id: string) => hostingStack.stopEngine(id),
+                removeEngine: (id: string, options: { deleteData: boolean; workspaceId?: string }) => hostingStack.removeEngine(id, options),
+                engineDependents: (id: string) => hostingStack.engineDependents(id),
+                updateEngine: (id: string, options: { consent: boolean; approvedDependents?: readonly string[] }) => hostingStack.updateEngine(id, options),
+            },
+        } : {}),
         flowCallers,
         endpointFile: join(home, 'mcp-endpoint.json'),
         osaDir: osaHome,

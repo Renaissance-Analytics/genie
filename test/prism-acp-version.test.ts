@@ -53,3 +53,27 @@ describe('prism-acp is the release whose Claude Stop drops what was queued mid-t
         expect(error.code).toBe(CANCEL_STATE_UNCERTAIN_CODE);
     });
 });
+
+// 0.38.0 adds `CodexDriver.steer`: input added to a RUNNING Codex turn, so mail reaches a busy Codex agent mid-turn
+// (Tynn #440). Its capability declaration and `SteerUnsupported` are what Genie reads.
+describe('prism-acp is the release whose Codex driver can steer a running turn', () => {
+    it('the installed prism-acp is 0.38.0 or later', () => {
+        const installed = JSON.parse(
+            readFileSync(join(root, 'node_modules/@particle-academy/prism-acp/package.json'), 'utf8'),
+        ).version as string;
+        expect(atLeast(versionOf(installed), [0, 38, 0]), `installed prism-acp is ${installed}; Codex steering needs 0.38.0`).toBe(true);
+    });
+
+    it('package.json and the lockfile pin 0.38.0 or later', () => {
+        const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
+        const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version: string }> };
+        expect(atLeast(versionOf(pkg.dependencies['@particle-academy/prism-acp']!), [0, 38, 0])).toBe(true);
+        expect(atLeast(versionOf(lock.packages['node_modules/@particle-academy/prism-acp']!.version), [0, 38, 0])).toBe(true);
+    });
+
+    it('the Codex driver declares steering', () => {
+        const caps = (prism as Record<string, unknown>)['CODEX_DRIVER_CAPABILITIES'] as { steer?: unknown } | undefined;
+        expect(caps?.steer).toBe(true);
+        expect(typeof (prism as Record<string, unknown>)['SteerUnsupported']).toBe('function');
+    });
+});

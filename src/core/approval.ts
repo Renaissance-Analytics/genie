@@ -48,6 +48,8 @@ export interface Approval {
     tool?: string | null;
     kind?: string | null;
     command?: string | null;
+    /** Why this was asked although the agent is Autonomous (Tynn #439), in words; absent or `null` = nothing to explain. */
+    why?: string | null;
 }
 
 /**

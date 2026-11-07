@@ -738,6 +738,7 @@ describe('every driver event the session offers is FORWARDED', () => {
             onProtocolError: () => seen.push('onProtocolError'),
             onStderr: () => seen.push('onStderr'),
             onExit: () => seen.push('onExit'),
+            onSteerUpdate: () => seen.push('onSteerUpdate'),
         };
 
         const forwarded = driverEvents(events);
@@ -749,9 +750,11 @@ describe('every driver event the session offers is FORWARDED', () => {
         forwarded.onProtocolError?.('x');
         forwarded.onStderr?.('x');
         forwarded.onExit?.(0, null);
+        // prism-acp 0.38.0: a Codex steer's record (Tynn #440). Dropped here, mail steered mid-turn is never Delivered.
+        (forwarded as { onSteerUpdate?: (u: unknown) => void }).onSteerUpdate?.({ kind: 'observed', steerId: 'x' });
 
         expect(seen.sort()).toEqual(
-            ['onExit', 'onProtocolError', 'onRequestPermission', 'onStderr', 'onTurnEnd', 'onUpdate'].sort(),
+            ['onExit', 'onProtocolError', 'onRequestPermission', 'onStderr', 'onSteerUpdate', 'onTurnEnd', 'onUpdate'].sort(),
         );
     });
 

@@ -80,6 +80,8 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
                     <ApprovalText text={approval.question} />
                 </span>
             </div>
+            {/* Asked although the agent is Autonomous (Tynn #439): why, in words, before the answer. */}
+            {approval.why ? <div data-approval-why="" className="mb-2 text-xs text-[var(--fg-2)]">{approval.why}</div> : null}
             {approval.command && approval.command !== approval.question ? (
                 <pre data-approval-command="" className="mb-2 whitespace-pre-wrap rounded-md bg-[var(--bg-2)] px-2.5 py-1.5 font-mono text-[11px] leading-[17px] text-[var(--fg-2)] [overflow-wrap:anywhere]"><ApprovalText text={approval.command} /></pre>
             ) : approval.command ? (

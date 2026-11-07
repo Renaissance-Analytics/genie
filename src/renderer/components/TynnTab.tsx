@@ -1,8 +1,9 @@
 import { Icon, Sidebar } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
-import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
+import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type ReleasesView, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
+import { TynnReleasesPanel } from './TynnReleasesPanel.js';
 import { TynnWipPanel } from './TynnWipPanel.js';
 import { TynnIssuesTab } from './TynnIssuesPanel.js';
 import type { TynnIssuesHost } from '../../core/tynn-issues.js';
@@ -94,6 +95,31 @@ export function TynnWipTab({ workspaceId, host }: { workspaceId: string; host: T
     );
 }
 
+/** Releases: read only, through the host's page door, live on the board's rings (one read per burst). */
+export function TynnReleasesTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
+    const [state, setState] = useState<TynnPageState<ReleasesView>>({ state: 'loading' });
+    const [live, setLive] = useState<LiveState | undefined>(undefined);
+    const read = useCallback(async () => {
+        if (!host.page) { setState({ state: 'error', reason: 'This Genie cannot read Tynn\'s Releases page.' }); return; }
+        const r = await host.page(workspaceId, 'releases', {});
+        if (r.ok && r.page === 'releases') setState({ state: 'ready', view: r.view });
+        else if (r.ok) setState({ state: 'error', reason: 'Tynn answered with a different workspace page.' });
+        else setState(r.state === 'not-linked' ? { state: 'not-linked' } : r.state === 'signed-out' ? { state: 'signed-out', reason: r.reason } : { state: 'error', reason: r.reason });
+    }, [host, workspaceId]);
+    useEffect(() => { void read(); }, [read]);
+    useEffect(() => {
+        const { watch } = host;
+        if (!watch) return undefined;
+        const follower = new PageFollower({ read, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } });
+        const stop = watch(workspaceId, (signal) => {
+            if ('state' in signal) setLive(signal.state);
+            else follower.ring();
+        });
+        return () => { stop(); follower.stop(); setLive(undefined); };
+    }, [host, workspaceId, read]);
+    return <TynnReleasesPanel state={state} live={live} />;
+}
+
 /** The tab: the page nav, and the page that is open. */
 export function TynnTab({ workspaceId, host, issues, initialSection = TYNN_FIRST_SECTION }: { workspaceId: string; host: TynnTabHost; issues?: TynnIssuesHost | undefined; initialSection?: TynnSectionId }) {
     const [section, setSection] = useState<TynnSectionId>(initialSection);
@@ -105,6 +131,7 @@ export function TynnTab({ workspaceId, host, issues, initialSection = TYNN_FIRST
             <div className="flex min-h-0 min-w-0 flex-1 overflow-auto">
                 {section === 'issues' && issues ? <TynnIssuesTab workspaceId={workspaceId} host={issues} />
                     : section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} />
+                    : section === 'releases' && host.page ? <TynnReleasesTab workspaceId={workspaceId} host={host} />
                         : <TynnBoardTab workspaceId={workspaceId} host={host} />}
             </div>
         </div>

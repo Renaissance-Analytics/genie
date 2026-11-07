@@ -15,6 +15,14 @@ import {
     BOARD_TRANSITIONS,
 } from '../src/core/tynn-board.js';
 import {
+    RELEASES_ANSWER,
+    RELEASES_DATA_API,
+    RELEASES_FIELDS,
+    RELEASES_LIVE,
+    RELEASES_QUERY,
+    RELEASES_STATES,
+    RELEASES_TOP_STORIES,
+    RELEASES_TOTALS,
     WIP_ACTIONS,
     WIP_ANSWER,
     WIP_COUNTS,
@@ -101,14 +109,14 @@ const publishedInSharedSchemas = (v: string) => compareVersions(v, LAST_SHARED_S
 const board = contract.surfaces.find((s) => s.id === 'board')!;
 
 describe('the contract file', () => {
-    it('pins Issues and WIP to the 0.7.0 contract published by tynn.ai #385', () => {
+    it('pins Releases, Issues and WIP to the 0.8.0 contract published by tynn.ai #389', () => {
         expect(pin).toEqual({
             repository: 'Renaissance-Analytics/tynn.ai',
             contract: 'workspace-ux',
-            version: '0.7.0',
-            commit: '4b84e55886babdc007abfb31b668e9103dec5856',
-            path: 'contracts/workspace-ux/0.7.0/workspace-ux.json',
-            sha256: '96373f78bd73dee3133ab5ffd53bf4548a2bf292fc53da54f2765fc38fda0d78',
+            version: '0.8.0',
+            commit: '1b740ef73125b86e43ce01818c17454049628fc2',
+            path: 'contracts/workspace-ux/0.8.0/workspace-ux.json',
+            sha256: '9c46f225862c64b9ac1d5831bd2588d3ba58842af72c8d8316fd848ae4f6370b',
         });
     });
 
@@ -312,5 +320,37 @@ describe('the Tynn tab\'s Issues, against the contract (0.7.0)', () => {
 
     it('has a view for every state the contract names', () => {
         expect([...ISSUES_STATES].sort()).toEqual(issues!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s Releases, against the contract (0.8.0)', () => {
+    type Releases = {
+        data: { api: { method: string; path: string }; query: string[]; answer: string[]; fields: Record<string, string[]>; order: string; topStories: number; totals: string[]; live: Record<string, unknown> };
+        states: Array<{ id: string }>;
+        actions: Action[];
+    };
+    const releases = contract.surfaces.find((s) => s.id === 'releases') as unknown as Releases | undefined;
+
+    it('is in the contract', () => {
+        expect(releases).toBeDefined();
+    });
+
+    it('reads Releases where the contract says, with its query, answer, fields, top stories and totals', () => {
+        expect(RELEASES_DATA_API).toEqual(releases!.data.api);
+        expect(RELEASES_QUERY).toEqual(releases!.data.query);
+        expect(RELEASES_ANSWER).toEqual(releases!.data.answer);
+        expect(RELEASES_FIELDS).toEqual(releases!.data.fields);
+        expect(RELEASES_TOP_STORIES).toBe(releases!.data.topStories);
+        expect(RELEASES_TOTALS).toEqual(releases!.data.totals);
+        // Genie keeps Tynn's order: it sorts nothing itself.
+        expect(releases!.data.order).toBe('newest first');
+    });
+
+    it('offers only its read, goes live on the board\'s rings as the contract says, and has a view for every state', () => {
+        expect(releases!.actions.map((a) => ({ id: a.id, ...a.api }))).toEqual([{ id: 'releases.list', ...RELEASES_DATA_API }]);
+        const { about: _about, web: _web, ...shape } = releases!.data.live;
+        expect(RELEASES_LIVE).toEqual(shape);
+        expect(RELEASES_LIVE.channel).toBe(BOARD_LIVE.channel);
+        expect([...RELEASES_STATES].sort()).toEqual(releases!.states.map((s) => s.id).sort());
     });
 });

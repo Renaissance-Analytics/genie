@@ -167,3 +167,24 @@ export async function writeThroughHost(payload: CopyPayload, host: HostClipboard
         return false;
     }
 }
+
+/** An inline code span or a link under the pointer (genie#1556), as ChatProse reads it from the DOM. */
+export interface InlineCopySource {
+    readonly tag: string;
+    readonly text: string;
+    readonly href: string | null;
+    /** Inside a fenced code block: that block has its own button. */
+    readonly inBlock: boolean;
+}
+
+/**
+ * WHAT AN INLINE COPY BUTTON COPIES (genie#1556): an inline code span's text exactly as drawn (the person asked for "the
+ * exact text"), or a link's URL — a web or mail link only. A Genie link (`#file:`, `#agent:`, `#workspace:`) is a pill to
+ * click, not an address to carry anywhere; code in a fenced block is that block's button. `null` = no button.
+ */
+export function inlineCopyText(el: InlineCopySource): { kind: 'inline' | 'link'; text: string } | null {
+    const tag = el.tag.toLowerCase();
+    if (tag === 'code') return !el.inBlock && el.text.length > 0 ? { kind: 'inline', text: el.text } : null;
+    if (tag === 'a' && el.href !== null && /^(?:https?:|mailto:)/i.test(el.href.trim())) return { kind: 'link', text: el.href.trim() };
+    return null;
+}

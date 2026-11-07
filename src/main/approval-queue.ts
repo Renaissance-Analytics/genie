@@ -1,3 +1,4 @@
+import { AUTONOMY_PERSON_ONLY } from '../core/agent-ops.js';
 import type { DeckItem } from '../core/deck.js';
 import type { Caller, McpCall } from './mcp-tools.js';
 
@@ -30,6 +31,8 @@ interface Pending {
     readonly detail: string;
     readonly at: number;
     readonly resolvers: Array<(v: Verdict) => void>;
+    /** Asked although the caller is Autonomous (Tynn #439): why, for the Deck item. */
+    readonly why: string | null;
 }
 
 const VERBS: Record<string, string> = {
@@ -37,6 +40,8 @@ const VERBS: Record<string, string> = {
     write: 'write to a terminal',
     // An agent's `services` / `sites` tools (mcp-tools-hosting.ts): the detail names the engine, version and image.
     'services.add': 'add a service',
+    // `services createDatabase`: the detail names the database, the shared engine and the workspace role that owns it.
+    'services.createDatabase': 'create a database',
     'services.remove': 'remove a service',
     'services.update': 'update a service image',
     // `use` and `detach`: the detail names the engine, and what the workspace uses for that kind before and after.
@@ -133,7 +138,8 @@ export class ApprovalQueue {
         // NEVER AUTO-APPROVED, whatever the agent's autonomy: creating an agent is the person's decision (the owner, 2026-10-19).
         // A permission switch answers only the actions it names (SWITCH_ANSWERS) — never agents.create.
         const switched = Object.hasOwn(SWITCH_ANSWERS, action) && this.#granted?.(caller, action) === true;
-        if (switched || (!PERSON_ONLY_ACTIONS.includes(action) && this.#autoApproved?.(caller, action) === true)) {
+        const autonomous = this.#autoApproved?.(caller, action) === true;
+        if (switched || (!PERSON_ONLY_ACTIONS.includes(action) && autonomous)) {
             this.#auto = [...this.#auto, { agentId: caller.agentId, agentName: caller.agentName, action, detail, at: this.#now() }].slice(-50);
             this.#changed();
             return Promise.resolve('allowed');
@@ -164,7 +170,7 @@ export class ApprovalQueue {
                 existing.resolvers.push(resolve);
             } else {
                 const id = `appr_${++this.#n}_${this.#now()}`;
-                entry = { id, caller, action, detail, at: this.#now(), resolvers: [resolve] };
+                entry = { id, caller, action, detail, at: this.#now(), resolvers: [resolve], why: autonomous ? AUTONOMY_PERSON_ONLY : null };
                 this.#pending.set(id, entry);
                 this.#changed();
             }
@@ -195,6 +201,7 @@ export class ApprovalQueue {
             at: p.at,
             answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] },
             forwardedFrom: null,
+            ...(p.why ? { why: p.why } : {}),
         }));
     }
 

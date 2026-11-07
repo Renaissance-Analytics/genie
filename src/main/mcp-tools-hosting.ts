@@ -7,7 +7,7 @@ import { validateServiceForm, type ServiceForm, type SiteForm, type SiteMode } f
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { Stack } from '../core/serve-config.js';
 import { mailpitInboxUrl } from '../core/mailpit-name.js';
-import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, engineKindOf, imageFor, SERVICE_CATALOG, sliceIsDroppable, type ServiceInstance } from '../core/services.js';
+import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, engineKindOf, imageFor, SERVICE_CATALOG, sliceIsDroppable, variantExtensions, type ServiceInstance } from '../core/services.js';
 import {
     createService, createSite, detachService, detectSite, openSite, removeService, removeSite, restartSite, serviceLogs, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateService, updateSite, useService,
     type HostingServices, type OpenInBrowser,
@@ -46,7 +46,7 @@ import type { SiteInfo } from './site-manager.js';
  * A refusal never asks for approval, and an answer never carries a credential.
  */
 
-export type HostingApproval = 'services.add' | 'services.remove' | 'services.use' | 'services.exec' | 'services.update' | 'sites.update' | 'sites.remove';
+export type HostingApproval = 'services.add' | 'services.createDatabase' | 'services.remove' | 'services.use' | 'services.exec' | 'services.update' | 'sites.update' | 'sites.remove';
 
 /**
  * Runs ONE command line through the platform's shell (core/shell-launch.ts) in `cwd`, with `env` over Genie's own
@@ -229,6 +229,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 + '`exec` {command, cwd? (a folder in this workspace; default its root)} — run ONE command line (a migration, a seed, a database client) through the shell WITH this workspace’s current service variables; the person approves the command first; answers its exit code and output, every credential masked. Use it rather than reading Genie’s files for a password. '
                 + '`add` {engine, version, variant?, scope: dedicated (default, this workspace only) | shared (one for the whole machine)} — the person approves it first and sees the image Genie will pull. A workspace’s own engine is the one its env comes from, before any shared one. '
                 + 'Postgres with pgvector: `add` {engine: "postgres", version: "17", variant: "pgvector"} — on a shared one Genie creates the `vector` extension in this workspace’s database (its role cannot). '
+                + '`createDatabase` {id, name} — on a SHARED Postgres this workspace uses, another database of its own (a test database, say): the person approves it, then Genie creates it as the engine’s superuser, owned by this workspace’s role (its role cannot create one), reachable by no other workspace; on pgvector, with `vector` in it. `name`: lower-case letters, digits and underscores, starting with a letter or underscore, at most 63; not ws_… or pg_…. Refused, with the reason, for a name that exists, an engine that is not a shared Postgres, or one this workspace does not use. The env still names the workspace’s own database: connect to the new one by its name. '
                 + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?, kind? (postgres | mysql | mariadb | redis | mongo: the env then carries that engine’s DB_*/REDIS_*… from the image’s own POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB…)} — always dedicated; the person sees the image before anything is pulled; re-added under the same name it keeps its port. '
                 + '`use` {id} — make this engine the one of its kind this workspace’s env comes from (attaches a detached shared one again); the person approves it. '
                 + '`detach` {id} — a SHARED engine stops giving this workspace its env; its database and data stay; the person approves it. '
@@ -238,7 +239,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'exec', 'add', 'use', 'detach', 'start', 'stop', 'update', 'remove'] },
+                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'exec', 'add', 'createDatabase', 'use', 'detach', 'start', 'stop', 'update', 'remove'] },
                     command: { type: 'string', description: 'exec: the command line to run, as you would type it (&&, pipes and quoting work).' },
                     cwd: { type: 'string', description: 'exec: the folder to run it in, inside this workspace (default the workspace root).' },
                     engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, websockets, meilisearch, seaweedfs, custom).' },
@@ -249,8 +250,8 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     image: { type: 'string', description: 'add (custom): the image to run, e.g. registry.example/team/app:1.' },
                     port: { type: 'number', description: 'add (custom): the port the image listens on inside its container.' },
                     env: { type: 'object', description: 'add (custom): NAME: value strings for the container — and this workspace’s processes.' },
-                    name: { type: 'string', description: `add (custom): a short name (lowercase, digits, hyphens); default "${DEFAULT_CUSTOM_NAME}".` },
-                    id: { type: 'string', description: 'logs / use / detach / start / stop / update / remove: the engine’s id, from `list`.' },
+                    name: { type: 'string', description: `add (custom): a short name (lowercase, digits, hyphens); default "${DEFAULT_CUSTOM_NAME}". createDatabase: the new database’s name (lower-case letters, digits, underscores; not ws_… or pg_…).` },
+                    id: { type: 'string', description: 'logs / createDatabase / use / detach / start / stop / update / remove: the engine’s id, from `list`.' },
                     tail: { type: 'number', description: 'logs: how many of the last lines (default 500, at most 5000).' },
                     deleteData: { type: 'boolean', description: 'Never true: an agent cannot delete a service’s data.' },
                 },
@@ -373,6 +374,23 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     if (r.kind === 'needs-consent') return err(`${r.image} was not pulled: ${r.note}`);
                     return ok({ ok: true, outcome: r.kind, service: serviceView(r.instance, caller.workspaceId, await statusOf(r.instance.id), inUseBy(s, caller.workspaceId)), note: ENV_NOTE });
                 }
+                case 'createDatabase': {
+                    const i = own(str(args.id));
+                    if (typeof i === 'string') return err(i);
+                    if (args.name !== undefined && typeof args.name !== 'string') return err('`name` is the new database’s name, a string; nothing was created');
+                    const database = str(args.name);
+                    if (!database) return err('createDatabase needs `name`: the new database’s name; nothing was created');
+                    // Every refusal — the name, the engine, this workspace's use of it, a name that exists — BEFORE the person is asked.
+                    const refusal = await s.engines.createDatabaseRefusal(i.id, caller.workspaceId, database);
+                    if (refusal) return err(refusal);
+                    const owner = i.slices![caller.workspaceId]!.identifier;
+                    const carried = variantExtensions(i.engine, i.variant);
+                    const extensions = carried.length > 0 ? `, with the ${carried.map((e) => `\`${e}\``).join(', ')} extension${carried.length > 1 ? 's' : ''} in it` : '';
+                    const verdict = await deps.approve(caller, 'services.createDatabase', `the database ${database} on ${labelOf(i)} (127.0.0.1:${i.publishedPort}), owned by this workspace’s role ${owner}${extensions} — created by Genie as the engine’s superuser; no other workspace can connect to it`, context);
+                    if (verdict !== 'allowed') return err(`creating the database ${database} was denied by the person; nothing was created`);
+                    const r = await s.engines.createDatabase(i.id, caller.workspaceId, database);
+                    return ok({ ok: true, database: r.database, owner: r.owner, service: serviceView(r.instance, caller.workspaceId, await statusOf(i.id), inUseBy(s, caller.workspaceId)), note: `connect as this workspace’s own user (the env’s DB_USERNAME / PGUSER) with ${r.database} as the database; the env’s DB_DATABASE still names the workspace’s own one` });
+                }
                 case 'use':
                 case 'detach': {
                     const i = own(str(args.id));
@@ -447,7 +465,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     return ok({ ok: true, removed: i.id, dataKept: true });
                 }
                 default:
-                    return err(`unknown action ${JSON.stringify(action)}; the actions are catalog, list, env, logs, add, use, detach, start, stop, update, remove`);
+                    return err(`unknown action ${JSON.stringify(action)}; the actions are catalog, list, env, logs, exec, add, createDatabase, use, detach, start, stop, update, remove`);
             }
         }),
     };

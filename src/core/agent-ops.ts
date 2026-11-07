@@ -189,12 +189,38 @@ export function applyOutcome(agentName: string, what: string, apply: ApplyWhen):
     }
 }
 
+/** Why an AUTONOMOUS agent was still asked (Tynn #439), drawn on the card: the workspace is not trusted. */
+export const AUTONOMY_UNTRUSTED = 'Autonomous doesn’t apply here: this workspace isn’t trusted.';
+/** Why an AUTONOMOUS agent was still asked (Tynn #439): the action is one autonomy never answers (approval-queue PERSON_ONLY_ACTIONS). */
+export const AUTONOMY_PERSON_ONLY = 'Autonomous doesn’t cover this: it always asks you.';
+
 /**
  * A Claude agent's TOOL SETTING as the answer to one shell call (genie#1188), read at the moment the permission hook
  * asks: all tools (and no setting) → allow, nobody asked; ask → park it for the person; edits only → refuse. In a workspace the person has not trusted, "all tools" asks too: the setting was never about this folder.
+ *
+ * AUTONOMOUS (Tynn #801) means nobody is asked (Tynn #439; the owner, 2026-11-04: "I have an agent with autonomous turned
+ * on but it's still prompting me to approve an execution"): it answers "ask" with allow. It does not turn edits only
+ * into allow — that setting is a refusal, never a question — and it does not apply in a workspace that is not trusted,
+ * as a Codex agent's yolo never did (session-host `codexRecordFor`); there the card says why (`askedWhy`).
  */
-export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined, where: { readonly untrusted?: boolean } = {}): 'allow' | 'deny' | 'ask' {
-    if (permissions === 'ask') return 'ask';
+export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined, where: { readonly untrusted?: boolean; readonly autonomous?: boolean } = {}): 'allow' | 'deny' | 'ask' {
     if (permissions === 'edits') return 'deny';
-    return where.untrusted === true ? 'ask' : 'allow';
+    if (where.untrusted === true) return 'ask';
+    if (where.autonomous === true) return 'allow';
+    return permissions === 'ask' ? 'ask' : 'allow';
+}
+
+/**
+ * What Codex asks (its command and file-change approvals), answered at the moment it asks (Tynn #439). Codex has no tool
+ * setting; an Autonomous agent is launched with Codex's own prompts off (session-host `codexOptionsFor`), so a request
+ * reaching Genie means the switch was turned on after the launch — answered now, as the launch would have. Otherwise, and
+ * in a workspace that is not trusted, the person answers.
+ */
+export function codexDecisionFor(where: { readonly untrusted?: boolean; readonly autonomous?: boolean }): 'allow' | 'ask' {
+    return where.autonomous === true && where.untrusted !== true ? 'allow' : 'ask';
+}
+
+/** Why a request still reaches the person although its agent is Autonomous, in words for the card; `null` = nothing to explain. */
+export function askedWhy(where: { readonly untrusted?: boolean; readonly autonomous?: boolean }): string | null {
+    return where.autonomous === true && where.untrusted === true ? AUTONOMY_UNTRUSTED : null;
 }

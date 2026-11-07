@@ -1,4 +1,4 @@
-import { permissionDecisionFor } from '../core/agent-ops.js';
+import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
 import { homedir } from 'node:os';
@@ -29,6 +29,18 @@ export function promptAcceptsFor(provider: string): PromptAccepts {
     const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
     const blocks = (caps as { promptBlocks?: readonly string[] } | null)?.promptBlocks ?? [];
     return { image: blocks.includes('image'), textResource: blocks.includes('resource-text') };
+}
+
+/**
+ * Whether an agent's provider REPORTS its slash commands (ACP `available_commands_update`, read by
+ * core/provider-commands.ts). Claude's does, at the `system/init` of a turn — so before its first turn it has reported
+ * nothing yet and a command still goes. prism-acp 0.38.0's Codex driver reports none and declares no capability for
+ * it, so a command typed to a Codex agent is refused rather than sent as chat (Tynn #440). Should a later prism report
+ * Codex's commands, the report itself is what is read (`unsupportedSlashCommand`), and this answers only for an agent
+ * that has not reported yet. Unknown providers: `true`, so nothing is refused on a guess.
+ */
+export function reportsCommandsFor(provider: string): boolean {
+    return provider !== 'codex';
 }
 
 /**
@@ -94,6 +106,7 @@ import {
     type CancelIntent,
     type PermissionRequestLike,
     type PromptContext,
+    type SteerRecordLike,
     type SessionDriverFactory,
     type StopVerdict,
     type TurnOutcomeLike,
@@ -104,6 +117,7 @@ import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
+import { unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
@@ -248,6 +262,7 @@ export function driverEvents(events: DriverEvents): {
     onProtocolError: (problem: string, detail?: { readonly recoverable: boolean }) => void;
     onStderr: (line: string) => void;
     onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+    onSteerUpdate: (update: SteerRecordLike) => void;
 } {
     return {
         onUpdate: (update) => events.onUpdate?.(update as Record<string, unknown>),
@@ -263,6 +278,8 @@ export function driverEvents(events: DriverEvents): {
         onProtocolError: (problem, detail) => events.onProtocolError?.(problem, detail),
         onStderr: (line) => events.onStderr?.(line),
         onExit: (code, signal) => events.onExit?.(code, signal),
+        // prism-acp 0.38.0: a Codex steer's record (Tynn #440) — how mail steered mid-turn becomes Delivered.
+        onSteerUpdate: (update) => events.onSteerUpdate?.(update),
     };
 }
 
@@ -947,7 +964,15 @@ export class SessionHost {
             ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
-            ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions, { untrusted: this.#untrustedNow?.(record) ?? this.#running.get(record.id)?.launchedUntrusted === true }) } : {}),
+            // Autonomous answers the same questions, at the same moment (Tynn #439): Claude's shell calls, and what Codex asks.
+            // Where it does not apply, the card says why (`askedWhy`).
+            ...(record.provider === 'claude' || record.provider === 'codex' ? {
+                permissionDecision: () => {
+                    const where = this.#approvalWhere(record);
+                    return record.provider === 'claude' ? permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions, where) : codexDecisionFor(where);
+                },
+                askWhy: () => askedWhy(this.#approvalWhere(record)),
+            } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
             mayTakeWork: () => !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
             onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
@@ -1124,6 +1149,14 @@ export class SessionHost {
      * Answer a parked approval by a DECISION (genie#1188: the tool setting changed while a shell command waited). `false`
      * = not running, or nothing parked.
      */
+    /** What answers an agent's approval now: its CURRENT record's autonomy, and the workspace's verdict now (else at launch). */
+    #approvalWhere(record: AgentRecord): { untrusted: boolean; autonomous: boolean } {
+        return {
+            untrusted: this.#untrustedNow?.(record) ?? this.#running.get(record.id)?.launchedUntrusted === true,
+            autonomous: (this.#currentRecord?.(record.id) ?? record).autoApprove === true,
+        };
+    }
+
     settleParked(agentId: AgentId, decision: 'allow' | 'deny'): boolean {
         const entry = this.#running.get(agentId);
         if (!entry || !entry.session.settleApproval(decision)) return false;
@@ -1148,6 +1181,9 @@ export class SessionHost {
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): { ok: true } | { ok: false; reason: string | null } {
         const entry = this.#running.get(agentId);
         if (!entry || !entry.session.running) return { ok: false, reason: null };
+        // A slash command the agent cannot run is said to the composer, never sent as a chat message (Tynn #440).
+        const unsupported = by === 'you' ? unsupportedSlashCommand(text, entry.session.extensions, reportsCommandsFor(entry.provider)) : null;
+        if (unsupported !== null) return { ok: false, reason: unsupported };
         const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
         if (!built.ok) return { ok: false, reason: built.reason };
         try {

@@ -2,6 +2,7 @@ import { app, safeStorage } from 'electron';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { storeRefusal } from '../core/browser-store.js';
+import { BROWSER_LINK_LABEL } from '../core/engine-protocol.js';
 import type { BrowserFacts } from './browser-service.js';
 import { BrowserCookieBridge } from './browser-cookie-bridge.js';
 import { runBrowserLink, type BrowserLinkClient } from './browser-process-link.js';
@@ -89,7 +90,8 @@ export async function runBrowserProcess(): Promise<void> {
         connect: async (onLost) => {
             const found = await linkToRunningHost({ runtimeDir: runtimeDir(home) });
             if (found === null) return null;
-            const client = new SessionEngineClient({ onDisconnected: () => onLost(), log });
+            // It says it is the browser: the host never forwards a tool or an elevation to this link (Tynn #444).
+            const client = new SessionEngineClient({ label: BROWSER_LINK_LABEL, onDisconnected: () => onLost(), log });
             const connected = await client.connect(found.transport, found.token);
             if (!connected.ok) { found.transport.close(); return null; }
             connection = String(await client.browserCall('whoami', []));

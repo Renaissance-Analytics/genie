@@ -179,6 +179,13 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             const delivery = host.rowsFor?.(id).map((r) => r.event)
                 .findLast((e) => e.kind === 'prompt_delivery' && e.id === sent.queued);
             if (host.rowsFor && !delivery) return true;
+            // Steered into a running Codex turn with an uncertain outcome (Tynn #440): MAYBE delivered. Told, so the
+            // batch is never sent again (it could arrive twice), and not acknowledged as Delivered.
+            if (delivery?.kind === 'prompt_delivery' && delivery.status === 'unconfirmed') {
+                out.delete(id);
+                settled(id, true);
+                return false;
+            }
             if (host.rowsFor ? delivery?.kind !== 'prompt_delivery' || delivery.status !== 'sent' : !host.inTurn(id)) {
                 out.delete(id);
                 settled(id, false);

@@ -13,6 +13,7 @@ import { hostname } from 'node:os';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { heldRows, rowsPatch, type HeldRows, type RowsPatch } from '../core/agent-push-wire.js';
 import {
+    BROWSER_LINK_LABEL,
     DURABLE_CALLBACKS,
     ENGINE_PROTOCOL,
     parseEngineFrame,
@@ -228,6 +229,11 @@ interface Connection {
     readonly local: boolean;
     /** The updater helper's link (P5b): never a window — not counted, sent no dump, open to `engine.updater` alone. */
     helper: boolean;
+    /**
+     * A WINDOW: it answers what the host asks of one (a forwarded tool, an elevation). The Genie browser's process links
+     * here too and answers neither (Tynn #444: asked as the newest link, it failed every forwarded tool on beta.60).
+     */
+    window: boolean;
 }
 
 export class SessionEngineServer {
@@ -339,9 +345,9 @@ export class SessionEngineServer {
         return this.#env.get(workspaceId) ?? {};
     }
 
-    /** Whether a window is connected now (the MCP server forwards window tools only then). */
+    /** Whether a window is connected now (the MCP server forwards window tools only then). The browser's link is none. */
     windowConnected(): boolean {
-        return this.clients > 0;
+        return [...this.#connections].some((c) => c.authed && c.window);
     }
 
     /** A window tool's call, to the newest window (P3.1). Rejects with no window, or when it closes before it answers. */
@@ -356,7 +362,7 @@ export class SessionEngineServer {
 
     /** Whether a LOCAL window is connected now: the only kind asked to elevate (P5a.2). */
     localWindowConnected(): boolean {
-        return [...this.#connections].some((c) => c.authed && c.local);
+        return [...this.#connections].some((c) => c.authed && c.window && c.local);
     }
 
     /** The records the window last pushed (the roster the host's tools and approvals read until P3.2). */
@@ -382,7 +388,7 @@ export class SessionEngineServer {
 
     /** A connection (a window) arrived: it must say the token before anything else. */
     accept(transport: ClientTransport & { trusted?: () => void }, options: { local?: boolean } = {}): void {
-        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map(), local: options.local === true, helper: false };
+        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map(), local: options.local === true, helper: false, window: false };
         this.#connections.add(conn);
         transport.onMessage((text) => this.#onMessage(conn, text));
         transport.onClose(() => {
@@ -424,6 +430,7 @@ export class SessionEngineServer {
                 return;
             }
             conn.authed = true;
+            conn.window = message.label !== BROWSER_LINK_LABEL;
             conn.transport.trusted?.();
             conn.transport.send(JSON.stringify({ kind: 'welcome', connectionId: conn.id, host: hostname(), isOwner: true, workspaceId: null, protocol: ENGINE_PROTOCOL, build: this.#options.build, pid: this.#options.pid ?? process.pid }));
             // THE UPDATER HELPER (P5b), on this host's own endpoint with the token: no dump, never counted as a window.
@@ -777,9 +784,9 @@ export class SessionEngineServer {
         return this.#options.keychain;
     }
 
-    /** A call to the WINDOW (the newest one): what only it has in phase 1. Refused when no window is connected. */
+    /** A call to the WINDOW (the newest one, never the browser's link): what only it has. Refused when no window is connected. */
     #reverse(method: EngineMethod, args: unknown[], options: { localOnly?: boolean } = {}): Promise<unknown> {
-        const conn = [...this.#connections].filter((c) => c.authed && (options.localOnly !== true || c.local)).at(-1);
+        const conn = [...this.#connections].filter((c) => c.authed && c.window && (options.localOnly !== true || c.local)).at(-1);
         if (!conn) return Promise.reject(new Error('No Genie window is connected to prepare this agent\'s credentials. Open Genie and start it again.'));
         const id = conn.nextCall++;
         return new Promise((resolve, reject) => {

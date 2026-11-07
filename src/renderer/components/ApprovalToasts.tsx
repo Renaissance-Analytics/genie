@@ -79,6 +79,8 @@ function FrontCard({ item, view, onAnswer, onLater, onOpenDeck, notes, onNote }:
                 {view.total > 1 ? <span data-approval-toast-position="" className="shrink-0 font-mono">{`${view.position} of ${view.total}`}</span> : null}
             </div>
             <p data-approval-toast-title="" className="mb-2.5 whitespace-pre-wrap leading-[18px] text-[var(--fg-1)] [overflow-wrap:anywhere]"><ApprovalText text={item.title} /></p>
+            {/* Asked although the agent is Autonomous (Tynn #439): why, in words. */}
+            {item.why ? <p data-approval-why="" className="mb-2 text-[12px] text-[var(--fg-2)]">{item.why}</p> : null}
             {/* An optional note, sent with Allow or Deny: the agent is told what you said (beta.33 item 16). */}
             {onNote ? <Input data-toast-note={item.id} value={note} onValueChange={(v) => onNote(item.id, v)} size="sm" placeholder={`Note for ${item.agentName ?? 'the agent'} (optional)`} aria-label="Note with your answer" className="mb-2" /> : null}
             <div className="flex items-center gap-2">
