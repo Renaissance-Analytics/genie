@@ -80,6 +80,22 @@ describe('activityFrom + unreportedChanges + changedGroups', () => {
         expect(unreportedChanges(a, ['a.ts', 'mystery.ts', '/w/tynn/main/ipc.ts', '/etc/outside'], root)).toEqual(['mystery.ts']);
     });
 
+    /*
+     * A BUILD'S WRITES NEVER COST MAIN TIME BY THE SQUARE (Tynn #274 / #429). Measured in the real window during a write-heavy
+     * build (scripts/ui-lag-cdp.mjs, CI): 3,000 changed paths made each `files.state` hold window main ~90 ms, 43 times in
+     * 12 s, every stack in this function — its duplicate check scanned the list it was building. 30,000 paths at that rate
+     * are seconds; one pass over them is milliseconds, so a second is a bound only the square can pass.
+     */
+    it('30,000 changed paths are read in one pass: duplicates dropped, first order kept, well under a second', () => {
+        const paths = Array.from({ length: 30_000 }, (_, i) => `gen/m${i % 30}/f${i}.js`);
+        const started = performance.now();
+        const out = unreportedChanges(new Map(), [...paths, paths[5]!, `${root}/${paths[7]!}`], root);
+        const ms = performance.now() - started;
+        expect(out).toHaveLength(30_000);
+        expect(out.slice(0, 2)).toEqual([paths[0], paths[1]]);
+        expect(ms).toBeLessThan(1_000);
+    });
+
     it('Changed groups files by who changed them, you included; nothing changed → null (absent, not empty)', () => {
         const a = attributionFrom([edit('kora', '/w/tynn/main/ipc.ts', 'completed'), edit('kora', '/w/tynn/b.ts', 'completed'), edit('zane', '/w/tynn/b.ts', 'completed')], root);
         expect(changedGroups(a, { mine: ['notes.md'], unreported: ['mystery.ts'] })).toEqual([

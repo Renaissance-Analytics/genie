@@ -415,7 +415,8 @@ export class FilesHost {
         const attribution = attributionFrom(events, ws.path);
         const mine = [...(this.#mine.get(workspaceId) ?? [])];
         const disk = this.#changedOnDisk.get(workspaceId) ?? new Map<string, number>();
-        const unreported = unreportedChanges(attribution, [...disk.keys()].filter((p) => !mine.includes(p)), ws.path);
+        const minePaths = new Set(mine);
+        const unreported = unreportedChanges(attribution, [...disk.keys()].filter((p) => !minePaths.has(p)), ws.path);
         return {
             files: [...attribution.values()],
             activity: activityFrom(events, ws.path),

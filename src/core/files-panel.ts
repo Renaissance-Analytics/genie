@@ -94,11 +94,18 @@ export function routeFileToOpen(routeFile: string | null, openPath: string | nul
 }
 
 export function confine(root: string, path: string): string | null {
+    return confiner(root)(path);
+}
+
+/** {@link confine} for one root and many paths: the root is normalised once. */
+function confiner(root: string): (path: string) => string | null {
     const rootN = normalise(root);
-    const full = normalise(isAbsolute(path.replace(/\\/g, '/')) ? path : `${root}/${path}`);
-    if (full === rootN) return '';
     const prefix = rootN.endsWith('/') ? rootN : `${rootN}/`;
-    return full.startsWith(prefix) ? full.slice(prefix.length) : null;
+    return (path) => {
+        const full = normalise(isAbsolute(path.replace(/\\/g, '/')) ? path : `${root}/${path}`);
+        if (full === rootN) return '';
+        return full.startsWith(prefix) ? full.slice(prefix.length) : null;
+    };
 }
 
 /** Folders first, then by name (case-insensitive) — the tree's one order. */
@@ -233,13 +240,16 @@ export function countsAsDiskChange(info: { readonly mtimeMs: number; readonly is
 }
 
 export function unreportedChanges(attribution: ReadonlyMap<string, FileAttribution>, changedOnDisk: readonly string[], root: string): string[] {
-    const out: string[] = [];
+    // One pass (Tynn #274 / #429): the duplicate check is a Set, not a scan of the list being built. A build's thousands of
+    // changed paths held window main ~90 ms per `files.state` when it was.
+    const inRoot = confiner(root);
+    const seen = new Set<string>();
     for (const raw of changedOnDisk) {
-        const path = confine(root, raw);
-        if (path === null || path === '') continue;
-        if (!attribution.has(path) && !out.includes(path)) out.push(path);
+        const path = inRoot(raw);
+        if (path === null || path === '' || attribution.has(path)) continue;
+        seen.add(path);
     }
-    return out;
+    return [...seen];
 }
 
 const sorted = (files: Iterable<string>) => [...new Set(files)].sort((a, b) => a.localeCompare(b, 'en'));

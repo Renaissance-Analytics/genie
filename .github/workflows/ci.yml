@@ -449,6 +449,20 @@ jobs:
           path: smoke-out/artboard*
           if-no-files-found: warn
           retention-days: 7
+      # UI LAG DURING A WRITE-HEAVY BUILD (Tynn #274 / #429; the host split's P2 row: "a write-heavy build never blocks the
+      # window more than 50 ms"). A build in a Genie terminal while the mouse moves and keys are typed; window main, the page
+      # and genie-host gauged, then profiled, and the worst gaps printed with their stacks (UI_LAG / UI_LAG_STACK lines).
+      - name: UI lag during a write-heavy build
+        if: ${{ !cancelled() }}
+        run: timeout 420 node scripts/ui-lag-cdp.mjs --budget
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-lag-linux
+          path: smoke-out/ui-lag*
+          if-no-files-found: warn
+          retention-days: 7
       # THE TRUST STEP, AS A PERSON SEES IT. It starts the app itself, on a home and a port of its own.
       - name: the trust step in the real app
         run: timeout 300 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/trust-step-cdp.mjs
@@ -779,6 +793,21 @@ jobs:
         with:
           name: artboard-windows
           path: smoke-out/artboard*
+          if-no-files-found: warn
+          retention-days: 7
+      # UI LAG DURING A WRITE-HEAVY BUILD, as on Linux above.
+      - name: UI lag during a write-heavy build
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          node scripts/ui-lag-cdp.mjs --budget
+          if ($LASTEXITCODE -ne 0) { throw "ui-lag-cdp failed (exit $LASTEXITCODE)" }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-lag-windows
+          path: smoke-out/ui-lag*
           if-no-files-found: warn
           retention-days: 7
       # THE TRUST STEP, AS A PERSON SEES IT, as on Linux above.
