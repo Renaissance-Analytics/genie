@@ -248,6 +248,6 @@ describe('the services tool and its skill name the action', () => {
         expect(def.description).toMatch(/`createDatabase` \{id, name\}/);
         const schema = def.inputSchema as { properties: { action: { enum: string[] } } };
         expect(schema.properties.action.enum).toContain('createDatabase');
-        expect(GENIE_SKILLS.find((s) => s.name === 'genie-services')!.body).toMatch(/`createDatabase`/);
+        expect(GENIE_SKILLS.find((s) => s.name === 'genie-services')!.body).toMatch(/`services` with action createDatabase \(id, name\)/);
     });
 });
