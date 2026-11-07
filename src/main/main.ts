@@ -110,6 +110,7 @@ import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
 import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js';
+import { RECOVER_REPORT, RECOVER_RESTART, recoverRenderer, rendererErrorPage, type RendererNotice } from './renderer-recovery.js';
 import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-records.js';
 import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
@@ -334,12 +335,18 @@ const crashRecorder = new WindowCrashRecorder({
     remove: removeCrashRecord,
     // The host's build as this window last heard it (its welcome); this Genie's version until it has linked.
     header: () => crashHeader(app.getVersion(), agentEngineLink?.client.welcome?.build ?? app.getVersion()),
+    // The main window's page, as last sampled: what it had grown to when it ended (an oom, the owner's 2026-11-06).
+    rendererMb: () => (mainPageRss === null ? null : Math.round(mainPageRss / (1024 * 1024))),
 });
 if (launch.kind === 'boot') crashRecorder.install(process, app);
 /** Window main's heartbeat to genie-host's hang watchdog (hang-watchdog.ts): started once the engine link is up. */
 let heartbeatNow: { stop(): void; bye(): void } | null = null;
 
 let window: BrowserWindow | null = null;
+/** The main window's page working set, in bytes, sampled every 5 s (app.getAppMetrics); `null` until it is. */
+let mainPageRss: number | null = null;
+/** The main window's page ended and was brought back (renderer-recovery.ts): the notice every snapshot carries. */
+let rendererNotice: RendererNotice | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
 const localDoor = localProtocolDoor(ipcMain);
 /**
@@ -1551,6 +1558,8 @@ async function boot(): Promise<void> {
             send: (beat) => agentEngineLink?.client.heartbeat(beat),
             pid: process.pid,
             rss: () => process.memoryUsage.rss(),
+            // The main window's page beside it: genie-host's rss line says what grew (bringBackItsPage samples it).
+            rendererRss: () => mainPageRss,
         });
     }
     /*
@@ -3488,6 +3497,7 @@ async function boot(): Promise<void> {
     if (windowSafe?.own()) startBeat({ started: () => (registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id), onChange: (l) => (host instanceof SessionHost ? host.subscribe(() => l()) : () => {}), beat: (ids) => { windowSafe?.beat(ids); } });
     // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
     registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
+    registry.setRendererNotice(() => rendererNotice);
     agentEngineLink?.client.onCrashState(() => registry?.touch());
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
@@ -3759,6 +3769,8 @@ async function boot(): Promise<void> {
         openInBrowser: openInBrowserFor('user-gesture'),
         // "Leave safe mode" (Tynn #386): the host's; this window only asks.
         safeMode: { leave: () => (windowSafe ? windowSafe.leave() : Promise.resolve({ ok: false as const, reason: 'Genie is still starting' })) },
+        // The brought-back page's notice: forget it.
+        rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); return { ok: true as const }; } },
         // The reopened-window notice's two actions: forget it; or stop every agent — one click, the person's, never automatic.
         hangNotice: {
             dismiss: () => (agentEngineLink ? agentEngineLink.client.dismissHangNotice() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })),
@@ -4118,8 +4130,51 @@ function mountMainWindow(show: boolean, reason = 'launch'): void {
         deps.pushFeatures();
     });
     livePanels?.attach(window);
+    bringBackItsPage(window);
     if (reason !== 'launch') rendererErrorLog?.(`window built again (${reason}): the same host`);
     refreshTray();
+}
+
+/**
+ * THE MAIN WINDOW'S PAGE, BROUGHT BACK WHEN IT ENDS (renderer-recovery.ts; the owner's black window of 2026-11-06, an oom
+ * with main alive and nothing reloading the page for 3.5 hours). Its memory is sampled for the beat and the crash record;
+ * an end reloads it (capped), a reload that throws builds the window again, and past the cap the plain page's two links —
+ * Restart Genie, Send a crash report — build the window again here, the same host, the notice kept for its report.
+ */
+function bringBackItsPage(win: BrowserWindow): void {
+    const sample = (): void => {
+        try {
+            const pid = win.webContents.getOSProcessId();
+            const metric = app.getAppMetrics().find((m) => m.pid === pid);
+            if (metric) mainPageRss = metric.memory.workingSetSize * 1024;
+        } catch { /* a window going away: the last sample stands */ }
+    };
+    sample();
+    // As soon as the page has loaded too (its renderer exists from then), not only on the 5 s tick.
+    win.webContents.on('did-finish-load', sample);
+    const sampler = setInterval(sample, 5_000);
+    sampler.unref?.();
+    win.on('closed', () => { clearInterval(sampler); });
+    const rebuild = (why: string): void => {
+        if (window !== win) return;
+        window = null;
+        try { win.destroy(); } catch { /* gone already */ }
+        mountMainWindow(true, why);
+    };
+    recoverRenderer({
+        contents: win.webContents,
+        rendererMb: () => (mainPageRss === null ? null : Math.round(mainPageRss / (1024 * 1024))),
+        onReloaded: (notice) => { rendererNotice = notice; registry?.touch(); },
+        onGaveUp: (notice) => { rendererNotice = notice; },
+        errorPage: rendererErrorPage,
+        recreate: () => { rebuild('renderer recovery: the reload failed'); },
+        log: (line) => { rendererErrorLog?.(line); },
+    });
+    win.webContents.on('will-navigate', (event, url) => {
+        if (url !== RECOVER_RESTART && url !== RECOVER_REPORT) return;
+        event.preventDefault();
+        rebuild(url === RECOVER_REPORT ? 'renderer recovery: Send a crash report' : 'renderer recovery: Restart Genie');
+    });
 }
 
 // A second launch shows the first one's window — hidden in the tray included. `Genie --quit` is the tray's Quit instead,

@@ -64,6 +64,7 @@ export class Registry {
     #signals: (() => SignalState) | null = null;
     #safeMode: (() => import('../core/safe-mode.js').SafeModeView | null) | null = null;
     #hangNotice: (() => import('../core/crash-record.js').HangNotice | null) | null = null;
+    #rendererNotice: (() => import('../core/renderer-notice.js').RendererNotice | null) | null = null;
     #deckSource: () => readonly DeckItem[] = () => [];
     #runningAtQuit: AgentId[] = [];
     #interruptedAtQuit: AgentId[] = [];
@@ -182,6 +183,11 @@ export class Registry {
     /** genie-host's reopened-window notice (Tynn #386): a hung window was ended and this one started; read into every snapshot. */
     setHangNotice(provider: () => import('../core/crash-record.js').HangNotice | null): void {
         this.#hangNotice = provider;
+    }
+
+    /** This window's page ended and was brought back (Tynn #386, renderer-recovery.ts); read into every snapshot. */
+    setRendererNotice(provider: () => import('../core/renderer-notice.js').RendererNotice | null): void {
+        this.#rendererNotice = provider;
     }
 
     setSignals(provider: () => SignalState): void {
@@ -323,6 +329,7 @@ export class Registry {
             // Only once main has said where it comes from: a snapshot with no host to ask carries no claim about it.
             ...(this.#safeMode ? { safeMode: this.#safeMode() } : {}),
             ...(this.#hangNotice ? { hangNotice: this.#hangNotice() } : {}),
+            ...(this.#rendererNotice ? { rendererNotice: this.#rendererNotice() } : {}),
         };
     }
 
