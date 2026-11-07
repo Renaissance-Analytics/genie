@@ -86,7 +86,7 @@ export interface PtyPort {
     resize(id: string, cols: number, rows: number): boolean;
     kill(id: string): boolean;
     scrollback(id: string): string | undefined;
-    /** Producer-authoritative position, when this port has one. An old/in-process producer stays unknown. */
+    /** Producer-authoritative position, when this port has one. A legacy/adopted producer may remain unknown. */
     position?(id: string): TerminalPosition | null;
     /** Subscribe to output. Returns an unsubscribe. */
     onData(listener: (id: string, data: string, position?: TerminalDataPosition) => void): () => void;

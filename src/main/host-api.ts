@@ -1,4 +1,6 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
+import type { NativeTerminalPort } from './local-terminal-native.js';
+import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import type { Headroom } from '../core/headroom.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
@@ -69,6 +71,7 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    localTerminals?: NativeTerminalPort;
     artboard?: LocalArtboardPort;
     chatDrafts?: LocalDraftsStore;
     filesWatch?: FilesWatchPort;
@@ -251,6 +254,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     };
 
     const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+        if (isLocalTerminalMethod(method)) {
+            if (!deps.localTerminals) throw new Error('the local terminal service is not available');
+            const name = method.slice('terminals.local'.length).toLowerCase();
+            if (!['open', 'write', 'resize', 'close', 'list', 'attach'].includes(name)) throw new Error('terminal stream control requires its authenticated local connection');
+            return deps.localTerminals.invoke(name, decodeTerminalNativeArguments(name, args));
+        }
         if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
         if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
         if (isLocalArtboardMethod(method)) return invokeLocalArtboard(deps.artboard, method, args);
@@ -616,6 +625,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     return {
         invoke,
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
+        ...(deps.localTerminals ? { localTerminals: deps.localTerminals } : {}),
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
         // A terminal's workspace, remembered once seen: its exit is pushed after it has left the list.
         workspaceOfTerminal: (terminalId) => {

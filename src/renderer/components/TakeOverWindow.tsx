@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
+import { flushSync } from 'react-dom';
+import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import type { GenieBridge } from '../bridge.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { DESIGN_LOGIN } from '../../core/design-login.js';
@@ -70,6 +72,7 @@ function LoginNotice({ provider }: { provider: string }) {
 export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowProps) {
     const [output, setOutput] = useState('');
     const [exited, setExited] = useState<number | null>(null);
+    const [terminalError, setTerminalError] = useState<string | null>(null);
     const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
     const size = useRef<{ cols: number; rows: number }>({ cols: 120, rows: 36 });
 
@@ -79,25 +82,17 @@ export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowP
         return () => { live = false; };
     }, []);
 
-    // A reopened window JOINS the TUI (§6.5): the scrollback so far seeds the pane; the live bytes follow. The
-    // window is the host's own, so it may join whichever workspace the terminal is in (null).
-    useEffect(() => {
-        let live = true;
-        void terminals.attach(null, terminalId).then((joined) => {
-            if (live && joined) setOutput((o) => (o.length === 0 ? joined.scrollback : o));
-        });
-        return () => { live = false; };
-    }, [terminals, terminalId]);
-
-    // Output for every terminal arrives on one channel; keep only this window's.
-    useEffect(() => {
-        const offData = terminals.onData((id, data) => { if (id === terminalId) setOutput((o) => o + data); });
-        const offExit = terminals.onExit((id, code) => { if (id === terminalId) setExited(code); });
-        return () => { offData(); offExit(); };
-    }, [terminals, terminalId]);
+    // Commit the displayed model before the protocol grants more output credit.
+    useEffect(() => watchTerminal(terminals, null, terminalId, {
+        snapshot: joined => flushSync(() => { setOutput(joined.scrollback); setTerminalError(null); setExited(null); }),
+        data: text => flushSync(() => setOutput(value => value + text)),
+        exit: code => flushSync(() => setExited(code)),
+        error: error => setTerminalError(error.message),
+    }), [terminals, terminalId]);
 
     return (
         <main data-surface="takeover" data-terminal={terminalId} className="flex h-screen w-screen flex-col bg-[var(--bg-0)]">
+            {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
             {login ? <LoginNotice provider={login} /> : null}
             <div className="relative min-h-0 flex-1">
             {Pane ? (
@@ -105,10 +100,10 @@ export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowP
                     paneId={terminalId}
                     output={output}
                     readOnly={exited !== null}
-                    onData={(data) => terminals.write(terminalId, data)}
+                    onData={(data) => terminalAction(() => terminals.write(terminalId, data), setTerminalError)}
                     onResize={({ cols, rows }) => {
                         size.current = { cols, rows };
-                        terminals.resize(terminalId, cols, rows);
+                        terminalAction(() => terminals.resize(terminalId, cols, rows), setTerminalError);
                     }}
                 />
             ) : null}

@@ -144,7 +144,7 @@ try {
     check(sessions === 1, '5. the session count equals the number of agents running (N = 1)', String(sessions));
 
     // POSITIVE CONTROL for the scan: a plain terminal spawns EXACTLY ONE pty.
-    const opened = await cdp.evaluate(`window.genie.terminals.open(${JSON.stringify(workspaceId)}, { cols: 80, rows: 24 })`);
+    const opened = await cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(workspaceId)}, { cols: 80, rows: 24 })`);
     terminalId = opened?.id ?? null;
     check(typeof terminalId === 'string' && opened.pid > 0, '6. a Workspace terminal opened (pid reported)', `pid ${opened?.pid}, shell ${opened?.shell}`);
     let withTerm = ptys();
@@ -154,7 +154,7 @@ try {
     check(stillRunning === true, '8. and the agent is still running beside it — the two are unrelated', String(stillRunning));
 
     // Close the terminal: the pty goes; the agent stays.
-    await cdp.evaluate(`window.genie.terminals.close(${JSON.stringify(terminalId)}); true`);
+    await cdp.evaluate(`window.genieTest.terminals.close(${JSON.stringify(terminalId)}).then(() => true)`);
     terminalId = null;
     let afterClose = ptys();
     for (const end = Date.now() + 10_000; Date.now() < end && afterClose.total !== withAgent.total;) { await sleep(500); afterClose = ptys(); }
@@ -171,7 +171,7 @@ try {
 } catch (error) {
     check(false, 'the check threw', String(error));
 } finally {
-    try { if (terminalId) await cdp.evaluate(`window.genie.terminals.close(${JSON.stringify(terminalId)}); true`); } catch { /* gone */ }
+    try { if (terminalId) await cdp.evaluate(`window.genieTest.terminals.close(${JSON.stringify(terminalId)}).then(() => true)`); } catch { /* gone */ }
     try { if (codexId) await cdp.evaluate(`window.genie.stopAgent(${JSON.stringify(codexId)}); true`); } catch { /* gone */ }
     try { cdp.close(); } catch { /* gone */ }
 }

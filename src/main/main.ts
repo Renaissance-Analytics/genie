@@ -1,4 +1,5 @@
 import { limitOf } from '../core/shell-limits.js';
+import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
@@ -1804,18 +1805,6 @@ async function boot(): Promise<void> {
     // The Files panel's pop-out button: the person's click (genie#1235).
     filesWindows = new FilesWindows({ openWindow: (route) => openFilesWindow(route, 'user-gesture'), closeWindow: closeWindowAt });
     filesWindows.onChange((list) => broadcast('genie:files-windows-changed', list));
-    // Pushed, not polled (house rule). One channel per kind; the id rides the payload.
-    terminals.onData((id, data) => {
-        for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('genie:terminal-data', { id, data });
-        }
-    });
-    terminals.onExit((id, exitCode) => {
-        for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('genie:terminal-exit', { id, exitCode });
-        }
-    });
-
     /*
      * TAKE OVER (§1). The host opens the TUI in a workspace terminal and asks for a window on
      * it; the window is the session, so closing it closes the terminal. The registry reads
@@ -2217,32 +2206,6 @@ async function boot(): Promise<void> {
         return started;
     });
 
-    ipcMain.handle('genie:terminal-open', async (_event, rawWorkspaceId: unknown, rawOptions: unknown) => {
-        if (!terminals || typeof rawWorkspaceId !== 'string') return null;
-        const workspace = registry?.snapshot().workspaces?.find((w) => w.id === rawWorkspaceId) ?? null;
-        if (!workspace) return null;
-        const options = (rawOptions ?? {}) as { cols?: unknown; rows?: unknown; command?: unknown };
-        const cols = typeof options.cols === 'number' && options.cols > 0 ? Math.floor(options.cols) : undefined;
-        const rows = typeof options.rows === 'number' && options.rows > 0 ? Math.floor(options.rows) : undefined;
-        const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
-        try {
-            // cwd RESUME (§6.5): a new terminal opens where the workspace's last shell was, when tracking is on.
-            const trackCwd = (services?.settings.snapshot() ?? {}).track_cwd !== false;
-            const cwd = (trackCwd ? terminals.lastCwd(workspace.id) : null) ?? workspace.path;
-            // A shell in a workspace sees the workspace's service engines (DB_*, REDIS_URL…), like its processes do, and
-            // GENIE_MCP_URL / GENIE_MCP_TOKEN (§6.9); the pty port adds GENIE_TERMINAL_ID itself. The SAME function gives an
-            // agent's `manageTerminals create` its env (the `terminalEnv` part below).
-            const env = terminalEnvFor(services, workspace.id, mcpEnv());
-            // Answered with the real pid and shell: under genie-host the pty is made in another process (P2.1).
-            return await terminals.openReady({ workspaceId: workspace.id, cwd, command, cols, rows, personal: true, ...(Object.keys(env).length > 0 ? { env } : {}) });
-        } catch (error: unknown) {
-            // The engine's own words, on the main process's stderr, where a VM run's
-            // installed-err.log catches them. The first fancy-pty failure on the installed app
-            // (2026-10-10) reached nobody: the port handed back pid -1 and nothing was logged.
-            console.error(`[terminal] open failed in ${workspace.path}: ${error instanceof Error ? error.message : String(error)}`);
-            throw error;
-        }
-    });
     // THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace's folder, with the workspace's
     // environment (the same `terminalEnvFor` as a workspace terminal), in a window of its own; closing it ends it.
     ipcMain.handle('genie:scratch-terminal-open', (_event, rawWorkspaceId: unknown) => {
@@ -2251,28 +2214,6 @@ async function boot(): Promise<void> {
         if (!workspace) return { ok: false, reason: 'That workspace is not open in Genie.' };
         return scratchTerminals.open({ workspaceId: workspace.id, cwd: workspace.path, env: terminalEnvFor(services, workspace.id, mcpEnv()) });
     });
-    ipcMain.handle('genie:terminal-write', (_event, id: unknown, data: unknown) =>
-        typeof id === 'string' && typeof data === 'string' ? (terminals?.write(id, data) ?? false) : false);
-    ipcMain.handle('genie:terminal-resize', (_event, id: unknown, cols: unknown, rows: unknown) =>
-        typeof id === 'string' && typeof cols === 'number' && typeof rows === 'number'
-            ? (terminals?.resize(id, Math.floor(cols), Math.floor(rows)) ?? false)
-            : false);
-    ipcMain.handle('genie:terminal-close', (_event, id: unknown) =>
-        typeof id === 'string' ? (terminals?.close(id) ?? false) : false);
-    ipcMain.handle('genie:terminal-list', (_event, rawWorkspaceId: unknown) =>
-        typeof rawWorkspaceId === 'string'
-            ? (terminals?.list().filter((t) => t.workspaceId === rawWorkspaceId).map(({ id, pid, shell }) => ({ id, pid, shell })) ?? [])
-            : []);
-
-    // JOIN a running terminal (§6.5 multi-attach): scrollback so far; null for another workspace's id or a gone one.
-    ipcMain.handle('genie:terminal-attach', (_event, workspaceId: unknown, id: unknown) => {
-        if ((typeof workspaceId !== 'string' && workspaceId !== null) || typeof id !== 'string') return null;
-        const joined = terminals?.attach(id) ?? null;
-        // The host's own windows may join any terminal (null); a named workspace must match.
-        if (!joined || (workspaceId !== null && joined.workspaceId !== workspaceId)) return null;
-        return { id: joined.id, pid: joined.pid, shell: joined.shell, scrollback: joined.scrollback };
-    });
-
     // RIGHT-CLICK A FILE (Tynn #841): the host OS's own app for it, or its file manager — a path confined to the workspace.
     ipcMain.handle('genie:files-open-external', async (_event, workspaceId: unknown, path: unknown) => {
         const abs = typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.absolute(workspaceId, path) ?? null : null;
@@ -2846,6 +2787,24 @@ async function boot(): Promise<void> {
          * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
          */
         remoteApi: buildHostApi({
+            localTerminals: createNativeTerminalPort({
+                terminals: () => terminals,
+                workspaces: () => registry?.snapshot().workspaces ?? [],
+                trackCwd: () => (services?.settings.snapshot() ?? {}).track_cwd,
+                environment: id => terminalEnvFor(services, id, mcpEnv()),
+                freshSnapshot: async id => {
+                    if (!terminals) return null;
+                    if (terminals.freshSnapshot) return terminals.freshSnapshot(id);
+                    const value = terminals.attach(id), position = terminals.streamSnapshot?.(id);
+                    return value ? { ...value, epoch: position?.epoch ?? null, endOffset: position?.endOffset ?? null } : null;
+                },
+                listen: (data, exit) => {
+                    const offData = terminals?.onData((id, text, position) => data({ id, data: text, ...(position ? { epoch: position.epoch, offset: position.offset } : {}) })) ?? (() => {});
+                    const offExit = terminals?.onExit((id, code, position) => exit({ id, exitCode: code, ...(position ?? {}) })) ?? (() => {});
+                    return () => { offData(); offExit(); };
+                },
+                openError: (path, error) => console.error(`[terminal] open failed in ${path}: ${error instanceof Error ? error.message : String(error)}`),
+            }),
             filesWatch: {
                 exists: id => { const w = registry?.workspace(id); return !!w && w.asleep !== true; },
                 watch: (viewId, id, want) => { const workspace = registry?.workspace(id); return filesWatch && workspace && workspace.asleep !== true ? filesWatch.watch(viewId, { id: workspace.id, path: workspace.path }, want) : false; },
