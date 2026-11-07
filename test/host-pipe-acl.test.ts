@@ -14,7 +14,7 @@ const TSX = import.meta.resolve('tsx');
  * read access for Everyone and anonymous). The host now gives its pipe an explicit, protected DACL: the user it runs
  * as, and SYSTEM, nothing else. The token hello stays the second gate.
  *
- * Read from the LIVE pipe of a real genie-host, by a reader of its own (GetNamedSecurityInfo, as SDDL), never by the
+ * Read from the LIVE pipe of a real genie-host, by a reader of its own (GetSecurityInfo on a handle it opens with READ_CONTROL, as SDDL), never by the
  * code that sets it. CONTROL: the same reader, on a pipe Node made with the default, finds an account beyond those two.
  */
 const READER = String.raw`
@@ -24,16 +24,33 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 public static class PipeSd {
-    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
-    static extern uint GetNamedSecurityInfoW(string name, int type, int info, IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl, out IntPtr sd);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool WaitNamedPipeW(string name, uint ms);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr h);
+    [DllImport("advapi32.dll")]
+    static extern uint GetSecurityInfo(IntPtr handle, int type, int info, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr sd);
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     static extern bool ConvertSecurityDescriptorToStringSecurityDescriptorW(IntPtr sd, uint revision, int info, out IntPtr text, out uint length);
     [DllImport("kernel32.dll")]
     static extern IntPtr LocalFree(IntPtr p);
     public static string Read(string name) {
-        IntPtr sd;
-        // SE_FILE_OBJECT (1); OWNER (1) | DACL (4).
-        uint error = GetNamedSecurityInfoW(name, 1, 5, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, out sd);
+        IntPtr h = new IntPtr(-1);
+        for (int i = 0; i < 40; i++) {
+            // READ_CONTROL only (0x00020000); OPEN_EXISTING (3). A pipe whose instances are all taken answers busy (231).
+            h = CreateFileW(name, 0x00020000, 0, IntPtr.Zero, 3, 0, IntPtr.Zero);
+            if (h != new IntPtr(-1)) break;
+            int e = Marshal.GetLastWin32Error();
+            if (e != 231) throw new Win32Exception(e);
+            WaitNamedPipeW(name, 250);
+        }
+        if (h == new IntPtr(-1)) throw new Win32Exception(231);
+        IntPtr owner, group, dacl, sacl, sd;
+        // SE_KERNEL_OBJECT (6); OWNER (1) | DACL (4).
+        uint error = GetSecurityInfo(h, 6, 5, out owner, out group, out dacl, out sacl, out sd);
+        CloseHandle(h);
         if (error != 0) throw new Win32Exception((int)error);
         IntPtr text; uint length;
         if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, 1, 5, out text, out length)) throw new Win32Exception();
