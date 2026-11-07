@@ -1,0 +1,50 @@
+name: Measure beta60 host stores
+
+# Diagnostic branch only. No publishing, credentials, or change to the normal CI gates.
+on:
+  push:
+    branches: [measure/beta60-store-stalls]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: measure-host-stores-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: store timing and quit check (windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: store timing regression
+        run: npx vitest run test/host-slow-calls.test.ts --testTimeout=30000 --hookTimeout=30000
+      - run: npm run typecheck
+      - run: npm run build
+      - run: node scripts/smoke-seed.mjs
+      - name: existing three-agent quit proof
+        run: node scripts/quit-keeps-host-cdp.mjs
+      - name: collect diagnostic logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path measure-out -Force | Out-Null
+          foreach ($relative in @('runtime/lifecycle.log', 'logs/genie-host.log')) {
+            $source = Join-Path (Join-Path $env:USERPROFILE '.genie') $relative
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination measure-out }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: beta60-host-stores-windows
+          path: |
+            measure-out/
+            smoke-out/quit-keeps-host*
+          if-no-files-found: warn
