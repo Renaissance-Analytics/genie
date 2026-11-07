@@ -44,7 +44,8 @@ import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
 import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
-import { killProcessAsync, listProcessesAsync } from './process-list.js';
+import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
+import { windowReleased } from './window-release.js';
 import { channelFrom } from '../core/update-channel.js';
 import type { ReleaseLike } from '../core/update-notes.js';
 import { hostIdleMs, hostIdleStep } from '../core/host-idle.js';
@@ -600,6 +601,8 @@ async function main(): Promise<void> {
     const hangWatchdog = new HangWatchdog({
         write: (record) => { writeCrashRecord(join(runtime, 'crash'), record); crashState.recorded(record); },
         kill: (pid) => killProcessAsync(pid),
+        // The new window after the ended one has let go of its process and sockets (Tynn #400), bounded at 10 s.
+        released: (pid) => windowReleased(pid, { alive: pidAlive, sockets: tcpSocketsOwnedByAsync }),
         alive: pidAlive,
         hostRss: () => process.memoryUsage.rss(),
         cpuMs: () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; },

@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type { RunningProcess } from './upgrade.js';
 import { resolveProgram } from '../core/program-lookup.js';
+import { socketsOwnedBy } from '../core/netstat.js';
 
 /**
  * Every process the OS can name WITH ITS EXECUTABLE PATH — what §7.2's teardown scans.
@@ -37,6 +38,21 @@ export async function listProcessesAsync(): Promise<readonly RunningProcess[]> {
 }
 
 /** `killProcess` without holding the event loop: one pid, never a tree. */
+/**
+ * The TCP sockets Windows still lists as owned by a pid (netstat -ano; core/netstat.ts), for window-release.ts: a killed
+ * process can leave the process table before they close. Elsewhere a process's sockets close with it: 0. A failed
+ * reading answers 0 (the caller's bound is for a reading that never clears, not one that can't be taken).
+ */
+export async function tcpSocketsOwnedByAsync(pid: number): Promise<number> {
+    if (process.platform !== 'win32') return 0;
+    try {
+        const { stdout } = await promisify(execFile)(resolveProgram('netstat'), ['-ano', '-p', 'TCP'], { timeout: 10_000, windowsHide: true, encoding: 'utf8' });
+        return socketsOwnedBy(stdout, pid);
+    } catch {
+        return 0;
+    }
+}
+
 export async function killProcessAsync(pid: number): Promise<boolean> {
     try {
         if (process.platform === 'win32') await promisify(execFile)(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { timeout: 10_000, windowsHide: true });
