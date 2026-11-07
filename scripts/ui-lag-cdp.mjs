@@ -366,8 +366,9 @@ try {
     }
     demand(host.read && host.beats > 0, 'genie-host\'s gauge ran (its preload was installed and beat)');
 
-    const build = passes[0].rows.filter((r) => r.phase.startsWith('build'));
-    result.budget = budgetVerdict(build.flatMap((r) => r.main.gaps), BUDGET_MS);
+    // Every gap of the unprofiled pass's build phases, not only each phase's worst few: `over` is the true count.
+    const build = passes[0].phases.filter((ph) => ph.name.startsWith('build'));
+    result.budget = budgetVerdict(passes[0].mainState.gauge.gaps.filter((g) => build.some((ph) => g.endedMs >= ph.mainMs && g.startedMs <= ph.end.mainMs)), BUDGET_MS);
     code = BUDGET && !result.budget.ok ? 1 : 0;
     if (code) failure = `BUDGET: window main was late ${result.budget.worstMs} ms during the build (${result.budget.over} gaps over ${BUDGET_MS} ms)`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
