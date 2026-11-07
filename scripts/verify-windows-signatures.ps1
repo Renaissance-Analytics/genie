@@ -24,7 +24,14 @@ if ($installers.Count -ne 1) { throw "Expected exactly one Windows setup install
 $notSigned = @{}
 if (Test-Path -LiteralPath $planFile -PathType Leaf) {
     $plan = Get-Content -LiteralPath $planFile -Raw | ConvertFrom-Json
-    foreach ($row in $plan.rows) { if (-not $row.wouldSign) { $notSigned[(Join-Path $appDir ($row.file -replace '/', '\'))] = $true } }
+    # Each key through Get-ChildItem, the same call that lists the payload below: a path given in its 8.3 form
+    # (C:\Users\RUNNER~1\...) is the long form in what Get-ChildItem returns, and Join-Path alone kept the short one, so
+    # nothing matched (the verifier row, job 128421475212).
+    foreach ($row in $plan.rows) {
+        if ($row.wouldSign) { continue }
+        $item = Get-ChildItem -LiteralPath (Join-Path $appDir ($row.file -replace '/', '\')) -File -ErrorAction SilentlyContinue
+        if ($item) { $notSigned[$item.FullName] = $true }
+    }
     Write-Host "Sign plan: $planFile, $($notSigned.Count) file(s) the build does not sign keep their own publisher's signature"
 }
 
