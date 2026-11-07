@@ -207,6 +207,18 @@ export type TurnState = 'idle' | 'working' | 'failed' | 'stopped' | 'unknown';
 export type CancelOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: 'not-running' | 'no-turn' | 'unsupported' | 'refused' };
 
 /**
+ * WHY A TURN IS CANCELLED (Tynn #672 part 3). `stop`: the person's "Stop this turn"; the session then waits for them
+ * (genie#1565, `#stoppedByYou`). `interrupt`: "Interrupt and send", which cancels the turn so the person's message, already
+ * handed over, runs next. That message is the next work, so nothing latches.
+ */
+export type CancelIntent = 'stop' | 'interrupt';
+
+/** An intent from outside (IPC, the remote protocol, the engine): only `interrupt` is an interrupt; anything else is a Stop. */
+export function cancelIntent(raw: unknown): CancelIntent {
+    return raw === 'interrupt' ? 'interrupt' : 'stop';
+}
+
+/**
  * How a stop ended (`AgentSession.stop`). `verified` only when a fresh reading shows every process the run was seen to
  * own is gone. Unverified says why, and names what is still running (`survivors`, empty when it could not look).
  */
@@ -1814,7 +1826,8 @@ export class AgentSession {
         return driver.setModel(modelId);
     }
 
-    cancel(by: string | null = 'you'): CancelOutcome {
+    // RED STUB (Tynn #672 part 3): the intent is taken and not yet used; the next commit makes an interrupt not latch.
+    cancel(by: string | null = 'you', _intent: CancelIntent = 'stop'): CancelOutcome {
         const driver = this.#driver;
         if (!driver || this.#exited || !this.#alive) return { ok: false, reason: 'not-running' };
         if (!this.#inTurn) return { ok: false, reason: 'no-turn' };
