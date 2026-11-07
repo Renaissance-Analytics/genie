@@ -1,7 +1,7 @@
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { PromptContext } from '../core/session.js';
-import type { NoticeMail } from '../core/stream-event.js';
+import type { NoticeMail, StreamEvent } from '../core/stream-event.js';
 import { inboxAgentPaused } from '../core/inbox.js';
 import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery } from '../core/app-inbox.js';
 
@@ -62,6 +62,8 @@ export interface InboxPushPorts {
         inTurn(agentId: AgentId): boolean;
         /** The prompt held under `id` is still waiting in the agent's current run (SessionHost.hasQueuedPrompt). */
         hasQueuedPrompt(agentId: AgentId, id: string): boolean;
+        /** Actual delivery outcomes, when the host keeps a ledger: leaving a queue alone does not prove acceptance. */
+        rowsFor?(agentId: AgentId): readonly { readonly event: StreamEvent }[];
         probe(agentId: AgentId): LiveSession | null;
         /** How the agent's last turn ended (SessionHost.lastTurnEnd): a notice whose turn was STOPPED was not told. */
         lastTurnEnd?(agentId: AgentId): 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null;
@@ -152,9 +154,12 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
         if (sent.queued !== null) {
             // HELD for the turn's end (Codex refuses a prompt mid-turn): still waiting, nothing to settle yet.
             if (host.hasQueuedPrompt(id, sent.queued)) return true;
-            // Gone from the queue. Sent, it opened its own turn, in flight now — the turn it is told by. Not in a turn: it
-            // was dropped with a turn that broke, or refused when it went, and was never delivered.
-            if (!host.inTurn(id)) {
+            // The delivery row distinguishes acceptance from a discarded queue item, even during stop's reentrant
+            // events before inTurn clears. Across a host link the row may arrive after the queue snapshot: wait for it.
+            const delivery = host.rowsFor?.(id).map((r) => r.event)
+                .findLast((e) => e.kind === 'prompt_delivery' && e.id === sent.queued);
+            if (host.rowsFor && !delivery) return true;
+            if (host.rowsFor ? delivery?.kind !== 'prompt_delivery' || delivery.status !== 'sent' : !host.inTurn(id)) {
                 out.delete(id);
                 settled(id, false);
                 return false;
