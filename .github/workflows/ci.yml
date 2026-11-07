@@ -528,6 +528,10 @@ jobs:
         # Ordinary CI has no signing identity. Keep icon/resource editing; protected jobs sign.
         run: npx electron-builder --publish never ${{ runner.os == 'Windows' && '--config.win.signExecutable=false' || '' }}
 
+      - name: prove the packaged Windows updater metadata and asset names
+        if: runner.os == 'Windows'
+        run: node scripts/verify-windows-update.cjs release test/fixtures/windows-update-beta59.json
+
       # The fuse as the built binary has it, not as the config asks.
       - name: the cookie fuse is on in what was packaged
         shell: bash
@@ -569,6 +573,7 @@ jobs:
             release/*.exe
             release/*.AppImage
             release/*.yml
+            release/signature-evidence/
           if-no-files-found: error
           retention-days: 7
 

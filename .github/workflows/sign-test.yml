@@ -1,11 +1,17 @@
 name: Test Windows signing
 
-# The coordinator dispatches the exact reviewed branch and approves the protected environment.
+# A branch push queues the exact head for the protected environment's owner approval.
 on:
+  push:
+    branches: [next/release-signing]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: sign-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   sign:
@@ -40,11 +46,20 @@ jobs:
       - name: verify every Windows signature before upload
         shell: pwsh
         run: ./scripts/verify-windows-signatures.ps1
+      - name: read the beta.59 reference release asset names
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view v2.0.0-beta.59 --repo "$GITHUB_REPOSITORY" --json tagName,assets --jq '{tagName,assets:[.assets[]|{name,size}]}' > release/signature-evidence/beta59-release-assets.json
+      - name: prove the signed installer's updater metadata and asset names
+        run: node scripts/verify-windows-update.cjs release release/signature-evidence/beta59-release-assets.json
       - uses: actions/upload-artifact@v4
         with:
           name: signed-windows-installer
           path: |
             release/*-setup.exe
+            release/*-setup.exe.blockmap
+            release/latest.yml
             release/signature-evidence/
           if-no-files-found: error
           retention-days: 7

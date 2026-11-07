@@ -176,6 +176,13 @@ jobs:
       - name: verify every Windows signature before upload
         shell: pwsh
         run: ./scripts/verify-windows-signatures.ps1
+      - name: read the beta.59 reference release asset names
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view v2.0.0-beta.59 --repo "$GITHUB_REPOSITORY" --json tagName,assets --jq '{tagName,assets:[.assets[]|{name,size}]}' > release/signature-evidence/beta59-release-assets.json
+      - name: prove the signed installer's updater metadata and asset names
+        run: node scripts/verify-windows-update.cjs release release/signature-evidence/beta59-release-assets.json
       - name: publish
         shell: bash
         env:

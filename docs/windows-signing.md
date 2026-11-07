@@ -11,7 +11,7 @@ The owner has configured the federated identities and approval gates externally:
 | Job | GitHub environment | Permitted ref | Token permissions |
 | --- | --- | --- | --- |
 | Windows release | `release` | `v*` tags | contents write, id-token write |
-| Manual signing proof | `sign-test` | `next/release-signing` | contents read, id-token write |
+| Branch-push / manual signing proof | `sign-test` | `next/release-signing` | contents read, id-token write |
 | Linux release | none | existing release tag trigger | existing contents write |
 
 The separate Windows job keeps the signing identity out of Linux. The Windows
@@ -19,6 +19,13 @@ build uses `--publish never`, verifies signatures, then uploads those exact file
 into the draft using `gh release upload`. It does not rebuild after verification.
 Linux's build, tests and electron-builder publication commands are unchanged.
 The final draft gate needs both jobs. Publishing the draft is still the owner's step.
+
+The upload is separate because `electron-builder --publish always` schedules publication
+inside the build when artifacts are emitted. A workflow step after that command cannot
+prevent an installer from uploading before its signature and updater checks run. Calling
+builder again with a prepackaged app would rebuild/sign a new NSIS installer, producing
+different bytes from the verified file. The `gh` upload streams the three files produced
+by the completed builder without rebuilding or rewriting them, to the same tag's draft.
 
 ## Credential selection and the locked adapter
 
@@ -75,16 +82,50 @@ editing. This opt-out is absent from the protected signing jobs. Their source gu
 run alongside the ordinary test suite; `Windows signing guards` also runs the actual
 PowerShell positive/negative fixture cases on Windows without signing permissions.
 
+## Updater evidence after signing
+
+The beta.59 release's actual Windows assets are `Genie-2.0.0-beta.59-setup.exe`,
+`Genie-2.0.0-beta.59-setup.exe.blockmap` and `latest.yml`. Its metadata names that
+same installer in both `path` and `files[0].url`. Later versions replace only the
+version in those asset names; the updater's repository and channel are unchanged.
+
+In the locked [26.15.3 package](https://registry.npmjs.org/app-builder-lib/-/app-builder-lib-26.15.3.tgz),
+`out/targets/nsis/NsisTarget.js` awaits `packager.signIf(installerPath)` at line302,
+creates the blockmap/update info at line309, then emits the completed artifact at
+line314. `out/publish/updateInfoBuilder.js` uses that SHA512 (or hashes the completed
+file). A source guard asserts this ordering. Publication policy `never` suppresses
+network uploads while retaining the builder's generated updater metadata.
+
+After Authenticode verification, both protected workflows fetch beta.59's current
+release asset list with the repository's read token, then run
+`scripts/verify-windows-update.cjs`. The verifier streams SHA512 over the finished
+installer and requires it to equal **both** `latest.yml` checksum fields, with
+matching version, size and exact path/URL. It requires the installer, blockmap and
+metadata files to be nonempty and compares their names to the reference release
+with only the version substituted. Metadata paths are never used to open files.
+
+The log prints the exact latest.yml contents, finished installer SHA512 in base64,
+both metadata SHA512 fields, a MATCH result, and the three file names/sizes/hashes.
+The artifact contains all three updater files plus `signature-evidence/latest.yml`,
+`installer.sha512`, `windows-update.json`, `updater-summary.txt`, the live beta.59
+asset list and the signature evidence. Release uploads the same root installer,
+blockmap and latest.yml after both verifiers pass. Ordinary Windows packaging CI
+also exercises the updater verifier on its unsigned build with a reference fixture
+copied from the actual beta.59 list; that proves packaging/hash wiring, while the
+protected run applies it to actual signed bytes.
+
 ## Review and real signing proof
 
-After the PR's ordinary CI is green, the coordinator dispatches `sign-test.yml`
-at the exact reviewed `next/release-signing` head and the owner approves its
-environment. GitHub requires a new manual workflow to [exist on the default branch](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)
-before its first dispatch; the coordinator handles that bootstrap separately.
-The workflow uploads the signed installer and signature evidence
+Each push to `next/release-signing` queues `sign-test.yml` at that exact head for
+the protected environment's owner approval. It also retains workflow_dispatch for
+later use. New pushes cancel a superseded run so approval targets the current head.
+This branch-push trigger avoids a default-branch bootstrap; no change to main is needed.
+After ordinary CI is green, the coordinator/owner approves the queued environment.
+The workflow uploads the signed installer, blockmap, metadata and signature/updater evidence
 only after verification. Check every `VALID` line, including the launcher,
 uninstaller, installer and DLLs. No release is created by this workflow.
 
 Unit/source tests cannot prove the Azure role, federation, service availability or
-public trust chain. Only that protected run establishes actual signing. Agents must
-not dispatch sign-test, request its approval or trigger a release as part of PR preparation.
+public trust chain. Only that protected run establishes actual signing. Branch pushes
+queue approval as authorized; agents must not manually dispatch sign-test, request
+or grant its approval, bootstrap main or trigger a release as part of PR preparation.
