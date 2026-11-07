@@ -1,5 +1,6 @@
 import type { GitFileState, GitTreeState } from './git-ports.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { cursorParts, makeCursor, type FilesStateSince } from '../core/files-state-cursor.js';
 import { access, copyFile, mkdir, open as openFile, readdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { uploadName, uploadSizeRefusal } from '../core/mobile-wire.js';
 import { dirname, join } from 'node:path';
@@ -100,6 +101,15 @@ export class FilesHost {
     readonly #ports: FilesHostPorts;
     readonly #cap: number;
     readonly #changedOnDisk = new Map<string, Map<string, number>>();
+    /*
+     * THE CURSOR (Tynn #522): every recorded batch and every path that leaves the disk list gets the next number, so a
+     * read with a cursor is sent only what is newer than it. The epoch names this host: a cursor from another (a window
+     * restarted, a host replaced) is answered with the whole list.
+     */
+    readonly #epoch = randomUUID().replace(/-/g, '').slice(0, 12);
+    #seq = 0;
+    readonly #seenAt = new Map<string, Map<string, number>>();
+    readonly #goneAt = new Map<string, Map<string, number>>();
     /** Files YOU wrote through the panel, per workspace — yours in Changed, never `?`. */
     readonly #mine = new Map<string, Set<string>>();
     readonly #listeners = new Set<(workspaceId: string, paths: readonly string[]) => void>();
@@ -238,7 +248,7 @@ export class FilesHost {
         mine.add(rel);
         this.#mine.set(workspaceId, mine);
         // Your own write is not an unreported change.
-        this.#changedOnDisk.get(workspaceId)?.delete(rel);
+        this.#forget(workspaceId, rel);
         return { ok: true, sha: shaOf(text) };
     }
 
@@ -283,7 +293,7 @@ export class FilesHost {
         const mine = this.#mine.get(workspaceId) ?? new Set<string>();
         mine.add(rel);
         this.#mine.set(workspaceId, mine);
-        this.#changedOnDisk.get(workspaceId)?.delete(rel);
+        this.#forget(workspaceId, rel);
         return { ok: true, sha: shaOf(bytes) };
     }
 
@@ -408,7 +418,51 @@ export class FilesHost {
         }
     }
 
-    async state(workspaceId: string): Promise<FilesState | null> {
+    /**
+     * Who is touching what, and what changed on disk. With no cursor argument, the whole state (a caller that knows no
+     * cursors). With one (`null` on a first read), the answer is relative to it: only the disk changes since (Tynn #522).
+     */
+    state(workspaceId: string): Promise<FilesState | null>;
+    state(workspaceId: string, cursor: string | null): Promise<FilesStateSince | null>;
+    async state(workspaceId: string, cursor?: string | null): Promise<FilesState | FilesStateSince | null> {
+        return cursor === undefined ? this.#wholeState(workspaceId) : this.#stateSince(workspaceId, cursor);
+    }
+
+    async #stateSince(workspaceId: string, cursor: string | null): Promise<FilesStateSince | null> {
+        const ws = this.#workspace(workspaceId);
+        if (!ws) return null;
+        const events = this.#ports.agentsOf(workspaceId).flatMap((a) => this.#ports.eventsOf(a.id));
+        const attribution = attributionFrom(events, ws.path);
+        const mine = [...(this.#mine.get(workspaceId) ?? [])];
+        const parts = cursorParts(cursor);
+        const since = parts && parts.epoch === this.#epoch && parts.seq <= this.#seq ? parts.seq : null;
+        const disk: Array<{ path: string; at: number }> = [];
+        const seen = this.#seenAt.get(workspaceId);
+        for (const [path, at] of this.#changedOnDisk.get(workspaceId) ?? []) if (since === null || (seen?.get(path) ?? 0) > since) disk.push({ path, at });
+        const gone: string[] = [];
+        if (since !== null) for (const [path, seq] of this.#goneAt.get(workspaceId) ?? []) if (seq > since) gone.push(path);
+        return {
+            cursor: makeCursor(this.#epoch, this.#seq),
+            since: since === null ? null : cursor,
+            files: [...attribution.values()],
+            activity: activityFrom(events, ws.path),
+            // The `?` group is the unreported list, which the reader rebuilds from the disk list it keeps.
+            changed: changedGroups(attribution, { mine, unreported: [] }),
+            disk,
+            gone,
+        };
+    }
+
+    /** A path the person wrote leaves the disk list: theirs, not a change nobody reported. Told to cursor readers as gone. */
+    #forget(workspaceId: string, rel: string): void {
+        if (!this.#changedOnDisk.get(workspaceId)?.delete(rel)) return;
+        this.#seenAt.get(workspaceId)?.delete(rel);
+        const gone = this.#goneAt.get(workspaceId) ?? new Map<string, number>();
+        gone.set(rel, ++this.#seq);
+        this.#goneAt.set(workspaceId, gone);
+    }
+
+    async #wholeState(workspaceId: string): Promise<FilesState | null> {
         const ws = this.#workspace(workspaceId);
         if (!ws) return null;
         const events = this.#ports.agentsOf(workspaceId).flatMap((a) => this.#ports.eventsOf(a.id));
@@ -434,8 +488,12 @@ export class FilesHost {
     recordDiskChanges(workspaceId: string, changes: ReadonlyArray<{ readonly path: string; readonly at: number }>): void {
         if (changes.length === 0) return;
         const set = this.#changedOnDisk.get(workspaceId) ?? new Map<string, number>();
-        for (const c of changes) set.set(c.path, c.at);
+        const seen = this.#seenAt.get(workspaceId) ?? new Map<string, number>();
+        const gone = this.#goneAt.get(workspaceId);
+        const seq = ++this.#seq;
+        for (const c of changes) { set.set(c.path, c.at); seen.set(c.path, seq); gone?.delete(c.path); }
         this.#changedOnDisk.set(workspaceId, set);
+        this.#seenAt.set(workspaceId, seen);
         const paths = changes.map((c) => c.path);
         for (const l of this.#listeners) l(workspaceId, paths);
     }

@@ -3,6 +3,8 @@ import type { LocalUploadClient, PageClient } from '../core/local-content.js';
 import { decodeLocalBase64, encodeLocalBase64 } from './local-base64.js';
 import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesProjection, type InvalidFilesArgument, type LocalFilesMethod } from '../core/local-files.js';
 import type { GenieBridge } from './bridge.js';
+import { applyFilesState, isFilesStateSince, projectFilesState, type FilesStateKept } from '../core/files-state-cursor.js';
+import type { FilesState } from '../main/files-host.js';
 
 type FilesContentKey = 'tree' | 'children' | 'open' | 'readMedia' | 'lastCommitted' | 'state' | 'gitStatus' | 'create' | 'rename' | 'duplicate' | 'trash' | 'readBytes' | 'write' | 'writeBytes';
 export type FilesProtocolKey = FilesContentKey | 'subscribe' | 'onChange';
@@ -67,6 +69,21 @@ export function filesContentReader(port: { release(ref: string): Promise<unknown
 
 export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient }): { files: Pick<GenieBridge['files'], FilesContentKey>; repo: NonNullable<GenieBridge['repo']> } {
     const decodeResult = filesContentReader(port);
+    /*
+     * FILES STATE BY CURSOR (Tynn #522): this window keeps each workspace's state and asks only for what changed since its
+     * last read; every view is answered with the whole state, as a full read would say it.
+     */
+    const kept = new Map<string, FilesStateKept>();
+    const state = async (id: string): Promise<FilesState | null> => {
+        const mine = typeof id === 'string' ? kept.get(id) : undefined;
+        const reply = await request<unknown>('files.state', [id, mine?.cursor ?? null]);
+        if (reply === null || reply === undefined) { if (typeof id === 'string') kept.delete(id); return null; }
+        // A host that knows no cursors answers in full.
+        if (!isFilesStateSince(reply)) return reply as FilesState;
+        const next = applyFilesState(kept.get(id), reply);
+        kept.set(id, next);
+        return projectFilesState(next) as FilesState;
+    };
     const request = async <T>(method: LocalFilesMethod, rawArgs: unknown[]): Promise<T> => {
         const args = fileArguments(method, rawArgs);
         let staged: string | null = null;
@@ -90,7 +107,7 @@ export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...ar
         files: {
             tree: id => request('files.tree', [id]), children: (id, dir) => request('files.localChildren', [id, dir]),
             open: (id, path) => request('files.localOpen', [id, path]), readMedia: (id, path) => request('files.localReadMedia', [id, path]),
-            lastCommitted: (id, path) => request('files.lastCommitted', [id, path]), state: id => request('files.state', [id]), gitStatus: id => request('files.gitStatus', [id]),
+            lastCommitted: (id, path) => request('files.lastCommitted', [id, path]), state, gitStatus: id => request('files.gitStatus', [id]),
             create: (id, path, kind) => request('files.create', [id, path, kind]), rename: (id, from, to) => request('files.rename', [id, from, to]),
             duplicate: (id, path) => request('files.duplicate', [id, path]), trash: (id, path) => request('files.trash', [id, path]),
             readBytes: (id, plugin, path) => request('files.readBytes', [id, plugin, path]), write: (id, path, text, expected) => request('files.write', [id, path, text, expected]),

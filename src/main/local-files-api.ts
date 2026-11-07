@@ -31,7 +31,11 @@ export async function invokeLocalFiles(deps: LocalFilesDeps | undefined, method:
         case 'files.tree': return str(workspaceId) ? host?.tree(workspaceId) ?? null : null;
         case 'files.localChildren': return str(workspaceId) && str(path) ? host?.children(workspaceId, path) ?? null : null;
         case 'files.lastCommitted': return str(workspaceId) && str(path) ? host?.lastCommitted(workspaceId, path) ?? null : null;
-        case 'files.state': return str(workspaceId) ? host?.state(workspaceId) ?? null : null;
+        // With a second argument (a cursor, or null on a first read): only what changed since it (Tynn #522). Without one,
+        // the whole state, for a caller that knows no cursors.
+        case 'files.state':
+            if (!str(workspaceId)) return null;
+            return (args.length >= 2 ? host?.state(workspaceId, str(path) ? path : null) : host?.state(workspaceId)) ?? null;
         case 'files.gitStatus': return str(workspaceId) ? host?.gitStatus(workspaceId) ?? {} : {};
         case 'files.localOpen':
         case 'files.localReadMedia':
