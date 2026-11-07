@@ -172,7 +172,7 @@ function NeedsYou({ item, host, answering, onAnswer, label, workspace }: { item:
                 <span className="font-mono">{workspace}</span>
             </div>
             {item.answer.kind === 'inline' ? (
-                <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answering} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
+                <ApprovalCard approval={{ question: item.title, options: item.answer.options, why: item.why ?? null }} answering={answering} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
             ) : (
                 <p className="mt-1 text-[13px]">{item.title}</p>
             )}

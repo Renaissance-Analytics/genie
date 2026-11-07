@@ -119,7 +119,9 @@ export interface AgentRecord {
     readonly permissions?: AgentPermissions;
     /**
      * AUTONOMOUS (Tynn #801): its gated actions — services, processes, sites, terminals — run without the person's
-     * approval, each one recorded. Absent = asked, as every agent was before this field existed.
+     * approval, each one recorded — and its provider's own prompts too (Tynn #439): a Claude agent's shell commands, what
+     * Codex asks. Not in a workspace that is not trusted, and never an action that always asks (both say why on the card).
+     * Absent = asked, as every agent was before this field existed.
      */
     readonly autoApprove?: boolean;
     /**

@@ -337,6 +337,8 @@ export interface AgentSessionOptions {
      * change to what decides it applies to the next request with nothing restarted. Absent = `ask`.
      */
     permissionDecision?: (request: PermissionRequestLike) => 'allow' | 'deny' | 'ask';
+    /** Why a request it parks still asks although the agent is Autonomous (Tynn #439), read as it parks; drawn on the card. */
+    askWhy?: () => string | null;
     /**
      * Whether this run may be handed work now, asked at each hand-over. False = it waits, as it does on a limit, and a run
      * that ends leaves it owed, so the next one gets it. Absent = always.
@@ -1127,7 +1129,9 @@ export class AgentSession {
                         // Decided now, from the setting as it is now (genie#1188): allowed or refused at once, or parked.
                         const decided = this.#options.permissionDecision?.(request) ?? 'ask';
                         if (decided !== 'ask') { resolve(answerFor(request, decided)); return; }
-                        const approval = approvalFrom(request);
+                        const narrowed = approvalFrom(request);
+                        const why = narrowed ? this.#options.askWhy?.() ?? null : null;
+                        const approval = narrowed && why ? { ...narrowed, why } : narrowed;
 
                         // A request with no readable options cannot be answered by anybody.
                         // Parking it would show a question with no buttons and block the agent
