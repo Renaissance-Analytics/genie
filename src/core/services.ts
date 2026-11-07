@@ -247,6 +247,8 @@ export interface AdoptedSlice {
     readonly bucket?: string;
     /** This version is the one whose connection the workspace gets (Genie 1's `active`). */
     readonly active?: boolean;
+    /** Postgres: the databases Genie created for this workspace beside its own (`services createDatabase`), owned by its role. */
+    readonly databases?: readonly string[];
 }
 
 const sqlEnv = (driver: string, defaultUser: string) => (host: string, port: number, c: Credentials): Record<string, string> => {

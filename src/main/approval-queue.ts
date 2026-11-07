@@ -37,6 +37,8 @@ const VERBS: Record<string, string> = {
     write: 'write to a terminal',
     // An agent's `services` / `sites` tools (mcp-tools-hosting.ts): the detail names the engine, version and image.
     'services.add': 'add a service',
+    // `services createDatabase`: the detail names the database, the shared engine and the workspace role that owns it.
+    'services.createDatabase': 'create a database',
     'services.remove': 'remove a service',
     'services.update': 'update a service image',
     // `use` and `detach`: the detail names the engine, and what the workspace uses for that kind before and after.

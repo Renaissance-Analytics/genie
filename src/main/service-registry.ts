@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { NAMESPACE_SLICED_ENGINES, provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
+import { createDatabaseSteps, databaseExistsStep, databaseNameProblem, NAMESPACE_SLICED_ENGINES, provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
 import { deleteDataVerdict } from '../core/service-tenancy.js';
 import { chooseEngines, containerNameOf, CUSTOM_KINDS, dataVolumeOf, engineKindOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, sliceIsDroppable, switchActiveWarning, variantExtensions, type AdoptedSlice, type Credentials, type CustomEngineSpec, type EngineAdmin, type EngineChoice, type ServiceInstance, type ServiceScope } from '../core/services.js';
 import { renderSockudoConfig, websocketAppOf } from '../core/websockets.js';
@@ -464,26 +464,89 @@ export class ServiceRegistry {
             && (x.slices !== undefined ? x.slices[workspaceId]?.active === true : x.scope.kind === 'dedicated' && x.scope.workspaceId === workspaceId && x.active));
     }
 
+    /** The engine answers its own client, bounded; past the bound it throws, saying `nothing` (what was not done). */
+    async #ready(i: ServiceInstance, nothing: string): Promise<void> {
+        const name = this.#nameOf(i.id);
+        const bound = this.#deps.sliceReadiness ?? DEFAULT_SLICE_READINESS;
+        const now = this.#deps.now ?? Date.now;
+        const sleep = this.#deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+        const probe = readinessProbe(i.engine, i.admin!);
+        const deadline = now() + bound.timeoutMs;
+        for (;;) {
+            const r = await this.#driver.exec(name, probe.argv);
+            if (stepSucceeded(probe, r)) return;
+            if (now() >= deadline) throw new Error(`${i.engine} ${i.version} did not answer within ${Math.round(bound.timeoutMs / 1000)} s (${r.stdout.trim() || `exit ${r.exitCode}`}); ${nothing} — ask again once it is running`);
+            await sleep(bound.pollMs);
+        }
+    }
+
     /** The engine answers its own client (bounded), then every slice's steps run in order; the first that fails throws. */
     async #provision(i: ServiceInstance, slices: readonly AdoptedSlice[]): Promise<void> {
         const name = this.#nameOf(i.id);
         const admin = i.admin!;
         const what = `${i.engine} ${i.version}`;
-        const bound = this.#deps.sliceReadiness ?? DEFAULT_SLICE_READINESS;
-        const now = this.#deps.now ?? Date.now;
-        const sleep = this.#deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-        const probe = readinessProbe(i.engine, admin);
-        const deadline = now() + bound.timeoutMs;
-        for (;;) {
-            const r = await this.#driver.exec(name, probe.argv);
-            if (stepSucceeded(probe, r)) break;
-            if (now() >= deadline) throw new Error(`${what} did not answer within ${Math.round(bound.timeoutMs / 1000)} s (${r.stdout.trim() || `exit ${r.exitCode}`}); no workspace database was created — ask again once it is running`);
-            await sleep(bound.pollMs);
-        }
+        await this.#ready(i, 'no workspace database was created');
         for (const slice of slices) {
             // A pgvector engine's `vector`, created as the superuser in the workspace's database: its role cannot (core/service-provision.ts).
             for (const step of provisionSteps(i.engine, admin, slice, { extensions: variantExtensions(i.engine, i.variant) })) await this.#step(name, what, slice.identifier, step);
         }
+    }
+
+    /**
+     * Why `workspaceId` cannot have a database named `database` created on engine `id` (`services createDatabase`, Tynn
+     * #403), in words — or null when it can. Asks the ENGINE whether the name is taken, so it waits for it to answer. The
+     * services tool asks this BEFORE the person is asked: nothing Genie would refuse is put to them.
+     */
+    async createDatabaseRefusal(id: string, workspaceId: string, database: string): Promise<string | null> {
+        const i = this.#find(id);
+        const problem = this.#createDatabaseProblem(i, workspaceId, database);
+        if (problem) return problem;
+        await this.#ready(i, 'no database was created');
+        return (await this.#databaseExists(i, database)) ? `${i.engine} ${i.version} already has a database named ${database}: it already exists, so nothing was created — choose another name` : null;
+    }
+
+    /**
+     * A second database for a workspace on a SHARED Postgres, owned by the workspace's role, made as the engine's superuser
+     * (core/service-provision.ts `createDatabaseSteps`) and recorded on the workspace's slice. Every refusal of
+     * `createDatabaseRefusal` is checked again here, in the slicing queue, and throws with its words; nothing is recorded
+     * then. Answers the database and its owner.
+     */
+    createDatabase(id: string, workspaceId: string, database: string): Promise<{ database: string; owner: string; instance: ServiceInstance }> {
+        const run = this.#slicing.then(async () => {
+            const refusal = await this.createDatabaseRefusal(id, workspaceId, database);
+            if (refusal) throw new Error(refusal);
+            const i = this.#find(id);
+            const owner = i.slices![workspaceId]!.identifier;
+            for (const step of createDatabaseSteps(i.admin!, database, owner, variantExtensions(i.engine, i.variant))) await this.#step(this.#nameOf(id), `${i.engine} ${i.version}`, owner, step);
+            const current = this.#find(id);
+            const mine = current.slices![workspaceId]!;
+            const updated: ServiceInstance = { ...current, slices: { ...current.slices, [workspaceId]: { ...mine, databases: [...(mine.databases ?? []), database] } } };
+            this.#data = { ...this.#data, instances: this.#data.instances.map((x) => (x.id === id ? updated : x)) };
+            await this.#flush();
+            return { database, owner, instance: updated };
+        });
+        this.#slicing = run.catch(() => undefined);
+        return run;
+    }
+
+    /** The refusals that need no engine: the name, the engine's kind and scope, and whether this workspace uses it. */
+    #createDatabaseProblem(i: ServiceInstance, workspaceId: string, database: string): string | null {
+        const what = `${i.engine}${i.variant ? ` (${i.variant})` : ''} ${i.version}`;
+        const nameProblem = databaseNameProblem(database);
+        if (nameProblem) return `${nameProblem}; nothing was created`;
+        if (i.engine !== 'postgres') return `${what} is not a Postgres: Genie creates a database only on a shared Postgres; nothing was created`;
+        if (i.scope.kind !== 'shared') return `${what} is this workspace’s own engine, not a shared one: its user is that engine’s superuser and creates databases itself; nothing was created`;
+        if (!i.admin || i.slices === undefined) return `${what} is shared with one connection for every workspace: Genie holds no superuser for it to create a database with; nothing was created`;
+        if (!i.slices[workspaceId]) return `this workspace has no database on ${what}, shared: \`services add\` attaches it first; nothing was created`;
+        if (i.detached?.includes(workspaceId)) return `this workspace is detached from ${what}, shared: \`services use\` attaches it again first; nothing was created`;
+        return null;
+    }
+
+    async #databaseExists(i: ServiceInstance, database: string): Promise<boolean> {
+        const step = databaseExistsStep(i.admin!, database);
+        const r = await this.#driver.exec(this.#nameOf(i.id), step.argv);
+        if (r.exitCode !== 0) throw new Error(`${i.engine} ${i.version}: asking whether ${database} exists failed: ${r.stdout.trim() || `exit ${r.exitCode}`}; nothing was created`);
+        return r.stdout.trim() === '1';
     }
 
     async #step(name: string, what: string, identifier: string, step: ProvisionStep): Promise<void> {
