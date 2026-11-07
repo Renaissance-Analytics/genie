@@ -438,7 +438,7 @@ export class KnowledgeStore {
         const { size, offset } = pageOf(input.limit, input.cursor);
         const rows = this.#db
             .prepare(
-                `SELECT n.id, n.title, n.class, n.tags, n.body AS head, length(n.body) AS body_length /* BREAK PROBE 2: whole bodies */
+                `SELECT n.id, n.title, n.class, n.tags, substr(n.body, 1, ${SNIPPET_HEAD}) AS head, length(n.body) AS body_length
                  FROM nodes n WHERE 1 = 1 ${where} ORDER BY n.created_at DESC, n.rowid DESC LIMIT ? OFFSET ?`,
             )
             .all(...params, size + 1, offset) as unknown as Array<Pick<Row, 'id' | 'title' | 'class' | 'tags'> & { head: string; body_length: number }>;
