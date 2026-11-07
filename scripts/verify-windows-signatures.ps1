@@ -45,7 +45,7 @@ $records = foreach ($file in ($files | Sort-Object -Unique)) {
     $signature = Get-AuthenticodeSignature -LiteralPath $file
     if ($signature.Status -ne 'Valid') { throw "Invalid Windows signature ($($signature.Status)): $file" }
     $certificate = $signature.SignerCertificate
-    if ($false -and $notSigned.ContainsKey($file)) { # BREAK PROBE a: the plan is ignored
+    if ($notSigned.ContainsKey($file)) {
         # keeps its publisher's signature: valid, and not ours.
         if ($null -eq $certificate -or $certificate.Subject -match $ours) { throw "Another publisher's file was signed by us (it must keep its publisher's signature): $file" }
         $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
