@@ -1,5 +1,5 @@
 import { Agent as SlideAgent } from '@particle-academy/dark-slide';
-import { Agent as SheetAgent } from '@particle-academy/holy-sheet';
+import { Agent as SheetAgent, ArchiveRefused, ReadLimitExceeded, UnsupportedFormatException, type ReadLimitName } from '@particle-academy/holy-sheet';
 import { Agent as DocAgent } from '@particle-academy/last-word';
 import { csvToWorkbook, workbookFromRead, workbookToCSV, type CellData, type WorkbookData } from '@particle-academy/fancy-sheets';
 import type { Deck } from '@particle-academy/fancy-slides';
@@ -77,8 +77,84 @@ const ODS_READ_ONLY = 'Genie can show .ods files but not save them yet (holy-she
 export function workbookFromBytes(path: string, bytes: Uint8Array): OpenedWorkbook {
     const ext = pluginFileExtension(path);
     if (ext === '.csv') return { workbook: csvToWorkbook(utf8(bytes), sheetNameOf(path)), source: { kind: 'csv' }, readOnly: null };
-    const schema = SheetAgent.read(bytes);
+    let schema: Record<string, unknown>;
+    try {
+        schema = SheetAgent.read(bytes);
+    } catch (error) {
+        throw workbookRefusal(error, bytes) ?? error;
+    }
     return { workbook: workbookFromRead(schema), source: { kind: 'read', schema }, readOnly: ext === '.ods' ? ODS_READ_ONLY : null };
+}
+
+/*
+ * A WORKBOOK HOLY-SHEET REFUSES, IN WORDS (Tynn #399). The editor shows what the read throws as its error line, so a
+ * refusal becomes one sentence: which limit and the count. Never a blank sheet (a DOCTYPE once read as an empty one) and
+ * never a library's own tag or a stack trace. Anything else is left as it was thrown (`null`).
+ */
+const TOO_BIG = 'This workbook is too big to open here: ';
+const count = (n: number): string => Math.round(n).toLocaleString('en-US');
+const mib = (n: number): string => `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+const READ_LIMIT_WORDS: Record<ReadLimitName, (actual: number, max: number) => string> = {
+    maxRows: (a, m) => `a sheet has ${count(a)} rows, and the limit is ${count(m)} rows.`,
+    maxColumns: (a, m) => `a sheet has ${count(a)} columns, and the limit is ${count(m)} columns.`,
+    maxCells: (a, m) => `it has at least ${count(a)} cells, and the limit is ${count(m)} cells.`,
+    maxSharedStrings: (a, m) => `it has ${count(a)} shared strings, and the limit is ${count(m)}.`,
+};
+
+export function workbookRefusal(error: unknown, bytes: Uint8Array): Error | null {
+    if (error instanceof ReadLimitExceeded) return new Error(TOO_BIG + READ_LIMIT_WORDS[error.limit](error.actual, error.max));
+    if (error instanceof UnsupportedFormatException && /DOCTYPE/.test(error.message)) {
+        return new Error('This workbook can’t be opened: one of its parts carries a DOCTYPE, which no spreadsheet has.');
+    }
+    if (error instanceof ArchiveRefused && error.reason === 'archive_limit') return new Error(TOO_BIG + archiveLimitWords(bytes));
+    return null;
+}
+
+/** holy-sheet's archive limits (DEFAULT_ARCHIVE_LIMITS, not exported): one reason for all five, so which one is read here. */
+const ARCHIVE = { maxArchiveBytes: 64 * 1024 * 1024, maxEntries: 16_384, maxPartBytes: 64 * 1024 * 1024, maxExpandedBytes: 256 * 1024 * 1024, maxCompressionRatio: 1_000 };
+
+function archiveLimitWords(bytes: Uint8Array): string {
+    if (bytes.length > ARCHIVE.maxArchiveBytes) return `the file is ${mib(bytes.length)}, and the limit is 64 MiB.`;
+    const entries = zipEntries(bytes);
+    if (entries === null) return 'it is over one of the size limits for a spreadsheet file.';
+    if (entries.length > ARCHIVE.maxEntries) return `it has ${count(entries.length)} parts, and the limit is ${count(ARCHIVE.maxEntries)}.`;
+    const big = entries.find((e) => e.size > ARCHIVE.maxPartBytes);
+    if (big) return `${big.name} unpacks to ${mib(big.size)}, and the limit for one part is 64 MiB.`;
+    const total = entries.reduce((sum, e) => sum + e.size, 0);
+    if (total > ARCHIVE.maxExpandedBytes) return `its parts unpack to ${mib(total)} in all, and the limit is 256 MiB.`;
+    const packed = entries.find((e) => e.size > Math.max(1, e.packed) * ARCHIVE.maxCompressionRatio);
+    if (packed) return `${packed.name} unpacks to ${count(packed.size / Math.max(1, packed.packed))} times its packed size, and the limit is ${count(ARCHIVE.maxCompressionRatio)} times.`;
+    return 'it is over one of the size limits for a spreadsheet file.';
+}
+
+/**
+ * The zip's central directory: each part's name and sizes, as recorded (nothing is unpacked). Bounded: the end record is
+ * looked for in the last 64 KiB + 22 bytes, and at most 65,535 entries are read. `null` when it can't be read (or is zip64).
+ */
+function zipEntries(bytes: Uint8Array): { name: string; size: number; packed: number }[] | null {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let end = -1;
+    for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65_535); i -= 1) {
+        if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
+    }
+    if (end < 0) return null;
+    const total = view.getUint16(end + 10, true);
+    let at = view.getUint32(end + 16, true);
+    if (at === 0xffffffff) return null;
+    const names = new TextDecoder();
+    const out: { name: string; size: number; packed: number }[] = [];
+    for (let n = 0; n < total; n += 1) {
+        if (at + 46 > bytes.length || view.getUint32(at, true) !== 0x02014b50) return null;
+        const packed = view.getUint32(at + 20, true);
+        const size = view.getUint32(at + 24, true);
+        const nameLength = view.getUint16(at + 28, true);
+        const extra = view.getUint16(at + 30, true);
+        const comment = view.getUint16(at + 32, true);
+        if (packed === 0xffffffff || size === 0xffffffff || at + 46 + nameLength > bytes.length) return null;
+        out.push({ name: names.decode(bytes.subarray(at + 46, at + 46 + nameLength)), size, packed });
+        at += 46 + nameLength + extra + comment;
+    }
+    return out;
 }
 
 export function bytesFromWorkbook(path: string, workbook: WorkbookData, source: WorkbookSource): Uint8Array {
