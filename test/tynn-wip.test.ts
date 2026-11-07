@@ -69,6 +69,17 @@ describe('where WIP is read', () => {
         // A lens that is not one is not sent.
         expect(tynnPagePath('p1', 'wip', { view: 'everything' })).toBe('/api/v1/projects/p1/wip');
     });
+
+    it('passes the product filter declared by the WIP contract and encodes identifiers as values', () => {
+        expect(tynnPagePath('p/1', 'wip', { view: 'done', story: 'a&b', product: 'prod/1' })).toBe('/api/v1/projects/p%2F1/wip?view=done&story=a%26b&product=prod%2F1');
+    });
+
+    it('does not accept inherited object keys as lenses or WIP answers', () => {
+        for (const view of ['constructor', 'toString', '__proto__']) {
+            expect(tynnPagePath('p1', 'wip', { view })).toBe('/api/v1/projects/p1/wip');
+            expect(parseWip({ ...ANSWER, view })).toBeNull();
+        }
+    });
 });
 
 describe('WIP going live', () => {

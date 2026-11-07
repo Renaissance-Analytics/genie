@@ -15,8 +15,9 @@ const main = code('../src/main/main.ts');
 
 describe('no raw activation anywhere in src/main', () => {
     it('no window.focus() / restore() / moveTop() / app.focus() — only bringUp may (core/window-activation.ts)', () => {
-        // The process book's restore() is not a window's; it is the only other `.restore()` in src/main.
-        const found = sources.flatMap(({ file, text }) => (text.match(/\b[\w!.]+\.(focus|restore|moveTop)\(\)|\bapp\.focus\(/g) ?? []).filter((m) => m !== 'processBook.restore()').map((m) => `${file}: ${m}`));
+        // The process book's restore() is not a window's; it is the only other `.restore()` in src/main — called
+        // `processBook` in genie-host and `ownBook` in a window's emergency path (the host split, P3.3c).
+        const found = sources.flatMap(({ file, text }) => (text.match(/\b[\w!.]+\.(focus|restore|moveTop)\(\)|\bapp\.focus\(/g) ?? []).filter((m) => m !== 'processBook.restore()' && m !== 'ownBook.restore()').map((m) => `${file}: ${m}`));
         expect(found).toEqual([]);
     });
 
@@ -63,8 +64,8 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
     });
 
     it('a page in a site panel opening a window (window.open, a script, an agent driving the page) is background', () => {
-        const panels = code('../src/main/site-panels-electron.ts');
-        expect(panels).toMatch(/setWindowOpenHandler\(\(\{ url \}\) => \{\s*options\.openInWindow\(url, 'background'\);/);
+        const panels = code('../src/main/site-webview-guard.ts');
+        expect(panels).toMatch(/setWindowOpenHandler\(\(\{ url \}\) => \{\s*ports\.openInWindow\(url, 'background'\);/);
         // Read raw: the line holds `https://`, which the comment strip would cut.
         const raw = readFileSync(new URL('../src/main/site-panels-electron.ts', import.meta.url), 'utf8');
         expect(raw).toMatch(/'site-panel:open-window'[^\n]*options\.openInWindow\(`https:\/\/\$\{key\(host\)\}\/`, 'user-gesture'\)/);
@@ -81,7 +82,8 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
 
 describe('every main-process activation names its gesture', () => {
     it('revealMainWindow takes a reason and is the user-gesture path; it is never handed over bare', () => {
-        expect(main).toMatch(/function revealMainWindow\(reason: string\): void \{\s*if \(!window\) return;\s*bringUp\(window, \{ activation: 'user-gesture', reason/);
+        // With no window (tray-only, P1b) the person's gesture builds one; otherwise it is shown as the user-gesture it is.
+        expect(main).toMatch(/function revealMainWindow\(reason: string\): void \{\s*leftRunning\.set\(false\);\s*if \(!window \|\| window\.isDestroyed\(\)\) \{ mountMainWindow\(true, reason\); return; \}\s*bringUp\(window, \{ activation: 'user-gesture', reason/);
         expect(main.match(/[(,:]\s*revealMainWindow\s*[,)]/g) ?? []).toEqual([]);
     });
 

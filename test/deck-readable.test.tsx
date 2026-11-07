@@ -13,6 +13,7 @@ import type { PendingQuestion } from '../src/main/attention-store.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { Deck } from '../src/renderer/components/Deck.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE DECK'S QUESTIONS, READABLE (the owner, 2026-10-15, with a screenshot of the Deck: "I can't read this. This UI is
@@ -78,7 +79,8 @@ describe('the title is the header, as plain text', () => {
 describe('who asked, where, and how long ago', () => {
     it('the agent’s name, the workspace’s NAME (never its id) and the age from askedAt', () => {
         const html = render(itemsOf([pending()]));
-        expect(html).toMatch(/data-deck-agent="agent_a"[^>]*>atlas</);
+        expect(control(html, 'data-deck-agent="agent_a"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-deck-agent="agent_a"')!.text).toMatch(/^atlas(?![\w])/);
         expect(html).toMatch(new RegExp(`data-deck-workspace="${WS_ID}"[^>]*>Tynn\\.ai<`));
         // The id rides as an attribute; it is never text a person reads.
         expect(html).not.toContain(`>${WS_ID}<`);
@@ -129,7 +131,10 @@ describe('Dismiss on the Deck', () => {
 
     it('every agent question has Dismiss beside Answer; a tool approval does not (control)', () => {
         const html = render([...itemsOf([pending()]), approval], { onDismiss: () => {} });
-        expect(html).toMatch(/data-action="deck-submit"[\s\S]*?data-action="question-dismiss"[^>]*data-deck-dismiss="q_1"[^>]*>Dismiss</);
+        expect(html.indexOf('data-action="question-dismiss"')).toBeGreaterThan(html.indexOf('data-action="deck-submit"'));
+        const dismiss = control(html, 'data-deck-dismiss="q_1"');
+        expect(dismiss).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
+        expect(dismiss!.open).toContain('data-action="question-dismiss"');
         expect((html.match(/data-deck-dismiss="/g) ?? []).length).toBe(1);
         expect(html).not.toContain('data-deck-dismiss="approval:kai"');
     });
@@ -138,7 +143,9 @@ describe('Dismiss on the Deck', () => {
         const old = pending({ id: 'q_old', key: 'k2', askedAt: '2026-10-14T09:00:00.000Z' });
         const fresh = pending({ id: 'q_new', key: 'k3', askedAt: '2026-10-15T11:30:00.000Z' });
         const html = render(itemsOf([old, fresh]), { onDismissOlder: () => {} });
-        expect(html).toMatch(/data-action="deck-dismiss-older"[^>]*data-deck-older="1"[^>]*>Dismiss all older than 1 day \(1\)</);
+        expect(control(html, 'data-deck-older="1"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-deck-older="1"')!.text).toMatch(/^Dismiss all older than 1 day \(1\)(?![\w])/);
+        expect(control(html, 'data-deck-older="1"')!.open).toContain('data-action="deck-dismiss-older"');
         // Control: only fresh questions (and an old APPROVAL, which is not dismissable) — no such button.
         expect(render([...itemsOf([fresh]), approval], { onDismissOlder: () => {} })).not.toContain('deck-dismiss-older');
     });

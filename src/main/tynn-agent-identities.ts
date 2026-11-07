@@ -3,11 +3,22 @@ import { isAcpProvider } from '../core/engine.js';
 import type { AgentRecord } from '../core/identity.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import type { TynnAgentToken, TynnSessionPort } from './tynn-agent-token.js';
+import type { KeychainRead, KeychainResult, SecretName } from './keychain.js';
+import type { MigrationSource, OldRead } from './keychain-migration.js';
 import { preparePrivateCredential, writePrivateCredential } from './private-credentials.js';
 
+/**
+ * WHERE AN AGENT'S KEY IS HELD: the host's keychain (P3.4, genie#1457). The window reaches it over the link
+ * (agent-secrets.ts) and the host directly (`Keychain` is this port). Named by the key's public id, which is no secret.
+ */
+export interface AgentSecrets {
+    probe(): Promise<KeychainResult>;
+    get(name: SecretName): Promise<KeychainRead>;
+    set(name: SecretName, value: string): Promise<KeychainResult>;
+}
 export interface AgentCredentialPorts {
     readonly file: string;
-    readonly cipher: { isAvailable(): boolean; encrypt(text: string): Buffer; decrypt(bytes: Buffer): string };
+    readonly secrets: AgentSecrets;
 }
 type FailureCode = 'offline' | 'inactive' | 'conflict' | 'pending' | 'storage' | 'refused';
 class ProvisionFailure extends Error {
@@ -20,6 +31,7 @@ interface Stored {
     readonly remoteAgentId: string;
     readonly state: 'pending' | 'ready';
     readonly publicId?: string;
+    /** An older Genie's safeStorage copy of the key, until the migration deletes it. Nothing reads it but `legacyKeys`. */
     readonly tokenEnc?: string;
 }
 interface RemoteAgent {
@@ -29,6 +41,7 @@ interface RemoteAgent {
     readonly status: 'active' | 'suspended' | 'archived';
     readonly tokens: readonly { readonly public_id: string; readonly active: boolean; readonly scope_target?: string }[];
 }
+const agentEntry = (publicId: string): SecretName => `tynn/agent/${publicId}`;
 const MCP_URL = `${TYNN_HOST}/mcp/tynn`;
 const RPK = /^rpk_([0-9A-HJKMNP-TV-Z]{26})\.[a-f0-9]{64}$/i;
 const object = (value: unknown): Record<string, unknown> | null => typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -42,14 +55,18 @@ function remoteAgent(value: unknown): RemoteAgent | null {
 
 /** Main-process vault and identity provisioner. No project file supplies or receives an agent credential. */
 export function tynnAgentIdentities(ports: AgentCredentialPorts) {
-    let rows: Promise<Record<string, Stored>> | null = null;
+    /** The file's permissions are made right once. Its contents are read each time: another process may write it (the one-time move). */
+    let prepared = false;
     let writes: Promise<unknown> = Promise.resolve();
     const inFlight = new Map<string, Promise<TynnAgentToken>>();
     const projects = new Map<string, Promise<TynnAgentToken>>();
 
-    const load = (): Promise<Record<string, Stored>> => rows ??= (async () => {
+    const load = async (): Promise<Record<string, Stored>> => {
         let text: string;
-        try { await preparePrivateCredential(ports.file); text = await readFile(ports.file, 'utf8'); }
+        try {
+            if (!prepared) { await preparePrivateCredential(ports.file); prepared = true; }
+            text = await readFile(ports.file, 'utf8');
+        }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be read.'); }
         try {
             const parsed = object(JSON.parse(text));
@@ -57,26 +74,28 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
             if (parsed?.version !== 1 || !records) throw new Error();
             return records as unknown as Record<string, Stored>;
         } catch { throw new ProvisionFailure('storage', 'The private Tynn agent vault is invalid; no new key was requested.'); }
-    })();
+    };
 
     const save = (key: string, record: Stored): Promise<void> => {
         const run = async () => {
             const next = { ...await load(), [key]: record };
             try {
                 await writePrivateCredential(ports.file, JSON.stringify({ version: 1, records: next }));
-                rows = Promise.resolve(next);
             } catch { throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be saved. Review any pending key before trying again.'); }
         };
         const work = writes.then(run, run); writes = work.catch(() => {}); return work;
     };
 
-    /** The stored key, unlocked and checked against its own public id; never a replacement. */
-    const unlock = (known: Stored): string => {
-        let token: string;
-        try { token = ports.cipher.decrypt(Buffer.from(known.tokenEnc ?? '', 'base64')); }
-        catch { throw new ProvisionFailure('storage', 'This agent’s Tynn key cannot be unlocked. No replacement was minted.'); }
-        if (RPK.exec(token)?.[1]?.toLowerCase() !== known.publicId?.toLowerCase()) throw new ProvisionFailure('storage', 'The stored Tynn agent key is invalid.');
-        return token;
+    /** The stored key, from the keychain and checked against its own public id; never a replacement. */
+    const unlock = async (known: Stored): Promise<string> => {
+        if (!known.publicId) throw new ProvisionFailure('storage', 'The stored Tynn agent key is invalid.');
+        const read = await ports.secrets.get(agentEntry(known.publicId));
+        if (read.kind !== 'value') throw new ProvisionFailure('storage', 'This agent’s Tynn key cannot be read from the keychain. No replacement was minted.');
+        if (RPK.exec(read.value)?.[1]?.toLowerCase() !== known.publicId.toLowerCase()) throw new ProvisionFailure('storage', 'The stored Tynn agent key is invalid.');
+        return read.value;
+    };
+    const keychainAnswers = async (message: string): Promise<void> => {
+        if (!(await ports.secrets.probe()).ok) throw new ProvisionFailure('storage', message);
     };
 
     /**
@@ -87,7 +106,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
      */
     async function stored(input: { projectId: string; agent: AgentRecord; signal?: AbortSignal }, userId: string, key: string): Promise<TynnAgentToken> {
         if (input.signal?.aborted) throw new ProvisionFailure('refused', 'Tynn agent credential preparation was cancelled.');
-        if (!ports.cipher.isAvailable()) throw new ProvisionFailure('storage', 'Unlock OS credential encryption before using a Tynn agent credential.');
+        await keychainAnswers('Unlock the keychain before using a Tynn agent credential.');
         const records = await load();
         const known = records[key];
         if (!Object.hasOwn(records, key)) throw new ProvisionFailure('refused', 'Sign in to Tynn before provisioning an agent credential.');
@@ -95,12 +114,12 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
             throw new ProvisionFailure('storage', 'The stored Tynn agent binding is invalid.');
         }
         if (known.state !== 'ready') throw new ProvisionFailure('pending', 'An earlier key request is unconfirmed. Review this agent’s keys in Tynn before issuing another.');
-        return { status: 'already', mcp: { url: MCP_URL, token: unlock(known) }, remoteAgentId: known.remoteAgentId, unverified: true };
+        return { status: 'already', mcp: { url: MCP_URL, token: await unlock(known) }, remoteAgentId: known.remoteAgentId, unverified: true };
     }
 
     async function decide(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal }, userId: string, key: string): Promise<TynnAgentToken> {
         const { projectId, agent, tynn } = input;
-        if (!ports.cipher.isAvailable()) throw new ProvisionFailure('storage', 'Unlock OS credential encryption before provisioning a Tynn agent.');
+        await keychainAnswers('Unlock the keychain before provisioning a Tynn agent.');
         const currentAccount = () => {
             if (input.signal?.aborted) throw new ProvisionFailure('refused', 'Tynn agent credential preparation was cancelled.');
             if (!tynn?.status().signedIn || tynn.userId?.() !== userId) throw new ProvisionFailure('refused', 'The Tynn account changed. Check the account before provisioning this agent.');
@@ -154,7 +173,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         if (known) {
             const live = remote.tokens.find((t) => t.public_id.toLowerCase() === known.publicId?.toLowerCase());
             if (!live?.active || (live.scope_target !== undefined && live.scope_target !== 'mcp')) throw new ProvisionFailure('inactive', 'This agent’s Tynn key was revoked, expired or changed. Explicit renewal is required.');
-            const token = unlock(known);
+            const token = await unlock(known);
             currentAccount();
             return { status: 'already', mcp: { url: MCP_URL, token }, remoteAgentId: remote.id };
         }
@@ -169,15 +188,37 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
             throw new ProvisionFailure('pending', 'Tynn did not confirm the expected agent key. Review the pending key before trying again.');
         }
         currentAccount();
-        let tokenEnc: string;
-        try { tokenEnc = ports.cipher.encrypt(token).toString('base64'); }
-        catch { throw new ProvisionFailure('pending', 'The issued Tynn key could not be encrypted. Review the pending key before trying again.'); }
-        await save(key, { ...binding, state: 'ready', publicId, tokenEnc });
+        const held = await ports.secrets.set(agentEntry(publicId), token).catch(() => ({ ok: false }));
+        if (!held.ok) throw new ProvisionFailure('pending', 'The issued Tynn key could not be kept in the keychain. Review the pending key before trying again.');
+        await save(key, { ...binding, state: 'ready', publicId });
         currentAccount();
         return { status: 'minted', mcp: { url: MCP_URL, token }, remoteAgentId: remote.id };
     }
 
     return {
+        /** The keys an older Genie sealed with safeStorage, for the one-time move (keychain-migration.ts). Only a window can open them. */
+        async legacyKeys(cipher: { decrypt(bytes: Buffer): string }): Promise<MigrationSource[]> {
+            const records = await load();
+            return Object.entries(records).filter(([, row]) => object(row) && typeof row.tokenEnc === 'string' && typeof row.publicId === 'string').map(([key, row]) => ({
+                name: agentEntry(row.publicId!),
+                old: {
+                    read: async (): Promise<OldRead> => {
+                        const now = (await load())[key];
+                        if (!now?.tokenEnc) return { kind: 'none' };
+                        try {
+                            const token = cipher.decrypt(Buffer.from(now.tokenEnc, 'base64'));
+                            return RPK.exec(token)?.[1]?.toLowerCase() === now.publicId?.toLowerCase() ? { kind: 'value', value: token } : { kind: 'unreadable' };
+                        } catch { return { kind: 'unreadable' }; }
+                    },
+                    remove: async (): Promise<void> => {
+                        const now = (await load())[key];
+                        if (!now) return;
+                        const { tokenEnc: _gone, ...kept } = now;
+                        await save(key, kept);
+                    },
+                },
+            }));
+        },
         ensure(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal }): Promise<TynnAgentToken> {
             // Signed in: Tynn is asked first, as always. Not (yet) signed in: only the saved account's stored key (genie#1234).
             const signedIn = input.tynn?.status().signedIn === true;

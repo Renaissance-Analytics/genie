@@ -8,6 +8,7 @@ import type { FlowRecord, FlowRun } from '../src/main/flow-store.js';
 import { SERVABLE } from '../src/renderer/bridge.js';
 import { FlowEditorWindow, FlowRunOverlay, ScheduleInspector } from '../src/renderer/components/FlowEditorWindow.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { controlByText } from './helpers/control-markup.js';
 
 /**
  * THE FLOW EDITOR WINDOW (genie#1204 item 1). Genie 1 edited a flow on fancy-flow's canvas in a window of its own
@@ -40,7 +41,7 @@ describe('the editor window', () => {
         const value = props.value as { nodes: Array<{ id: string }> };
         expect(value.nodes.map((x) => x.id)).toEqual(['t', 's', 'k']);
         expect(html).toContain('value="nightly report"');
-        expect(html).toMatch(/<button[^>]*>Save<\/button>/);
+        expect(controlByText(html, 'Save')).toMatchObject({ tag: 'button', fancy: true });
         expect((props.builtins as { run?: boolean }).run).toBe(false);
         expect(props.executors).toBeUndefined();
     });

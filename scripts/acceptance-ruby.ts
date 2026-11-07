@@ -15,7 +15,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RUBY_RECIPES } from '../src/core/ruby-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, type RubyVersionsPorts } from '../src/main/ruby-versions.js';
 import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
@@ -31,12 +32,12 @@ async function main(): Promise<void> {
     nodePhpVersionsFs().mkdirp(root);
     const ports: RubyVersionsPorts = {
         platform: 'linux', arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run, cpus: availableParallelism(),
-        fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = RUBY_RECIPES[0]!.version;
 
     console.log('1. a tampered index');
-    const tampered = await installRubyVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.split('\n').map((l) => { const c = l.split('\t'); if (c.length >= 4 && /^[0-9a-f]{64}$/.test(c[3]!)) c[3] = 'f'.repeat(64); return c.join('\t'); }).join('\n') } : r; } });
+    const tampered = await installRubyVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.split('\n').map((l) => { const c = l.split('\t'); if (c.length >= 4 && /^[0-9a-f]{64}$/.test(c[3]!)) c[3] = 'f'.repeat(64); return c.join('\t'); }).join('\n') } : r; } });
     check(tampered.kind === 'not-installed' && /does not match the sha256 ruby-lang\.org publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : JSON.stringify(tampered));
     check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 

@@ -78,7 +78,7 @@ describe('unread — a view that commits nothing', () => {
     });
 });
 
-describe('read receipts — your receive is the ONLY thing that marks mail read', () => {
+describe('explicit receive read receipts, alongside provider-delivery acknowledgement', () => {
     it('a receive with acknowledge:false leaves mail unread and the cursor where it was', async () => {
         await store.send({ from: a, to: b, text: 'peek' });
 

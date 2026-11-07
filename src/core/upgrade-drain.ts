@@ -18,7 +18,7 @@ export const RESUME_AFTER_RESTART =
 /**
  * The agents in the MIDDLE OF A TURN: a turn in flight by Genie's own record (`AgentSession.inTurn` — a prompt went in, or
  * the agent began a turn itself, and its end has not come). Not `turnState: 'working'`: a session that was only STARTED
- * reads `working` until a turn of its own ends, so every agent the boot relaunch started and nobody spoke to was recorded
+ * read `working` until a turn of its own ended (until 2026-11-01), so every agent the boot relaunch started and nobody spoke to was recorded
  * as interrupted at the next quit and told to continue a turn it never had (genie#1248: 6 agents at 02:48 and 7 at 19:27
  * on 2026-10-26). Restart asks the same question the same way (genie#1238). Unknown (`null`/absent) is not mid-turn.
  */

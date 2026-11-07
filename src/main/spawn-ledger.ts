@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { ProcessInfo, ProcessTree } from '../core/process-tree.js';
-import { leftoversToEnd, sweepLine, type LedgerRecord } from '../core/spawn-ledger.js';
+import { leftoversToEnd, leftoversUnconfirmed, sweepLine, unconfirmedLine, type LedgerRecord } from '../core/spawn-ledger.js';
 import { writeJsonAtomic } from './store.js';
 
 /**
@@ -75,7 +75,10 @@ export class SpawnLedger {
             ended.push(...processes);
             log(sweepLine(record, processes));
         }
-        this.#records = this.#records.filter((r) => r.bootId === this.#bootId);
+        const unconfirmed = leftoversUnconfirmed(previous, table, this.#bootId);
+        for (const { record, running } of unconfirmed) log(unconfirmedLine(record, running));
+        const kept = new Set<LedgerRecord>(unconfirmed.map((u) => u.record));
+        this.#records = this.#records.filter((r) => r.bootId === this.#bootId || kept.has(r));
         this.#save();
         return ended;
     }

@@ -17,9 +17,7 @@ const remote: NonNullable<FeatureData['remote']> = {
     locked: false,
     pin: { code: '482913', expiresAt: Date.now() + 120_000 },
     devices: [],
-    shares: [],
     connections: [],
-    servedLink: null,
     // The switch is on (Tynn #820): these describe a host that listens or tries to.
     enabled: true,
     firewall: false,

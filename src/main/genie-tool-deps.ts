@@ -37,6 +37,7 @@ export interface GenieToolParts {
     readonly roster: () => readonly AgentRecord[];
     /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
     readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
+    readonly refusalForRecipient?: (address: string) => string | null;
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
     readonly liveness?: (agentId: string) => Liveness;
     /** A Take Over terminal's id or a session's key → who is calling; anything else is nobody. */
@@ -50,7 +51,7 @@ export interface GenieToolParts {
     /** openFileForUser (genie#922): the caller's workspace and the path relative to it — main opens Genie's file panel there. */
     readonly openFile: (target: { workspaceId: string; path: string; absolutePath: string; line: number | null }) => Promise<{ ok: true } | { ok: false; reason: string }>;
     /** The `plan` tool: the caller's plan into its own session (`SessionHost.reportPlan`); `false` = no running session. */
-    readonly reportPlan?: (agentId: string, steps: readonly { content: string; status: string }[]) => boolean;
+    readonly reportPlan?: (agentId: string, steps: readonly { content: string; status: string }[]) => boolean | Promise<boolean>;
     /** The `plan` tool's read: the caller's kept plan (the record's `plan`); `null` = none. */
     readonly readPlan?: (agentId: string) => readonly { content: string; status: string }[] | null;
     readonly terminals: TerminalsPort;
@@ -75,6 +76,16 @@ export interface GenieToolParts {
     readonly pages?: { open(): readonly DrivablePage[] };
 }
 
+/**
+ * THE AGENTS GENIE'S TOOLS KNOW (Tynn story #385): every agent the registry holds — the OS agent (genie@system) included.
+ * A tool finds its CALLER here (agentinbox: `roster().find(r => r.id === caller.agentId)`). The window built it from the
+ * snapshot's workspaces, which never include Genie's own workspace, so the OS agent could not find itself and every peer
+ * read unreachable from it. genie-host's roster is its registry's whole list too (host-mcp.ts `records`).
+ */
+export function toolRoster(registry: { listAgents(): readonly AgentRecord[] }): readonly AgentRecord[] {
+    return registry.listAgents();
+}
+
 export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
     const values = () => p.settings.snapshot();
     return {
@@ -83,6 +94,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             attention: p.attention,
             roster: p.roster,
             ...(p.workspaceSlugs ? { workspaceSlugs: p.workspaceSlugs } : {}),
+            ...(p.refusalForRecipient ? { refusalForRecipient: p.refusalForRecipient } : {}),
             ...(p.liveness ? { liveness: p.liveness } : {}),
             resolveCaller: p.resolveCaller,
             workspaceSetting: (workspaceId) => inboxSettingFrom(p.settings.snapshotFor(workspaceId)),

@@ -17,7 +17,7 @@ const ctx: AddressContext = {
 describe('the route', () => {
     it('`inbox=` rides any page — open on the threads, on a thread, on a message — and round-trips', () => {
         for (const text of [
-            'genie://dashboard?group=workspace&inbox=',
+            'genie://dashboard?inbox=',
             'genie://workspace/ws_tynn?inbox=human%7Cagent_atlas',
             'genie://agent/agent_atlas?tab=stream&inbox=msg_123',
             'genie://deck?inbox=',
@@ -30,13 +30,13 @@ describe('the route', () => {
     });
 
     it('closed: no `inbox` at all, and a route without it reads exactly as before (positive control: with it, it is there)', () => {
-        expect(parseRoute('genie://dashboard?group=workspace')).toEqual({ surface: 'dashboard', group: 'workspace', chat: null, pin: null });
+        expect(parseRoute('genie://dashboard?group=workspace')).toEqual({ surface: 'dashboard', chat: null, pin: null });
         expect(formatRoute({ ...parseRoute('genie://deck?inbox='), inbox: null })).toBe('genie://deck');
         expect(parseRoute('genie://deck?inbox=')).toHaveProperty('inbox', '');
     });
 
     it('the old page `genie://inbox` opens the flyout over the Dashboard — there is no inbox page any more', () => {
-        expect(parseRoute('genie://inbox')).toEqual({ surface: 'dashboard', group: 'workspace', chat: null, pin: null, inbox: '' });
+        expect(parseRoute('genie://inbox')).toEqual({ surface: 'dashboard', chat: null, pin: null, inbox: '' });
         expect(parseRoute('genie://inbox?inbox=msg_9')).toMatchObject({ surface: 'dashboard', inbox: 'msg_9' });
     });
 });

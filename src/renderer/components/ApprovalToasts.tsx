@@ -1,6 +1,7 @@
 import { Button, Icon, Input, Toast } from '@particle-academy/react-fancy';
 import { useEffect, useReducer, useState } from 'react';
 import type { OptionTone } from '../../core/approval.js';
+import { ApprovalText } from './ApprovalCard.js';
 import type { DeckItem } from '../../core/deck.js';
 import { EMPTY_TOASTS, TOAST_DEPTH, toastReducer, toastView, type ToastStackView } from '../../core/approval-toasts.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
@@ -77,7 +78,7 @@ function FrontCard({ item, view, onAnswer, onLater, onOpenDeck, notes, onNote }:
                 <span data-approval-toast-workspace="" className="min-w-0 flex-1 truncate">{workspaceOf(item)}</span>
                 {view.total > 1 ? <span data-approval-toast-position="" className="shrink-0 font-mono">{`${view.position} of ${view.total}`}</span> : null}
             </div>
-            <p data-approval-toast-title="" className="mb-2.5 break-words leading-[18px] text-[var(--fg-1)]">{item.title}</p>
+            <p data-approval-toast-title="" className="mb-2.5 whitespace-pre-wrap leading-[18px] text-[var(--fg-1)] [overflow-wrap:anywhere]"><ApprovalText text={item.title} /></p>
             {/* An optional note, sent with Allow or Deny: the agent is told what you said (beta.33 item 16). */}
             {onNote ? <Input data-toast-note={item.id} value={note} onValueChange={(v) => onNote(item.id, v)} size="sm" placeholder={`Note for ${item.agentName ?? 'the agent'} (optional)`} aria-label="Note with your answer" className="mb-2" /> : null}
             <div className="flex items-center gap-2">

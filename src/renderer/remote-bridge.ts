@@ -1,11 +1,21 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
+import { localTerminalClient } from './local-terminal-client.js';
+import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
-import { parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
+import { verifiedBlobClient } from './blob-reader.js';
+import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
+import { localPageClient, localUploadClient } from './local-content-client.js';
+import { filesContentReader, localFilesClient } from './local-files-client.js';
+import { localFilesWatchClient } from './local-files-watch-client.js';
+import { localDraftsClient } from './local-drafts-client.js';
+import { localArtboardClient } from './local-artboard-client.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -32,6 +42,12 @@ export interface RemoteState {
 }
 
 export interface RemoteClient {
+    /** Local connection resources, not yet consumed by a family bridge. */
+    readonly blobs?: BlobClient;
+    readonly uploads?: LocalUploadClient;
+    readonly pages?: PageClient;
+    /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
+    readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
     readonly bridge: GenieBridge;
     readonly ready: Promise<{ ok: true } | { ok: false; reason: string }>;
     state(): RemoteState;
@@ -95,6 +111,8 @@ interface PhonePush {
 }
 
 export function connectRemote(transport: ClientTransport, auth: AuthRequest, label: string, options: RemoteOptions = {}): RemoteClient {
+    let terminalClient: ReturnType<typeof localTerminalClient> | undefined;
+    let filesWatches: ReturnType<typeof localFilesWatchClient> | undefined;
     let state: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null, pairing: null };
     const stateListeners = new Set<(s: RemoteState) => void>();
     const setState = (patch: Partial<RemoteState>) => {
@@ -146,6 +164,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         }
     });
     transport.onClose(() => {
+        filesWatches?.dispose();
+        terminalClient?.dispose();
         // A refused handshake arrives as a close with no welcome and no refused frame: say so, once.
         if (!state.connected) resolveReady({ ok: false, reason: 'the connection closed before the host answered — wrong address, or the host is not listening' });
         setState({ connected: false, driving: false });
@@ -163,7 +183,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         });
 
     /** A read: the host's value, or a rejection with its reason. */
-    const read = async <T>(method: RemoteMethod, ...args: unknown[]): Promise<T> => {
+    const read = async <T>(method: RemoteMethod | ControlMethod, ...args: unknown[]): Promise<T> => {
         const r = await call(method, ...args);
         if (!r.ok) throw new Error(r.reason);
         return r.value as T;
@@ -187,6 +207,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
 
     const phone = options.profile === 'mobile';
+    const local = auth.kind === 'local';
+    let activityView = 0;
     const windows = options.windows ?? new AgentWindows();
 
     /** Bytes staged on the host in chunks under the socket's frame cap; the id a call then names (`{ staged: id }`). */
@@ -224,14 +246,65 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
     const watchers = new Map<string, number>();
 
+    // Native type guards can see bigint or cyclic objects. Keep their refusal order on the host,
+    // and send only string slots (or null), without serializing an invalid object's contents.
+    const ownerText = (value: unknown): string | null => typeof value === 'string' ? value : null;
+    const localOwner: import('./bridge.js').LocalOwnerBridge | undefined = local ? {
+        appInbox: {
+            state: (id) => read('appInbox.state', ownerText(id)),
+            createKey: (id, name) => read('appInbox.createKey', ownerText(id), ownerText(name)),
+            revokeKey: (id, key) => read('appInbox.revokeKey', ownerText(id), ownerText(key)),
+            source: (id, op, kind, source) => read('appInbox.source', ownerText(id), ownerText(op), ownerText(kind), ownerText(source)),
+        },
+        deviceLink: {
+            hosts: () => read('deviceLink.hosts'),
+            forget: (url) => read('deviceLink.forget', ownerText(url)),
+            adopt: (url, token) => read('deviceLink.adopt', ownerText(url), ownerText(token)),
+        },
+        tynnNetwork: {
+            workstations: () => read('tynnNetwork.workstations'),
+            setRole: (id, role, code) => read('tynnNetwork.setRole', ownerText(id), ownerText(role), ownerText(code)),
+            shares: {
+                list: (id) => read('tynnNetwork.shares.list', ownerText(id)),
+                mint: (input) => {
+                    // The native handler read exactly these fields; unrelated object contents never reached mintShareLink.
+                    const i = (input ?? {}) as { workspaceId?: unknown; capability?: unknown; expiresInDays?: unknown };
+                    return read('tynnNetwork.shares.mint', { workspaceId: ownerText(i.workspaceId),
+                        capability: i.capability === 'readonly' ? 'readonly' : 'control', expiresInDays: typeof i.expiresInDays === 'number' ? i.expiresInDays : 7 });
+                },
+                revoke: (id) => read('tynnNetwork.shares.revoke', ownerText(id)),
+            },
+        },
+    } : undefined;
     const bridge: GenieBridge = {
         snapshot: () => read<GenieSnapshot>('snapshot'),
         subscribe: (onChange) => on('snapshot', (p) => onChange(p as GenieSnapshot)),
         // The Dashboard's lanes (beta.33 item 10): the host's feeds, read once and pushed after (a guest: its workspace's).
         activity: {
             feeds: (workspaceId) => read<Record<string, ActivityFeed>>('activity', workspaceId),
-            subscribe: (onFeed) => on('activity', (p) => onFeed(p as ActivityFeed)),
+            subscribe: (onFeed) => {
+                if (!local) return on('activity', (p) => onFeed(p as ActivityFeed));
+                const viewId = `activity-${++activityView}`;
+                const off = on(LOCAL_EVENTS.activity, (p) => onFeed(p as ActivityFeed));
+                void call('activity.watch', viewId).then((r) => { if (!r.ok) setState({ lastRefusal: r.reason }); });
+                let live = true;
+                return () => {
+                    if (!live) return;
+                    live = false; off();
+                    void call('activity.unwatch', viewId).then((r) => { if (!r.ok) setState({ lastRefusal: r.reason }); });
+                };
+            },
         },
+        ...(local ? {
+            accountRetry: (agentId: string) => answer<{ ok: true } | { ok: false; reason: string }>('accountRetry', agentId),
+            onHeadroom: (listener: (room: Readonly<Record<string, Headroom>>) => void) => {
+                let live = true;
+                const off = on(LOCAL_EVENTS.headroom, (p) => listener(p as Readonly<Record<string, Headroom>>));
+                // Native subscriptions also read once, and ignore an unavailable initial read.
+                void read<Readonly<Record<string, Headroom>>>('headroom').then((room) => { if (live) listener(room); }, () => {});
+                return () => { live = false; off(); };
+            },
+        } : {}),
         agentDetail: (agentId) => (phone ? watch(agentId) : read<AgentDetail | null>('agentDetail', agentId)),
         subscribeAgent: (agentId, onChange) => {
             if (!phone) return on(`agent:${agentId}`, (p) => onChange(p as AgentDetail | null));
@@ -308,6 +381,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             settings: (workspaceId) => answer('workspaces.settings', workspaceId),
             setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
             resetSetting: (workspaceId, key) => answer('workspaces.resetSetting', workspaceId, key),
+            ...(auth.kind === 'local' ? { onSettingsChanged: (listener: (id: string) => void) => on('workspace-settings-changed', (id) => listener(id as string)) } : {}),
             setGoverns: (workspaceId, childIds) => answer('workspaces.setGoverns', workspaceId, [...childIds]),
             setDefaultAgent: (workspaceId, agentId) => answer('workspaces.setDefaultAgent', workspaceId, agentId),
             setColor: (workspaceId, color) => answer('workspaces.setColor', workspaceId, color),
@@ -317,7 +391,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             previewDelete: (agentId, outcome, also) => answer('agents.previewDelete', agentId, outcome, [...also]),
             delete: (agentId, outcome, also, handoff) => answer('agents.delete', agentId, outcome, [...also], handoff === true),
             switchDriver: (agentId, to) => answer('agents.switchDriver', agentId, to),
-            setBudget: (agentId, usd) => answer('agents.setBudget', agentId, usd),
+            setBudget: (agentId, usd) => {
+                // JSON arrays would turn these into null, which means an explicit clear.
+                if (usd === undefined || (typeof usd === 'number' && !Number.isFinite(usd))) return Promise.resolve({ ok: false, reason: 'a budget is a finite non-negative number of dollars, or null to clear it' });
+                return answer('agents.setBudget', agentId, usd);
+            },
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),
             setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
             setAutoApprove: (agentId, on) => answer('agents.setAutoApprove', agentId, on),
@@ -325,9 +403,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setDrivePages: (agentId, on) => answer('agents.setDrivePages', agentId, on),
             setIssueWatch: (agentId, setting) => answer('agents.setIssueWatch', agentId, setting),
             setPermissions: (agentId, permissions) => answer('agents.setPermissions', agentId, permissions),
-            setModel: (agentId, model) => answer('agents.setModel', agentId, model),
+            setModel: (agentId, model) => model === undefined
+                ? Promise.resolve({ ok: false, reason: 'a model is a name, or null for the provider default' })
+                : answer('agents.setModel', agentId, model),
             models: (agentId, refresh) => answer('agents.models', agentId, refresh === true),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
+            toolOutput: (agentId, toolCallId) => answer('agents.toolOutput', agentId, toolCallId),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: phone ? {
@@ -340,12 +421,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 if (!staged.ok) return staged;
                 return answer('files.upload', workspaceId, dir, { staged: staged.id }) as never;
             },
-        } : NO_FILES,
+        } : { ...NO_FILES },
         // A phone's upload (§6.8): the bytes ride the socket; the host copies them into the inbox and drops the temp file.
         uploads: { sendFile: (to, text, name, base64) => answer<{ ok: true; messageId: string }>('inbox.sendFile', to, text, name, base64) },
         terminals: {
-            // Another machine's previous session is not this window's to seed.
-            previousSession: async () => null,
             open: (workspaceId, options) => read('terminals.open', workspaceId, options),
             write: (id, data) => fire('terminals.write', id, data),
             resize: (id, cols, rows) => fire('terminals.resize', id, cols, rows),
@@ -383,10 +462,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         } : {}),
         updates: {
             state: () => read<UpdateState>('updates.state'),
-            subscribe: (onChange) => on('updates', (p) => onChange(p as UpdateState)),
+            subscribe: (onChange) => on(local ? LOCAL_EVENTS.updates : 'updates', (p) => onChange(p as UpdateState)),
             check: () => read<UpdateState>('updates.check'),
             download: () => read<boolean>('updates.download'),
             install: () => read<{ report: string } | null>('updates.install'),
+            ...(local ? { notes: () => read<UpdateState | null>('updates.notes') } : {}),
         },
     };
 
@@ -410,8 +490,45 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
     };
 
+    const blobRead = async <T>(method: ControlMethod | RemoteMethod, ...args: unknown[]): Promise<T> => {
+        const started = await ready;
+        if (!started.ok) throw new Error(started.reason);
+        if (!state.connected) throw new Error('the blob connection closed');
+        return read<T>(method, ...args);
+    };
+    const blobs = local ? verifiedBlobClient({
+        open: (kind, ref) => blobRead<BlobInfo>('blob.open', kind, ref),
+        read: (id, offset, length) => blobRead<BlobChunk>('blob.read', id, offset, length),
+        // Disconnect already releases the server's resources; never wait on a closed frame stream.
+        close: id => state.connected ? blobRead<{ closed: boolean }>('blob.close', id) : Promise.resolve({ closed: false }),
+    }) : undefined;
+    const uploads = local ? localUploadClient({
+        begin: input => blobRead<LocalUploadInfo>('localUpload.begin', input),
+        chunk: (id, index, base64) => blobRead<{ received: number }>('localUpload.chunk', id, index, base64),
+        abort: id => state.connected ? blobRead<{ aborted: boolean }>('localUpload.abort', id) : Promise.resolve({ aborted: false }),
+    }) : undefined;
+    const pages = local ? localPageClient({
+        open: (kind, ref) => blobRead<MetadataPage>('page.open', kind, ref),
+        next: cursor => blobRead<MetadataPage>('page.next', cursor),
+        close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
+    }) : undefined;
+    if (local) {
+        terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on });
+        bridge.terminals = terminalClient.terminals;
+        bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
+        bridge.chatDrafts = localDraftsClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
+        const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
+        Object.assign(bridge.files, files.files); bridge.repo = files.repo;
+        filesWatches = localFilesWatchClient({ read: blobRead, decode: filesContentReader({ release: ref => blobRead('content.release', ref), blobs: blobs!, pages: pages! }), on: listener => on(LOCAL_EVENTS.files, listener), refusal: reason => setState({ lastRefusal: reason }) });
+        Object.assign(bridge.files, filesWatches.files);
+    }
+
     return {
         bridge,
+        ...(blobs ? { blobs } : {}),
+        ...(uploads ? { uploads } : {}),
+        ...(pages ? { pages } : {}),
+        ...(localOwner ? { localOwner } : {}),
         ready,
         state: () => state,
         onState: (l) => { stateListeners.add(l); return () => { stateListeners.delete(l); }; },

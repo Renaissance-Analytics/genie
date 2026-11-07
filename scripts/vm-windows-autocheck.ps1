@@ -106,6 +106,7 @@ try {
 
     Step "launch the installed $current; NOBODY asks it to check"
     $env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.mjs"
+    $env:GENIE_PAGE_PROBE = '1'
     Run 'node scripts\smoke-seed.mjs'
     Remove-Item -Force -ErrorAction SilentlyContinue installed-out.log, installed-err.log
     $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `

@@ -1,5 +1,6 @@
 import type { WorkstationRole } from '../core/workstation-role.js';
 import type { TailscaleStatus } from '../main/tailscale-cli.js';
+import type { KeyringView } from '../main/linux-keyring.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
 import type { AgentFilesReport } from '../core/agent-files-health.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
@@ -22,7 +23,6 @@ import type { NodeVersionsView } from '../main/node-versions.js';
 import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
-import type { ShareLink } from '../core/remote.js';
 import type { PairRequest } from '../core/pair-confirm.js';
 import type { AnnotatedRow, SyncResult } from '../core/integrations.js';
 import type { GithubView } from '../core/github.js';
@@ -33,6 +33,7 @@ export type { FrontDoorStatus };
 import type { HostedProcess } from '../main/process-book.js';
 import type { RestartPolicy } from '../main/process-supervisor.js';
 import type { InboxMessage } from '../main/inbox-store.js';
+import type { AskedRecord } from '../main/attention-store.js';
 import type { ThreadSummary } from '../core/inbox-threads.js';
 
 /**
@@ -49,6 +50,10 @@ export interface InboxSection {
     readonly uncollected?: number | undefined;
     readonly thread?: InboxThreadView | null | undefined;
     readonly servedAttachment?: { id: string; name: string; base64: string } | null | undefined;
+    /** A thread search's answer: the newest hits (at most INBOX_SEARCH_MAX) and how many there are. */
+    readonly search?: InboxSearchResult | null | undefined;
+    /** A decided question's record, or `record: null` when none is kept. */
+    readonly question?: { id: string; record: AskedRecord | null } | null | undefined;
 }
 
 /** One thread's history as the `inbox.thread` action answers it: the newest `limit`, and whether older ones exist. */
@@ -59,6 +64,17 @@ export interface InboxThreadView {
     readonly limit: number;
     /** The message the thread was opened on (a chat's mail row), when it was. */
     readonly focus: string | null;
+    /** Newer mail exists after the window (it was asked `fromSeq`/`beforeSeq`, or the buffer's newest end was trimmed). */
+    readonly newer?: boolean | undefined;
+}
+
+/** A thread search, answered host-side over the thread's stored mail: newest hits first. */
+export interface InboxSearchResult {
+    readonly key: string;
+    readonly query: string;
+    readonly hits: readonly InboxMessage[];
+    /** Every match, including those past the hits served. */
+    readonly total: number;
 }
 
 /**
@@ -144,7 +160,7 @@ export interface KnowledgeAdded {
     readonly unresolved: readonly { ref: string; reason: 'ambiguous' | 'missing' }[];
 }
 
-/** Remote access (§6.8) as the host sees it. `servedLink` is in the answer to a mint ONLY — never in a pushed snapshot. */
+/** Remote access (§6.8) as the host sees it. Sharing is a Tynn link (tynn-share-links.ts), not part of this section. */
 export interface RemoteSection {
     readonly host: string;
     readonly url: string | null;
@@ -155,9 +171,7 @@ export interface RemoteSection {
     readonly devices: readonly Device[];
     /** "Pair this device?" waiting for Allow on this screen (q_8c07b142); always empty for a remote window. */
     readonly pairRequests?: readonly PairRequest[] | undefined;
-    readonly shares: readonly ShareLink[];
     readonly connections: readonly { id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }[];
-    readonly servedLink: { id: string; url: string } | null;
     /** The `remote_access` switch (Tynn #820): off = nothing listens, whatever Tailscale says. */
     readonly enabled: boolean;
     /** Windows: the firewall rule can be added here (Genie 1's allowFirewall). */
@@ -197,6 +211,10 @@ export interface IntegrationsSection {
     readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly { name: string; description: string }[] };
     /** What the sync last did to each workspace's agent files: current, upgraded, or failed (absent before the first sync). */
     readonly agentFiles?: readonly AgentFilesReport[];
+    /** Linux with no keyring: the card (main/linux-keyring.ts), null when the keyring is fine or off Linux. */
+    readonly keyring?: KeyringView | null;
+    /** What an unlock set going, said on screen — the Genie browser restarting (Tynn story #388); null/absent = nothing. */
+    readonly keyringNotice?: string | null;
 }
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */
@@ -274,13 +292,20 @@ export interface ToolchainSection {
 }
 
 export interface FeatureData {
+    /**
+     * Main's number for this snapshot, taken when it was started (genie#1393). Absent from a host on an older Genie. The
+     * window keeps the newest one ({@link newestSnapshot}): a push and a click's answer race.
+     */
+    readonly seq?: number;
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     /**
      * `saved`: what the canvas's last `flows.saveGraph` did (genie#1204) — served in the answer to that action only, never
      * in a pushed snapshot: the flow it saved (and whether the save disarmed it), or the problems, each on its node.
      */
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null; saved?: FlowSaved | null; toolKinds?: readonly import('@particle-academy/fancy-flow/engine').NodeKindDefinition[] } | null;
-    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus } | null;
+    /** Workspaces waiting for the person's yes. Absent = none. */
+    readonly trust?: readonly TrustStepView[];
+    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus; /** What the hosting was started without (genie-host's launch inputs), each with its reason. */ problems?: readonly string[] } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
     readonly toolchain: ToolchainSection | null;
@@ -297,6 +322,32 @@ export interface FeatureData {
     readonly whatsNew?: { version: string; notes: string } | null;
     /** The running version (Tynn #763: the header shows it); absent/`null` = not known yet. */
     readonly version?: string | null;
+}
+
+/**
+ * The snapshot the window should show (genie#1393): the NEWER of the two by main's number. A push and a click's answer
+ * race, and the one that lands last is not always the one built last; showing it left a running site reading
+ * `starting` until something else pushed. One without a number (a remote host on an older Genie) is taken as it comes.
+ */
+export function newestSnapshot(current: FeatureData, next: FeatureData): FeatureData {
+    if (current.seq === undefined || next.seq === undefined) return next;
+    return next.seq >= current.seq ? next : current;
+}
+
+/** What a feature action came to, for a control that shows its progress (renderer/site-actions.ts). */
+export type ActOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+
+/** A workspace not trusted yet: what would run, for the person to say yes to. */
+export interface TrustStepView {
+    readonly workspaceId: string;
+    readonly changed: boolean;
+    readonly list: {
+        readonly sites: readonly { readonly key: string; readonly fingerprint: string; readonly runs: string; readonly folder: string; readonly npmScript: string | null }[];
+        readonly hooks: readonly { readonly file: string; readonly event: string; readonly command: string }[];
+        readonly servers: readonly { readonly file: string; readonly name: string; readonly command: string }[];
+        readonly gitKeys: readonly { readonly key: string; readonly value: string }[];
+        readonly approvals: readonly string[];
+    };
 }
 
 /** First paint: nothing has been asked yet. */
@@ -322,6 +373,12 @@ export type FeatureAction =
     /** One repo's IssueWatch switch in Tynn (watch it; include a fork's upstream) — one field at a time. */
     | { kind: 'issueWatch.setRepo'; workspaceId: string; owner: string; repo: string; enabled?: boolean; includeUpstream?: boolean }
     | { kind: 'whatsNew.show' }
+    /** "Leave safe mode" (Tynn #386): genie-host's leave. Starts nothing; automatic behaviour is back on. */
+    | { kind: 'safeMode.leave' }
+    // The reopened-window notice (Tynn #386): forget it, or stop every agent (the person's choice, after a second hang).
+    | { kind: 'hangNotice.dismiss' }
+    | { kind: 'rendererNotice.dismiss' }
+    | { kind: 'hangNotice.stopAll' }
     | { kind: 'whatsNew.close'; version: string }
     | { kind: 'knowledge.search'; query: string }
     | { kind: 'knowledge.openAdd'; workspaceId?: string }
@@ -460,7 +517,11 @@ export type FeatureAction =
     | { kind: 'inbox.send'; to: string; text: string; attachments?: readonly string[] }
     | { kind: 'inbox.markRead'; messageId: string }
     /** A thread's history, by its key or by a message in it; answered in `inbox.thread`, never pushed. */
-    | { kind: 'inbox.thread'; key?: string; messageId?: string; limit: number }
+    | { kind: 'inbox.thread'; key?: string; messageId?: string; limit: number; beforeSeq?: number; fromSeq?: number }
+    /** Search one thread's STORED mail host-side (text, sender, question ids); answered in `inbox.search`, never pushed. */
+    | { kind: 'inbox.search'; key: string; query: string }
+    /** The questions a decided ForceTheQuestion asked, by its id; answered in `inbox.question`, never pushed. */
+    | { kind: 'inbox.question'; questionId: string }
     | { kind: 'inbox.markAllRead' }
     /** An attachment's bytes for the person, answered once in `inbox.servedAttachment`. */
     | { kind: 'inbox.attachment'; attachmentId: string }
@@ -487,12 +548,12 @@ export type FeatureAction =
     | { kind: 'tailscale.up' }
     /** Install Tailscale: its own signed installer on Windows, its download page elsewhere (Genie 1's tailscale.install). */
     | { kind: 'tailscale.install' }
-    /** Mint a share link for one workspace. Its URL comes back in THIS answer only. */
-    | { kind: 'remote.mintShare'; workspaceId: string; grantedTo: string; expiresInMs: number }
-    | { kind: 'remote.revokeShare'; shareId: string }
     /** Sign in to Tynn with a token; an empty token signs out. */
     | { kind: 'integrations.tynnSignIn' }
     | { kind: 'integrations.tynnCode'; code: string }
+    /** The keyring card's one button: install, start, restart Genie or check again, whichever comes next. */
+    | { kind: 'keyring.fix' }
+    | { kind: 'keyring.cancel' }
     | { kind: 'integrations.tynnSignOut' }
     /** GitHub (beta.33 item 25; Genie 1's): sign in with the device flow, cancel it, read GitHub again, open one of its pages, sign out. */
     | { kind: 'integrations.githubSignIn' }
@@ -501,6 +562,8 @@ export type FeatureAction =
     | { kind: 'integrations.githubOpen'; target: { page: 'install' } | { page: 'device' } | { page: 'authorizations' } | { page: 'installation'; installationId: number } }
     | { kind: 'integrations.githubSignOut' }
     | { kind: 'workspace.syncAgentFiles'; workspaceId: string; workspacePath: string }
+    /** The person's yes to what a workspace would run. */
+    | { kind: 'workspace.trust'; workspaceId: string; workspacePath: string }
     /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
     | { kind: 'plugins.setEnabled'; id: string; enabled: boolean };
 

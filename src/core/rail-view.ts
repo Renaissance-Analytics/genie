@@ -61,7 +61,7 @@ export interface RailItem {
     asleep?: boolean;
     /** Its colour (genie#1300); absent = none known yet, and no swatch is drawn. */
     color?: string;
-    /** GENIE 1'S ROW (core/rail-indicators.ts): agents mid-turn (`null` = not read yet), and the process / site tones. */
+    /** GENIE 1'S ROW (core/rail-indicators.ts): agents working (`null` = not read yet), and the process / site tones. */
     working?: number | null;
     processes?: ProcessTone;
     processesTitle?: string;

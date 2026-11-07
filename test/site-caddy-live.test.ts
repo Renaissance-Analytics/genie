@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { request } from 'node:http';
 import { createServer, connect } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
@@ -57,7 +57,7 @@ describe.skipIf(!bin)('a static site’s Caddy, as Genie writes it, under the re
         writeFileSync(join(repo, 'public', 'index.html'), `<!doctype html><p>${token}</p>\n`);
         const port = await freePort();
         const file = join(repo, 'Caddyfile');
-        writeFileSync(file, serveCaddyfile({ sitePort: port, repoPath: repo, serve: { mode: 'static', root: 'public', spa: false } })!);
+        writeFileSync(file, serveCaddyfile({ sitePort: port, repoPath: repo, serve: { mode: 'static', root: 'public', spa: false }, storageDir: join(repo, 'caddy-data') })!);
 
         const caddy = spawn(bin!, ['run', '--config', file, '--adapter', 'caddyfile'], { stdio: 'ignore' });
         procs.push(caddy);
@@ -77,6 +77,54 @@ describe.skipIf(!bin)('a static site’s Caddy, as Genie writes it, under the re
         expect(outside).not.toBeNull();
         expect(await reachable(outside!, port)).toBe(false);
     }, 30_000);
+});
+
+/**
+ * Caddy's DEFAULT storage is where it cleans and locks when nothing names another (%AppData%\Caddy on Windows,
+ * ~/.local/share/caddy on Linux) — and XDG_DATA_HOME, when set, overrides it on every OS (caddy.AppDataDir). So the
+ * "default" is pointed at a temp dir here, and three site Caddys start TOGETHER the way Genie's boot starts them.
+ */
+describe.skipIf(!bin)('site Caddys started together, under the real Caddy', () => {
+    const startThree = async (render: (port: number, repo: string, storageDir: string) => string) => {
+        const shared = mkdtempSync(join(tmpdir(), 'genie2-caddy-default-'));
+        dirs.push(shared);
+        const ports: number[] = [];
+        const storages: string[] = [];
+        for (let i = 0; i < 3; i++) {
+            const repo = mkdtempSync(join(tmpdir(), 'genie2-site-'));
+            dirs.push(repo);
+            mkdirSync(join(repo, 'public'));
+            writeFileSync(join(repo, 'public', 'index.html'), `<p>site ${i}</p>\n`);
+            const port = await freePort();
+            const storageDir = join(repo, 'caddy-data');
+            const file = join(repo, 'Caddyfile');
+            writeFileSync(file, render(port, repo, storageDir));
+            ports.push(port);
+            storages.push(storageDir);
+            procs.push(spawn(bin!, ['run', '--config', file, '--adapter', 'caddyfile'], { stdio: 'ignore', env: { ...process.env, XDG_DATA_HOME: shared, XDG_CONFIG_HOME: shared } }));
+        }
+        for (const port of ports) {
+            let up = false;
+            for (let i = 0; i < 50 && !up; i++) { up = await reachable('127.0.0.1', port); if (!up) await new Promise((r) => setTimeout(r, 200)); }
+            expect(up).toBe(true);
+        }
+        // The start-time clean runs in the background after "serving": give it time to reach the storage.
+        await new Promise((r) => setTimeout(r, 2000));
+        return { defaultDir: join(shared, 'caddy'), storages };
+    };
+
+    it('CONTROL — a Caddyfile naming no storage: the start-time clean reaches the shared default (its storage_clean lock / last_clean.json)', async () => {
+        const { defaultDir } = await startThree((port, repo) => serveCaddyfile({ sitePort: port, repoPath: repo, serve: { mode: 'static', root: 'public', spa: false }, storageDir: '/unused' })!
+            .split('\n').filter((l) => !/^\t(storage|storage_clean_interval|persist_config) /.test(l)).join('\n'));
+        expect(existsSync(join(defaultDir, 'last_clean.json')) || existsSync(join(defaultDir, 'locks', 'storage_clean.lock'))).toBe(true);
+    }, 40_000);
+
+    it('Genie’s Caddyfile: nothing is cleaned, locked or autosaved in the shared default — each Caddy keeps to its own storage', async () => {
+        const { defaultDir } = await startThree((port, repo, storageDir) => serveCaddyfile({ sitePort: port, repoPath: repo, serve: { mode: 'static', root: 'public', spa: false }, storageDir })!);
+        expect(existsSync(join(defaultDir, 'locks', 'storage_clean.lock'))).toBe(false);
+        expect(existsSync(join(defaultDir, 'last_clean.json'))).toBe(false);
+        expect(existsSync(join(defaultDir, 'autosave.json'))).toBe(false);
+    }, 40_000);
 });
 
 describe('when the real Caddy is not here', () => {

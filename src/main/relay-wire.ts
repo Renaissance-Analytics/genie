@@ -132,9 +132,9 @@ export function hostHelloSigningString(h: { workstationId: string; fingerprint: 
     return `genie-relay-host-hello\n${h.workstationId}.${h.fingerprint}.${h.nonce}.${h.ts}`;
 }
 
-export function buildTicketHostHello(opts: { ticket: string; workstationId: string; fingerprint: string; sign: (data: Buffer) => Buffer; now?: number }): TicketHostHello {
+export async function buildTicketHostHello(opts: { ticket: string; workstationId: string; fingerprint: string; sign: (data: Buffer) => Buffer | Promise<Buffer>; now?: number }): Promise<TicketHostHello> {
     const base = { workstationId: opts.workstationId, fingerprint: opts.fingerprint, nonce: randomBytes(16).toString('hex'), ts: opts.now ?? Date.now() };
-    return { type: 'host-hello', ...base, ticket: opts.ticket, sig: opts.sign(Buffer.from(hostHelloSigningString(base), 'utf8')).toString('base64url') };
+    return { type: 'host-hello', ...base, ticket: opts.ticket, sig: (await opts.sign(Buffer.from(hostHelloSigningString(base), 'utf8'))).toString('base64url') };
 }
 
 // ---- the socket -------------------------------------------------------------------------------------------------------

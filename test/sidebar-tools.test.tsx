@@ -58,7 +58,7 @@ describe('collapsed', () => {
             expect(html).toContain(`data-nav="${route}"`);
         }
         expect(html).toMatch(/data-nav="genie:\/\/workspace\/tynn"[^>]*title="tynn"/);
-        expect(html).toContain('data-deck-dot=""');
+        expect(html.match(/<button[^>]*data-nav="genie:\/\/deck"[\s\S]*?<\/button>/)?.[0] ?? '').toContain('data-react-fancy-sidebar-dot=""');
         expect(html).toContain('data-rail-tool="add-workspace"');
         // the labels are not drawn — the rail is narrow — but each control is still named for a screen reader
         expect(html).not.toContain('>Dashboard</span>');

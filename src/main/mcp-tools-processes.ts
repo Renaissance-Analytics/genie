@@ -4,6 +4,7 @@ import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import { describeSchedule, type ScheduleKind } from '../core/scheduled-task.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
+import type { ProcessBookApi } from './processes-host.js';
 import type { RunNowResult } from './process-scheduler.js';
 import type { RestartPolicy } from './process-supervisor.js';
 
@@ -38,7 +39,7 @@ export type ProcessApproval = 'processes.add' | 'processes.remove';
 
 /** What the tool acts on: the book (kept processes) and the supervisor's log tail. Main wires the real ones. */
 export interface ProcessesPort {
-    readonly book: Pick<ProcessBook, 'list' | 'prepare' | 'create' | 'start' | 'stop' | 'restart' | 'remove' | 'enableSchedule' | 'pauseSchedule'>;
+    readonly book: Pick<ProcessBookApi, 'list' | 'prepare' | 'create' | 'start' | 'stop' | 'restart' | 'remove' | 'enableSchedule' | 'pauseSchedule'>;
     readonly logs: (id: string, lines?: number) => ProcessLog | null;
     /** A scheduled task's Run now (process-scheduler.ts). Absent = no scheduler here, and `run-now` says so. */
     readonly runNow?: (id: string) => Promise<RunNowResult>;
@@ -176,7 +177,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                                 restart: 'never' as const,
                                 schedule: { cron, kind, prompt: str(args.prompt), agent: str(args.agent) },
                             };
-                            const ready = port.book.prepare(input);
+                            const ready = await port.book.prepare(input);
                             const what = kind === 'agent-nudge' ? `nudges ${str(args.agent)} with “${str(args.prompt)}”` : `runs \`${ready.command}\` in ${ready.cwd}`;
                             const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: ${describeSchedule(cron)} (${cron}) it ${what}. It will keep running on this schedule, without asking again, until you pause it.`, context);
                             if (verdict !== 'allowed') return err(`scheduling ${ready.name} was denied by the person; nothing was kept`);
@@ -196,7 +197,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                             restart: (args.restart as RestartPolicy | undefined) ?? 'on-failure',
                         };
                         // The book's own checks, BEFORE anyone is asked: a request Genie would refuse is never put to the person.
-                        const ready = port.book.prepare(input);
+                        const ready = await port.book.prepare(input);
                         const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: \`${ready.command}\` in ${ready.cwd}, restart ${ready.restart} — Genie starts it now and brings it back on every launch until it is stopped`, context);
                         if (verdict !== 'allowed') return err(`adding ${ready.name} was denied by the person; nothing was started or kept`);
                         const status = await port.book.create(input);

@@ -1,3 +1,4 @@
+import { writeGenieInstructions } from './genie-instructions.js';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
@@ -76,6 +77,7 @@ export class DoctorRun {
     readonly #o: DoctorRunOptions;
     #opened: Promise<Opened> | null = null;
     #current: AgentRecord | null = null;
+    #asUntrusted = false;
 
     constructor(options: DoctorRunOptions) {
         this.#o = options;
@@ -158,6 +160,10 @@ export class DoctorRun {
                 ...(this.#o.driverFor ? { driverFor: this.#o.driverFor } : {}),
                 ...(this.#o.processTree ? { processTree: this.#o.processTree } : {}),
                 mcpServersFor: (record) => genieMcpServers(endpoint, book.keyFor(record.id)),
+                // A TRIAL OF THE TRUST GATE: this one agent starts as an untrusted workspace's does, when the trial asks for it. Doctor's alone.
+                untrustedFilesFor: async () => (this.#asUntrusted ? writeGenieInstructions(join(runtimeDir(this.#o.besideHome), 'untrusted-agent'), registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }))) : null),
+                untrustedNow: () => this.#asUntrusted,
+                markGenieWords: (agentId) => { void registry.markGenieWords(agentId); },
                 onThreadId: (agentId, threadId) => { void registry.recordThread(agentId, threadId); },
                 // The agent's real plan too: kept on its record, as in Genie.
                 onPlan: (agentId, steps) => { void registry.setPlan(agentId, steps); },
@@ -180,6 +186,7 @@ export class DoctorRun {
             tool('startAgent', 'Start an agent', 'Start ONE agent, on its own thread, with Genie’s real tools — to watch what it does. Leave workspace out for the workstation agent (genie). Refused while normal Genie is running.', {
                 workspace: { type: 'string', description: 'The workspace’s name, id or path; leave out for the workstation agent.' },
                 agent: { type: 'string', description: 'The agent’s name.' },
+                untrusted: { type: 'boolean', description: 'For a trial of the trust gate: start it as an untrusted workspace starts it.' },
             }, ['agent'], async (args) => {
                 const genie = this.#o.genieRunning();
                 if (this.#current) return err(`${this.#current.name} is already started here; stop it first (one agent at a time)`);
@@ -193,8 +200,9 @@ export class DoctorRun {
                 let workspaceId = OS_WORKSPACE;
                 if (typeof args.workspace === 'string' && args.workspace.trim() !== '') {
                     const key = args.workspace.trim();
-                    const w = opened.registry.listWorkspaces().find((x) => x.id === key || x.path === key || nameOf(x.path) === key);
+                    const w = opened.registry.workspaceStates().find((x) => x.id === key || x.path === key || (x.asleep ? x.hibernatedName === key : nameOf(x.path) === key));
                     if (!w) return err(`no workspace "${key}"; use loadWorkspace / workspaces to find its name`);
+                    if (w.asleep) return err(`workspace "${key}" is hibernated; redock it first`);
                     workspaceId = w.id;
                 }
                 const record = opened.registry.listAgents().find((a) => a.workspaceId === workspaceId && a.name === name);
@@ -212,6 +220,7 @@ export class DoctorRun {
                 const cwd = this.#cwdFor(opened.registry, record);
                 if (!cwd) return err(`${name}'s workspace has no folder Genie knows`);
                 if (may.beside) writeDoctorHold(this.#o.genieHome, { workspaceId: record.workspaceId, agentId: record.id });
+                this.#asUntrusted = args.untrusted === true;
                 const started = opened.host.start(record, cwd);
                 if (!started.ok) {
                     if (may.beside) clearDoctorHold(this.#o.genieHome);
@@ -241,6 +250,16 @@ export class DoctorRun {
                 }
                 const tools = [...calls.values()];
                 return r.ok ? ok({ reply: r.reply, tools }) : err(r.reason);
+            }),
+            tool('agentWaiting', 'What the agent waits on', 'The approval the started agent is parked on, or none.', {}, [], async () => {
+                if (!this.#current) return err('no agent is started');
+                const parked = (await this.#opened!).host.probe(this.#current.id)?.pendingApproval ?? null;
+                return ok({ waiting: parked ? { what: parked.question, options: parked.options.map((o) => o.id) } : null });
+            }),
+            tool('answerApproval', 'Answer the agent', 'Answer the approval the started agent is parked on, by the option’s id.', { option: { type: 'string' } }, ['option'], async (args) => {
+                if (!this.#current) return err('no agent is started');
+                const r = (await this.#opened!).host.answerApproval(this.#current.id, String(args.option));
+                return r.ok ? ok({ answered: args.option }) : err(r.reason);
             }),
             tool('stopAgent', 'Stop the agent', 'Stop the started agent. Its thread and records are kept.', {}, [], async () => {
                 const record = this.#current;

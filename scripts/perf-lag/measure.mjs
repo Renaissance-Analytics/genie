@@ -25,6 +25,11 @@ const SECONDS = Number(process.argv[3] ?? 240);
 const launchedAt = Number(process.env.LAUNCHED_AT_MS ?? Date.now());
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const since = (t) => t - launchedAt;
+// BOUNDED (host-split proof, 2026-11-01): a renderer saturated by eleven streaming agents can leave a CDP call unanswered for minutes (measured on
+// genie-test-windows: 45 min in the composer wait). Every call into the page is raced against a bound and counted as
+// slow, so a run always ends; main's own gap recorder (__lag, inside main) is what measures the freeze and is unaffected.
+const within = (ms, promise, fallback) => Promise.race([promise, sleep(ms).then(() => { timedOut += 1; return fallback; })]);
+let timedOut = 0;
 const agents = JSON.parse(readFileSync(join(homedir(), 'lag-agents.json'), 'utf8'));
 const subject = agents[0];
 if (!/^agent_[0-9a-f]{32}$/.test(subject.id)) throw new Error(`not an agent id: ${subject.id}`);
@@ -46,7 +51,14 @@ class Cdp {
         await new Promise((res, rej) => { c.#ws.addEventListener('open', res, { once: true }); c.#ws.addEventListener('error', () => rej(new Error('cdp socket')), { once: true }); });
         return c;
     }
-    send(method, params = {}) { const id = this.#id++; return new Promise((r) => { this.#pending.set(id, r); this.#ws.send(JSON.stringify({ id, method, params })); }); }
+    /** Per-request bound for THIS target (the page's client sets one; main's has none): an unanswered request resolves empty. */
+    timeoutMs = 0;
+    send(method, params = {}) {
+        const id = this.#id++;
+        const reply = new Promise((r) => { this.#pending.set(id, r); this.#ws.send(JSON.stringify({ id, method, params })); });
+        if (!this.timeoutMs) return reply;
+        return Promise.race([reply, sleep(this.timeoutMs).then(() => { this.#pending.delete(id); timedOut += 1; return { result: {} }; })]);
+    }
     async eval(expression, awaitPromise = false) {
         const f = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise });
         if (f.result?.exceptionDetails) throw new Error(JSON.stringify(f.result.exceptionDetails).slice(0, 400));
@@ -87,6 +99,8 @@ await main.eval(`(() => { globalThis.__lag = []; let last = Date.now(); setInter
 console.log(`main attached at +${mainAttached} ms`);
 
 const page = await Cdp.connect(await target(9222, (t) => t.type === 'page' && t.webSocketDebuggerUrl && !/devtools/.test(t.url)));
+// Every request into the page is bounded (see `within`): a saturated renderer delays the run, never strands it.
+page.timeoutMs = 10_000;
 console.log(`renderer attached at +${since(Date.now())} ms`);
 await page.send('Profiler.enable');
 await page.send('Profiler.setSamplingInterval', { interval: 1000 });
@@ -95,13 +109,14 @@ await page.eval(`(() => { window.__long = []; try { new PerformanceObserver((l) 
 
 // The long thread's chat, as the person had it.
 let composerAt = null;
-for (let i = 0; i < 1200 && composerAt === null; i += 1) {
+const composerDeadline = Date.now() + 180_000;
+for (let i = 0; i < 1200 && composerAt === null && Date.now() < composerDeadline; i += 1) {
     try {
-        const ok = await page.call(function openChat(id, composer) {
+        const ok = await within(5_000, page.call(function openChat(id, composer) {
             if (!location.hash.includes(id)) location.hash = `#genie://agent/${id}?tab=stream`;
             if (!document.querySelector(composer)) document.querySelector('[data-action="chat"]')?.click();
             return Boolean(document.querySelector(composer));
-        }, [subject.id, COMPOSER]);
+        }, [subject.id, COMPOSER]), false);
         if (ok) composerAt = since(Date.now());
     } catch { /* page navigating */ }
     if (composerAt === null) await sleep(100);
@@ -121,18 +136,18 @@ let steadyFrom = null;
 let steadyAt = null;
 while (Date.now() < until) {
     if (steadyFrom === null && since(Date.now()) >= 120_000) { steadyFrom = await counters(); steadyAt = Date.now(); }
-    await page.call(function focus(composer) { document.querySelector(composer)?.focus(); return true; }, [COMPOSER]).catch(() => undefined);
+    await within(5_000, page.call(function focus(composer) { document.querySelector(composer)?.focus(); return true; }, [COMPOSER]).catch(() => undefined), undefined);
     const ch = 'abcdefghij'[typed % 10];
     const t0 = Date.now();
-    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, code: `Key${ch.toUpperCase()}`, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+    await within(5_000, page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, code: `Key${ch.toUpperCase()}`, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) }), undefined);
     const tDown = Date.now();
-    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, code: `Key${ch.toUpperCase()}`, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+    await within(5_000, page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, code: `Key${ch.toUpperCase()}`, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) }), undefined);
     const tUp = Date.now();
     let shown = false;
     try {
-        shown = await page.call(function painted(composer, typed) {
+        shown = await within(5_000, page.call(function painted(composer, typed) {
             return new Promise((r) => requestAnimationFrame(() => { const el = document.querySelector(composer); const v = el ? (el.value ?? el.textContent ?? '') : ''; r(v.endsWith(typed)); }));
-        }, [COMPOSER, ch], true);
+        }, [COMPOSER, ch], true), false);
     } catch { shown = false; }
     const t1 = Date.now();
     // Where the time went: the key down handled (browser process → renderer → ack), the key up, then the next frame.
@@ -151,10 +166,10 @@ while (Date.now() < until) {
 const steadyTo = await counters();
 const perSecond = steadyFrom && steadyTo ? Object.fromEntries(Object.keys(steadyTo).sort().map((k) => [k, Math.round(((steadyTo[k] - (steadyFrom[k] ?? 0)) / ((Date.now() - steadyAt) / 1000)) * 10) / 10])) : null;
 const lag = (await main.eval('globalThis.__lag')).map(([t, d]) => [since(t), d]);
-const frames = ((await page.eval('window.__frames').catch(() => null)) ?? []).map(([t, d]) => [since(Math.round(t)), d]);
-const long = (await page.eval('window.__long')).map(([t, d]) => [since(Math.round(t)), Math.round(d)]);
+const frames = ((await within(30_000, page.eval('window.__frames').catch(() => null), null)) ?? []).map(([t, d]) => [since(Math.round(t)), d]);
+const long = ((await within(30_000, page.eval('window.__long').catch(() => []), [])) ?? []).map(([t, d]) => [since(Math.round(t)), Math.round(d)]);
 const mainProfile = (await main.send('Profiler.stop')).result.profile;
-const pageProfile = (await page.send('Profiler.stop')).result.profile;
+const pageProfile = (await within(60_000, page.send('Profiler.stop'), { result: { profile: { nodes: [], samples: [], timeDeltas: [] } } })).result?.profile ?? { nodes: [], samples: [], timeDeltas: [] };
 writeFileSync(`${label}-main.cpuprofile`, JSON.stringify(mainProfile));
 writeFileSync(`${label}-renderer.cpuprofile`, JSON.stringify(pageProfile));
 const memory = await main.eval('JSON.stringify(process.memoryUsage())').catch(() => null);
@@ -182,7 +197,7 @@ const phase = (from, to) => {
     };
 };
 const result = {
-    label, seconds: SECONDS, mainAttached, composerAt, memory,
+    label, seconds: SECONDS, mainAttached, composerAt, memory, rendererCallsTimedOut: timedOut,
     boot: phase(0, 90_000), steady: phase(120_000, SECONDS * 1000), all: phase(0, SECONDS * 1000),
     keysMissed: keys.filter(([, , s]) => !s).length,
     steadyPerSecond: perSecond,

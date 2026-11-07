@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { useEffect, useRef, useState } from 'react';
 import { timeLeftWords, type PairRequest } from '../../core/pair-confirm.js';
 import { useNow } from '../use-now.js';
@@ -95,7 +96,7 @@ export function PairPrompt({ requests, onAnswer, now: fixedNow }: PairPromptProp
             <div className="pointer-events-none fixed bottom-4 right-4 z-[60]">
                 <div data-pair-result="" role="status" className={`${card} flex items-center gap-3 border-[var(--border-1)]`}>
                     <span data-pair-outcome={outcome.kind} className="flex-1">{outcomeWords(outcome)}</span>
-                    <button type="button" data-action="dismiss-pair-outcome" onClick={() => setOutcome(null)} className={`${btn} border border-[var(--border-1)]`}>Dismiss</button>
+                    <Button size="xs" type="button" data-action="dismiss-pair-outcome" onClick={() => setOutcome(null)} className={`${btn} border border-[var(--border-1)]`}>Dismiss</Button>
                 </div>
             </div>
         );
@@ -122,17 +123,17 @@ export function PairPrompt({ requests, onAnswer, now: fixedNow }: PairPromptProp
                 {failure ? (
                     <p data-pair-failed="" role="alert" className="flex items-center gap-2 text-xs text-[var(--danger)]">
                         <span className="flex-1">{`Your answer did not reach Genie: ${failure.reason}`}</span>
-                        <button type="button" data-action="retry-pair-answer" onClick={() => answer(request.id, failure.allow)} className={`${btn} border border-[var(--danger)]`}>Retry</button>
+                        <Button size="xs" type="button" data-action="retry-pair-answer" onClick={() => answer(request.id, failure.allow)} className={`${btn} border border-[var(--danger)]`}>Retry</Button>
                     </p>
                 ) : null}
                 <div className="flex items-center justify-end gap-2">
                     {more > 0 ? <span className="mr-auto text-xs text-[var(--fg-3)]">{`${more} more waiting`}</span> : null}
-                    <button type="button" data-action="deny-pair" disabled={mine !== null} onClick={() => answer(request.id, false)} className={`${btn} border border-[var(--border-1)] hover:bg-[var(--bg-2)]`}>
+                    <Button size="xs" type="button" data-action="deny-pair" disabled={mine !== null} onClick={() => answer(request.id, false)} className={`${btn} border border-[var(--border-1)] hover:bg-[var(--bg-2)]`}>
                         {mine && !mine.allow ? 'Denying…' : 'Deny'}
-                    </button>
-                    <button type="button" data-action="allow-pair" disabled={mine !== null} onClick={() => answer(request.id, true)} className={`${btn} bg-[var(--primary)] text-white`}>
+                    </Button>
+                    <Button size="xs" type="button" data-action="allow-pair" disabled={mine !== null} onClick={() => answer(request.id, true)} className={`${btn} bg-[var(--primary)] text-white`}>
                         {mine?.allow ? 'Allowing…' : 'Allow'}
-                    </button>
+                    </Button>
                 </div>
             </div>
         </div>

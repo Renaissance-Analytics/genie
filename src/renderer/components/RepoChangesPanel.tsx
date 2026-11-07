@@ -94,7 +94,7 @@ export function RepoChangesView({ repos, repoRel, status, selected, diff, busy, 
 type RepoBridge = NonNullable<GenieBridge['repo']>;
 
 /** The panel's wiring: the repo picked, its status, the selection, the diff, and every action through the host. */
-export function RepoChangesPanel({ workspaceId, repo, files }: { workspaceId: string; repo: RepoBridge | undefined; files?: Pick<GenieBridge['files'], 'watch' | 'onChange'> | undefined }) {
+export function RepoChangesPanel({ workspaceId, repo, files }: { workspaceId: string; repo: RepoBridge | undefined; files?: Pick<GenieBridge['files'], 'subscribe'> | undefined }) {
     const [repos, setRepos] = useState<readonly { rel: string; name: string }[]>([]);
     const [repoRel, setRepoRel] = useState('');
     const [status, setStatus] = useState<RepoStatus | null>(null);
@@ -125,12 +125,17 @@ export function RepoChangesPanel({ workspaceId, repo, files }: { workspaceId: st
         if (r.ok) { setStatus(r.value as RepoStatus); setError(null); } else { setStatus(null); setError(r.error); }
     }, [repo, workspaceId, repoRel]);
     useEffect(() => { if (repos.length > 0) void refresh(); }, [refresh, repos.length]);
-    // Live: the host's watcher pushes every change on disk (an agent's write, a commit elsewhere), never a poll.
+    // Live: the host's watcher pushes every change on disk (an agent's write, a commit elsewhere), never a poll — and with
+    // it THIS repo's status, read once per batch on the host however many views want it (the host split, P2.2). The panel
+    // holds its subscription while it is shown; the first status above stays a call.
     useEffect(() => {
-        if (!files || repos.length === 0) return;
-        void files.watch(workspaceId);
-        return files.onChange((id) => { if (id === workspaceId) void refresh(); });
-    }, [files, workspaceId, refresh, repos.length]);
+        if (!files?.subscribe || repos.length === 0) return;
+        return files.subscribe(workspaceId, { repos: [repoRel] }, (event) => {
+            const r = event.git?.repos?.[repoRel];
+            if (!r) return;
+            if (r.ok) { setStatus(r.value as RepoStatus); setError(null); } else { setStatus(null); setError(r.error); }
+        });
+    }, [files, workspaceId, repoRel, repos.length]);
 
     const changes = useMemo(() => new Map((status?.changes ?? []).map((c) => [c.path, c])), [status]);
     useEffect(() => {

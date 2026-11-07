@@ -132,9 +132,9 @@ describe('an engine change reaches running sites without anyone restarting them'
         expect(pty.opened.length).toBe(before);
     });
 
-    it('compose wires it: an engine change tells the sites, and the sites read the engines’ env at each start', () => {
-        const compose = readFileSync('src/main/compose.ts', 'utf8');
-        expect(compose).toMatch(/serviceEnv: \(workspaceId\) => engines\.envFor\(workspaceId\)/);
-        expect(compose).toMatch(/sites\.serviceEnvChanged\(/);
+    it('Genie’s hosting wires it (hosting-compose.ts): an engine change tells the sites, and the sites read the engines’ env at each start', () => {
+        const hosting = readFileSync('src/main/hosting-compose.ts', 'utf8');
+        expect(hosting).toMatch(/serviceEnv: \(workspaceId\) => engines\.envFor\(workspaceId\)/);
+        expect(hosting).toMatch(/sites\.serviceEnvChanged\(/);
     });
 });

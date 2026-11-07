@@ -16,6 +16,8 @@ describe('the MCP call reaches the approval queue (genie#1360)', () => {
         const gates = [...code('main.ts').matchAll(/approvals\.gate\(([^)]*)\)/g)].map((m) => m[1]!.split(',').map((a) => a.trim()));
         expect(gates.length).toBeGreaterThan(0);
         for (const args of gates) expect(args).toHaveLength(4);
-        expect(code('main.ts')).toMatch(/approve: \(caller, action, detail, call\) => composed\.approvals\.gate\(caller, action, detail, call\)/);
+        // Either queue gets the call: this window's own (the emergency path), or genie-host's through the replica, which ties
+        // it to the agent's real call by its forwarded id (the host split, P3.1).
+        expect(code('main.ts')).toMatch(/approve: \(caller, action, detail, call\) => \(own \? own\.approvals\.gate\(caller, action, detail, call\) : composed\.approvals\.gate\(caller, action, detail, call\)\)/);
     });
 });

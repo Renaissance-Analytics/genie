@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { READ_BACK_WAIT } from './helpers/read-back.js';
 import { SettingsStore } from '../src/main/settings-store.js';
 import { applyLoginItem, wireCloseToTray, wireLoginItem, type ClosableWindow, type LoginItemEnv, type LoginItemPort, type ResidenceSettings } from '../src/main/tray-residence.js';
 
@@ -43,7 +44,7 @@ describe('wireCloseToTray', () => {
         expect(notify).toHaveBeenCalledTimes(1);
         expect(notify.mock.calls[0]![0]).toMatchObject({ title: 'Genie is still running in the tray' });
         // The marker reaches the file (and the write settles before the directory is removed).
-        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true));
+        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true), READ_BACK_WAIT);
     });
 
     it('the notice stays shown across a restart: the marker is a setting, so the next Genie says nothing', async () => {
@@ -53,7 +54,7 @@ describe('wireCloseToTray', () => {
         wireCloseToTray(a.win, { platform: 'linux', quitting: () => false, settings: first, notify: notifyA });
         a.close();
         expect(notifyA).toHaveBeenCalledTimes(1);
-        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true));
+        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true), READ_BACK_WAIT);
         const reopened = await SettingsStore.open(dir);
         const b = fakeWindow();
         const notifyB = vi.fn();
@@ -74,7 +75,7 @@ describe('wireCloseToTray', () => {
         close();
         expect(counts).toEqual({ hide: 1, prevented: 1, closed: 1 });
         expect(notify).toHaveBeenCalledTimes(1);
-        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true));
+        await vi.waitFor(async () => expect((await SettingsStore.open(dir)).get('tray_notice_shown')).toBe(true), READ_BACK_WAIT);
     });
 
     it('macOS: the close is the platform’s own — nothing prevented, nothing hidden, no notice', async () => {
@@ -119,6 +120,28 @@ describe('wireLoginItem', () => {
         expect(set).toHaveLength(4);
     });
 
+    it('a host left running: the entry goes on at once with the setting off, and off again when the mark clears (live, no restart)', async () => {
+        const store = await SettingsStore.open(dir);
+        const { port, set } = fakePort();
+        let mark = false;
+        let changed: (value: boolean) => void = () => {};
+        await wireLoginItem(store, port, WIN, { now: () => mark, onChange: (listener) => { changed = listener; } });
+        expect(set.at(-1)).toEqual({ openAtLogin: false, path: WIN.execPath, args: [] });
+        mark = true;
+        changed(true);
+        expect(set.at(-1)).toEqual({ openAtLogin: true, path: WIN.execPath, args: ['--hidden'] });
+        mark = false;
+        changed(false);
+        expect(set.at(-1)).toEqual({ openAtLogin: false, path: WIN.execPath, args: [] });
+    });
+
+    it('a mark already set at boot keeps the entry: a reboot does not lose it', async () => {
+        const store = await SettingsStore.open(dir);
+        const { port, set } = fakePort();
+        await wireLoginItem(store, port, WIN, { now: () => true, onChange: () => {} });
+        expect(set).toEqual([{ openAtLogin: true, path: WIN.execPath, args: ['--hidden'] }]);
+    });
+
     it('CONTROL: an unrelated setting changes nothing at the OS', async () => {
         const store = await SettingsStore.open(dir);
         const { port, set } = fakePort();
@@ -134,6 +157,15 @@ describe('wireLoginItem', () => {
         expect(store.get('launch_at_login')).toBe(true);
         expect(set.every((s) => (s as { openAtLogin: boolean }).openAtLogin === true)).toBe(true);
         expect(set.at(-1)).toEqual({ openAtLogin: true, path: WIN.execPath, args: [] });
+    });
+
+    it('Linux: the mark’s own entry, found at the next boot, is not Genie 1’s: the setting stays off', async () => {
+        const store = await SettingsStore.open(dir);
+        const file = '/home/a/.config/autostart/genie.desktop';
+        const { port, files } = fakePort({ files: [file] });
+        await wireLoginItem(store, port, { platform: 'linux', packaged: true, execPath: '/opt/Genie/genie', appImage: null, configHome: '/home/a/.config' }, { now: () => true, onChange: () => {} });
+        expect(store.get('launch_at_login')).not.toBe(true);
+        expect(files.get(file)).toContain('--hidden');
     });
 
     it('Linux writes and removes the autostart file', async () => {

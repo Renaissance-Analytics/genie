@@ -37,8 +37,8 @@ const sleeping = snapshot.workspaces!.filter((workspace) => workspace.asleep);
 const sleepingRows = snapshot.agents.filter((agent) => agent.workspaceId === 'sleeping');
 
 describe('Dashboard shows active workspaces only', () => {
-    it.each(['workspace', 'status'] as const)('%s grouping hides hibernated agents and excludes them from every status chip', (group) => {
-        const html = render({ group, focusedId: 'sleep-working', revealId: 'sleep-working', trayId: 'sleep-working' });
+    it('hides hibernated agents and excludes them from every status chip', () => {
+        const html = render({ focusedId: 'sleep-working', revealId: 'sleep-working', trayId: 'sleep-working' });
         expect(ids(html)).toEqual(['active-idle', 'active-working', 'genie']);
         expect(html).not.toContain('Hibernated workspace'); expect(html).not.toContain('/fixture/sleeping');
         expect(html).toMatch(/data-chip="working"[^>]*>[\s\S]*?2 working/);
@@ -47,15 +47,15 @@ describe('Dashboard shows active workspaces only', () => {
         expect(html).not.toContain('data-legend'); expect(html).not.toContain('data-focused="true"');
     });
 
-    it('keeps active empty-workspace groups without retaining hibernated empty ones', () => {
+    it('keeps the active empty-workspace CTA without retaining hibernated empty ones', () => {
         const html = render();
         expect(html).toContain('data-workspace="active-empty"'); expect(html).toContain('Active empty');
-        expect(html).toContain('No agents');
+        expect(html).toContain('has no agents yet');
         expect(html).not.toContain('data-workspace="sleeping-empty"'); expect(html).not.toContain('Hibernated empty');
     });
 
-    it.each(['workspace', 'status'] as const)('with every workspace asleep, %s grouping retains genie and offers an honest empty state', (group) => {
-        const html = render({ group, workspaces: sleeping, rows: sleepingRows });
+    it('with every workspace asleep, retains genie and offers an honest empty state', () => {
+        const html = render({ workspaces: sleeping, rows: sleepingRows });
         expect(ids(html)).toEqual(['genie']);
         expect(html).toContain('data-dashboard-no-active-workspaces'); expect(html).toContain('No active workspaces');
         expect(html).not.toContain('data-dashboard="first-run"');
@@ -84,14 +84,14 @@ describe('Dashboard shows active workspaces only', () => {
         expect(html).toContain('data-chip="waiting"'); expect(html).toContain('data-chip="remote"');
     });
 
-    it('status grouping retains agents whose workspace is missing from the registry', () => {
-        const html = render({ group: 'status', rows: [...snapshot.agents, row('orphan-agent', 'unregistered')] });
+    it('retains agents whose workspace is missing from the registry', () => {
+        const html = render({ rows: [...snapshot.agents, row('orphan-agent', 'unregistered')] });
         expect(ids(html)).toEqual(['active-idle', 'active-working', 'genie', 'orphan-agent']);
         expect(html).toMatch(/data-chip="working"[^>]*>[\s\S]*?3 working/);
         expect(html).not.toContain('data-agent="sleep-working"');
     });
 
-    it('an orphan from separately persisted registry files remains visible by status', async () => {
+    it('an orphan from separately persisted registry files stays registered as Stopped and is hidden by default', async () => {
         const dir = await mkdtemp(join(tmpdir(), 'genie-dashboard-orphan-'));
         try {
             const store = new Store(dir);
@@ -102,8 +102,10 @@ describe('Dashboard shows active workspaces only', () => {
             const restored = registry.snapshot();
             expect(restored.workspaces?.map((workspace) => workspace.id)).toEqual(['active']);
             expect(restored.agents.map((agent) => agent.id)).toContain(orphan.id);
-            const html = render({ workspaces: restored.workspaces, rows: restored.agents, genie: restored.osAgent ?? null, group: 'status' });
-            expect(ids(html)).toContain(orphan.id);
+            const html = render({ workspaces: restored.workspaces, rows: restored.agents, genie: restored.osAgent ?? null });
+            expect(restored.agents.find((agent) => agent.id === orphan.id)?.state).toBe('stopped');
+            expect(ids(html)).not.toContain(orphan.id);
+            expect(html).toContain('data-dashboard-filter="stopped"');
         } finally { await rm(dir, { recursive: true, force: true }); }
     });
 

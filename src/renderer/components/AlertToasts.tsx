@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 
 /**
@@ -23,7 +24,7 @@ export function AlertToasts({ toasts, onDismiss }: { toasts: readonly AlertToast
                         <p className="flex items-center gap-1.5 truncate font-medium"><WorkspaceSwatch color={t.color} /><span className="truncate">{t.title}</span></p>
                         <p className="line-clamp-3 text-[var(--fg-3)]">{t.body}</p>
                     </div>
-                    <button type="button" data-alert-toast-dismiss={t.id} aria-label="Dismiss" className="shrink-0 text-[var(--fg-4)] hover:text-[var(--fg-2)]" onClick={() => onDismiss(t.id)}>×</button>
+                    <Button size="xs" type="button" data-alert-toast-dismiss={t.id} aria-label="Dismiss" className="shrink-0 text-[var(--fg-4)] hover:text-[var(--fg-2)]" onClick={() => onDismiss(t.id)}>×</Button>
                 </div>
             ))}
         </div>

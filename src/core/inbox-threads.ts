@@ -14,6 +14,8 @@
  * to an agent it has not collected — Genie 1's lag badge, per thread.
  */
 
+import { searchNeedle } from './inbox-view.js';
+
 export const HUMAN = 'human';
 
 /** The fields of an inbox message the threads read (`main/inbox-store.ts`'s `InboxMessage`). */
@@ -160,4 +162,41 @@ export function ago(at: number, now: number): string {
     const h = Math.round(m / 60);
     if (h < 48) return `${h}h`;
     return `${Math.round(h / 24)}d`;
+}
+
+/**
+ * A WINDOW of one thread, oldest first (the owner, 2026-11-01: sort and page the thread). No seq: the newest `limit`. With
+ * `beforeSeq`: the `limit` just older than it (Load older). With `fromSeq`: everything from it on, up to `limit` (a live
+ * refresh of what is on screen). `more` = older mail exists before the window; `newer` = newer mail exists after it.
+ */
+export function threadWindow<M extends ThreadMail>(mail: readonly M[], key: string, opts: { limit: number; beforeSeq?: number | undefined; fromSeq?: number | undefined }): { key: string; messages: M[]; more: boolean; newer: boolean } {
+    const all = mail.filter((m) => pairKey(m.from, m.to) === key).sort((x, y) => x.seq - y.seq);
+    const n = Math.max(1, opts.limit);
+    let start: number;
+    let end: number;
+    if (opts.fromSeq !== undefined) {
+        const from = opts.fromSeq;
+        start = all.findIndex((m) => m.seq >= from);
+        if (start === -1) start = all.length;
+        end = Math.min(all.length, start + n);
+    } else {
+        const before = opts.beforeSeq;
+        end = before === undefined ? all.length : all.filter((m) => m.seq < before).length;
+        start = Math.max(0, end - n);
+    }
+    return { key, messages: all.slice(start, end), more: start > 0, newer: end < all.length };
+}
+
+/**
+ * SEARCH ONE THREAD over its STORED mail — every message the host holds, not what a window has loaded. Matches the text
+ * (question ids are in it; a shortened `q_e07a0573…` matches too) and the sender's name. Case-insensitive. Newest hits
+ * first, at most `max`; `total` counts them all.
+ */
+export function searchThread<M extends ThreadMail>(mail: readonly M[], key: string, query: string, name: (participant: string) => string, max: number): { hits: M[]; total: number } {
+    const q = searchNeedle(query);
+    if (q === '') return { hits: [], total: 0 };
+    const matched = mail
+        .filter((m) => pairKey(m.from, m.to) === key && (m.text.toLowerCase().includes(q) || name(m.from).toLowerCase().includes(q)))
+        .sort((x, y) => y.seq - x.seq);
+    return { hits: matched.slice(0, Math.max(0, max)), total: matched.length };
 }

@@ -4,6 +4,7 @@ import { tabStrip } from '../src/core/workspace-tabs.js';
 import { NO_TERMINALS } from '../src/renderer/bridge.js';
 import { Workspace } from '../src/renderer/components/Workspace.js';
 import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * FILES IS ITS OWN WORKSPACE TAB (beta.35 item 41; the owner, 2026-10-21, a screenshot of Moic Suite with the file
@@ -25,12 +26,19 @@ describe('the strip', () => {
     it('a Files tab, labelled; current when the files are open; pressing it asks for the files view', () => {
         const opened: string[] = [];
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'files' }} canDesign hasSettings onView={(v) => opened.push(v)} onAdd={() => {}} onOpenAgent={() => {}} />);
-        expect(html).toMatch(/data-workspace-tab="files"[^>]*data-current="true"[^>]*>Files</);
-        expect(html).not.toMatch(/data-workspace-tab="home"[^>]*data-current="true"/);
-        const tabs = WorkspaceTabs({ designed: { tabs: [] }, agents: [], current: { kind: 'view', view: 'home' }, canDesign: true, hasSettings: true, onView: (v) => opened.push(v), onAdd: () => {}, onOpenAgent: () => {} });
-        const files = (tabs.props.children as Array<{ props: Record<string, unknown> }>).flat().find((c) => c?.props?.['data-workspace-tab'] === 'files');
-        (files!.props['onClick'] as () => void)();
+        expect(control(html, 'data-workspace-tab="files"')).toMatchObject({ tag: 'button', tab: true });
+        expect(control(html, 'data-workspace-tab="files"')!.text).toMatch(/^Files(?![\w])/);
+        expect(control(html, 'data-workspace-tab="files"')!.open).toContain('aria-selected="true"');
+        expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-selected="false"');
+        // Pressing a tab is react-fancy Tabs' onTabChange with that tab's value; the strip turns it into the view (or the agent).
+        const agentsOpened: string[] = [];
+        const strip = WorkspaceTabs({ designed: { tabs: [] }, agents: [{ id: 'a1', name: 'atlas', state: 'idle' }], current: { kind: 'view', view: 'home' }, canDesign: true, hasSettings: true, onView: (v) => opened.push(v), onAdd: () => {}, onOpenAgent: (id) => agentsOpened.push(id) });
+        const tabsEl = (strip.props.children as Array<{ props: Record<string, unknown> } | null>).flat().find((c) => typeof c?.props?.['onTabChange'] === 'function');
+        const pick = tabsEl!.props['onTabChange'] as (value: string) => void;
+        pick('files');
+        pick('agent:a1');
         expect(opened).toEqual(['files']);
+        expect(agentsOpened).toEqual(['a1']);
     });
 });
 
@@ -38,14 +46,14 @@ describe('the workspace with its files open', () => {
     const ws = { id: 'tynn', name: 'tynn', path: '/w/tynn' };
     it('the Files tab is current and the files take the whole body — no dashboard beside them', () => {
         const html = renderToStaticMarkup(<Workspace view="home" workspace={ws} terminals={NO_TERMINALS} files={{ tree: async () => [], state: async () => null, open: async () => ({ ok: false, path: '', error: '' }), watch: async () => {}, onChanged: () => () => {} } as never} panel="files" />);
-        expect(html).toMatch(/data-workspace-tab="files"[^>]*data-current="true"/);
+        expect(control(html, 'data-workspace-tab="files"')!.open).toContain('aria-selected="true"');
         expect(html).toContain('data-workspace-body="files"');
         expect(html).not.toContain('data-workspace-body="home"');
     });
 
     it('CONTROL: files closed — the Dashboard is current and its body is drawn', () => {
         const html = renderToStaticMarkup(<Workspace view="home" workspace={ws} terminals={NO_TERMINALS} panel={null} />);
-        expect(html).toMatch(/data-workspace-tab="home"[^>]*data-current="true"/);
+        expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-selected="true"');
         expect(html).toContain('data-workspace-body="home"');
         expect(html).not.toContain('data-workspace-body="files"');
     });

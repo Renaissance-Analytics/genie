@@ -1,3 +1,4 @@
+import { fakeKeychain } from './helpers/tynn-storage.js';
 import { createPublicKey, verify } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -213,21 +214,14 @@ describe('identityFrom — the stored key, closed over', () => {
     });
 });
 
-describe('workstationKeyStore — the private key is never on disk in the clear', () => {
+describe('workstationKeyStore — the private key is never on disk', () => {
     const dirs: string[] = [];
     afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
     const dir = () => { const d = mkdtempSync(join(tmpdir(), 'ws-id-')); dirs.push(d); return d; };
-    // A reversible stand-in for safeStorage: the file must hold ITS output, not the PEM.
-    const cipher: IdentityCipher = {
-        isAvailable: () => true,
-        encrypt: (text) => Buffer.from([...Buffer.from(text, 'utf8')].map((b) => b ^ 0x5a)),
-        decrypt: (bytes) => Buffer.from([...bytes].map((b) => b ^ 0x5a)).toString('utf8'),
-    };
-
     it('round-trips per Tynn host, and the file holds no PEM', async () => {
         const d = dir();
         const pair = generateHostKeypair();
-        const store = workstationKeyStore(join(d, 'workstation.json'), cipher);
+        const store = workstationKeyStore(join(d, 'workstation.json'), fakeKeychain());
         await store.write(HOST, { workstationId: 'ws_1', privateKeyPem: pair.privateKeyPem });
         expect(await store.read(HOST)).toEqual({ workstationId: 'ws_1', privateKeyPem: pair.privateKeyPem });
         expect(await store.read('https://other.example.com')).toBeNull();
@@ -236,17 +230,4 @@ describe('workstationKeyStore — the private key is never on disk in the clear'
         expect(onDisk).not.toContain('PRIVATE KEY');
     });
 
-    it('no OS encryption: refuses to write (fail closed)', async () => {
-        const d = dir();
-        const store = workstationKeyStore(join(d, 'workstation.json'), { ...cipher, isAvailable: () => false });
-        await expect(store.write(HOST, { workstationId: 'ws_1', privateKeyPem: generateHostKeypair().privateKeyPem })).rejects.toThrow(/encryption/);
-    });
-
-    it('a key that cannot be decrypted reads as not registered', async () => {
-        const d = dir();
-        const pair = generateHostKeypair();
-        await workstationKeyStore(join(d, 'workstation.json'), cipher).write(HOST, { workstationId: 'ws_1', privateKeyPem: pair.privateKeyPem });
-        const broken = workstationKeyStore(join(d, 'workstation.json'), { ...cipher, decrypt: () => { throw new Error('other keychain'); } });
-        expect(await broken.read(HOST)).toBeNull();
-    });
 });

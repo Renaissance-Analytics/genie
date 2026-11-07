@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
+import { GitDidNotAnswer, withinGitLimit, type GitLimit } from './git-ports.js';
+import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
 import { guardRepoPath, parseRepoStatus, type RepoStatus } from './repo-model.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE REPOSITORY PANEL'S GIT (beta.33 item 14; Genie 1 main/repo/index.ts). The engine behind the Repository official
@@ -15,32 +18,40 @@ export type RepoResult<T> = { ok: true; value: T } | { ok: false; error: string 
 const ok = <T,>(value: T): RepoResult<T> => ({ ok: true, value });
 const fail = (error: string): RepoResult<never> => ({ ok: false, error });
 
-function git(cwd: string, args: readonly string[]): Promise<RepoResult<string>> {
+async function git(cwd: string, args: readonly string[], limit?: GitLimit): Promise<RepoResult<string>> {
+    if (!(await gitMayRun(cwd))) return fail(GIT_NEEDS_TRUST);
     return new Promise((resolve) => {
-        execFile('git', [...args], { cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (error, stdout, stderr) => {
+        const answered = (error: Error | null, stdout: string | Buffer, stderr: string | Buffer): void => {
             if (error) resolve(fail(String(stderr ?? '').trim() || error.message));
             else resolve(ok(String(stdout)));
-        });
+        };
+        const options = { cwd, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } };
+        if (limit) limit.git(args, options, answered);
+        else execFile(resolveProgram('git'), [...args], { ...options, windowsHide: true }, answered);
     });
 }
 
 /** Run git in the confined repo folder; a path that escapes the workspace never reaches git. */
-async function inRepo(root: string, repoRel: string, args: readonly string[]): Promise<RepoResult<string>> {
+async function inRepo(root: string, repoRel: string, args: readonly string[], limit?: GitLimit): Promise<RepoResult<string>> {
     let cwd: string;
     try { cwd = guardRepoPath(root, repoRel); } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
-    return git(cwd, args);
+    return git(cwd, args, limit);
 }
 
 const done = (r: RepoResult<string>): RepoResult<null> => (r.ok ? ok(null) : r);
 
+/** A read has a limit; a push or a pull, which may wait on a network or a person's key, does not. */
+const asRead = (run: (limit: GitLimit) => Promise<RepoResult<string>>): Promise<RepoResult<string>> =>
+    withinGitLimit(run).catch((error: unknown) => { if (error instanceof GitDidNotAnswer) return fail(error.message); throw error; });
+
 export async function repoStatus(root: string, repoRel: string): Promise<RepoResult<RepoStatus>> {
-    const r = await inRepo(root, repoRel, ['status', '--porcelain=v1', '--branch', '-uall']);
+    const r = await asRead((limit) => inRepo(root, repoRel, ['status', '--porcelain=v1', '--branch', '-uall'], limit));
     return r.ok ? ok(parseRepoStatus(r.value)) : r;
 }
 
 /** One file's unified diff, staged or not. An untracked file has none yet — empty, not an error. */
 export async function repoDiff(root: string, repoRel: string, file: string, staged: boolean): Promise<RepoResult<{ patch: string }>> {
-    const r = await inRepo(root, repoRel, ['diff', ...(staged ? ['--cached'] : []), '--', file]);
+    const r = await asRead((limit) => inRepo(root, repoRel, ['diff', ...(staged ? ['--cached'] : []), '--', file], limit));
     return r.ok ? ok({ patch: r.value }) : r;
 }
 

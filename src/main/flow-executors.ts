@@ -23,6 +23,8 @@ import type { MemoryClass, Scope } from './knowledge-store.js';
 
 export interface FlowPorts {
     promptAgent(address: string, text: string): Promise<string>;
+    /** This agent's folder skills are off, so a value in its prompt must not name one back in. */
+    escapesPromptValues?(address: string): boolean;
     runCommand(workspaceId: string, command: string, cwd: string | undefined): Promise<{ exitCode: number; output: string }>;
     addKnowledge(input: { title: string; body: string; class: MemoryClass; scope: Scope; tags: string[] }): Promise<{ id: string }>;
     /** genie/file_move: into `toFolder` (relative) of the same workspace; `to: null` when it was already there. No shell. */
@@ -77,7 +79,7 @@ async function questionAnswer(args: Record<string, unknown>, asked: unknown, wai
 }
 
 /** `{{a.b.c}}` → the value at that path in `inputs`, stringified; missing → empty. */
-export function renderTemplate(template: string, inputs: Record<string, unknown>): string {
+export function renderTemplate(template: string, inputs: Record<string, unknown>, value: (text: string) => string = (text) => text): string {
     return template.replace(/\{\{\s*([A-Za-z0-9_.$-]+)\s*\}\}/g, (_m, path: string) => {
         let cur: unknown = inputs;
         for (const seg of path.split('.')) {
@@ -85,9 +87,12 @@ export function renderTemplate(template: string, inputs: Record<string, unknown>
             cur = (cur as Record<string, unknown>)[seg];
         }
         if (cur === undefined || cur === null) return '';
-        return typeof cur === 'object' ? JSON.stringify(cur) : String(cur);
+        return value(typeof cur === 'object' ? JSON.stringify(cur) : String(cur));
     });
 }
+
+/** A value that must not load a skill by name in a Codex message: `$name` does, `$ name` doesn't (measured). */
+const spaceSkillNames = (text: string): string => text.replace(/\$(?=[A-Za-z0-9_:-])/g, '$ ');
 
 type Ctx = Parameters<NodeExecutor>[0];
 
@@ -128,7 +133,8 @@ export function genieExecutors(ports: FlowPorts): ExecutorRegistry {
             const inputs = ctx.inputs as Record<string, unknown>;
             const agent = text(config, 'agent', inputs);
             if (!agent) ctx.abort('genie/agent_prompt needs an agent address in its config');
-            const prompt = text(config, 'prompt', inputs);
+            const raw = config['prompt'];
+            const prompt = typeof raw === 'string' ? renderTemplate(raw, inputs, ports.escapesPromptValues?.(agent) ? spaceSkillNames : undefined) : '';
             const reply = await ports.promptAgent(agent, prompt);
             return { reply, agent };
         },

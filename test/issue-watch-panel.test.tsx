@@ -7,6 +7,7 @@ import { tabStrip } from '../src/core/workspace-tabs.js';
 import { EMPTY_FEATURES } from '../src/renderer/features.js';
 import { IssueWatchPanel } from '../src/renderer/components/IssueWatchPanel.js';
 import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE PERSON'S OWN VIEW OF ISSUEWATCH (Tynn #806; Genie 1's IssueWatch flyout — "open issues, PRs and security alerts in
@@ -57,7 +58,9 @@ describe('where it lives', () => {
         expect(tabStrip({ tabs: [] }, [], { github: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'github', 'add', 'settings']);
         expect(tabStrip({ tabs: [] }, [], { github: false }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'add', 'settings']);
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'github' }} canDesign hasSettings github onView={() => {}} onAdd={() => {}} onOpenAgent={() => {}} />);
-        expect(html).toMatch(/data-workspace-tab="github"[^>]*data-current="true"[^>]*>GitHub</);
+        expect(control(html, 'data-workspace-tab="github"')).toMatchObject({ tag: 'button', tab: true });
+        expect(control(html, 'data-workspace-tab="github"')!.text).toMatch(/^GitHub(?![\w])/);
+        expect(control(html, 'data-workspace-tab="github"')!.open).toContain('aria-selected="true"');
     });
 
     it('the panel: the state line, the counts, every open item linked out to GitHub (COUNTED), the recent activity', () => {
@@ -76,6 +79,9 @@ describe('where it lives', () => {
         expect(EMPTY_FEATURES.issueWatch).toBeNull();
         const main = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
         expect(main).toMatch(/issueWatch: \(\) => issueWatchPanels\(\)/);
-        expect(main).toMatch(/onEntry: \(entry\) => \{\s*issueWatchLatest\.set\(entry\.projectId, entry\);\s*issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\);[\s\S]*?pushFeatures\(\);\s*\}/);
+        // The entry is recorded where Tynn is heard, genie-host (P5c), and every change reaches the window's panel.
+        const host = readFileSync('src/main/issue-watch-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+        expect(host).toMatch(/onEntry: \(entry\) => \{\s*this\.#latest\.set\(entry\.projectId, entry\);\s*this\.#delivered\.set\(entry\.projectId, this\.#now\(\)\);[\s\S]*?this\.#changed\(\);\s*\}/);
+        expect(main).toMatch(/issueWatchNow\?\.onChange\(\(\) => \{ pushFeatures\(\); \}\);/);
     });
 });

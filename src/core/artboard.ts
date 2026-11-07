@@ -229,6 +229,8 @@ export interface DisplayPost {
     review?: BoardPost['review'];
     html?: string;
     src?: string;
+    /** A listed artifact that could not be inspected is kept visible with its failure. */
+    contentError?: string;
 }
 
 export interface ResolveDeps {

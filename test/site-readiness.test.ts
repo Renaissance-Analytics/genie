@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { PtyOpened, PtyPort } from '../src/main/terminal-host.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
 import { SiteManager, type CreateSiteInput, type SiteManagerDeps } from '../src/main/site-manager.js';
-import { siteAnswers, SITE_READY_TIMEOUT_MS } from '../src/main/port-probe.js';
+import { siteAnswers } from '../src/main/port-probe.js';
 import { siteTone } from '../src/core/rail-indicators.js';
 
 /**
@@ -63,19 +63,6 @@ describe('a started site waits for its port', () => {
         expect(changes()).toBeGreaterThan(before);
     });
 
-    it('a port that never answers within the timeout is "failed", with the reason (host, port, seconds)', async () => {
-        const p = heldProbe();
-        const { sites } = make({ probeReady: p.probe });
-        const site = sites.create(proxy);
-        await p.answer(0, false);
-        const after = sites.get(site.id)!;
-        expect(after.state).toBe('failed');
-        expect(after.problem).toMatch(/web\.gen/);
-        expect(after.problem).toMatch(new RegExp(`127\\.0\\.0\\.1:${site.port}`));
-        expect(after.problem).toMatch(new RegExp(`${SITE_READY_TIMEOUT_MS / 1000} s`));
-        expect(sites.routes()).toEqual([]);
-    });
-
     it('Retry (a restart) waits again, and a late answer from the FIRST start does not mark the second one running', async () => {
         const p = heldProbe();
         const { sites } = make({ probeReady: p.probe });
@@ -126,11 +113,12 @@ describe('a started site waits for its port', () => {
         expect(siteTone([{ workspaceId: 'acme', state: 'starting' }], 'acme')).toBe('starting');
     });
 
-    it('Genie wires the real probe into its site manager (main.ts -> compose.ts -> SiteManager)', () => {
+    it('Genie wires the real probe into its site manager (main.ts -> compose.ts -> hosting-compose.ts -> SiteManager)', () => {
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        const compose = readFileSync(new URL('../src/main/compose.ts', import.meta.url), 'utf8');
-        expect(main).toMatch(/composeServices\(\{[\s\S]{0,6000}?siteProbe: \(port, options\) => siteAnswers\(port, options\)/);
-        expect(compose).toMatch(/new SiteManager\(\{[\s\S]{0,4000}?\.\.\.\(input\.siteProbe \? \{ probeReady: input\.siteProbe \} : \{\}\)/);
+        const hosting = readFileSync(new URL('../src/main/hosting-compose.ts', import.meta.url), 'utf8');
+        // composeWith: composeServices, or composeWindowServices against genie-host's stores (the host split, P3.1).
+        expect(main).toMatch(/composeWith\(\{[\s\S]{0,6000}?siteProbe: \(port, options\) => siteAnswers\(port, options\)/);
+        expect(hosting).toMatch(/new SiteManager\(\{[\s\S]{0,4000}?\.\.\.\(input\.siteProbe \? \{ probeReady: input\.siteProbe \} : \{\}\)/);
     });
 });
 

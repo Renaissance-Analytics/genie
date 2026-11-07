@@ -1,4 +1,4 @@
-import { Skeleton } from '@particle-academy/react-fancy';
+import { Button, Skeleton } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { chatThreadFrom } from '../core/chat-view.js';
 import { composerMeter } from '../core/composer.js';
@@ -95,7 +95,7 @@ export function DoctorApp({ facts, connect, detail, onSend, onStart, onAnswerApp
                         {running ? null : (
                             <div data-doctor-start="" className="flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-2 text-[13px]">
                                 <span>genie is not running{detail.session?.failure ? ` — ${detail.session.failure.reason}` : ''}.</span>
-                                <button type="button" onClick={onStart} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] hover:bg-[var(--bg-2)]">Start genie</button>
+                                <Button size="xs" type="button" onClick={onStart} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] hover:bg-[var(--bg-2)]">Start genie</Button>
                             </div>
                         )}
                         <AgentView

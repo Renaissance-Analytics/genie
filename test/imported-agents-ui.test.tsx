@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { importedAgents } from '../src/core/agent-adoption.js';
 import { ImportedAgentsView } from '../src/renderer/components/ImportedAgents.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * "IT CAME WITH AGENTS" ON SCREEN (Add workspace parity item 6; Genie 1's WorkspaceBroughtAgents + ImportedAgents): after an
@@ -46,8 +47,18 @@ describe('the workspace came with agents', () => {
 
     it('while one is being adopted its button says so and every Adopt waits; the result and Tynn-free errors are shown', () => {
         const html = renderToStaticMarkup(<ImportedAgentsView {...base} busy="atlas" notice="atlas is registered. Its .agents/atlas/AGENT.md was read, not rewritten." error="acme already has an agent named bolt" />);
-        expect(html).toMatch(/data-agent="atlas"[^>]*disabled=""[^>]*>[\s\S]*?Adopting…/);
-        expect(html).toMatch(/data-agent="bolt"[^>]*disabled=""/);
+        // The one being adopted shows its work: a spinner, "Adopting…", aria-busy, and it cannot be pressed again.
+        const atlas = control(html, 'data-agent="atlas"');
+        expect(atlas).toMatchObject({ tag: 'button', fancy: true, text: 'Adopting…' });
+        expect(atlas!.open).toMatch(/\sdisabled=""/);
+        expect(atlas!.open).toMatch(/\saria-busy="true"/);
+        expect(atlas!.inner).toMatch(/animate-spin/);
+        // Every other Adopt waits, and says nothing about being busy (CONTROL for the three claims above).
+        const bolt = control(html, 'data-agent="bolt"');
+        expect(bolt).toMatchObject({ tag: 'button', fancy: true, text: 'Adopt' });
+        expect(bolt!.open).toMatch(/\sdisabled=""/);
+        expect(bolt!.open).not.toMatch(/aria-busy="true"/);
+        expect(bolt!.inner).not.toMatch(/animate-spin/);
         expect(html).toContain('atlas is registered. Its .agents/atlas/AGENT.md was read, not rewritten.');
         expect(html).toContain('acme already has an agent named bolt');
     });

@@ -29,7 +29,7 @@ import type { Actor, FlowRecord, FlowRun, FlowStore } from './flow-store.js';
 
 /** What the tool acts on: the flow store, and the scheduler's Run now. Main wires the composition's. */
 export interface FlowsPort {
-    readonly store: Pick<FlowStore, 'list' | 'get' | 'schedules' | 'create' | 'update' | 'arm' | 'disarm' | 'remove'>;
+    readonly store: Pick<import('./flows-host.js').FlowsApi, 'list' | 'get' | 'schedules' | 'create' | 'update' | 'arm' | 'disarm' | 'remove'>;
     readonly runNow: (flowId: string) => Promise<FlowRun>;
 }
 

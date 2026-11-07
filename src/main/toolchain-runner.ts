@@ -1,54 +1,45 @@
-import { execFile } from 'node:child_process';
 import type { ToolStatus } from '../core/toolchain.js';
 import { probeTools, type CommandRunner, type LatestIndex } from './toolchain-prober.js';
+import { execInProcess, streamInProcess, type LineStream, type RunOptions, type RunResult, type RunStreams } from './spawn-exec.js';
+
+export type { RunOptions, RunStreams };
 
 /**
- * THE REAL COMMAND RUNNER behind the toolchain prober.
+ * THE REAL COMMAND RUNNER behind the toolchain prober, the Docker driver and every other command Genie runs.
  *
- * `execFile`, never a shell: arguments reach the binary as-is, so a version string or a package
- * id can never become a command (the §2.4 thread-id lesson, applied to tools). A missing binary
- * rejects with `ENOENT`, which the prober reads as not-installed; a non-zero exit is a RESULT with
- * its code, because for a probe and for an update the exit code is a fact to report, not a failure
- * to throw. A hang is cut at the timeout (`ETIMEDOUT`) — a prober that waits forever on one tool
- * freezes the whole panel.
+ * In Electron, NOT on main's thread (genie#1397): main.ts routes it through the spawn host (main/spawn-host-client.ts),
+ * a child process that creates the processes — on Windows a process is created synchronously on the calling thread, and
+ * the Docker CLI alone held the owner's main 600 s in one session. Anywhere nothing has routed it (genie-host, the live
+ * checks, the tests) it runs in-process (main/spawn-exec.ts), with the same results and error codes either way:
+ * `execFile`, never a shell unless asked; ENOENT for a missing binary; a non-zero exit as a result; ETIMEDOUT at the
+ * timeout.
  */
 
-export interface RunOptions {
-    readonly timeoutMs?: number;
-    readonly cwd?: string;
-    /** Added to the child's inherited environment for this call only (Genie's own is not changed). */
-    readonly env?: Readonly<Record<string, string>>;
+interface ExecRoute {
+    readonly exec: (binary: string, args: readonly string[], options?: RunOptions) => Promise<RunResult>;
+    readonly stream: LineStream;
 }
 
-const DEFAULT_TIMEOUT_MS = 20_000;
+let route: ExecRoute | null = null;
 
-/** Both streams as written, for a caller that must not lose either (a container's log: Postgres writes only to stderr). */
-export interface RunStreams {
-    readonly stdout: string;
-    readonly stderr: string;
+/** Where commands are created from now on (the spawn host), or `null` for in-process. main/spawn-host-client.ts sets it. */
+export function setExecRoute(next: ExecRoute | null): void {
+    route = next;
 }
 
-export const execFileRunner: (binary: string, args: readonly string[], options?: RunOptions) => Promise<{ stdout: string; exitCode: number; streams: RunStreams }> = (binary, args, options = {}) =>
-    new Promise((resolve, reject) => {
-        const child = execFile(
-            binary,
-            [...args],
-            { timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...(options.cwd ? { cwd: options.cwd } : {}), ...(options.env ? { env: { ...process.env, ...options.env } } : {}), shell: false },
-            (error, stdout, stderr) => {
-                if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-                    reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: 'ENOENT' }));
-                    return;
-                }
-                if (error && (error as { killed?: boolean }).killed) {
-                    reject(Object.assign(new Error(`${binary} did not answer within ${options.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`), { code: 'ETIMEDOUT' }));
-                    return;
-                }
-                const exitCode = typeof child.exitCode === 'number' ? child.exitCode : error ? 1 : 0;
-                // Some tools print their banner on stderr (java, older php builds); the prober parses whatever came out.
-                resolve({ stdout: String(stdout) || String(stderr), exitCode, streams: { stdout: String(stdout), stderr: String(stderr) } });
-            },
-        );
-    });
+export const execFileRunner: (binary: string, args: readonly string[], options?: RunOptions) => Promise<RunResult> = (binary, args, options = {}) =>
+    route ? route.exec(binary, args, options) : execInProcess(binary, args, options);
+
+/** A long-lived command's stdout lines (`docker events`), created where `execFileRunner`'s commands are. */
+export const lineStreamRunner: LineStream = (binary, args, onLine, onEnd) =>
+    route ? route.stream(binary, args, onLine, onEnd) : streamInProcess(binary, args, onLine, onEnd);
+
+/** A command's stdout, or a rejection naming why it failed (a non-zero exit included): for callers that only want text. */
+export async function execFileText(binary: string, args: readonly string[], options: RunOptions = {}): Promise<string> {
+    const r = await execFileRunner(binary, args, options);
+    if (r.exitCode !== 0) throw Object.assign(new Error(`${binary} ${args[0] ?? ''} exited with code ${r.exitCode}${r.streams.stderr.trim() ? `: ${r.streams.stderr.trim().slice(0, 300)}` : ''}`), { exitCode: r.exitCode });
+    return r.streams.stdout;
+}
 
 /** The prober over the real runner. The index is injected so an offline machine still answers `unknown`. */
 export function probeToolsLive(latest: LatestIndex, runner: CommandRunner = execFileRunner): Promise<ToolStatus[]> {

@@ -5,7 +5,7 @@
  *   node scripts/agents-hold-no-pty-cdp.mjs
  *
  * Runs against an app launched with `--remote-debugging-port=9222` after `smoke-seed.mjs`,
- * with `GENIE2_CODEX_BINARY` pointing at the stub app-server (so an agent can actually run).
+ * with GENIE_PAGE_PROBE=1 and `GENIE2_CODEX_BINARY` pointing at the stub app-server (so an agent can actually run).
  * The unit layer (test/no-agent-pty.test.ts) proves the host never ASKS for a pty on an
  * agent's behalf; the type layer makes "agent on a pty" uncompilable; this is the third layer
  * §8.2 asks for — a process scan while agents run:
@@ -18,6 +18,7 @@
  * processes is the number of live ptys on an otherwise idle machine. On Linux it is the number
  * of allocated pty slaves (`/dev/pts`). Deltas against a baseline taken before anything starts.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
@@ -122,10 +123,13 @@ try {
     check(typeof codexId === 'string' && typeof workspaceId === 'string', '1. the seed left a codex agent and a workspace', `${codexId} in ${workspaceId}`);
 
     // START AN AGENT, the way a person does.
-    await cdp.evaluate(`window.genie.openAgent(${JSON.stringify(codexId)}); true`);
+    // Start (the one restart): opening an agent starts nothing since q_04ce323c.
+    await waitForPageProbe(cdp);
+    await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
     let running = null;
     for (const end = Date.now() + 30_000; Date.now() < end && running !== true;) {
-        running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);
+        // Past its preparation too: a session reads as running while its launch is still being prepared, before there is any process to count.
+        running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => (d?.session ? d.session.running && d.session.starting === false : null))`);
         if (running !== true) await sleep(500);
     }
     check(running === true, '2. the agent\'s session is RUNNING (the host says so)', String(running));
@@ -140,7 +144,7 @@ try {
     check(sessions === 1, '5. the session count equals the number of agents running (N = 1)', String(sessions));
 
     // POSITIVE CONTROL for the scan: a plain terminal spawns EXACTLY ONE pty.
-    const opened = await cdp.evaluate(`window.genie.terminals.open(${JSON.stringify(workspaceId)}, { cols: 80, rows: 24 })`);
+    const opened = await cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(workspaceId)}, { cols: 80, rows: 24 })`);
     terminalId = opened?.id ?? null;
     check(typeof terminalId === 'string' && opened.pid > 0, '6. a Workspace terminal opened (pid reported)', `pid ${opened?.pid}, shell ${opened?.shell}`);
     let withTerm = ptys();
@@ -150,7 +154,7 @@ try {
     check(stillRunning === true, '8. and the agent is still running beside it — the two are unrelated', String(stillRunning));
 
     // Close the terminal: the pty goes; the agent stays.
-    await cdp.evaluate(`window.genie.terminals.close(${JSON.stringify(terminalId)}); true`);
+    await cdp.evaluate(`window.genieTest.terminals.close(${JSON.stringify(terminalId)}).then(() => true)`);
     terminalId = null;
     let afterClose = ptys();
     for (const end = Date.now() + 10_000; Date.now() < end && afterClose.total !== withAgent.total;) { await sleep(500); afterClose = ptys(); }
@@ -167,7 +171,7 @@ try {
 } catch (error) {
     check(false, 'the check threw', String(error));
 } finally {
-    try { if (terminalId) await cdp.evaluate(`window.genie.terminals.close(${JSON.stringify(terminalId)}); true`); } catch { /* gone */ }
+    try { if (terminalId) await cdp.evaluate(`window.genieTest.terminals.close(${JSON.stringify(terminalId)}).then(() => true)`); } catch { /* gone */ }
     try { if (codexId) await cdp.evaluate(`window.genie.stopAgent(${JSON.stringify(codexId)}); true`); } catch { /* gone */ }
     try { cdp.close(); } catch { /* gone */ }
 }

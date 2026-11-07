@@ -6,6 +6,7 @@ import type { AgentRow, Delivery } from './dashboard-view.js';
 import type { AgentRecord } from './identity.js';
 import type { TurnState } from './session.js';
 import type { ProviderExtensions } from './provider-commands.js';
+import { isSleeping } from './agent-status.js';
 
 /**
  * RECORD + LIVE SESSION → DASHBOARD ROW.
@@ -51,10 +52,21 @@ export interface LiveSession {
     running: boolean;
     turnState: TurnState;
     /**
-     * A turn in flight by Genie's own record (`AgentSession.inTurn`) — not `working`, which a starting session reads as
-     * too. A Restart that cuts one tells the agent (genie#1238). Absent = not reported.
+     * COOLING (core/session.ts COOLING_MS): its turn ended cleanly under 15 s ago — the board shows `Cooling` and sorts it
+     * with Working. Display only: `turnState` is `idle` and nothing waits for it. Absent = not cooling (or an older host).
+     */
+    cooling?: boolean | undefined;
+    /** When this running session became Idle after Cooling; display only, never a work gate. */
+    idleSince?: number | null | undefined;
+    /** Its person stopped the last turn; the process may still be alive. Display only here. */
+    stoppedByYou?: boolean | undefined;
+    /**
+     * A turn in flight by Genie's own record (`AgentSession.inTurn`) — not `working`, which provider activity before any
+     * turn of the run reads as too. A Restart that cuts one tells the agent (genie#1238). Absent = not reported.
      */
     inTurn?: boolean | undefined;
+    /** Still coming up (`AgentSession.starting`): `Starting` in the header and the chat. Absent = not reported. */
+    starting?: boolean | undefined;
     /** Epoch ms. `null` when the session never recorded a start. */
     startedAt: number | null;
     /**
@@ -141,7 +153,8 @@ function durationOf(startedAt: number | null, now: number): string | null {
  *  3. **`working` requires the protocol to have said so.** `turnState: 'unknown'` means it has
  *     not, and rendering `Working` there would be Genie asserting activity it cannot see,
  *     which is the one thing it must never do.
- *  4. **Everything else is `idle`.** A session that simply ended is idle, not broken: painting
+ *  4. **`cooling` for 15 s after a turn that replied** (`LiveSession.cooling`): the board's Working rank, its own word.
+ *  5. **Everything else is `idle`.** A session that simply ended is idle, not broken: painting
  *     a stopped agent red is how a board learns to cry wolf, and then nobody reads the reds.
  */
 export function agentRowFor(
@@ -156,10 +169,14 @@ export function agentRowFor(
     const fidelity = 'declared' as const;
 
     const state: AgentRow['state'] =
-        session === null ? 'idle'
+        session === null ? 'stopped'
         : session.pendingApproval !== null ? 'waiting'
         : session.failure !== null ? 'broken'
+        : !session.running || session.turnState === 'stopped' || session.stoppedByYou === true ? 'stopped'
         : session.running && session.turnState === 'working' ? 'working'
+        // Between turns: Cooling for COOLING_MS, sorted with Working, so a turn ending does not reorder the board.
+        : session.running && session.turnState === 'idle' && session.cooling === true ? 'cooling'
+        : isSleeping(session, now) ? 'sleeping'
         : 'idle';
 
     return {
@@ -197,6 +214,7 @@ export function agentRowFor(
         signedOut: session?.signedOut === true,
         accountPaused: session?.accountPaused ?? null,
         designLogin: session?.designLogin === true,
-        background: session?.background ?? null,
+        // Only a running process has work running: a process that exited leaves its last count behind, until its next `run`.
+        background: session?.running ? session.background ?? null : null,
     };
 }

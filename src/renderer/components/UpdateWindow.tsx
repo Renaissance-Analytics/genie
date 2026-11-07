@@ -1,4 +1,4 @@
-import { ContentRenderer, Modal } from '@particle-academy/react-fancy';
+import { Button, ContentRenderer, Modal } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import type { SignalAction } from '../../core/deck.js';
 import type { UpdateChip } from '../../core/update-chip.js';
@@ -46,18 +46,18 @@ export function UpdateWindow({ update, onAction, onClose }: UpdateWindowProps) {
             </Modal.Body>
             <Modal.Footer>
                 <div className="flex w-full items-center justify-end gap-2">
-                    <button type="button" data-action="update-close" onClick={onClose} className="rounded-md border border-[var(--border-1)] px-3 py-1 text-[13px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]">
+                    <Button size="xs" type="button" data-action="update-close" onClick={onClose} className="rounded-md border border-[var(--border-1)] px-3 py-1 text-[13px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]">
                         Close
-                    </button>
+                    </Button>
                     {update.action ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action={update.action}
                             onClick={() => onAction(update.action!)}
                             className="rounded-md bg-[var(--primary)] px-3 py-1 text-[13px] font-medium text-white hover:opacity-90"
                         >
                             {update.action === 'update-install' ? `Restart to install Genie ${update.version}` : `Download Genie ${update.version}`}
-                        </button>
+                        </Button>
                     ) : (
                         <span className="text-[13px] text-[var(--fg-3)]">{update.label}</span>
                     )}

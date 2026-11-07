@@ -4,6 +4,7 @@ import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { FlowRecord, FlowRun } from '../src/main/flow-store.js';
 import { FlowsSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from '../src/renderer/features.js';
+import { buttonTexts } from './helpers/control-markup.js';
 
 /**
  * THE FLOWS SURFACE (hosting ship line P4). A flow row offered only Arm / Disarm: no way to run one by hand, no
@@ -36,7 +37,7 @@ function rowOf(html: string, id: string): string {
     const next = html.indexOf('data-flow="', start + 1);
     return html.slice(start, next === -1 ? undefined : next);
 }
-const buttonsOf = (row: string) => [...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]!);
+const buttonsOf = (row: string) => buttonTexts(row);
 
 describe('a flow row', () => {
     it('a disarmed flow offers Run now, Arm and Delete, and says it has not run yet', () => {

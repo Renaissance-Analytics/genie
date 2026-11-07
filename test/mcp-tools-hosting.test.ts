@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { JsonObject } from '@particle-academy/prism-mcp';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
@@ -12,6 +13,8 @@ import { hostingTools, maskEnv } from '../src/main/mcp-tools-hosting.js';
 import type { Caller, Registration } from '../src/main/mcp-tools.js';
 import type { DockerRunner } from '../src/main/service-driver.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
+import { systemProcessTree } from '../src/core/process-tree.js';
+import { StagingPermissionsClient } from '../src/main/staging-permissions.js';
 
 /**
  * AGENTS CONFIGURE SERVICES AND SITES THROUGH GENIE (the owner, 2026-10-14: "agents should be using genie mcp tools to
@@ -62,6 +65,36 @@ let dir: string;
 let docker: ReturnType<typeof fakeDocker>;
 let services: ComposedServices;
 let tools: Registration[];
+interface ComposeSample { stage: string; elapsedMs: number; totalMs: number }
+let composeStages: ComposeSample[] = [];
+let composeAttempt = 0;
+const timingLine = (attempt: number, sample: ComposeSample): void => {
+    if (process.env.CI === 'true' && process.platform === 'win32') console.log(`COMPOSE_TIMING ${JSON.stringify({ attempt, ...sample })}`);
+};
+const timingContext = process.env.CI === 'true' && process.platform === 'win32' ? new AsyncLocalStorage<number>() : null;
+const timingStarts = new Map<number, number>();
+const restoreTiming: Array<() => void> = [];
+function subphase<T>(name: string, action: () => Promise<T>): Promise<T> {
+    const attempt = timingContext?.getStore() ?? 0, started = performance.now(), origin = timingStarts.get(attempt) ?? started;
+    const emit = (stage: string, elapsedMs: number) => { try { timingLine(attempt, { stage, elapsedMs, totalMs: performance.now() - origin }); } catch { /* diagnostics only */ } };
+    emit(`${name}:begin`, 0);
+    const done = () => emit(name, performance.now() - started);
+    try { return action().finally(done); } catch (error) { done(); throw error; }
+}
+beforeAll(() => {
+    if (!timingContext) return;
+    const read = systemProcessTree.read;
+    if (read) {
+        const observed = vi.spyOn(systemProcessTree, 'read').mockImplementation(() => subphase('staging-process-read', () => read.call(systemProcessTree)));
+        restoreTiming.push(() => observed.mockRestore());
+    }
+    const directories = StagingPermissionsClient.prototype.directories;
+    const observed = vi.spyOn(StagingPermissionsClient.prototype, 'directories').mockImplementation(function (this: StagingPermissionsClient, paths) {
+        return subphase('staging-permissions', () => directories.call(this, paths));
+    });
+    restoreTiming.push(() => observed.mockRestore());
+});
+afterAll(() => { for (const restore of restoreTiming) restore(); });
 const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 const pg = { workspaceId: 'example', engine: 'postgres', major: '17', scope: 'dedicated' as const };
 const callers: Record<string, Caller> = {};
@@ -84,7 +117,10 @@ async function asked(): Promise<{ id: string; title: string }> {
 const dockerCalls = (verb: string) => docker.calls.filter((c) => c[0] === verb).length;
 
 beforeEach(async () => {
+    const setupStarted = performance.now(), attempt = ++composeAttempt, samples: ComposeSample[] = []; composeStages = samples;
+    timingStarts.set(attempt, setupStarted);
     dir = await mkdtemp(join(tmpdir(), 'genie2-mcp-hosting-'));
+    const fixtureDir = dir;
     docker = fakeDocker();
     opened.length = 0;
     shown.length = 0;
@@ -92,22 +128,35 @@ beforeEach(async () => {
         await mkdir(join(dir, ws), { recursive: true });
         await writeFile(join(dir, ws, 'project.json'), `${JSON.stringify({ name: ws, repos: [] }, null, 2)}\n`, 'utf8');
     }
-    services = await composeServices({
-        userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
-        workspaces: () => [{ id: 'example', path: join(dir, 'example') }, { id: 'example-other', path: join(dir, 'example-other') }],
-    });
+    timingLine(attempt, { stage: 'fixture-files', elapsedMs: performance.now() - setupStarted, totalMs: performance.now() - setupStarted });
+    const input = {
+        userData: fixtureDir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
+        workspaces: () => [{ id: 'example', path: join(fixtureDir, 'example') }, { id: 'example-other', path: join(fixtureDir, 'example-other') }],
+        onComposeStage: (sample: ComposeSample) => { samples.push(sample); timingLine(attempt, sample); },
+    };
+    services = await (timingContext ? timingContext.run(attempt, () => composeServices(input)) : composeServices(input));
+    const composedAt = performance.now();
+    timingLine(attempt, { stage: 'hook-composed', elapsedMs: composedAt - setupStarted, totalMs: composedAt - setupStarted });
     callers['t-example'] = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'example', workspacePath: join(dir, 'example') };
     callers['t-other'] = { agentId: mintAgentId(), agentName: 'vega', workspaceId: 'example-other', workspacePath: join(dir, 'example-other') };
+    const toolsAt = performance.now();
+    timingLine(attempt, { stage: 'caller-records', elapsedMs: toolsAt - composedAt, totalMs: toolsAt - setupStarted });
     tools = hostingTools({ resolveCaller: (id) => callers[id] ?? null, approve: (c, a, d) => services.approvals.gate(c, a, d), services, openInBrowser: async (url) => { shown.push(url); return { ok: true }; } });
+    const readyAt = performance.now();
+    timingLine(attempt, { stage: 'tool-registrations', elapsedMs: readyAt - toolsAt, totalMs: readyAt - setupStarted });
+    timingLine(attempt, { stage: 'hook-ready', elapsedMs: readyAt - setupStarted, totalMs: readyAt - setupStarted });
 });
 
 afterEach(async () => {
-    await services.shutdown();
+    await services?.shutdown();
     await rm(dir, { recursive: true, force: true });
 });
 
 describe('services: reading', () => {
     it('catalog: the engines Genie offers with their versions and images — never MinIO, which can only be taken over', async () => {
+        // The real first composition must expose costs, including a positive completion; a missing observer is not zero cost.
+        expect(composeStages.map(sample => sample.stage)).toEqual(expect.arrayContaining(['local-staging', 'settings', 'agent-stores', 'hosting', 'ready']));
+        for (const sample of composeStages) { expect(Number.isFinite(sample.elapsedMs) && sample.elapsedMs >= 0).toBe(true); expect(sample.totalMs).toBeGreaterThanOrEqual(sample.elapsedMs); }
         const r = await call('services', 't-example', { action: 'catalog' });
         expect(r.isError).toBe(false);
         const engines = r.json.engines as Array<{ engine: string; versions: string[]; images: string[]; scopes: string[] }>;
@@ -119,6 +168,15 @@ describe('services: reading', () => {
         expect(engines.find((e) => e.engine === 'postgres')!.images).toContain('postgres:17');
         expect(engines.find((e) => e.engine === 'mailpit')!.images).toEqual(['axllent/mailpit:v1.30']);
         expect(engines.find((e) => e.engine === 'websockets')!.scopes).toEqual(['shared']);
+    });
+
+    it('a throwing diagnostic observer leaves real composition and shutdown usable', async () => {
+        const ownDir = await mkdtemp(join(tmpdir(), 'genie2-compose-observer-')); let observed: ComposedServices | undefined;
+        try {
+            observed = await composeServices({ userData: ownDir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
+                onComposeStage: () => { throw new Error('synthetic observer'); } });
+            expect(observed.engines.list()).toEqual([]); expect(observed.settings.snapshot().developer_mode).toBe(false);
+        } finally { await observed?.shutdown(); await rm(ownDir, { recursive: true, force: true }); }
     });
 
     it('list: its own engines and the shared ones, with live status, and never another workspace’s — counted; no credential in the answer', async () => {

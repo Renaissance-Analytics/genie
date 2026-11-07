@@ -20,6 +20,8 @@ const TONE = {
     warn: 'text-[var(--warning)]',
     bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
+    // Cooling (core/session.ts COOLING_MS): its own colour, not Working's green nor Idle's grey.
+    cool: 'text-[var(--sky-400)]',
 } as const;
 
 const LABEL = 'w-10 shrink-0 text-[10px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]';
@@ -54,7 +56,7 @@ const FEED_TONE: Record<FeedKind, string> = {
 const MONO: ReadonlySet<FeedKind> = new Set(['edit', 'command', 'tool']);
 
 /** The heartbeat's line: the state's own colour, so a lane reads at a glance. */
-const BEAT_COLOUR: Record<DashLane['tone'], string> = { ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)', muted: 'var(--fg-4)' };
+const BEAT_COLOUR: Record<DashLane['tone'], string> = { ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)', muted: 'var(--fg-4)', cool: 'var(--sky-400)' };
 
 export interface WorkspaceDashboardProps {
     /** The workspace's display name, for the sentences. */
@@ -167,6 +169,10 @@ function Lane({ lane, onOpenAgent, onOpenDeckItem, onStartAgent }: { lane: DashL
 export function WorkspaceDashboard({ name, workspaceId, view, onOpenAgent, onOpenDeckItem, onAddAgent, onStartAgent }: WorkspaceDashboardProps) {
     return (
         <div data-workspace-dashboard={workspaceId} className="flex h-full min-w-0 flex-1 flex-col gap-2 overflow-y-auto bg-[var(--bg-1)] px-5 py-4">
+            {/* ANOTHER AGENT, ALWAYS (Tynn story #381): a fixed row above the lanes, the same with none, one or many — it never moves. */}
+            <div data-dash-header="" className="flex h-7 shrink-0 items-center justify-end">
+                <Button type="button" size="xs" icon="plus" data-action="add-agent" data-add-agent={workspaceId} onClick={onAddAgent}>Add agent</Button>
+            </div>
             {/* A question in this workspace no agent's lane holds (a flow's) — it would otherwise have no way in here. */}
             {view.waiting.map((w) => (
                 <div key={w.id} data-dash-waiting={w.id} className="flex items-center gap-2 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-[13px]">
@@ -177,7 +183,6 @@ export function WorkspaceDashboard({ name, workspaceId, view, onOpenAgent, onOpe
             {view.noAgents ? (
                 <div className="mt-3 flex flex-col items-start gap-2 text-[13px] text-[var(--fg-3)]">
                     <p>No agents in {name}.</p>
-                    <Button type="button" size="xs" data-add-agent={workspaceId} onClick={onAddAgent}>+ Add agent</Button>
                 </div>
             ) : (
                 view.lanes.map((lane) => <Lane key={lane.id} lane={lane} onOpenAgent={onOpenAgent} onOpenDeckItem={onOpenDeckItem} onStartAgent={onStartAgent} />)

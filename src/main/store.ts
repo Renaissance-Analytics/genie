@@ -1,7 +1,8 @@
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
 import { runtimeDir } from './paths.js';
+import { restrictPrivateFile } from './private-credentials.js';
 
 /**
  * WHAT GENIE REMEMBERS BETWEEN RUNS — workspaces and agent records.
@@ -32,6 +33,8 @@ export interface WorkspaceRecord {
     path: string;
     /** Hibernated (§6.1): nothing may start here; stays asleep through restarts and upgrades. */
     asleep?: boolean;
+    /** Last awake display name; ghost labels and old inbox addresses never reopen the folder. */
+    hibernatedName?: string;
     /** Ops project (§6.1): the workspace ids this one GOVERNS. A Genie-side relation; the envelope schema has no such field. */
     governs?: string[];
     /** Its DEFAULT AGENT (Genie 1's): one of its own agents, the one an action uses when it names none. Absent = none. */
@@ -90,9 +93,48 @@ export function reportFlush(flush: Promise<void>, what: string): void {
     });
 }
 
-export function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+/**
+ * A file that holds a secret in the clear (host-split plan §13: services.json…): the owner's alone.
+ * POSIX modes; on Windows the profile's ACL is the guard, and a mode does nothing.
+ */
+export const PRIVATE_FILE = { mode: 0o600 } as const;
+
+/**
+ * A private file an older Genie left open is tightened when its store opens: it may not be rewritten for a long time. No
+ * file yet is fine; a failure is said, never fatal (a store that cannot chmod still works, and no worse than before).
+ */
+export async function makePrivate(file: string): Promise<void> {
+    if (process.platform === 'win32') {
+        // A file that is not there yet is fine, as below. A store that cannot tighten an old file still opens; the ACL path has said why.
+        if (!(await lstat(file).then(() => true, () => false))) return;
+        await restrictPrivateFile(file).catch((error: unknown) => { console.error(`[genie] could not make ${file} private: ${error instanceof Error ? error.message : String(error)}`); });
+        return;
+    }
+    await chmod(file, PRIVATE_FILE.mode).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') console.error(`[genie] could not make ${file} private: ${error.message}`);
+    });
+}
+
+/**
+ * A small secret that is not JSON (host.token, mcp-endpoint.json's text), whole and private before its name appears. On POSIX the mode at create does that; on Windows the temp file is restricted
+ * before the rename, so nobody can read it open under its real name.
+ */
+export async function writeTextPrivate(file: string, text: string): Promise<void> {
+    await mkdir(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.${++tmpCounter}.tmp`;
+    try {
+        await writeFile(tmp, text, { encoding: 'utf8', mode: PRIVATE_FILE.mode });
+        await restrictPrivateFile(tmp);
+        await rename(tmp, file);
+    } catch (error) {
+        await rm(tmp, { force: true }).catch(() => undefined);
+        throw error;
+    }
+}
+
+export function writeJsonAtomic(file: string, value: unknown, options?: { readonly mode?: number }): Promise<void> {
     const previous = inFlight.get(file) ?? Promise.resolve();
-    const mine = previous.catch(() => undefined).then(() => writeJsonAtomicNow(file, value));
+    const mine = previous.catch(() => undefined).then(() => writeJsonAtomicNow(file, value, options?.mode));
     inFlight.set(file, mine);
     const settle = (): void => { if (inFlight.get(file) === mine) inFlight.delete(file); };
     void mine.then(settle, settle);
@@ -104,15 +146,25 @@ export function writeJsonAtomic(file: string, value: unknown): Promise<void> {
  * power cut the rename could be on disk and the bytes not, and the record came back EMPTY — and on POSIX the directory
  * is synced after, so the rename itself is kept.
  */
-async function writeJsonAtomicNow(file: string, value: unknown): Promise<void> {
+async function writeJsonAtomicNow(file: string, value: unknown, mode?: number): Promise<void> {
     await mkdir(dirname(file), { recursive: true });
     const tmp = `${file}.${process.pid}.${++tmpCounter}.tmp`;
-    const handle = await open(tmp, 'w');
+    // The temp file gets the mode: the rename names it, so the secret is never on disk more open than this.
+    const handle = await open(tmp, 'w', mode);
     try {
         await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
         await handle.sync();
     } finally {
         await handle.close();
+    }
+    // On Windows the mode above means nothing. The same ACL as a credential's, on the temp file, so the name never points at an open file. A refusal fails the write, and the old file stays.
+    if (mode === PRIVATE_FILE.mode) {
+        try {
+            await restrictPrivateFile(tmp);
+        } catch (error) {
+            await rm(tmp, { force: true }).catch(() => undefined);
+            throw error;
+        }
     }
     for (let attempt = 0; ; attempt += 1) {
         try {

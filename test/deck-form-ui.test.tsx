@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { DeckItem, SignalState } from '../src/core/deck.js';
 import { Deck } from '../src/renderer/components/Deck.js';
 import { QuestionForm, type QuestionDraft } from '../src/renderer/components/QuestionForm.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE FORM IN PLACE (§4.5): an agent's questions are their form, right in the Deck row where they are read (the body IS
@@ -48,7 +49,8 @@ describe('the in-place form', () => {
         expect(html).toContain('Scope');
         // COUNTED: one note per question, not one for the form.
         expect((html.match(/data-deck-note="q_1"/g) ?? []).length).toBe(2);
-        expect((html.match(/<button[^>]*data-action="deck-submit"[^>]*>Answer</g) ?? []).length).toBe(1);
+        expect((html.match(/data-action="deck-submit"/g) ?? []).length).toBe(1);
+        expect(control(html, 'data-action="deck-submit"')).toMatchObject({ tag: 'button', fancy: true, text: 'Answer' });
         expect(html).not.toContain('data-nav=');
         // The door is gone while the form is open — one rendering of one decision.
         expect(html).not.toContain('data-deck-expand="q_1"');

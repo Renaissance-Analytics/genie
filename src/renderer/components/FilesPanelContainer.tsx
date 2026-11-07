@@ -17,6 +17,7 @@ import { ancestorsOf, revealFor, treeFromLoaded } from '../../core/files-tree-la
 import type { GenieBridge } from '../bridge.js';
 import { FileOpModal } from './FileOpModal.js';
 import { useCopyText } from './CopyText.js';
+import { GitReadProblem } from './GitReadProblem.js';
 import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile, type PluginTabView } from './FilesPanel.js';
 
 /**
@@ -24,9 +25,10 @@ import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile, type P
  * them when the host says the workspace changed (push, never a poll), keeps the open tabs. The pure
  * rendering is `FilesPanel`, which is what the tests render. One container per workspace surface.
  */
-export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange, routeFile, routeFilter, onRouteChange, routeLine = null }: {
+export function FilesPanelContainer({ workspace, files, visible = true, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange, routeFile, routeFilter, onRouteChange, routeLine = null }: {
     workspace: { id: string; name?: string | undefined; path: string };
     files: GenieBridge['files'];
+    visible?: boolean | undefined;
     pinned: boolean;
     onPin?: (() => void) | undefined;
     onClose: () => void;
@@ -97,7 +99,12 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     const [state, setState] = useState<FilesPanelState | null>(null);
     // Git's state of each changed file, for the tree's colours (Genie 1 FileTree) — re-read with the tree, on the host's push.
     const [git, setGit] = useState<Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>>>({});
-    const readGit = useCallback(() => { if (!single && files.gitStatus) void files.gitStatus(workspace.id).then(setGit, () => {}); }, [files, workspace.id, single]);
+    const [gitProblem, setGitProblem] = useState<string | null>(null);
+    // Colours from the last good read stay; a read that failed says so, with a Retry, and never reads as "nothing changed".
+    const readGit = useCallback(() => {
+        if (single || !files.gitStatus) return;
+        void files.gitStatus(workspace.id).then((next) => { setGit(next); setGitProblem(null); }, () => { setGitProblem('Git did not answer in time, so changes may not be marked.'); });
+    }, [files, workspace.id, single]);
     // The editor follows GENIE's theme, not the OS's (Genie 1 useResolvedTheme): a light Genie on a dark OS is a light editor.
     const { resolved: theme } = useTheme();
     /*
@@ -159,22 +166,30 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             });
         }
         void files.state(workspace.id).then((s) => setState(s));
-        readGit();
     }, [files, workspace.id, single, lazy, loadDir, lockedRoot]);
 
     useEffect(() => {
+        if (!visible) return;
         refresh();
-        void files.watch(workspace.id);
-        return files.onChange((id, paths) => {
-            if (id !== workspace.id) return;
+        // Git is read ONCE here; after that it comes pushed with the batches (the host split, P2.2), computed once on the
+        // host however many views want it — never a git run per view per batch.
+        readGit();
+        const onBatch = (paths: readonly string[] | undefined) => {
             if (!lazy || !paths || paths.length === 0) { refresh(); return; }
             // Only the folders the changes are in, and only those already listed; the attribution state as before.
             const dirs = new Set(paths.map((p) => ancestorsOf(p).at(-1) ?? ''));
             for (const dir of dirs) if (loadedRef.current.has(dir)) loadDir(dir);
             void files.state(workspace.id).then((s) => setState(s));
-            readGit();
-        });
-    }, [files, workspace.id, refresh, lazy, loadDir]);
+        };
+        // THIS VIEW'S SUBSCRIPTION: the host watches the workspace while it is held, and lets go when the panel closes.
+        if (files.subscribe) {
+            return files.subscribe(workspace.id, { git: !single }, (event) => {
+                if (event.git) { if (event.git.tree) setGit(event.git.tree); return; }
+                onBatch(event.paths);
+            });
+        }
+        return files.onChange((id, paths) => { if (id === workspace.id) { onBatch(paths); readGit(); } });
+    }, [files, workspace.id, refresh, readGit, single, lazy, loadDir, visible]);
 
     // Every folder that is open is listed (opening one is what loads it).
     useEffect(() => {
@@ -189,10 +204,12 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
 
     // A dirty tab is NEVER auto-reloaded (§4.3); a clean one follows the disk — text re-read, a plugin editor remounted.
     // Only the tabs among the changes (genie#921): a build elsewhere in the workspace re-reads nothing.
-    useEffect(() => files.onChange((id, paths) => {
+    useEffect(() => visible ? files.onChange((id, paths) => {
         if (id !== workspace.id) return;
         act({ kind: 'disk-changed', paths: paths ?? benchRef.current.tabs });
-    }), [files, workspace.id, act]);
+    }) : undefined, [files, workspace.id, act, visible]);
+    // A redock rereads clean tabs while the bench preserves dirty buffers and their conflict baseline.
+    useEffect(() => { if (visible) act({ kind: 'disk-changed', paths: benchRef.current.tabs }); }, [visible, act]);
     const rereadKey = bench.reread.join('\n');
     useEffect(() => { for (const path of benchRef.current.reread) load(path); }, [rereadKey, load]);
 
@@ -413,9 +430,11 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             node: <PluginEditorBody key={`${t}:${p.rev}`} pluginId={p.editor.pluginId} fancyExport={p.editor.fancyEditor.export} workspaceId={workspace.id} path={t} files={files} onDirtyChange={(d) => act({ kind: 'plugin-dirty', path: t, dirty: d })} registerSave={(fn) => { pluginSaves.current.set(t, fn); }} />,
         }];
     });
+    const gitProblemRow = gitProblem ? <GitReadProblem reason={gitProblem} onRetry={readGit} /> : null;
     const panel = <FilesPanel active={bench.active} pluginTabs={pluginTabs} workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={(t) => closeTabs([t])} onPin={onPin} onClose={() => askClose(tabs, onClose)} prefs={prefs} onPrefs={changePrefs} theme={theme} unsaved={dirty} git={git} {...(open?.ok && bench.texts[open.path]?.ok ? { baseline: (bench.texts[open.path] as { text: string }).text } : {})} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} copied={pathCopy.state} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
     return (
         <>
+            {gitProblemRow}
             {panel}
             {discard ? <DiscardModal paths={discard.paths} onCancel={() => setDiscard(null)} onDiscard={() => { const then = discard.then; setDiscard(null); then(); }} /> : null}
             {fileOp && fileOp.dialog.action !== 'duplicate' ? <FileOpModal key={`${fileOp.dialog.action}:${fileOp.dialog.node.path}`} dialog={fileOp.dialog} error={fileOp.error} busy={fileOp.busy} onConfirm={(name) => runFileOp(fileOp.dialog, name)} onCancel={() => setFileOp(null)} /> : null}

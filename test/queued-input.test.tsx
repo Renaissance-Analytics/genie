@@ -9,6 +9,7 @@ import type { DriverEvents, TurnOutcomeLike } from '../src/core/session.js';
 import { SessionHost } from '../src/main/session-host.js';
 import { ChatFlyout } from '../src/renderer/components/ChatFlyout.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
+import { control } from './helpers/control-markup.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -119,7 +120,7 @@ describe('input sent during a Codex turn', () => {
         expect(message).toMatchObject({ who: 'you', delivered: false, resend: 'restart' });
         const html = renderToStaticMarkup(<ChatFlyout thread={{ agentId: s.record.id, name: 'worker', fidelity: 'declared', unread: null, messages: message ? [message] : [], context: null }} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
         // The chat's one Restart (genie#1238): it restarts worker and sends what was not delivered.
-        expect(html).toMatch(/data-action="restart"[^>]*>Restart<\/button>/);
+        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
         expect(s.prompts).toEqual(['first']);
     });
 
@@ -146,7 +147,7 @@ describe('input sent during a Codex turn', () => {
         expect(s.messages().slice(1).map((m) => [m.text, m.delivered, m.queued])).toEqual([['second', false, false], ['third', false, false]]);
     });
 
-    it('a remote user prompt uses the same queue and credits you; an inbox notice keeps its sender and mail', async () => {
+    it('a remote user prompt uses the same queue and credits you; an inbox notice keeps its sender and mail in the ledger', async () => {
         const s = await open();
         const api = buildHostApi({ host: s.host, find: (id: string) => id === s.record.id ? s.record : null } as unknown as HostApiDeps);
         s.host.promptWith(s.record.id, 'first', []);
@@ -158,7 +159,12 @@ describe('input sent during a Codex turn', () => {
         expect(s.host.ledgerFor(s.record.id).filter((r) => r.event.kind === 'turn').at(-1)?.event).toMatchObject({ by: 'you' });
         s.end();
         expect(s.prompts).toEqual(['first', 'from phone', 'collect your mail']);
-        expect(s.messages().find((m) => m.who === 'delivery')).toMatchObject({ from: 'genie → worker', mail: [{ id: 'mail1', from: 'you', subject: 'direction' }] });
+        expect(s.host.ledgerFor(s.record.id).find(({ event }) => event.kind === 'message' && event.speaker === 'peer')?.event).toMatchObject({
+            kind: 'message', speaker: 'peer', peerName: 'genie', text: 'collect your mail',
+            mail: [{ id: 'mail1', from: 'human', fromName: null, sentAt: '2026-10-23T00:00:00Z', text: 'direction' }],
+        });
+        expect(s.messages().some(m => m.who === 'delivery')).toBe(false);
+        expect(s.messages().some(m => m.text === 'collect your mail')).toBe(false);
     });
 
     it('reopens an unsent image draft from disk, retries once, and discards another without sending', async () => {

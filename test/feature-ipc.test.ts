@@ -52,10 +52,10 @@ describe('the snapshot', () => {
         // The flows section also carries Genie's tool kinds for the editor window (genie#1204): one per offered tool.
         expect(snap.flows).toMatchObject({ flows: [], adding: null });
         expect(snap.flows!.toolKinds!.map((k) => k.name)).toContain('@genie/knowledge');
-        expect(snap.hosting).toEqual({ sites: [], processes: [], adding: null, editing: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } });
+        expect(snap.hosting).toEqual({ sites: [], processes: [], adding: null, editing: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' }, problems: [] });
         // The AgentInbox flyout's threads (beta.33 item 19) are measured too: none yet, nothing uncollected; a thread and an
         // attachment are answers to their own actions, never in a snapshot.
-        expect(snap.inbox).toEqual({ unread: [], peers: [], recent: [], threads: [], uncollected: 0, thread: null, servedAttachment: null });
+        expect(snap.inbox).toEqual({ unread: [], peers: [], recent: [], threads: [], uncollected: 0, thread: null, servedAttachment: null, search: null, question: null });
         expect(snap.settings.values).toMatchObject({ theme: 'system', start_minimized: false });
         expect(snap.knowledge).toEqual({ hits: [], query: '', adding: null, lastAdd: null });
         // The toolchain is the one section that needs a scan — null until one has run.

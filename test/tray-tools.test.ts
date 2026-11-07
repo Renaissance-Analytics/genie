@@ -70,6 +70,6 @@ describe('main', () => {
         expect(src).toMatch(/onUpdate: \(\) => \{ revealMainWindow\('tray: update'\); \},/);
         expect(src).toMatch(/onTaskManager: \(\) => \{ revealMainWindow\('tray: Task Manager'\); showToPerson\(\{ activation: 'user-gesture', route: 'genie:\/\/hosting\?tab=processes', reason: 'tray: Task Manager' \}\); \},/);
         expect(src).toMatch(/const update = trayUpdate\(updates\?\.state\(\) \?\? null\);/);
-        expect(src).toMatch(/updates\.onChange\(\(state\) => \{\n\s*refreshTray\(\);/);
+        expect(src).toMatch(/updates\.onChange\(\([^)]*\) => \{\s*refreshTray\(\);/);
     });
 });

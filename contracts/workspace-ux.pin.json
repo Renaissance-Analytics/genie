@@ -1,10 +1,8 @@
 {
-  "repository": "Civicognita/shared-schemas",
+  "repository": "Renaissance-Analytics/tynn.ai",
   "contract": "workspace-ux",
-  "version": "0.6.0",
-  "tag": "workspace-ux/v0.6.0",
-  "tagObject": null,
-  "commit": "a6080a9bcdf97f011c62b36b748bb60c31403c77",
-  "path": "contracts/workspace-ux/0.6.0/workspace-ux.json",
-  "sha256": "57b6f7968555d9deb4c04033801882b291668d14be0d119bb8584598c0490b56"
+  "version": "0.5.0",
+  "commit": "9221f24ae5de6ac230c6003006ae8fbb85d9b44c",
+  "path": "contracts/workspace-ux/0.5.0/workspace-ux.json",
+  "sha256": "01789f462ab5ae600caa867a691e67482e3d1a57cf76c0b16a5dc32523b7d54c"
 }

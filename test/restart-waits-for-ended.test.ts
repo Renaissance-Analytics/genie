@@ -77,6 +77,9 @@ function world(options: { cwdForRestart?: string; graceMs?: number; exitAfterMs?
         host: sessionHostPort(() => host),
         cwdFor: () => options.cwdForRestart ?? dir,
         readManifest: async () => null,
+        // A switch asks whether the provider it goes to is installed and signed in (genie#1569).
+        providerInstalled: () => true,
+        signedIn: () => true,
         startRefusal: () => null,
     } as unknown as AgentOpsPorts;
     // Providers actually SPAWNED (a driver's start ran) — `driverFor` is asked before the host's folder check, so a refused

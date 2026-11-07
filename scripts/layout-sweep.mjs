@@ -109,7 +109,8 @@ const PROBE = `
             }
         }
 
-        const rail = document.querySelector('nav');
+        // The rail CONTAINER (data-rail, w-52): since #1430 the first <nav> is react-fancy Sidebar's landmark inside it (191px).
+        const rail = document.querySelector('[data-rail=expanded]');
         const doc = document.documentElement;
 
         /*
@@ -268,7 +269,8 @@ for (const width of WIDTHS) {
 say('landing on a workspace agent, chat pinned');
 await evaluate(`window.location.hash = '#genie://dashboard'; true`);
 await new Promise((r) => setTimeout(r, 400));
-const seededAgent = await evaluate(`document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]')?.getAttribute('data-agent') ?? null`);
+await evaluate(`(() => { const stopped = document.querySelector('[data-dashboard-filter="stopped"]'); if (stopped?.getAttribute('aria-pressed') === 'false') stopped.click(); return true; })()`);
+const seededAgent = await evaluate(`document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])')?.getAttribute('data-agent') ?? null`);
 if (!seededAgent) {
     console.error('LAYOUT SWEEP found no seeded workspace agent on the Dashboard');
     process.exit(1);

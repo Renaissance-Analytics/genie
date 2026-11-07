@@ -1,14 +1,20 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { fullDateTime } from '../src/core/clock-words.js';
 import { headroomFromMeta, rateLimitAlert, type Headroom } from '../src/core/headroom.js';
 import { HeadroomBoard } from '../src/core/headroom-board.js';
 import { toStreamEvent } from '../src/core/stream-event.js';
-import { RateLimitDetail, RateLimitPills } from '../src/renderer/components/Dashboard.js';
+import { RateLimitPills } from '../src/renderer/components/Dashboard.js';
 import { Sidebar } from '../src/renderer/components/Sidebar.js';
 import { EMPTY_SNAPSHOT } from '../src/renderer/bridge.js';
 import { EMPTY_FEATURES } from '../src/renderer/features.js';
 import { Shell } from '../src/renderer/Shell.js';
+
+/** A Sidebar item's dot (react-fancy 6.1.0): its colour, and the words a screen reader hears with the item's name. */
+const dotIn = (row: string): { color: string; words: string } | null => {
+    const c = /data-react-fancy-sidebar-dot=""[^>]*data-color="([^"]+)"|data-color="([^"]+)"[^>]*data-react-fancy-sidebar-dot=""/.exec(row);
+    if (!c) return null;
+    return { color: (c[1] ?? c[2])!, words: /data-react-fancy-sidebar-dot-label=""[^>]*>([^<]*)</.exec(row)?.[1]?.trim() ?? '' };
+};
 
 /**
  * EVERY REPORTED LIMIT ON HOVER, AND A DOT IN THE SIDEBAR (genie#1268; the owner, 2026-10-27: "On hover of the provider
@@ -77,39 +83,19 @@ describe('every reported window is kept', () => {
     });
 });
 
-describe('the hover on a provider’s pill', () => {
-    // Fancy's Tooltip draws its content only on hover, so the card is rendered as the pill hands it over, and the
-    // pill's accessible name — the same lines, for a screen reader — is read from the pill itself.
-    const card = (provider: string, limit: Headroom) => renderToStaticMarkup(<RateLimitDetail provider={provider} limit={limit} />);
+describe('the pill’s accessible name (the detail itself is a popover now: rate-limit-popover.test.tsx)', () => {
     const named = (html: string, provider: string) => html.match(new RegExp(`data-rate-limit="${provider}"[^>]*aria-label="([^"]*)"`))?.[1] ?? '';
 
-    it('lists every window: % used, % left, and the reset as the full date with am/pm', () => {
-        const c = card('claude', headroomFromMeta(claude)!);
-        expect(c).toContain(`5h window: 62% used · 38% left · resets ${fullDateTime(at(27, 16))}`);
-        expect(c).toContain(`7d window: 92% used · 8% left · resets ${fullDateTime(at(30, 9))}`);
-        expect(c).toContain(`7d opus window: 40% used · 60% left · resets ${fullDateTime(at(31, 9))}`);
-        expect(fullDateTime(at(30, 9))).toMatch(/^[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, \d{4} at 9:00 AM$/);
-        const x = card('codex', headroomFromMeta(codex)!);
-        expect(x).toContain('pro');
-        expect(x).toContain(`5h window: 40% used · 60% left · resets ${fullDateTime(at(27, 18))}`);
-        expect(x).toContain(`7d window: 28% used · 72% left · resets ${fullDateTime(at(2, 9))}`);
-    });
-
-    it('the card is the provider’s logo, not its name (genie#1266)', () => {
-        const c = card('claude', headroomFromMeta(claude)!);
-        expect(c).toMatch(/data-provider-logo="claude"/);
-        expect(c.replace(/<[^>]*>/g, ' ')).not.toMatch(/Claude/);
-    });
-
-    it('the pill’s accessible name carries every window too', () => {
+    it('names the provider and its most constrained window, in the sidebar dot’s words', () => {
         const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta(claude)!, codex: headroomFromMeta(codex)! }} />);
-        expect(named(html, 'claude')).toContain(`7d window: 92% used · 8% left · resets ${fullDateTime(at(30, 9))}`);
-        expect(named(html, 'claude')).toContain('7d opus window: 40% used');
-        expect(named(html, 'codex')).toContain(`7d window: 28% used · 72% left · resets ${fullDateTime(at(2, 9))}`);
+        // Claude's binding window is the 5h (38% left), but its 7d has 8% left: the tighter one is what a person needs.
+        expect(named(html, 'claude')).toBe('Claude Code rate limits: 8% left this week');
+        expect(named(html, 'codex')).toBe('Codex rate limits: 60% left in the 5-hour window');
     });
 
-    it('a spent window reads as over, with the reported share used', () => {
-        expect(card('claude', headroomFromMeta({ ...claude, windows: { five_hour: { utilization: 1.08, resetsAtMs: at(27, 16) } } })!)).toContain('5h window: 108% used · over the limit · resets');
+    it('a spent window reads as over', () => {
+        const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta({ ...claude, windows: { five_hour: { utilization: 1.08, resetsAtMs: at(27, 16) } } })! }} />);
+        expect(named(html, 'claude')).toBe('Claude Code rate limits: over the limit in the 5-hour window');
     });
 });
 
@@ -155,28 +141,32 @@ describe('the dot on the Dashboard’s sidebar row', () => {
 
     it('yellow at the warning, with its words for a screen reader; static', () => {
         const row = dashboardRow(sidebar({ level: 'warning', label: 'Claude Code: 30% left in the 5-hour window' }));
-        expect(row).toMatch(/data-rate-limit-dot="warning"[^>]*role="img"[^>]*aria-label="Claude Code: 30% left in the 5-hour window"/);
-        expect(row).toContain('bg-[var(--warning)]');
+        expect(dotIn(row)).toEqual({ color: 'amber', words: 'Claude Code: 30% left in the 5-hour window' });
         expect(row).not.toMatch(/animate-/);
     });
 
     it('red at the danger', () => {
         const row = dashboardRow(sidebar({ level: 'danger', label: 'Claude Code: 8% left this week' }));
-        expect(row).toMatch(/data-rate-limit-dot="danger"/);
-        expect(row).toContain('bg-[var(--danger)]');
+        expect(dotIn(row)?.color).toBe('red');
     });
 
     it('on the collapsed rail too', () => {
-        expect(dashboardRow(sidebar({ level: 'danger', label: 'Claude Code: 8% left this week' }, true))).toMatch(/data-rate-limit-dot="danger"/);
+        expect(dotIn(dashboardRow(sidebar({ level: 'danger', label: 'Claude Code: 8% left this week' }, true)))?.color).toBe('red');
     });
 
     it('no alert, no dot (positive control above)', () => {
-        expect(sidebar(null)).not.toContain('data-rate-limit-dot');
-        expect(sidebar(undefined, true)).not.toContain('data-rate-limit-dot');
+        expect(dotIn(dashboardRow(sidebar(null)))).toBeNull();
+        expect(dotIn(dashboardRow(sidebar(undefined, true)))).toBeNull();
     });
 });
 
 describe('from any page: the Shell lights the dot from the header’s readings', () => {
+    /** The RAIL's Dashboard item (a react-fancy Sidebar item) — not the title bar's Genie mark, also a dashboard door. */
+    const railDashboard = (html: string): string => {
+        const row = html.match(/<button\b[^>]*data-nav="genie:\/\/dashboard"[^>]*data-react-fancy-sidebar-item=""[\s\S]*?<\/button>/)?.[0] ?? '';
+        expect(row, 'the rail’s Dashboard item is drawn').not.toBe('');
+        return row;
+    };
     const render = (route: string, rateLimits: Record<string, Headroom>) => renderToStaticMarkup(
         <Shell
             route={route}
@@ -205,10 +195,10 @@ describe('from any page: the Shell lights the dot from the header’s readings',
 
     it('on Settings, Claude at 8% left this week: the red dot on the Dashboard row, named', () => {
         const html = render('genie://settings', { claude: room(8, '7d') });
-        expect(html).toMatch(/data-rate-limit-dot="danger"[^>]*aria-label="Claude Code: 8% left this week"/);
+        expect(dotIn(railDashboard(html))).toEqual({ color: 'red', words: 'Claude Code: 8% left this week' });
     });
 
     it('every window above 30%: no dot', () => {
-        expect(render('genie://settings', { claude: room(31, '7d') })).not.toContain('data-rate-limit-dot');
+        expect(dotIn(railDashboard(render('genie://settings', { claude: room(31, '7d') })))).toBeNull();
     });
 });

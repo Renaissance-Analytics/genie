@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fancyTermPort, type HostBackend } from '../src/main/fancy-term-port.js';
+import { TerminalHost } from '../src/main/terminal-host.js';
 
 /**
  * THE ADAPTER between Genie's narrow `PtyPort` and `fancy-term-host`'s `PtyBackend`.
@@ -45,6 +46,55 @@ function fakeBackend() {
     };
 }
 
+function streamProducer() {
+    const fixture = fakeBackend();
+    fixture.backend.getScrollback = () => undefined;
+    const port = fancyTermPort(fixture.backend, { defaultShell: () => ({ command: '/synthetic/shell', args: [] }), platform: 'linux', lookup: { platform: 'linux', env: { PATH: '/synthetic' }, isFile: () => true } });
+    return { ...fixture, port };
+}
+describe('P4 native-local emergency producer positions', () => {
+    it('a quiet terminal has a real producer epoch and zero offset before first output, through TerminalHost', async () => {
+        const f = streamProducer(), host = new TerminalHost(f.port);
+        const opened = await host.openReady({ workspaceId: 'work', cwd: '/synthetic', personal: true });
+        expect(host.streamSnapshot(opened.id)).toEqual({ id: opened.id, tail: '', epoch: expect.any(String), endOffset: 0 });
+        expect(f.port.position?.('not-created')).toBeNull(); host.closeAll();
+    });
+    it('counts actual UTF16 output once across multiple listeners and while no pane listens', () => {
+        const f = streamProducer(), opened = f.port.open({ cwd: '/synthetic' }), a: unknown[][] = [], b: unknown[][] = [];
+        const offA = f.port.onData((...args) => a.push(args)), offB = f.port.onData((...args) => b.push(args));
+        const first = 'A' + String.fromCharCode(0xd800), second = String.fromCharCode(0xdc00) + '\u001b';
+        f.emitData(opened.id, first); f.emitData(opened.id, second);
+        expect(a).toEqual(b); expect(a.map(event => event[2])).toEqual([{ epoch: expect.any(String), offset: 0, endOffset: first.length }, { epoch: expect.any(String), offset: first.length, endOffset: first.length + second.length }]);
+        const epoch = f.port.position?.(opened.id)?.epoch;
+        offA(); offB(); f.emitData(opened.id, 'unwatched');
+        expect(f.port.position?.(opened.id)).toEqual({ epoch, endOffset: first.length + second.length + 'unwatched'.length });
+        expect(a).toHaveLength(2); expect(b).toHaveLength(2);
+    });
+    it('mints the producer before reentrant backend-create output, without resetting the first bytes', () => {
+        const f = streamProducer(), create = f.backend.create.bind(f.backend);
+        f.backend.create = options => { const opened = create(options); f.emitData(opened.id, 'during-create'); return opened; };
+        const opened = f.port.open({ cwd: '/synthetic' });
+        expect(f.port.position?.(opened.id)).toEqual({ epoch: expect.any(String), endOffset: 'during-create'.length });
+    });
+    it('exit carries the producer final offset after the final flush and releases its counter', () => {
+        const f = streamProducer(), opened = f.port.open({ cwd: '/synthetic' }), events: unknown[][] = [];
+        f.port.onData((...args) => events.push(['data', ...args])); f.port.onExit((...args) => events.push(['exit', ...args]));
+        f.emitData(opened.id, 'last🧪'); f.emitExit(opened.id, 7);
+        expect(events).toEqual([['data', opened.id, 'last🧪', { epoch: expect.any(String), offset: 0, endOffset: 'last🧪'.length }], ['exit', opened.id, 7, { epoch: expect.any(String), endOffset: 'last🧪'.length }]]);
+        expect(f.port.position?.(opened.id)).toBeNull();
+    });
+    it('an adopted/unknown producer stays unknown rather than inferring zero or a scrollback length', () => {
+        const f = streamProducer(); f.emitData('older-producer', 'unknown-history');
+        expect(f.port.position?.('older-producer')).toBeNull();
+    });
+    it('a failed backend create releases the minted counter', () => {
+        const f = streamProducer(); let id = '';
+        f.backend.create = options => { id = options.id; throw new Error('synthetic backend failure'); };
+        expect(() => f.port.open({ cwd: '/synthetic' })).toThrow('synthetic backend failure');
+        expect(f.port.position?.(id)).toBeNull();
+    });
+});
+
 describe('opening', () => {
     it('mints an id the engine can key on, and returns what the engine reported', () => {
         const f = fakeBackend();
@@ -75,7 +125,7 @@ describe('opening', () => {
 
     it('parses a COMMAND into the shell and its args', () => {
         const f = fakeBackend();
-        const port = fancyTermPort(f.backend, { defaultShell: () => ({ command: '/bin/sh', args: [] }) });
+        const port = fancyTermPort(f.backend, { defaultShell: () => ({ command: '/bin/sh', args: [] }), platform: 'linux' });
 
         port.open({ cwd: '/repo', command: 'npm test --filter=Challenge' });
 
@@ -205,11 +255,64 @@ describe('environment for a supervised process', () => {
         // A background process or a site's server needs the service env (§6.6); a plain shell
         // must not get an empty env object that the engine could read as "replace the user's".
         const f = fakeBackend();
-        const port = fancyTermPort(f.backend, { defaultShell: () => ({ command: '/bin/sh', args: [] }) });
+        const port = fancyTermPort(f.backend, { defaultShell: () => ({ command: '/bin/sh', args: [] }), platform: 'linux' });
         port.open({ cwd: '/repo', command: 'php artisan queue:work', env: { APP_ENV: 'local' } });
         port.open({ cwd: '/repo' });
         expect(f.created[0]).toMatchObject({ env: { APP_ENV: 'local' } });
         // Every terminal carries GENIE_TERMINAL_ID (§6.9); a plain shell gets THAT and nothing else — the engine merges it over the user's environment.
         expect(f.created[1]!.env).toEqual({ GENIE_TERMINAL_ID: (f.created[1] as { id: string }).id });
+    });
+});
+
+describe('a batch file on Windows: an npm site', () => {
+    const machine = (files: string[], path = 'C:\\node') => ({ platform: 'win32' as const, env: { PATH: path, SystemRoot: 'C:\\Windows' }, isFile: (p: string) => files.includes(p.toLowerCase()) });
+    function rig(files: string[], path?: string) {
+        const made: Array<Record<string, unknown>> = [];
+        const backend = { create: (o: Record<string, unknown>) => { made.push(o); return { id: String(o.id), pid: 7, shell: String(o.shell), existing: false, scrollback: '' }; }, on: () => {}, write: () => {}, resize: () => {}, kill: () => {}, getScrollback: () => '' } as never;
+        return { made, port: fancyTermPort(backend, { defaultShell: () => ({ command: 'cmd', args: [] }), platform: 'win32', lookup: machine(files, path) }) };
+    }
+    const NPM = 'c:\\node\\npm.cmd';
+
+    it.each([
+        ['npm run dev', ['run', 'dev']],
+        ['npm.cmd run dev', ['run', 'dev']],
+        ['npm run dev -- --port=5173', ['run', 'dev', '--', '--port=5173']],
+    ])('%s: the batch file by its whole path, with its arguments as a list', (command, args) => {
+        const t = rig([NPM]);
+        t.port.open({ cwd: 'C:\\w', command });
+        expect(t.made[0]).toMatchObject({ shell: 'C:\\node\\npm.cmd', args });
+    });
+
+    it('a .bat too, and a program comes before a batch file of the same name', () => {
+        const bat = rig(['c:\\node\\tool.bat']);
+        bat.port.open({ cwd: 'C:\\w', command: 'tool' });
+        expect(bat.made[0]).toMatchObject({ shell: 'C:\\node\\tool.bat' });
+        const both = rig(['c:\\node\\tool.exe', 'c:\\node\\tool.cmd']);
+        both.port.open({ cwd: 'C:\\w', command: 'tool' });
+        expect(both.made[0]).toMatchObject({ shell: 'C:\\node\\tool.exe' });
+    });
+
+    it('only an absolute PATH entry counts: one in a relative entry is not found', () => {
+        const t = rig(['node\\npm.cmd'], 'node');
+        expect(() => t.port.open({ cwd: 'C:\\w', command: 'npm run dev' })).toThrow(/"npm" was not found/);
+        expect(t.made).toEqual([]);
+    });
+
+    it.each(['&', '|', '<', '>', '^', '%', '!'])('an argument with %s reaches no batch file: nothing starts, and the words name it', (character) => {
+        const t = rig([NPM]);
+        expect(() => t.port.open({ cwd: 'C:\\w', command: `npm run dev${character}x` })).toThrow(new RegExp(`dev\\${character}x`));
+        expect(t.made).toEqual([]);
+    });
+
+    it('a batch file named by its whole path gets the same check', () => {
+        const t = rig([]);
+        expect(() => t.port.open({ cwd: 'C:\\w', command: 'C:\\node\\npm.cmd run a&b' })).toThrow(/a&b/);
+        expect(t.made).toEqual([]);
+    });
+
+    it('CONTROL: a program takes the same argument: this is about batch files', () => {
+        const t = rig(['c:\\node\\node.exe']);
+        t.port.open({ cwd: 'C:\\w', command: 'node serve&x' });
+        expect(t.made[0]).toMatchObject({ shell: 'C:\\node\\node.exe', args: ['serve&x'] });
     });
 });

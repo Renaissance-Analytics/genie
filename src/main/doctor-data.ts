@@ -53,7 +53,10 @@ function rowText(event: Record<string, unknown>): string {
 export function doctorDataTools(deps: { genieHome: string }): Registration[] {
     const store = new Store(deps.genieHome);
     const load = async () => {
-        const [workspaces, agents] = await Promise.all([store.readWorkspaces(), store.readAgents()]);
+        const [registered, records] = await Promise.all([store.readWorkspaces(), store.readAgents()]);
+        const hibernated = new Set(registered.filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
+        const workspaces = registered.filter((workspace) => !hibernated.has(workspace.id));
+        const agents = records.filter((record) => !hibernated.has(record.workspaceId));
         const named = await Promise.all(workspaces.map(async (w) => ({ record: w, name: await nameOf(w) })));
         return { workspaces: named, agents };
     };

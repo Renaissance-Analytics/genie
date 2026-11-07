@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Badge, Drawer, Editor } from '@particle-academy/react-fancy';
+import { Badge, Button, Drawer, Editor } from '@particle-academy/react-fancy';
 import { frontMatterPill } from '../../core/front-matter.js';
 import { FrontMatterDrawer } from './FrontMatterDrawer.js';
 import { genieClipboardWriter } from '../clipboard.js';
@@ -54,11 +54,11 @@ export function DocumentEditor({ value, onChange, frontMatter, onFrontMatterChan
     return (
         <Drawer.Container data-document-editor="" className="flex h-full min-h-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-2 py-1">
-                <button type="button" data-fm-pill="" className="inline-flex items-center hover:brightness-110" onClick={() => setDrawerOpen((o) => !o)} title={pill.title} aria-expanded={drawerOpen}>
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-fm-pill="" className="inline-flex items-center hover:brightness-110" onClick={() => setDrawerOpen((o) => !o)} title={pill.title} aria-expanded={drawerOpen}>
                     <Badge size="sm" variant={pill.present ? 'soft' : 'outline'} color={pill.present ? 'violet' : 'zinc'} dot={pill.present}>
                         {pill.label}
                     </Badge>
-                </button>
+                </Button>
             </div>
             {editor}
             <FrontMatterDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} value={frontMatter ?? null} onChange={onFrontMatterChange} />

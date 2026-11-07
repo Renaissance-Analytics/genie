@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { withDrafts, type Draft } from '../src/core/chat-view.js';
 import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * AN UNDELIVERED MESSAGE AFTER ITS AGENT IS RUNNING AGAIN (the owner, 2026-10-20, after beta.32: "this retarded shit is
@@ -35,17 +36,22 @@ describe('on screen', () => {
         const html = render(threadWith('send'));
         expect(html).toContain('Not delivered. tynn was not running when you sent it.');
         expect(html).not.toContain('tynn is not running');
-        expect(html).toMatch(/<button[^>]*data-action="send-draft"[^>]*data-draft="d1"[^>]*>Send now<\/button>/);
+        expect(control(html, 'data-action="send-draft"')).toMatchObject({ tag: 'button', fancy: true, text: 'Send now' });
+        expect(control(html, 'data-action="send-draft"')!.open).toContain('data-draft="d1"');
         expect(html).not.toContain('data-action="restart"');
     });
 
     it('not running: the chat’s one Restart (genie#1238) (CONTROL)', () => {
         const html = render(threadWith('restart'));
         expect(html).toContain('Not delivered. tynn is not running.');
-        expect(html).toMatch(/data-action="restart"[^>]*>Restart</);
+        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
     });
 
     it('either way it can be discarded', () => {
-        for (const r of ['send', 'restart'] as const) expect(render(threadWith(r))).toMatch(/<button[^>]*data-action="discard-draft"[^>]*data-draft="d1"[^>]*>Discard<\/button>/);
+        for (const r of ['send', 'restart'] as const) {
+            const discard = control(render(threadWith(r)), 'data-action="discard-draft"');
+            expect(discard).toMatchObject({ tag: 'button', fancy: true, text: 'Discard' });
+            expect(discard!.open).toContain('data-draft="d1"');
+        }
     });
 });

@@ -1,4 +1,5 @@
 import { relayWorkstationOf } from '../core/remote-window.js';
+import type { AuthRequest } from '../core/remote-protocol.js';
 /**
  * CONNECTING TO ANOTHER MACHINE — the client-local half (§6.8). The device's memory of where it has
  * paired is a DEVICE preference (the three-way split), so it lives in the window's own storage under
@@ -53,6 +54,37 @@ export { relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteWindo
 
 const HOSTS_KEY = 'genie.remote.hosts';
 
+export interface DeviceLinkBridge {
+    open(url: string): Promise<{ ok: true; channel: string } | { ok: false; reason: string }>;
+    hosts(): Promise<string[]>;
+    forget(url: string): Promise<boolean>;
+    adopt(url: string, token: string): Promise<boolean>;
+}
+
+/**
+ * THE ONE-TIME MOVE (M-e): a token an earlier Genie left in this window's storage goes to the host, and is deleted here only once the host has read the same bytes back.
+ * Anything else stays, and the next open tries again. Answers the addresses still here.
+ */
+export async function moveRememberedTokens(storage: TokenStorage, link: DeviceLinkBridge): Promise<string[]> {
+    const tokens = rememberedTokens(storage);
+    const left: string[] = [];
+    for (const url of tokens.hosts()) {
+        const token = tokens.tokenFor(url);
+        if (token === null) continue;
+        const moved = await link.adopt(url, token).catch(() => false);
+        if (moved) tokens.forget(url);
+        else left.push(url);
+    }
+    return left;
+}
+
+/** What a desktop window says to another machine: the PIN it was given, or the saved hello the host fills in. Nothing to say: null. */
+export function deviceAuth(pin: string, label: string, paired: readonly string[], url: string): AuthRequest | null {
+    const code = pin.trim();
+    if (code) return { kind: 'pin', code, label };
+    return paired.includes(url) ? { kind: 'saved', label } : null;
+}
+
 /** A host this device has connected to (Genie 1's `remote.known`). `name` is the host's own, from its welcome. */
 export interface KnownHost {
     readonly url: string;
@@ -65,10 +97,10 @@ export interface KnownHost {
 /**
  * THE KNOWN HOSTS (Tynn #819): every host this device holds a token for or has connected to, newest first, with its name
  * and when it was last connected. A host remembered before names were kept is listed by its address, never dropped.
- * Forget removes the host AND its token — the next connection needs the PIN again.
+ * Forget removes the host AND its token — the next connection needs the PIN again. On a desktop the host holds the tokens, so `held` answers; a phone reads its own storage.
  */
-export function knownHosts(storage: TokenStorage) {
-    const tokens = rememberedTokens(storage);
+export function knownHosts(storage: TokenStorage, held?: { hosts(): string[]; forget(url: string): void }) {
+    const tokens = held ?? rememberedTokens(storage);
     const read = (): Record<string, { name: string | null; at: number | null }> => {
         try {
             const raw = storage.getItem(HOSTS_KEY);
@@ -87,7 +119,7 @@ export function knownHosts(storage: TokenStorage) {
             const meta = read();
             const urls = [...new Set([...Object.keys(meta), ...tokens.hosts()])];
             return urls
-                .map((url): KnownHost => ({ url, name: meta[url]?.name ?? null, lastConnectedAt: meta[url]?.at ?? null, paired: tokens.tokenFor(url) !== null }))
+                .map((url): KnownHost => ({ url, name: meta[url]?.name ?? null, lastConnectedAt: meta[url]?.at ?? null, paired: tokens.hosts().includes(url) }))
                 .sort((a, b) => (b.lastConnectedAt ?? -1) - (a.lastConnectedAt ?? -1));
         },
         noteConnected: (url: string, name: string | null, at: number): void => write({ ...read(), [url]: { name, at } }),

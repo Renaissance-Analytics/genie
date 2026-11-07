@@ -18,7 +18,7 @@ import { TerminalHost, type PtyPort } from '../src/main/terminal-host.js';
 
 describe('shellLaunch', () => {
     it('Windows: cmd.exe /d /s /c with the line as one argument', () => {
-        expect(shellLaunch('win32', () => ({ command: 'pwsh.exe', args: [] }), 'cd app && php artisan migrate')).toEqual({ command: 'cmd.exe', args: ['/d', '/s', '/c', 'cd app && php artisan migrate'] });
+        expect(shellLaunch('win32', () => ({ command: 'pwsh.exe', args: [] }), 'cd app && php artisan migrate')).toEqual({ command: process.env.SystemRoot ? `${process.env.SystemRoot}\\System32\\cmd.exe` : 'C:\\Windows\\System32\\cmd.exe', args: ['/d', '/s', '/c', 'cd app && php artisan migrate'] });
     });
     it('elsewhere: the login shell, -lc, the line as one argument', () => {
         expect(shellLaunch('linux', () => ({ command: '/usr/bin/zsh', args: ['-l'] }), 'cd app && php artisan migrate')).toEqual({ command: '/usr/bin/zsh', args: ['-lc', 'cd app && php artisan migrate'] });

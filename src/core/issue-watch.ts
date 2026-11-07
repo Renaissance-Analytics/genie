@@ -33,7 +33,10 @@ export interface IwItem {
 export interface IwEntry {
     readonly projectId: string;
     readonly items: readonly IwItem[];
+    /** A WINDOW of the open Tynn issues, not all of them: the most recently moved, bounded (Tynn's FEEDBACK_ITEMS_LIMIT). */
     readonly feedback: readonly IwItem[];
+    /** How many Tynn issues are open (`counts.feedback`); absent or `null` = Tynn did not say. */
+    readonly feedbackTotal?: number | null | undefined;
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
@@ -67,8 +70,10 @@ export function parseIssueWatchEntry(raw: unknown): IwEntry | null {
     const projectId = str(r.projectId) ?? str(r.workspaceId);
     if (projectId === null || !Array.isArray(r.items)) return null;
     const keep = <T>(v: T | null): v is T => v !== null;
+    const total = (r.counts as { feedback?: unknown } | null | undefined)?.feedback;
     return {
         projectId,
+        feedbackTotal: typeof total === 'number' && Number.isFinite(total) ? total : null,
         items: r.items.map((i) => readItem(i, false)).filter(keep),
         feedback: (Array.isArray(r.feedbackItems) ? r.feedbackItems : []).map((i) => readItem(i, true)).filter(keep),
     };
@@ -119,25 +124,90 @@ export const IW_EVENT_KINDS: ReadonlyArray<{ kind: IwEventKind; label: string; d
 const family = (item: IwItem): 'issue' | 'pr' | 'security' | 'feedback' =>
     item.kind === 'feedback' ? 'feedback' : SECURITY.has(item.kind) ? 'security' : item.kind === 'pr' ? 'pr' : 'issue';
 
-/** Consecutive entries, per project, into events. Holds only each item's last `updatedAt`. */
+const timeOf = (iso: string | null | undefined): number | null => {
+    const at = iso ? Date.parse(iso) : Number.NaN;
+    return Number.isNaN(at) ? null : at;
+};
+
+/** The latest move in a list: `null` when none has a readable time. */
+function latestMove(list: readonly IwItem[]): number | null {
+    const times = list.map((i) => timeOf(i.updatedAt ?? i.createdAt)).filter((t): t is number => t !== null);
+    return times.length > 0 ? Math.max(...times) : null;
+}
+
+/** What the feed remembers of one project. */
+interface FeedMemory {
+    /** Every item seen since boot, with its last `updatedAt`. Never forgotten: leaving a list says nothing about an item. */
+    readonly seen: Map<string, string>;
+    /** The GitHub items in the last entry, for what closed. */
+    items: ReadonlySet<string>;
+    /** The Tynn issues in the last entry, for what closed. */
+    window: ReadonlySet<string>;
+    /** The latest move in the first entry, on each source's own clock (see `IssueWatchFeed`). */
+    readonly baseline: { readonly github: number | null; readonly tynn: number | null };
+}
+
+/**
+ * Consecutive entries, per project, into events.
+ *
+ * EVERY LIST HERE IS A WINDOW (genie#1531). Tynn sends its 10 most recently moved open issues, and reads one page of 50 per
+ * GitHub stream, where `/issues` counts pull requests in that 50 before they are filtered out. An item enters and leaves with
+ * nothing changing on it, because another one moved or closed. So being seen for the first time never means new.
+ *
+ * NEW is: not seen since boot, and created at or after the baseline, the latest move in the first entry. The lists are
+ * sorted newest first, so what they leave out is older than what they hold: anything that existed then was created no later
+ * than the baseline, and anything created since at or after it. Each source has its own baseline, because a time from one
+ * clock says nothing exact about the other. A row with no `createdAt` is judged by its last move, and with no time at
+ * all it can't be ruled out, so it is told, once.
+ *
+ * An item that first appears from before the baseline is news only if it moved since: an `.updated`, never a `.new`.
+ *
+ * THE LIMITS: an issue reopened after being seen is an `.updated`, and closed Tynn issues are told only when the window holds
+ * every open one (`counts.feedback`). GitHub has no such total, so an item leaving a full page is counted as closed.
+ * What is seen lives for the process: the first entry after a restart is a baseline, so what was created while Genie was
+ * down is not told.
+ */
 export class IssueWatchFeed {
-    readonly #seen = new Map<string, Map<string, string>>();
+    readonly #memory = new Map<string, FeedMemory>();
 
     apply(entry: IwEntry): IwEvent[] {
+        const items = new Set(entry.items.map((i) => i.key));
+        const window = new Set(entry.feedback.map((i) => i.key));
         const all = [...entry.items, ...entry.feedback];
-        const before = this.#seen.get(entry.projectId);
-        this.#seen.set(entry.projectId, new Map(all.map((i) => [i.key, i.updatedAt ?? ''])));
-        if (before === undefined) return [];
+        const before = this.#memory.get(entry.projectId);
+        if (before === undefined) {
+            this.#memory.set(entry.projectId, {
+                seen: new Map(all.map((i) => [i.key, i.updatedAt ?? ''])),
+                items,
+                window,
+                baseline: { github: latestMove(entry.items), tynn: latestMove(entry.feedback) },
+            });
+            return [];
+        }
         const events: IwEvent[] = [];
         for (const item of all) {
-            const was = before.get(item.key);
             const f = family(item);
-            if (was === undefined) events.push({ kind: `${f}.new` as IwEventKind, item });
-            else if (f !== 'feedback' && (item.updatedAt ?? '') > was) events.push({ kind: `${f}.updated` as IwEventKind, item });
+            const updated = item.updatedAt ?? '';
+            const was = before.seen.get(item.key);
+            if (was === undefined || updated > was) before.seen.set(item.key, updated);
+            if (was !== undefined) {
+                if (f !== 'feedback' && updated > was) events.push({ kind: `${f}.updated` as IwEventKind, item });
+                continue;
+            }
+            const baseline = f === 'feedback' ? before.baseline.tynn : before.baseline.github;
+            const created = timeOf(item.createdAt ?? item.updatedAt);
+            if (baseline === null || created === null || created >= baseline) {
+                events.push({ kind: `${f}.new` as IwEventKind, item });
+            } else if (f !== 'feedback' && (timeOf(item.updatedAt) ?? 0) > baseline) {
+                events.push({ kind: `${f}.updated` as IwEventKind, item });
+            }
         }
-        const now = new Set(all.map((i) => i.key));
-        const closed = [...before.keys()].filter((k) => !now.has(k)).length;
+        const whole = (entry.feedbackTotal ?? 0) <= entry.feedback.length;
+        const closed = [...before.items].filter((k) => !items.has(k)).length
+            + (whole ? [...before.window].filter((k) => !window.has(k)).length : 0);
         if (closed > 0) events.push({ kind: 'closed', count: closed });
+        before.items = items;
+        before.window = window;
         return events;
     }
 }
@@ -263,6 +333,8 @@ export function tynnProjectIdOf(manifest: string | null): string | null {
 /** What IssueWatch knows of one workspace now: the client's state, whether it is linked to a Tynn project, its latest entry. */
 export interface IssueWatchSummary {
     readonly state: 'signed-out' | 'connecting' | 'live' | 'reconnecting' | 'stopped';
+    /** Why it is not live: the client's last failure, in its own words (genie#1478). */
+    readonly reason?: string | undefined;
     /** Linked to a Tynn project (project.json `tynn.projectId`). */
     readonly linked: boolean;
     /** The latest entry Tynn sent for it; absent until one arrives. */
@@ -301,7 +373,7 @@ export function issueWatchCountLine(c: IssueWatchCounts): string {
 export function issueWatchWhyNot(s: IssueWatchSummary): string | null {
     if (!s.linked) return 'this workspace is not linked to a Tynn project (project.json tynn.projectId)';
     if (s.state === 'signed-out') return 'not signed in to Tynn (Settings → Accounts → Tynn → Open Tynn in your browser)';
-    if (s.state !== 'live' && s.entry === undefined) return 'IssueWatch is not connected to Tynn yet';
+    if (s.state !== 'live' && s.entry === undefined) return s.reason ? `IssueWatch is not connected to Tynn: ${s.reason}` : 'IssueWatch is not connected to Tynn yet';
     if (s.entry === undefined) return 'Tynn has sent nothing for this workspace yet';
     return null;
 }
@@ -465,7 +537,7 @@ export function issueWatchPanelView(summary: IssueWatchSummary, recent: readonly
     // fresh; older, it says how old, in warning words — the socket being up says nothing about the list.
     const line: IssueWatchPanelView['line'] = !summary.linked ? { tone: 'muted', text: issueWatchWhyNot(summary)! }
         : why !== null ? { tone: 'warn', text: why }
-        : summary.state !== 'live' ? { tone: 'warn', text: 'Reconnecting to Tynn — showing what it last sent' }
+        : summary.state !== 'live' ? { tone: 'warn', text: summary.reason ? `Not connected to Tynn (${summary.reason}) — showing what it last sent` : 'Reconnecting to Tynn — showing what it last sent' }
         : delivered === undefined ? { tone: 'ok', text: 'Live from Tynn' }
         : now - delivered > ISSUE_WATCH_STALE_MS ? { tone: 'warn', text: `Tynn last sent this list ${shortAge(delivered, now)} ago — it may be out of date. Refresh asks for it now.` }
         : { tone: 'ok', text: `Live from Tynn · updated ${shortAge(delivered, now)} ago` };

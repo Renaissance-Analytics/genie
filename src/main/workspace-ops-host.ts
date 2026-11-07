@@ -23,6 +23,8 @@ import { publishEnvelope, type AgiRemotePorts } from './agi-remote-host.js';
  */
 
 export interface WorkspaceOpsPorts {
+    /** Host-owned fresh verdict before publishing awake metadata to any workspace consumer. */
+    reverifyTrustBeforeRedock?(workspaceId: string): Promise<void>;
     fs: {
         exists(path: string): Promise<boolean>;
         entries(path: string): Promise<string[]>;
@@ -54,8 +56,8 @@ export interface WorkspaceOpsPorts {
     };
     host: {
         probe(agentId: AgentRecord['id']): LiveSession | null;
-        prompt(agentId: AgentRecord['id'], text: string): boolean;
-        stop(agentId: AgentRecord['id']): boolean;
+        prompt(agentId: AgentRecord['id'], text: string): boolean | Promise<boolean>;
+        stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
     };
     attention: { finished(): readonly { agentId: string; handoff: string | null; at: string }[] };
     terminals: { list(): readonly { id: string; workspaceId: string }[]; close(id: string): boolean };
@@ -124,15 +126,18 @@ export function workspaceAtFolder(ports: Pick<WorkspaceOpsPorts, 'registry'>, pa
 /** The refusal for a folder that is already a workspace (see `workspaceAtFolder`). */
 export const alreadyAtFolder = (path: string, id: string): string => `${path} is already the workspace ${id}. Open that workspace instead.`;
 
+const KEEPS_MANIFEST = 'keep project.json, adding what it lacks (a copy stays beside it)';
+
 export async function previewAddWorkspace(ports: WorkspaceOpsPorts, path: string, id: string = basename(path)): Promise<AddPreview> {
     if (isRoot(path)) return { ok: false, reason: `${path} is a whole drive; pick a folder on it` };
     if (ports.registry.workspace(id)) return { ok: false, reason: alreadyNamed(id) };
     const existing = workspaceAtFolder(ports, path);
     if (existing) return { ok: false, reason: alreadyAtFolder(path, existing.id) };
     const exists = await ports.fs.exists(path);
-    const kind = classifyFolder({ exists, entries: exists ? await ports.fs.entries(path) : [] });
+    const entries = exists ? await ports.fs.entries(path) : [];
+    const kind = classifyFolder({ exists, entries });
     try {
-        return { ok: true, path, kind, steps: planAdd(kind, path) };
+        return { ok: true, path, kind, steps: planAdd(kind, path).map((step) => (entries.includes('project.json') && step.action.startsWith('write project.json') ? { ...step, action: KEEPS_MANIFEST } : step)) };
     } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message : String(error) };
     }
@@ -186,12 +191,23 @@ export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overl
         if (!stamp.ok) return stamp;
         stamped = stamp.stamped;
     } else {
+        // A project.json already here is the folder's: what it says stays. Read before anything is made, so a refusal touches nothing.
+        let kept: Record<string, unknown> = {};
+        const keeps = preview.steps.some((step) => step.action === KEEPS_MANIFEST);
+        if (keeps) {
+            const current = await ports.fs.readJson(manifestPath);
+            if (typeof current !== 'object' || current === null || Array.isArray(current)) return { ok: false, reason: `project.json in ${path} isn't a JSON object Genie can read, so Genie won't replace it. Fix it or move it, then add the folder again.` };
+            const stamp = stampSchema(current as Record<string, unknown>, SCHEMA_REVISION);
+            if (!stamp.ok) return stamp;
+            await ports.fs.writeJson(join(path, 'project.json.pre-add.bak'), current);
+            kept = stamp.manifest;
+        }
         if (preview.kind === 'empty') await ports.fs.mkdir(join(path, 'repos'));
         await ports.fs.mkdir(join(path, '.ai'));
         await ports.fs.mkdir(join(path, 'sandbox'));
         await ports.fs.mkdir(join(path, '.trash'));
         // The source may say more than the folder does (§6.1 from Tynn: the project name, its vision, the `tynn` link).
-        await ports.fs.writeJson(manifestPath, { ...freshManifest(path, preview.kind), ...(overlay ?? {}) });
+        await ports.fs.writeJson(manifestPath, { ...freshManifest(path, preview.kind), ...kept, ...(overlay ?? {}) });
         if (preview.kind === 'empty') await ports.fs.gitInit(path);
     }
 
@@ -274,6 +290,12 @@ export async function hibernateWorkspace(ports: WorkspaceOpsPorts, workspaceId: 
  * reported; the wake stands.
  */
 export async function wakeWorkspace(ports: WorkspaceOpsPorts, workspaceId: string): Promise<{ ok: true; services?: EnginesTouched & { started: string[] } } | Refusal> {
+    const workspace = ports.registry.workspace(workspaceId);
+    if (!workspace) return { ok: false, reason: `no workspace ${workspaceId}` };
+    if (workspace.asleep && ports.reverifyTrustBeforeRedock) {
+        try { await ports.reverifyTrustBeforeRedock(workspaceId); }
+        catch (error) { return { ok: false, reason: `workspace trust could not be verified: ${reasonOf(error)}` }; }
+    }
     if (!(await ports.registry.setAsleep(workspaceId, false))) return { ok: false, reason: `no workspace ${workspaceId}` };
     if (!ports.engines) return { ok: true };
     const started: string[] = [];
@@ -421,7 +443,7 @@ export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: str
     return { ok: true, id, kind: 'empty', stamped: null };
 }
 
-export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord, load?: { running: number; cap: number }): string | null {
+export function startRefusal(ports: { readonly registry: { workspace(id: string): { readonly id: string; readonly asleep?: boolean | undefined } | null } }, record: AgentRecord, load?: { running: number; cap: number }): string | null {
     const workspace = ports.registry.workspace(record.workspaceId);
     if (workspace?.asleep) return `${workspace.id} is hibernating; wake it before starting ${record.name}`;
     // §6.1 caps: a start past the cap is refused with the number and the setting named — never queued, never silent.

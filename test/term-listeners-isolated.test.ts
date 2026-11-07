@@ -29,7 +29,7 @@ describe('the engine adapter (fancy-term-port)', () => {
     it('a data listener that throws: the engine’s call does not throw, and the next listener still hears (COUNTED)', () => {
         const report = vi.spyOn(console, 'error').mockImplementation(() => {});
         const e = backend();
-        const port = fancyTermPort(e.b, { defaultShell: () => ({ command: 'sh', args: [] }) });
+        const port = fancyTermPort(e.b, { defaultShell: () => ({ command: 'sh', args: [] }), platform: 'linux' });
         const heard: string[] = [];
         port.onData(() => { throw new Error('window closed'); });
         port.onData((id, d) => heard.push(`${id}:${d}`));

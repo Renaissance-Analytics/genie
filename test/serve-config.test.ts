@@ -57,19 +57,19 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
     });
 
     it('static: its port bound to 127.0.0.1, root inside the repo, file_server; SPA adds the index.html fallback', () => {
-        const plain = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: false } })!;
+        const plain = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: 'dist', spa: false } })!;
         expect(plain).toContain('http://:4101 {');
         expect(plain).toContain('bind 127.0.0.1');
         expect(plain).toContain('root * /repo/dist');
         expect(plain).toContain('file_server');
         expect(plain).not.toContain('try_files');
 
-        const spa = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: true } })!;
+        const spa = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: 'dist', spa: true } })!;
         expect(spa).toContain('try_files {path} /index.html');
     });
 
     it('php: public/ behind php_fastcgi on the worker port', () => {
-        const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
+        const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
         expect(php).toContain('root * /repo/public');
         expect(php).toContain('php_fastcgi 127.0.0.1:4102 {');
         // The request is HTTPS to PHP (moic.gen rendered blank: http:// asset links on an https page). COUNTED: exactly
@@ -79,7 +79,7 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
         expect(block.match(/^\t\tenv REQUEST_SCHEME https$/gm) ?? []).toHaveLength(1);
         expect(block.match(/^\t\tenv SERVER_PORT 443$/gm) ?? []).toHaveLength(1);
         // CONTROL: a static site has no PHP and so no such block.
-        expect(serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: false } })).not.toContain('env HTTPS');
+        expect(serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: 'dist', spa: false } })).not.toContain('env HTTPS');
         expect(php).toContain('file_server');
     });
 
@@ -88,12 +88,12 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
     // worker gone 1.5 s on the same port: without these lines a request in the gap was 502 after 8 ms; with them, 200
     // after 1617 ms.
     it('php: the site’s Caddy waits for its PHP worker to come back instead of answering 502', () => {
-        const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
+        const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
         const block = /php_fastcgi 127\.0\.0\.1:4102 \{([\s\S]*?)\n\t\}/.exec(php)?.[1] ?? '';
         expect(block.match(/^\t\tlb_try_duration 10s$/gm) ?? []).toHaveLength(1);
         expect(block.match(/^\t\tlb_try_interval 100ms$/gm) ?? []).toHaveLength(1);
         // CONTROL: a static site has no upstream to wait for.
-        expect(serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: false } })).not.toContain('lb_try');
+        expect(serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: 'dist', spa: false } })).not.toContain('lb_try');
     });
 
     // B22, moic.gen again (2026-10-15): with HTTPS=on set, Laravel STILL built http:// asset links. The site's Caddy
@@ -102,7 +102,7 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
     // Measured in WSL genie-test with Caddy 2.11.7 + php-cgi 8.3 + symfony/http-foundation 7.4: HTTP_X_FORWARDED_PROTO=http,
     // symfony.url=http://moic.gen/... The cure tells PHP the same thing on both signals and trusts NO proxy header.
     it('php: X-Forwarded-Proto is https to PHP, set in the php_fastcgi block, with no proxy trusted', () => {
-        const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
+        const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
         const block = /php_fastcgi 127\.0\.0\.1:4102 \{([\s\S]*?)\n\t\}/.exec(php)?.[1] ?? '';
         // COUNTED: exactly one, inside the php_fastcgi block (anywhere else it would not reach PHP).
         expect(block.match(/^\t\theader_up X-Forwarded-Proto https$/gm) ?? []).toHaveLength(1);
@@ -111,7 +111,7 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
         // (measured: `trusted_proxies static private_ranges` delivered a private peer's spoofed `203.0.113.9`).
         expect(php).not.toMatch(/trusted_proxies|client_ip_headers/);
         // CONTROL: a static site runs no PHP and gets neither.
-        expect(serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: true } })).not.toContain('X-Forwarded-Proto');
+        expect(serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: 'dist', spa: true } })).not.toContain('X-Forwarded-Proto');
     });
 
     // The owner, 2026-10-14, on beta.24: "Zero *.gen sites are being served". Measured on his machine: one site's own
@@ -120,7 +120,7 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
     // And a bare `127.0.0.1:4109` address is served over HTTPS, while the front door proxies to it in plain HTTP.
     it('a site’s Caddy holds ITS port and nothing else: auto_https off, admin off, an explicit http:// address', () => {
         for (const serve of [{ mode: 'static', root: 'dist', spa: false }, { mode: 'php', root: 'public', fcgiPort: 4102 }] as const) {
-            const out = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve })!;
+            const out = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve })!;
             const globals = /^\{([\s\S]*?)\n\}/.exec(out)?.[1] ?? '';
             expect(globals).toMatch(/^\s*auto_https off\s*$/m);
             expect(globals).toMatch(/^\s*admin off\s*$/m);
@@ -134,12 +134,12 @@ describe('the Caddyfile Genie renders — per site, loopback only', () => {
     });
 
     it('never binds beyond loopback, and refuses a root that escapes the repo', () => {
-        const out = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: 'dist', spa: true } })!;
+        const out = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: 'dist', spa: true } })!;
         // The address names no interface, so the `bind` line is what keeps it on loopback: exactly one, and only that.
         expect(out).not.toMatch(/0\.0\.0\.0/);
         expect(out.match(/^\s*bind\s+\S+$/gm) ?? []).toEqual(['\tbind 127.0.0.1']);
-        expect(() => serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: '../etc', spa: false } })).toThrow(/inside the repo/);
-        expect(() => serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'static', root: '/etc', spa: false } })).toThrow(/inside the repo/);
+        expect(() => serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: '../etc', spa: false } })).toThrow(/inside the repo/);
+        expect(() => serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'static', root: '/etc', spa: false } })).toThrow(/inside the repo/);
     });
 });
 

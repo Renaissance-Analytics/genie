@@ -72,15 +72,42 @@ function step(i: number): void {
     if (i % 50 === 0) send({ sessionUpdate: 'usage_update', used: 10_000 + i, size: 200_000 });
 }
 
+/**
+ * Every read of a row SLOT older than the newest `fresh`, in each of `arrays`, counted: each old index becomes an accessor
+ * that counts and returns the row. The host keeps its rows and the ledger it serves as arrays grown in place, so a read of
+ * the ledger — a `for … of`, a spread, a `slice`, an index — goes through these, and a rescan reads every old slot. Rows
+ * appended after this stay plain (they are the newest, which an event is allowed to read).
+ */
+function countOldRowReads(arrays: readonly (readonly unknown[])[], fresh: number): { reads: number; old: number } {
+    const gauge = { reads: 0, old: 0 };
+    const seen = new Set<readonly unknown[]>();
+    for (const array of arrays) {
+        if (seen.has(array)) continue;
+        seen.add(array);
+        const old = Math.max(0, array.length - fresh);
+        if (gauge.old === 0) gauge.old = old;
+        for (let i = 0; i < old; i += 1) {
+            let row = array[i];
+            Object.defineProperty(array, i, {
+                configurable: true,
+                enumerable: true,
+                get: () => { gauge.reads += 1; return row; },
+                set: (next: unknown) => { row = next; },
+            });
+        }
+    }
+    return gauge;
+}
+
 describe('a live session with a 60k-row ledger', () => {
     it('costs the same per event as an empty one: what main reads per event does not rescan the rows', () => {
         /*
-         * MEASURED AGAINST ITSELF, IN THE SAME RUN (genie#1273). This held the cost to an absolute 2 ms per event. CI's
-         * ubuntu runner reads 0.18 ms and omarchy-test 0.015 ms when the file runs alone — but in a full suite on the VM
-         * (four workers, the VM below normal priority) one 200-event window read 3.6 ms: a stall landing on the window,
-         * not a cost of the code. And a flat cost was never the claim's opposite of "under 2 ms"; it is "not more with a
-         * bigger ledger". So the same events are timed on a 600-row session and a 60,000-row one, interleaved so a stall
-         * cannot favour either, each taken as its BEST batch (interference only ever adds time).
+         * COUNTED, NOT TIMED (genie#1273, and again 2026-11-01). This compared ms per event at 600 and 60,000 rows. The
+         * ratio was right in every run (x0.64–x1.01, the control x60–x185) — and the test still failed most full-suite
+         * runs on omarchy-test (2 vCPU), timed out at 5 s building and timing the ledgers. What it names is "does not
+         * rescan the rows", and that is a count: every read of a row slot is counted (`countOldRowReads`), on the host's
+         * rows and on the ledger it serves, and an event of a 60,000-row session must read no more of its old rows than
+         * an event of a 600-row one. A rescan reads every one of them, per read.
          */
         // Per event, main read the session three times (the window's detail, the Dashboard's snapshot twice) and the
         // ledger twice (the detail's rows and its turn count).
@@ -101,30 +128,29 @@ describe('a live session with a 60k-row ledger', () => {
             };
             while (host.rowsFor(r.id).length < rows) { events = mine; step(i++); }
             expect(host.rowsFor(r.id).length).toBeGreaterThanOrEqual(rows);
-            /** The best of `batches` batches of `per` events: ms per event. */
-            const batch = (per: number, scan: boolean) => { const t0 = performance.now(); for (let k = 0; k < per; k += 1) event(scan); return (performance.now() - t0) / per; };
-            return { host, batch };
+            // The first reads build what is then KEPT (the ledger served, the background count): once, not per event.
+            for (let k = 0; k < 5; k += 1) event(false);
+            // Every row but the newest 100 (a reply, its tool calls — what an event may read) is counted from here on.
+            const gauge = countOldRowReads([host.rowsFor(r.id), host.ledgerFor(r.id)], 100);
+            /** Old row slots read per event, over `n` events. */
+            const perEvent = (n: number, scan: boolean) => { const before = gauge.reads; for (let k = 0; k < n; k += 1) event(scan); return (gauge.reads - before) / n; };
+            return { host, gauge, perEvent };
         };
         const small = live(600);
         const large = live(ROWS);
-        const best = { small: Infinity, large: Infinity, smallScan: Infinity, largeScan: Infinity };
-        for (let b = 0; b < 8; b += 1) {
-            best.small = Math.min(best.small, small.batch(50, false));
-            best.large = Math.min(best.large, large.batch(50, false));
-            best.smallScan = Math.min(best.smallScan, small.batch(10, true));
-            best.largeScan = Math.min(best.largeScan, large.batch(10, true));
-        }
-        const growth = best.large / best.small;
-        const controlGrowth = best.largeScan / best.smallScan;
-        console.log(`PERF: main-side reads per event: ${best.small.toFixed(3)} ms at 600 rows, ${best.large.toFixed(3)} ms at ${ROWS} (x${growth.toFixed(2)}); with the ledger walked per read x${controlGrowth.toFixed(1)}`);
-        // POSITIVE CONTROL: the same gauge, the same events, plus the ledger walked once per read — and the growth shows.
-        expect(controlGrowth, `control growth x${controlGrowth.toFixed(2)}`).toBeGreaterThan(10);
-        // A hundred times the rows, and the same cost per event. Before the fix each read walked all 60k rows (a delivery
-        // read alone built a map of 15k calls and sorted it).
-        expect(growth, `per event x${growth.toFixed(2)} from 600 to ${ROWS} rows`).toBeLessThan(3);
+        const reads = { small: small.perEvent(200, false), large: large.perEvent(200, false), smallScan: small.perEvent(2, true), largeScan: large.perEvent(2, true) };
+        console.log(`PERF: old rows main reads per event: ${reads.small} at 600 rows, ${reads.large} at ${ROWS}; with the ledger walked per read ${reads.smallScan} / ${reads.largeScan} (${large.gauge.old} old rows counted)`);
+        // POSITIVE CONTROL: the same gauge, the same events, plus the ledger walked five times per event (what the reads did
+        // before the fix) — and the gauge sees every old row, five times.
+        expect(reads.largeScan, `control: ${reads.largeScan} old rows read per event`).toBeGreaterThanOrEqual(5 * large.gauge.old);
+        expect(large.gauge.old).toBeGreaterThan(ROWS - 1_000);
+        // A hundred times the rows, and no more of them read per event. Before the fix each read walked all 60k rows (a
+        // delivery read alone built a map of 15k calls and sorted it): 59,900 or more per read, five reads per event.
+        expect(reads.large - reads.small, `old rows read per event: ${reads.large} at ${ROWS} rows, ${reads.small} at 600`).toBeLessThan(100);
+        expect(reads.large, `old rows read per event at ${ROWS} rows`).toBeLessThan(100);
         small.host.stopAll();
         large.host.stopAll();
-    });
+    }, 30_000);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

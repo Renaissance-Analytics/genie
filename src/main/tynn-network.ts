@@ -62,6 +62,9 @@ export async function connectableWorkstations(request: SessionRequest, thisMachi
     for (const row of Array.isArray(rows) ? rows : []) {
         const r = row as Record<string, unknown>;
         if (typeof r.id !== 'string' || thisMachine.has(r.id) || byId.has(r.id)) continue;
+        // No entitlement at all: Tynn still lists a machine whose share link was claimed, after its one session is over
+        // (tynn.ai #394), with no source and not connectable. It is not this person's to reach, so it is not offered.
+        if (typeof r.source !== 'string' || r.source === '') continue;
         byId.set(r.id, {
             id: r.id,
             name: typeof r.name === 'string' && r.name !== '' ? r.name : r.id,
@@ -137,13 +140,13 @@ export interface RelayHostPorts {
 }
 
 /** The host's own calls to Tynn: its proof header, no session, no cookies. */
-export function relayHostPorts(input: { tynnHost: string; workstationId: string; authHeader: () => string; fetch: typeof fetch }): RelayHostPorts {
+export function relayHostPorts(input: { tynnHost: string; workstationId: string; authHeader: () => string | Promise<string>; fetch: (url: string, init?: RequestInit) => Promise<Response> }): RelayHostPorts {
     const base = input.tynnHost.replace(/\/+$/, '');
     return {
         async ticket() {
             let res: Response;
             try {
-                res = await input.fetch(`${base}/api/v1/workstations/${encodeURIComponent(input.workstationId)}/relay-ticket`, { method: 'POST', headers: { accept: 'application/json', authorization: input.authHeader() } });
+                res = await input.fetch(`${base}/api/v1/workstations/${encodeURIComponent(input.workstationId)}/relay-ticket`, { method: 'POST', headers: { accept: 'application/json', authorization: await input.authHeader() } });
             } catch (error) {
                 throw new Error(`Tynn could not be reached (${error instanceof Error ? error.message : String(error)})`);
             }
@@ -194,6 +197,8 @@ export type RelayHostStatus =
 export interface RelayHostHandle {
     status(): RelayHostStatus;
     stop(): void;
+    /** Re-check every live session's grant with Tynn now, rather than at the next timer (a link was just revoked). */
+    revalidate(): Promise<void>;
 }
 
 /**
@@ -205,7 +210,7 @@ export function startRelayHost(input: {
     socket: RelaySocketFactory;
     workstationId: string;
     fingerprint: string;
-    sign: (data: Buffer) => Buffer;
+    sign: (data: Buffer) => Buffer | Promise<Buffer>;
     attach?: (transport: ServerTransport) => () => void;
     onStatus?: (status: RelayHostStatus) => void;
     reconnect?: { minMs: number; maxMs: number };
@@ -261,6 +266,7 @@ export function startRelayHost(input: {
 
     return {
         status: () => status,
+        revalidate: async () => { await link?.revalidate(); },
         stop() {
             stopped = true;
             link?.close();

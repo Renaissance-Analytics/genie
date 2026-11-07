@@ -1,10 +1,12 @@
 import { limitOf } from '../core/shell-limits.js';
+import { createNativeTerminalPort } from './local-terminal-native.js';
+import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
 import { readTynnPage } from './tynn-page-client.js';
 import type { TynnPage, TynnPageQuery } from '../core/tynn-pages.js';
-import type { BoardIds, BoardLiveSignal, BoardScope } from '../core/tynn-board.js';
-import { TynnBoardLive } from './tynn-board-live.js';
+import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
+import type { Headroom } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
@@ -26,9 +28,11 @@ import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
-import { commsOf } from '../core/comms.js';
+import { CommsCache } from '../core/comms.js';
+import { askerLiveFrom } from './asker-live.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
+import { localProtocolDoor } from './local-protocol-door.js';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
@@ -36,6 +40,7 @@ import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
+import { crashReportHost } from './crash-report-host.js';
 import { FilesWindows } from './files-windows.js';
 import { availableParallelism, homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
@@ -43,33 +48,49 @@ import { fileURLToPath } from 'node:url';
 import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
 import type { AgentDetail } from '../renderer/bridge.js';
 import type { TimedEvent } from '../core/stream-view.js';
-import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
+import { AGENT_PUSH_INTERVAL_MS, AgentPush, wireInboxChatUpdates } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
+import { LatestPush } from '../core/latest-push.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
+import { TrustVerdicts } from './trust-verdict.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
-import { quitPlan, quitSequence } from '../core/quit.js';
+import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
+import { windowLaunchFlags } from '../core/launch-flags.js';
+import { startBeat } from './safe-mode-beat.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
-import { TynnAccount } from './tynn-account.js';
+import { settleStaleLegacyPairing, tynnPairingSource, TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
-import { GithubAccount } from './github-account.js';
+import { githubSealedSources, GithubAccount } from './github-account.js';
+import type { GithubAccountReplica } from './github-account-replica.js';
 import type { RepoListing } from '../core/github.js';
-import { ensureWorkstation, identityFrom, readGenie1Identity, workstationKeyStore } from './workstation-identity.js';
+import { readGenie1Identity, workstationKeyStore, workstationSealedSources } from './workstation-identity.js';
+import { WorkstationService, type WorkstationPort } from './workstation-service.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
+import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn, unlockKeyringBeforeStores } from './linux-keyring.js';
+import type { KeyringReplica } from './keyring-replica.js';
+import { osCipher } from './os-cipher.js';
+import { linkedAgentSecrets, linkedVault } from './agent-secrets.js';
+import { reportProxyAnswers } from './proxy-report.js';
+import type { SessionEngineClient } from './session-engine-client.js';
+import type { TynnAccountReplica } from './tynn-account-replica.js';
+import { Keychain } from './keychain.js';
+import { gatherSources, hostVault } from './keychain-migration.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
-import { droneRefusal, effectiveRoleOf, type WorkstationRole } from '../core/workstation-role.js';
+import { droneRefusal, effectiveRoleOf, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
+import { deviceLinkGate } from './device-link-gate.js';
 import { dispatchConnectLink } from '../core/connect-link.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
 import { wordTynnRefusal } from './drone-refusal.js';
@@ -78,6 +99,7 @@ import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { featureOrigin, HostPicks } from './host-picks.js';
+import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
@@ -87,18 +109,31 @@ import { chmod, mkdir, readdir, readFile as readFileText, stat as statPath, writ
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
-import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
-import { sweepLeftoverProviders } from './leftover-sweep.js';
+import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
+import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
+import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js';
+import { RECOVER_REPORT, RECOVER_RESTART, pageMemorySampler, recoverRenderer, rendererErrorPage, type RendererNotice } from './renderer-recovery.js';
+import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-records.js';
+import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
+import type { ListedPty } from './spawn-host-protocol.js';
+import * as diagnosticsChannel from 'node:diagnostics_channel';
+import { Session as InspectorSession } from 'node:inspector';
+import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
+import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
+import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
+import { hostBuild } from './engine-launch.js';
+import { materializeHostRuntime } from './host-runtime.js';
 import { LoginHost } from './login-host.js';
-import { openScratchTerminal } from './scratch-terminal.js';
+import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
+import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { DESIGN_LOGIN, tellDesignLoginRan } from '../core/design-login.js';
 import { PlanKeepalive } from '../core/plan-keepalive.js';
@@ -106,8 +141,9 @@ import { ActivityFeeds } from './activity-feeds.js';
 import type { ActivityFeed } from '../core/activity-feed.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
-import { ChatDraftStore, MAX_DRAFT_FILE_BYTES } from './chat-draft-store.js';
-import { composeServices, type ComposedServices } from './compose.js';
+import { ChatDraftStore } from './chat-draft-store.js';
+import { engineDraftsPort } from './engine-draft-files-client.js';
+import { composeServices, composeWindowServices, type ComposeInput, type WindowServices } from './compose.js';
 import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
 import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
 import { QuestionWindow } from './question-window.js';
@@ -118,17 +154,20 @@ import { readV1Catalog, readV1Knowledge } from './v1-import.js';
 import { readV1Inbox } from './v1-inbox.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
-import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
-import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers } from './tray.js';
+import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers, type TrayItem } from './tray.js';
 import { needsYouCount } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
-import { showOnBoot } from '../core/tray-resident.js';
+import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
+import { onTheClock, trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
+import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
+import { panelRestart } from '../core/panel-restart.js';
+import { LeftRunningMark } from './left-running.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
-import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
+import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
@@ -142,7 +181,8 @@ import { installRustVersion, listRustVersions, managedRust, removeRustVersion, r
 import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, rubyVersionsRoot, type RubyVersionsPorts } from './ruby-versions.js';
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
-import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
+import { runElevatedBatch, type PrivilegedStep } from './elevate.js';
+import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -150,25 +190,32 @@ import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { osPidAlive } from './process-supervisor.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
-import { electronBrowserView } from './electron-browser-view.js';
-import { genieBrowserWindows, type GenieBrowserWindows } from './genie-browser-electron.js';
-import { sitePanels } from './site-panels-electron.js';
+import { electronBrowserView, followFrontDoorInPanes } from './electron-browser-view.js';
+import { BrowserCookieBridge } from './browser-cookie-bridge.js';
+import { BrowserPagesReplica } from './browser-pages-replica.js';
+import type { BrowserPage } from './browser-service.js';
+import { genieBrowserWindows, rerouteGenieBrowserSession, watchWorkspaceStores, workspaceBrowserSession, type GenieBrowserWindows } from './genie-browser-electron.js';
+import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
 import { parseTabs, sitePanelKeys } from '../core/workspace-tabs.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
-import { UpdateHost } from './updater.js';
+import { QUIT_DELAY_MS, UpdateHost } from './updater.js';
 import { channelFrom } from '../core/update-channel.js';
-import { genieHome, installDir, osaHomeDir, runtimeDir } from './paths.js';
+import { genieRoot, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
-import { realElectronUpdaterPort } from './electron-updater-port.js';
-import { killProcess, killProcessAsync, listProcesses, listProcessesAsync } from './process-list.js';
-import { RESUME_AFTER_RESTART, relaunchPlan } from '../core/upgrade-drain.js';
+import { killProcessAsync, listProcessesAsync } from './process-list.js';
+import { RESUME_AFTER_RESTART } from '../core/upgrade-drain.js';
+import { restoreAfterRelaunch } from './relaunch-restore.js';
+import { WindowSafeMode } from './window-safe-mode.js';
+import { windowWake } from './window-wake.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
+import { FilesWatchHub, type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
+import { repoStatus } from './repo-git.js';
 import { fileExporter } from './file-export.js';
-import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
-import { TerminalSnapshots } from './terminal-snapshots.js';
+import type { EditorBytesDeps } from './plugin-editor-bytes.js';
+import { removeSavedScrollback } from './saved-scrollback.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
@@ -182,26 +229,39 @@ import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gi
 import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { withActionSignal } from './mcp-signal.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
+import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
+import type { TerminalsApi } from './terminals-host.js';
+import type { ProcessBookApi } from './processes-host.js';
+import { workspaceNameFor } from './workspace-names.js';
+import { HostRegistryStore } from './agent-stores-replica.js';
+import type { ForwardedToolCall } from './mcp-host-tools.js';
+import type { WindowView } from './host-mcp.js';
+import type { McpToolResult } from '@particle-academy/prism-mcp';
+import type { InboxStore } from './inbox-store.js';
+import type { AttentionStore } from './attention-store.js';
+import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
-import { genieToolDeps } from './genie-tool-deps.js';
+import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
 import { launchSubprocessIn, runPluginTool } from './plugin-runner.js';
 import { runOfficialTool } from './official-tools.js';
-import { artboardRead, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
+import { artboardReadFiles, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
-import { wireInboxPush } from './inbox-push.js';
+import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
 import { AppInboxKeys } from './app-inbox-keys.js';
+import type { AppInboxReplica } from './app-inbox-host.js';
 import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
-import { appDelivery, isAppSender, type AppSourceKind } from '../core/app-inbox.js';
-import { IssueWatchClient, type IssueWatchRefreshAnswer, type SocketLike } from './issue-watch-client.js';
-import { IssueWatchDelivery } from './issue-watch-delivery.js';
+import { type AppSourceKind } from '../core/app-inbox.js';
+import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
+import { IssueWatchReplica } from './issue-watch-replica.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nestGoverned } from '../core/rail-view.js';
-import { issueWatchPanelView, issueWatchSoundKinds, PANEL_RECENT, tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary, type IwEntry, type IwEvent } from '../core/issue-watch.js';
+import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } from '../core/issue-watch.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE MAIN PROCESS.
@@ -267,8 +327,88 @@ if (launch.kind === 'exit') {
     console.log(`[genie] ${launch.reason}`);
     app.exit(0);
 }
+/*
+ * THE LAST-KNOWN STATE ON EVERY EXIT PATH THIS PROCESS CAN CATCH (Tynn #386: window-crash-recorder.ts): a small record in
+ * runtime/crash — the reason or code, the time, the last RSS, the running agents' names, never content — on `exit`, an
+ * uncaught exception, an unhandled rejection, a renderer or the GPU gone, and before-quit (taken back by a quit that runs
+ * to its end). A boot launch only: a second instance owns nothing. Synchronous, never throwing.
+ */
+const crashRecorder = new WindowCrashRecorder({
+    pid: process.pid,
+    rss: () => process.memoryUsage.rss(),
+    agents: () => (registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : []),
+    write: (record) => writeCrashRecord(join(runtimeDir(genieRoot()), 'crash'), record),
+    remove: removeCrashRecord,
+    // The host's build as this window last heard it (its welcome); this Genie's version until it has linked.
+    header: () => crashHeader(app.getVersion(), agentEngineLink?.client.welcome?.build ?? app.getVersion()),
+    // The main window's page, as last sampled: what it had grown to when it ended (an oom, the owner's 2026-11-06).
+    rendererMb: () => pageMemory.mb(),
+});
+if (launch.kind === 'boot') crashRecorder.install(process, app);
+/** Window main's heartbeat to genie-host's hang watchdog (hang-watchdog.ts): started once the engine link is up. */
+let heartbeatNow: { stop(): void; bye(): void } | null = null;
 
 let window: BrowserWindow | null = null;
+/**
+ * The main window's page working set, as last REALLY read (app.getAppMetrics: a missing renderer or a 0 never overwrites a
+ * real reading, and a page's load reads again until it gets one; renderer-recovery.ts `pageMemorySampler`).
+ */
+const pageMemory = pageMemorySampler({
+    read: () => {
+        const win = window;
+        if (!win || win.isDestroyed()) return null;
+        const pid = win.webContents.getOSProcessId();
+        const metric = app.getAppMetrics().find((m) => m.pid === pid);
+        return metric ? metric.memory.workingSetSize * 1024 : null;
+    },
+    later: (fn) => { setTimeout(fn, 250).unref?.(); },
+});
+/** The main window's page ended and was brought back (renderer-recovery.ts): the notice every snapshot carries. */
+let rendererNotice: RendererNotice | null = null;
+/** Only the window constructors using preload.cjs admit contents to this local frame door. */
+const localDoor = localProtocolDoor(ipcMain);
+/**
+ * THE STALL WATCHDOG (beta.53 freezes; main/stall-watchdog.ts): main's held event loop, slow renderer requests and slow
+ * outbound calls, the windows' own long tasks and frame gaps, hung renderers and gone child processes — each a line in
+ * lifecycle.log. Every invoke handler is timed from here, before any is registered; the log is opened at boot.
+ */
+let stallLog: ((line: string) => void) | null = null;
+/** Main's own stack, sampled cheaply and read on a block (main/stall-profile.ts); started at boot. */
+let stallProfiler: { capture(ms: number): void; stop(): void } | null = null;
+/**
+ * THE SPAWN HOST (genie#1397): the child that creates every process main used to create on its own thread — the Docker
+ * CLI (600 s of the owner's main in one beta.54 session, up to 18.3 s at a time), every other `execFileRunner` command,
+ * `docker events`, and the supervisor's ptys (sites, workers, the front door). Started at boot; stopped last at quit.
+ */
+let spawnHostNow: SpawnHostClient | null = null;
+/** The interactive terminals' spawn host (the host split, P2.1): genie-host's `terminals` child; null = this process's engine. */
+let spawnTerminalsNow: SpawnHostClient | null = null;
+/** Live ptys a previous window started, found under genie-host at boot: the terminals' to adopt (supervised processes are the host's own since P3.3b). */
+let adoptablePtys: ListedPty[] = [];
+const stallWatchdog = new StallWatchdog({
+    log: (line) => stallLog?.(line),
+    onMainStall: (ms) => stallProfiler?.capture(ms),
+    routeOf: () => {
+        const url = window && !window.isDestroyed() ? window.webContents.getURL() : '';
+        const at = url.indexOf('#');
+        return at === -1 ? null : url.slice(at + 1);
+    },
+});
+timeIpcHandlers(ipcMain, stallWatchdog);
+/** A window's name in the log: its page (`index`, `question`, `browser`…), from its URL. */
+function windowNameOf(contents: Electron.WebContents): string {
+    try {
+        const page = new URL(contents.getURL()).pathname.split('/').pop() ?? '';
+        return page.replace(/[.]html$/, '') || 'blank';
+    } catch {
+        return 'unknown';
+    }
+}
+/** Electron's own hang signal for a window, into the log: `unresponsive`, then `responsive` with how long. */
+function watchWindowHang(w: BrowserWindow): void {
+    w.on('unresponsive', () => { if (!w.isDestroyed()) stallWatchdog.unresponsive(windowNameOf(w.webContents), true); });
+    w.on('responsive', () => { if (!w.isDestroyed()) stallWatchdog.unresponsive(windowNameOf(w.webContents), false); });
+}
 /** The tray outlives every window; held so it is not garbage-collected into nothing. */
 let tray: Tray | null = null;
 /** The tray's handlers, kept so a held login (Tynn #794) can redraw its menu; and what it last showed as held. */
@@ -294,13 +434,116 @@ function refreshTray(): void {
     const signedOut = host?.signedOutProviders() ?? [];
     // Claude Design's login (#1081): per machine, so one line however many agents wait on it.
     const designLogin = (host?.designLoginAgents().length ?? 0) > 0;
-    const key = JSON.stringify({ held, update, signedOut, paused, designLogin, waiting: trayWaiting });
+    // GENIE-HOST RUNNING (P1b): the tray says so, and WHAT it runs — what a person with no window open sees. Whether a
+    // window is open changes the menu ("Just close the UI" only with one).
+    const hostNow = agentEngineLink?.live === true ? hostActivityNow() : null;
+    const uiOpen = window !== null && !window.isDestroyed();
+    const key = JSON.stringify({ held, update, signedOut, paused, designLogin, waiting: trayWaiting, hostNow, uiOpen });
     if (key === trayHeldKey) return;
     trayHeldKey = key;
-    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update, signedOut, paused, designLogin)));
-    tray.setToolTip(trayTooltip(held, signedOut, paused, designLogin, trayWaiting));
+    trayMenuNow = trayMenuTemplate(trayHandlers, held, update, signedOut, paused, designLogin);
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuNow));
+    trayTooltipNow = trayTooltip(held, signedOut, paused, designLogin, trayWaiting, hostNow);
+    tray.setToolTip(trayTooltipNow);
     // THE DECK NEEDS YOU (the owner, 2026-10-26): the mark with a dot while anything waits on the person.
     if (trayImages) tray.setImage(trayWaiting > 0 ? trayImages.attention : trayImages.plain);
+}
+
+/** What the tray says and offers now (refreshTray): read by the tray probe, as Electron's Tray cannot be asked. */
+let trayTooltipNow = 'Genie';
+let trayMenuNow: TrayItem[] = [];
+
+/** What genie-host runs now, as the tray says it and the tray-only rule counts it (core/tray-only.ts). */
+function hostActivityNow(): HostActivity {
+    const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).length : 0;
+    const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
+    const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).length;
+    return { agents, terminals: terminals?.count ?? 0, processes, services: servicesUp, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
+}
+
+/** What waits on the host's clock, from the host's own lists (core/tray-only.ts). With no host, nothing here outlives the window. */
+function onTheClockNow(): { armedFlows: number; scheduledTasks: number } {
+    if (agentEngineLink?.live !== true) return { armedFlows: 0, scheduledTasks: 0 };
+    return onTheClock(agentEngineLink.client.flows().list(), agentEngineLink.client.processBook().kept());
+}
+
+/**
+ * JUST CLOSE THE UI (P1b; the owner, 2026-11-02: "Keep the tray up … as long as any genie services are running, that tray
+ * should be there so users can shut them down or restart if needed"). Every window closes — the main one and every other
+ * (Take Over, files, remote, the Genie browser) — and this process stays as the tray: still the host's window client, so
+ * the phone/remote link and the .gen front door keep working. Nothing of the host is touched. Open Genie (or a second
+ * launch) builds the window again (revealMainWindow → mountMainWindow); with nothing left running, watchTrayOnly ends it.
+ */
+function closeUi(reason: string): void {
+    leftRunning.set(true);
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.destroy();
+    window = null;
+    browserPane = null;
+    trayQuietSince = null;
+    rendererErrorLog?.(`ui closed (${reason}): Genie stays in the tray`);
+    refreshTray();
+}
+
+/**
+ * What a Restart or a Shut down everything would stop, named (core/tray-confirm.ts): the running agents, every open
+ * terminal (marked when a command runs in it — read from the process table), the kept processes, the active services and
+ * the sites.
+ */
+function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
+    const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : [];
+    const workspaces = registry?.snapshot().workspaces ?? [];
+    const seen = new Map<string, number>();
+    const terminalsOpen = (terminals?.list() ?? []).map((t) => {
+        const n = (seen.get(t.workspaceId) ?? 0) + 1;
+        seen.set(t.workspaceId, n);
+        const ws = workspaces.find((w) => w.id === t.workspaceId);
+        return { name: `${ws ? basename(ws.path) : t.workspaceId} · terminal ${n}`, busy: terminalBusy(t.pid, table) };
+    });
+    const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => p.name);
+    const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).map((e) => `${e.engine} ${e.version}`);
+    const sites = (services?.routes() ?? []).map((r) => r.host);
+    const clockFlows = agentEngineLink?.live === true ? agentEngineLink.client.flows().list().filter((f) => f.armed).map((f) => f.name) : [];
+    const clockTasks = agentEngineLink?.live === true ? agentEngineLink.client.processBook().kept().filter((p) => p.wanted && p.schedule).map((p) => p.name) : [];
+    return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites, flows: clockFlows, scheduled: clockTasks };
+}
+
+/** How long the tray's question waits for the busy marks' process table (read off main) before it is asked without them. */
+const TRAY_TABLE_MS = 1_500;
+
+/**
+ * ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first, every time — what will stop,
+ * named; Cancel the default and the cancel; only the confirm button goes on. Not asked anywhere else: the quit dialog's own
+ * answer, the tray-only exit, the OS ending the session, the upgrade.
+ */
+async function confirmTray(action: TrayAction): Promise<boolean> {
+    const table = await tableWithin(() => systemProcessTree.read?.() ?? Promise.resolve(null), TRAY_TABLE_MS);
+    const q = trayConfirm(action, stoppingNow(table));
+    return trayConfirmed(dialog.showMessageBoxSync({ type: 'question', title: q.title, message: q.message, buttons: [...q.buttons], defaultId: q.defaultId, cancelId: q.cancelId }));
+}
+
+/**
+ * RESTART (the tray, P1b): everything shut down as a quit does — the running set recorded first, so the agents that were
+ * running start again (§7.6); genie-host ended — and Genie started again, in the tray (`--hidden`). Kept processes come
+ * back by their own restore and restart policy; terminals end with their shells.
+ */
+function restartGenie(): void {
+    rendererErrorLog?.('restart asked for from the tray');
+    app.relaunch({ args: [...process.argv.slice(1).filter((a) => a !== HIDDEN_ARG), HIDDEN_ARG] });
+    requestQuit('shut-down');
+}
+
+/** Since when a tray-only Genie has had nothing running (core/tray-only.ts); null while anything runs or a window is open. */
+let trayQuietSince: number | null = null;
+/** One look, every few seconds while genie-host runs: the tray says what runs, and a tray-only Genie with nothing left ends. */
+function watchTrayOnly(): void {
+    refreshTray();
+    const step = trayOnlyStep({ uiOpen: window !== null && !window.isDestroyed(), activity: hostActivityNow() }, trayQuietSince, Date.now());
+    trayQuietSince = step.quietSince;
+    if (step.exit) {
+        rendererErrorLog?.('tray only: nothing left running for a minute; shutting everything down');
+        leftRunning.set(false);
+        requestQuit('shut-down');
+    }
 }
 
 const mcpRecovery = new McpRecovery();
@@ -337,10 +580,14 @@ function recoverMissingMcp(agentId: AgentId, reports: readonly McpServerReport[]
  * has to restart them or Genie. One recovery at a time: two quick account changes must not restart an agent twice.
  */
 let tynnRecovering = false;
-function recoverTynnAgents(): void {
-    if (tynnRecovering || !services || !tynnAccount?.status().signedIn) return;
+function recoverTynnAgents(asked: { secretsMoved?: boolean } = {}): void {
+    if (tynnRecovering || !services || (!asked.secretsMoved && !tynnAccount?.status().signedIn)) return;
+    // With a host, the host hears the account itself and restarts its own agents, with or without this window (host-tynn-recovery.ts). All it
+    // cannot hear is that this window's one-time move has finished.
+    if (agentEngineLink && !asked.secretsMoved) return;
     tynnRecovering = true;
-    void services.tynnRecovery().then((ids) => {
+    const named = agentEngineLink ? agentEngineLink.client.tynn().recovery(asked) : services.tynnRecovery(asked);
+    void named.then((ids) => {
         for (const id of ids) {
             if (!host?.probe(id as AgentId)) continue;
             host?.notice(id as AgentId, 'Tynn is available again. Genie is restarting this session on the same conversation to bring its Tynn tools up to date.');
@@ -353,6 +600,7 @@ function recoverTynnAgents(): void {
 
 /** Each provider's rate limit as the Dashboard header shows it, buffered (core/headroom-board.ts). */
 const headroomBoard = new HeadroomBoard();
+const headroomListeners = new Set<(room: Readonly<Record<string, Headroom>>) => void>();
 
 /** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
 function alertAccountPaused(provider: string): void {
@@ -377,15 +625,12 @@ let registry: Registry | null = null;
 /** Each workspace's colour (genie#1300): read from and written to its project.json. */
 let workspaceColors: WorkspaceColors | null = null;
 /**
- * ISSUEWATCH (Tynn #806): the latest entry Tynn sent per project, and the client's state — what `checkIssues` and imDone's
- * count line read for a workspace (its project.json `tynn.projectId`). Filled by the client once it runs.
+ * ISSUEWATCH (Tynn #806; the host split, P5c): genie-host hears Tynn and holds the state — the latest entry per project,
+ * when it arrived, what happened lately, the repo switches, the client's state. This window reads it through the replica
+ * (issue-watch-replica.ts): what `checkIssues`, imDone's count line and the GitHub panel read for a workspace (its
+ * project.json `tynn.projectId`). On the emergency no-host path the replica reads the window's own (issue-watch-emergency.ts).
  */
-const issueWatchLatest = new Map<string, IwEntry>();
-/** When each project's latest entry arrived: the panel says how old its list is (the owner, 2026-10-21). */
-const issueWatchDelivered = new Map<string, number>();
-let issueWatchState: IssueWatchSummary['state'] = 'stopped';
-/** What happened lately per Tynn project, newest first, capped — the GitHub panel's "Lately". */
-const issueWatchRecent = new Map<string, IwEvent[]>();
+let issueWatchNow: IssueWatchReplica | null = null;
 /** A workspace's Tynn project, from its project.json `tynn.projectId`; `null` = not linked. */
 /** The Tynn tab's door (genie#1295): the pairing's request, the workspace's own project, nothing else. */
 function tynnBoardPorts(): TynnBoardPorts {
@@ -399,39 +644,23 @@ function tynnBoardPorts(): TynnBoardPorts {
     };
 }
 /**
- * THE LIVE BOARD (genie#1295 row B4): one socket to Tynn for every open Tynn tab, on the web board's own channel. Each
- * open tab is a watch (workspace → its project); a project's rings and live state go to the windows as
- * `genie:workspace-tynn-board-live` for every workspace watching it. A window that closes drops its watches.
+ * THE LIVE BOARD (genie#1295 row B4; the host split, P5c): genie-host follows each open Tynn tab per view — one socket for
+ * every board, released with this window's link — and its rings and live state come back for the workspaces this window's
+ * views watch, broadcast to the renderers as `genie:workspace-tynn-board-live`. A tab that closes drops its watch. On the
+ * emergency no-host path the door is the window's own hub (issue-watch-emergency.ts).
  */
-let tynnBoardLiveClient: TynnBoardLive | null = null;
-const tynnBoardWatches = new Map<number, { workspaceId: string; projectId: string; stop: () => void }>();
+let tynnBoardDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
+const tynnBoardWatches = new Map<number, () => void>();
 let tynnBoardWatchSeq = 0;
-function tynnBoardLiveSignal(projectId: string, signal: BoardLiveSignal): void {
-    const workspaces = new Set([...tynnBoardWatches.values()].filter((w) => w.projectId === projectId).map((w) => w.workspaceId));
-    for (const workspaceId of workspaces) broadcast('genie:workspace-tynn-board-live', workspaceId, signal);
-}
-function tynnBoardLive(): TynnBoardLive {
-    tynnBoardLiveClient ??= new TynnBoardLive({
-        tynn: () => {
-            const account = tynnAccount;
-            if (!account || account.status().signedIn !== true) return null;
-            return { request: (path, init) => account.request(path, init) };
-        },
-        socket: (url) => new WebSocket(url) as unknown as SocketLike,
-        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        onRing: (projectId, ring) => tynnBoardLiveSignal(projectId, { ring }),
-        onState: (projectId, state) => tynnBoardLiveSignal(projectId, { state }),
-    });
-    return tynnBoardLiveClient;
-}
-/** Start following a workspace's board for a window; answers the watch's id (to stop it), or null when not linked. */
-function watchTynnBoard(workspaceId: string, onGone: (stop: () => void) => void): number | null {
-    const projectId = tynnProjectFor(workspaceId);
-    if (projectId === null) return null;
+/** Start following a workspace's board for a tab; answers the watch's id (to stop it), or null when not linked. */
+async function watchTynnBoard(workspaceId: string, onGone: (stop: () => void) => void): Promise<number | null> {
+    const door = tynnBoardDoor;
+    if (door === null || tynnProjectFor(workspaceId) === null) return null;
     const id = ++tynnBoardWatchSeq;
-    const stopLive = tynnBoardLive().watch(projectId);
-    const stop = () => { if (tynnBoardWatches.delete(id)) stopLive(); };
-    tynnBoardWatches.set(id, { workspaceId, projectId, stop });
+    const viewId = `tynn-board-${id}`;
+    if (!(await door.watch(viewId, workspaceId))) return null;
+    const stop = () => { if (tynnBoardWatches.delete(id)) door.unwatch(viewId); };
+    tynnBoardWatches.set(id, stop);
     onGone(stop);
     return id;
 }
@@ -462,60 +691,63 @@ function agentCreatePorts(): AgentCreatePorts {
 }
 /** Every workspace's GitHub panel (Tynn #806), as the features snapshot carries it. */
 function issueWatchPanels(): Record<string, IssueWatchPanelView> {
-    const out: Record<string, IssueWatchPanelView> = {};
-    for (const w of registry?.snapshot().workspaces ?? []) {
-        const projectId = tynnProjectFor(w.id);
-        out[w.id] = issueWatchPanelView(issueWatchSummaryFor(w.id), projectId === null ? [] : issueWatchRecent.get(projectId) ?? [], Date.now(), projectId === null ? null : issueWatchWatched.get(projectId) ?? null);
-    }
-    return out;
+    return issueWatchNow?.panels(registry?.snapshot().workspaces ?? [], tynnProjectFor, Date.now()) ?? {};
 }
-/** The running IssueWatch client, once boot has started it: what a `checkIssues(refresh: true)` goes through. */
-let issueWatchRunning: IssueWatchClient | null = null;
-/** Have Tynn read a workspace's repos now (its project.json `tynn.projectId`). */
+/** Have Tynn read a workspace's repos now (its project.json `tynn.projectId`): the host's call. */
 async function issueWatchRefreshFor(workspaceId: string): Promise<IssueWatchRefreshAnswer> {
-    const projectId = tynnProjectFor(workspaceId);
-    if (projectId === null) return { ok: false, reason: 'this workspace is not linked to a Tynn project' };
-    if (!issueWatchRunning) return { ok: false, reason: 'IssueWatch is not running' };
-    const answer = await issueWatchRunning.refresh(projectId);
-    void issueWatchLoadRepos(projectId);
-    return answer;
+    if (tynnProjectFor(workspaceId) === null) return { ok: false, reason: 'this workspace is not linked to a Tynn project' };
+    if (!issueWatchNow) return { ok: false, reason: 'IssueWatch is not running' };
+    return issueWatchNow.refresh(workspaceId);
 }
-/**
- * WHICH REPOS FEED A PROJECT'S STREAM (the owner, 2026-10-21: Genie 1 let him choose) — Tynn's switches, per project,
- * for the GitHub panel. Read when the project's first entry arrives, after a switch is set, and on Refresh: never on a
- * timer.
- */
-const issueWatchWatched = new Map<string, WatchedReposView>();
-/** Tells the windows the switches changed — main's pushFeatures, once the client runs (set beside it). */
-let issueWatchChanged: () => void = () => {};
-async function issueWatchLoadRepos(projectId: string): Promise<void> {
-    if (!issueWatchRunning) return;
-    const r = await issueWatchRunning.watchedRepos(projectId);
-    issueWatchWatched.set(projectId, r.ok ? { state: 'ok', ...r.repos } : { state: 'unavailable', reason: r.reason });
-    issueWatchChanged();
-}
-/** A Watched repos checkbox: Tynn's switch, then the switches read again (Tynn pushes the changed feed itself). */
+/** A Watched repos checkbox: Tynn's switch, set by the host, which reads the switches again (Tynn pushes the changed feed itself). */
 async function issueWatchSetRepoFor(workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }): Promise<unknown> {
-    const projectId = tynnProjectFor(workspaceId);
-    if (projectId === null || !issueWatchRunning) return { ok: false, reason: 'IssueWatch is not running for this workspace' };
-    const r = await issueWatchRunning.setWatchedRepo(projectId, owner, repo, change);
-    await issueWatchLoadRepos(projectId);
-    return r;
+    if (tynnProjectFor(workspaceId) === null || !issueWatchNow) return { ok: false, reason: 'IssueWatch is not running for this workspace' };
+    return issueWatchNow.setRepo(workspaceId, owner, repo, change);
 }
 function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     const projectId = tynnProjectFor(workspaceId);
-    const entry = projectId === null ? undefined : issueWatchLatest.get(projectId);
-    const deliveredAt = projectId === null ? undefined : issueWatchDelivered.get(projectId);
-    return { state: issueWatchState, linked: projectId !== null, ...(entry ? { entry } : {}), ...(deliveredAt !== undefined ? { deliveredAt } : {}) };
+    return issueWatchNow?.summaryFor(projectId) ?? { state: 'stopped', linked: projectId !== null };
 }
-let terminals: TerminalHost | null = null;
+let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let loginHost: LoginHost | null = null;
+/** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
+let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
-let snapshots: TerminalSnapshots | null = null;
+/**
+ * THE FILE WATCHER'S VIEWS (the host split, P2.2; plan §11b): genie-host's hub over the engine link, or — only when no host
+ * could start — a hub of this window's own. The local protocol owns every renderer view's registration.
+ */
+let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): boolean | Promise<boolean>; unwatch(viewId: string): void; close(): void } | null = null;
+const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
 let takeOvers: TakeOverHost | null = null;
+/** This workstation's Tynn identity, once known: a crash report is sent with its host proof (Tynn #386 part 4). */
+let crashReportMachine: WorkstationPort | null = null;
+/** The workspace header's throwaway terminals (Tynn story #378): each in its own window, closed with it. */
+let scratchTerminals: ScratchTerminals | null = null;
 let filesWindows: FilesWindows | null = null;
-let host: SessionHost | null = null;
+let host: AgentEngine | null = null;
+/**
+ * SAFE MODE AS THIS WINDOW READS IT (Tynn #386; window-safe-mode.ts): genie-host's over the link, or — on the emergency
+ * no-host path, where this window runs everything itself — the same runtime files, read here. Opened once the link is known.
+ */
+let windowSafe: WindowSafeMode | null = null;
+const windowSafeNow = (): boolean => windowSafe?.active() === true;
+/** The link to `genie-host` when agents run there (the host split, phase 1); `null` = the engine runs in this process. */
+let agentEngineLink: AgentEngineLink | null = null;
+/** Electron reports no change of proxy settings: asked when a window links and when the machine wakes. */
+let handProxyAnswers: (() => Promise<void>) | null = null;
+function reportProxies(client: SessionEngineClient, log: (line: string) => void): Promise<void> {
+    return reportProxyAnswers({
+        hosts: [TYNN_HOST, 'https://github.com', 'https://api.github.com'],
+        resolve: (url) => (url === TYNN_HOST ? session.fromPartition('persist:tynn') : session.defaultSession).resolveProxy(url),
+        send: async (answers) => {
+            const reply = await client.call('engine.proxyRemember', [answers]);
+            if (!reply.ok) throw new Error(reply.reason);
+        },
+        log,
+    });
+}
 /** The plan keepalive (core/plan-keepalive.ts), so the quit sequence can stop a nudge waiting out its grace. */
 let keepaliveNow: PlanKeepalive | null = null;
 /** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
@@ -534,21 +766,28 @@ function activityOf(raw: unknown): Record<string, ActivityFeed> {
  * registry's first load, when the session host already exists.
  */
 let askerLivenessKnown = false;
+/** The Dashboard's comms cell (§4.1): AgentInbox traffic since the session started, bounded to the newest 2000 mails. */
+const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.involving(agentId as AgentId, 2000) : null));
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
-let updates: UpdateHost | null = null;
+/** The updater as this window reads and drives it: genie-host's, through a replica (P5b); the window's own only on the emergency path. */
+let updates: Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> | null = null;
 /**
  * ONE QUIT (core/quit.ts `quitSequence`): asked at most once, the running set recorded at most once (§7.6 — an
  * upgrade's drain records it itself, so the quit does not overwrite it with the empty list it leaves), the shutdown
  * run exactly once. Its `quitting` is what turns the main window's close from a hide into a real close.
  */
 const quit = quitSequence();
+/** That the person left the host running (P6): what brings it back at logon with the setting off. */
+const leftRunning = new LeftRunningMark(runtimeDir(genieRoot()));
 
 /**
  * THE QUIT a person asks for — the tray's Quit, and `Genie --quit` from outside (core/quit-flag.ts), one entry for both.
- * `app.quit()` runs before-quit, so the confirmation is asked only where it would be, and the shutdown runs once.
+ * `app.quit()` runs before-quit, so the confirmation is asked only where it would be, and the shutdown runs once. The
+ * tray's Shut down everything and Restart, and the tray-only exit (P1b), come with their answer: nothing is asked.
  */
-function requestQuit(): void {
+function requestQuit(answer?: 'shut-down'): void {
+    if (answer) quit.choose(answer);
     app.quit();
 }
 
@@ -572,9 +811,13 @@ function openTakeOverWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    win.on('closed', () => takeOvers?.windowClosed(terminalId));
+    win.on('closed', () => {
+        takeOvers?.windowClosed(terminalId);
+        scratchTerminals?.windowClosed(terminalId);
+    });
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
 
@@ -594,6 +837,7 @@ function openFilesWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => filesWindows?.windowClosed(workspaceId));
@@ -621,6 +865,7 @@ function openFlowEditorWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
@@ -661,17 +906,6 @@ async function setWorkspaceColor(rawId: unknown, color: unknown): Promise<{ ok: 
     return workspaceColors.set(workspace.path, color);
 }
 
-/** A workspace's display name from its envelope (project.json `name`), else its folder; read once per path. */
-const manifestNames = new Map<string, string>();
-function workspaceNameFor(path: string): string {
-    const cached = manifestNames.get(path);
-    if (cached !== undefined) return cached;
-    let manifest: string | null = null;
-    try { manifest = readFileSync(join(path, 'project.json'), 'utf8'); } catch { manifest = null; }
-    const name = workspaceDisplayName(manifest, path);
-    manifestNames.set(path, name);
-    return name;
-}
 
 /** The tray icon: shipped beside the app as an extra resource; the repo's build/ in a dev run; the embedded mark otherwise. */
 function trayIconPath(): string | null {
@@ -689,7 +923,7 @@ function v1DatabaseFile(): string {
  * there too and logged, because a silent partial import is a missing workspace nobody can explain.
  */
 async function importFromV1(theRegistry: Registry): Promise<void> {
-    const marker = join(genieHome(), 'v1-import.json');
+    const marker = join(genieRoot(), 'v1-import.json');
     // Once — but beta.7's import did not carry v1's hibernation, so a marker without `hibernationApplied` gets
     // ONE amendment pass that puts v1-hibernated workspaces to sleep; after that the marker says so and nothing
     // here runs again (a person who wakes a workspace in Genie 2 must not find it asleep at the next boot).
@@ -736,11 +970,13 @@ async function importFromV1(theRegistry: Registry): Promise<void> {
 async function reapV1Runtime(includeShells: boolean): Promise<void> {
     const userData = app.getPath('userData');
     const roots = ['runtime', 'toolchain', 'pty-host'].map((d) => join(userData, d));
-    const victims = v1Leftovers(listProcesses(), { roots, selfPid: process.pid, includeShells });
+    // Read and ended OFF the loop (beta.53 freezes: this listing was a PowerShell run on main at every boot, ~3 s on Windows).
+    const victims = v1Leftovers(await listProcessesAsync(), { roots, selfPid: process.pid, includeShells });
     if (victims.length === 0) return;
-    const killed = victims.filter((v) => killProcess(v.pid));
+    const ended = await Promise.all(victims.map(async (v) => ((await killProcessAsync(v.pid)) ? v : null)));
+    const killed = ended.filter((v) => v !== null);
     const report = { at: new Date().toISOString(), found: victims.length, killed: killed.length, victims: victims.map((v) => ({ pid: v.pid, executable: v.executable, why: v.why })) };
-    await writeFileText(join(genieHome(), 'v1-reap.json'), JSON.stringify(report, null, 2), 'utf8');
+    await writeFileText(join(genieRoot(), 'v1-reap.json'), JSON.stringify(report, null, 2), 'utf8');
     console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
 }
 
@@ -759,15 +995,20 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
         show: false,
         webPreferences: {
             preload: join(here, 'preload.cjs'),
+            // Expose the page's existing bridge to native harnesses; no product behavior changes.
+            additionalArguments: process.env.GENIE_PAGE_PROBE === '1' ? ['--genie-page-probe'] : [],
             // The renderer gets `window.genie` and nothing else: no Node, no `require`, no
             // `ipcRenderer`. A renderer with Node integration is a renderer where a prompt
             // injection reaches the filesystem — and this one displays agent-authored text.
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: true,
+            // A site panel is a <webview> (P2b): the main window alone, every one decided by main (site-webview-guard.ts).
+            webviewTag: !search,
         },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     // The renderer's console reaches no file, so main writes the lines Genie keeps: the composer-focus log (genie#1235,
     // core/composer-focus.ts) and a surface's render error (parity audit #7), which also goes to the lifecycle log.
@@ -856,7 +1097,9 @@ const activationLedger = new ActivationLedger();
  * `attractMainWindow`. `reason` names the gesture in the focus log.
  */
 function revealMainWindow(reason: string): void {
-    if (!window) return;
+    leftRunning.set(false);
+    // Tray-only (P1b, "Just close the UI"): the person asked for Genie — the window is built again, the same host.
+    if (!window || window.isDestroyed()) { mountMainWindow(true, reason); return; }
     bringUp(window, { activation: 'user-gesture', reason, ledger: activationLedger, label: 'main' });
 }
 
@@ -865,7 +1108,8 @@ function revealMainWindow(reason: string): void {
  * button flashes when the person is elsewhere, and what it wanted is waiting when they come (genie#1235).
  */
 function attractMainWindow(reason: string): void {
-    if (!window) return;
+    // No window (tray-only): an agent or a job never builds one — what it wanted waits for the person to open Genie.
+    if (!window || window.isDestroyed()) return;
     bringUp(window, { activation: 'background', reason, ledger: activationLedger, label: 'main' });
 }
 
@@ -874,9 +1118,13 @@ function attractMainWindow(reason: string): void {
  * browser's genie://oauth/callback?token=… arrives as a second launch's argv (Windows, Linux), as `open-url` (macOS), or
  * as THIS launch's argv when Genie was not running. A URL that arrives before the account is open waits for it.
  */
-let tynnAccount: TynnAccount | null = null;
+let tynnAccount: TynnAccount | TynnAccountReplica | null = null;
 /** This Genie's GitHub sign-in (main/github-account.ts, beta.33 item 25): Genie 1's carried over, or the device flow. */
-let githubAccount: GithubAccount | null = null;
+let githubAccount: GithubAccount | GithubAccountReplica | null = null;
+/** Linux: the keyring card (linux-keyring.ts) — null off Linux. Opened before the Tynn account, which refuses without it. */
+let keyring: LinuxKeyring | KeyringReplica | null = null;
+/** Late-bound: a move of this machine's key that finishes lets it register with what it has. */
+let registerWorkstationNow: (() => Promise<void>) | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
 /** Every Tynn workstation id this machine holds (this-machine.ts); replaced once the identity store is open. */
@@ -894,7 +1142,11 @@ let relayAfterSwitch: (() => void) | null = null;
 let relayHostNow: RelayHostHandle | null = null;
 let relayStatusNow: RelayHostStatus = { state: 'off' };
 /** A window's connection to a Tynn workstation (Tynn #837), by the channel it was given; main alone holds it. */
+/** A secret's move, said where it can be read afterwards: names and states, never a value. */
+const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieRoot()))(`keychain ${line}`); } catch { /* the console has it */ } };
 const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents; workstationId: string }>();
+/** The sockets to other machines the host holds for each window (genie:device-open). */
+const deviceChannels = new Map<string, Electron.WebContents>();
 /** The Genie browser for each Tynn workstation a window here drives: a door per connection (remote-browsers.ts). */
 const remoteBrowsers = new RemoteBrowsers(siteDoor);
 let nextRelayChannel = 0;
@@ -937,7 +1189,7 @@ const loginItemPort: LoginItemPort = {
 /** Where an agent runs: its workspace's path. The OS agent runs in the user's data directory. */
 function cwdFor(record: AgentRecord): string {
     // The OSA belongs to the workstation: it runs in its own home, written at boot from its baked-in instructions.
-    if (record.workspaceId === OS_WORKSPACE) return osaHomeDir();
+    if (record.workspaceId === OS_WORKSPACE) return osaHomeDir(genieRoot());
     const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId);
     return workspace?.path ?? app.getPath('userData');
 }
@@ -1016,10 +1268,25 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
     return id ? registry?.find(id as AgentId) ?? null : null;
 }
 
-let services: ComposedServices | null = null;
+let services: WindowServices | null = null;
+/** Settles when the services are composed: an agent's launch asks them about its workspace first. */
+let servicesComposed: (value: WindowServices) => void = () => {};
+const composedServices = new Promise<WindowServices>((resolve) => { servicesComposed = resolve; });
+/** The same, for what must answer at once. Until then nothing is trusted. */
+let composedNow: WindowServices | null = null;
+let trustVerdicts: TrustVerdicts | null = null;
 // Genie's own MCP server (§6.9) and what its boot probe said (§6.4 "native transport verified at boot").
 let mcp: GenieMcpServer | null = null;
 let mcpVerified: Verification | null = null;
+/** Genie's MCP endpoint when genie-host serves it (P3.1); `mcp` is this window's own only on the emergency path. */
+let hostMcpEndpoint: { url: string; token: string } | null = null;
+const mcpEndpointNow = (): { url: string; token: string } | null => mcp?.endpoint() ?? hostMcpEndpoint;
+/** Tell genie-host what its MCP server needs of this window (P3.1), coalesced; a no-op until the tools are built. */
+let pushHostView: () => void = () => {};
+/** A window tool's call, forwarded by genie-host's MCP server; refused until the tools are built. */
+let windowToolRun: ((call: ForwardedToolCall) => Promise<McpToolResult>) | null = null;
+/** openFileForUser calls that arrived before the tools were built: shown as soon as they are. */
+const openFilesLater: ForwardedToolCall[] = [];
 /** The two variables every terminal gets once the server listens; GENIE_TERMINAL_ID is minted by the pty port itself. */
 /** Every tool Genie's MCP serves (name and description), set once the registrations exist. */
 let mcpToolList: readonly { name: string; description: string }[] = [];
@@ -1027,18 +1294,41 @@ let mcpToolList: readonly { name: string; description: string }[] = [];
 const sessionCallers = new CallerBook();
 /** An agent session calling Genie's MCP, by its caller key: the agent and its workspace, now. */
 function sessionCaller(key: string): Caller | null {
-    return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir()) : null;
+    return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir(genieRoot())) : null;
 }
-const mcpEnv = (): Record<string, string> => { const e = mcp?.endpoint(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
+const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
 /** The Genie browser window (beta.35 item 36): this workstation's Genie sites in a window of their own. */
 let genieBrowserWindow: GenieBrowserWindows | null = null;
+/**
+ * THIS MACHINE'S SITES, IN THE GENIE BROWSER'S OWN PROCESS (the host split, P2b): asked through the host, which starts it.
+ * Another workstation's window stays here until P5, and so does the emergency no-host path.
+ */
+function openLocalBrowser(url: string | undefined, activation: Activation): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (agentEngineLink?.live === true) {
+        return agentEngineLink.client.browserCall('open', [url ?? null, activation]).then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
+    }
+    return Promise.resolve(genieBrowserWindow?.open(url, activation) ?? { ok: false as const, error: 'Genie’s browser is not ready yet' });
+}
+/** The Genie browser process's pages, for the `pages` tool. */
+const browserPages = new BrowserPagesReplica((pageId, method, args) => agentEngineLink?.client.browserCall('pageCall', [pageId, method, args]) ?? Promise.reject(new Error('no host')));
+/** This window's side of each workspace's cookie sync. Set once the services are composed. */
+let cookieBridge: BrowserCookieBridge | null = null;
+/** This window's connection to the host, as the browser service calls it. */
+let browserConnection: string | null = null;
+/** Whether the Genie browser's own process is linked to the host. */
+let browserLinked = false;
+/** What a browser needs, said whenever it changes and whenever the link comes back. Set once the services are composed. */
+let publishBrowserFacts: () => void = () => {};
 
 /**
  * Where "latest" comes from, per tool (toolchain-prober.ts `latestIndex`): every command it runs goes through the same
  * platform routing as the probe and the update, so on Windows `npm outdated -g` reaches npm.cmd through cmd.exe.
  */
-const latestFor = latestIndex({ run: execFileRunner, fetchJson: async (url) => (await fetch(url)).json(), platform: process.platform as Platform });
+/** Every toolchain and PHP download. */
+const httpFetch = httpFetchOver((url, init) => net.fetch(url, init));
+
+const latestFor = latestIndex({ run: execFileRunner, fetchJson: async (url) => (await net.fetch(url)).json(), platform: process.platform as Platform });
 
 /** The package manager that actually ANSWERS on this machine (apt or dnf on Linux), asked once per run. */
 let detectedPackageManager: Promise<PackageManager | null> | null = null;
@@ -1046,7 +1336,7 @@ const packageManager = (): Promise<PackageManager | null> => (detectedPackageMan
 /** Installs and updates take minutes (winget, a polkit prompt waiting on the person); the probe's 20 s would cut them off. */
 const longRunner: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) });
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
-const toolchainDataDir = (): string => join(genieHome(), 'genie2-toolchain');
+const toolchainDataDir = (): string => join(genieRoot(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
 const phpVersionsBase = (): Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs' | 'ca'> => ({ platform: process.platform as PhpVersionsPorts['platform'], root: phpVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs(), ca: phpCa });
 /**
@@ -1073,7 +1363,12 @@ async function boot(): Promise<void> {
     // genie:// — Tynn's sign-in hands its code back through it (openGenieUrl above).
     registerGenieProtocol();
     // The store this launch actually got, written down for the next (a probe can come back empty — genie#588).
-    if (process.platform === 'linux') rememberPasswordStore(genieHome(), safeStorage.getSelectedStorageBackend());
+    // Only a store that gave a key is remembered; the remembered store failing to give one is forgotten (a selected store
+    // is not a working one: password-store-memo.ts).
+    // A LOCKED KEYRING, ASKED FIRST (Tynn story #388): Electron reads its store's availability once, so the keyring is asked to
+    // unlock — its own dialog — before anything here reads it. An unlocked one answers at once; no Secret Service, at once too.
+    if (process.platform === 'linux') await unlockKeyringBeforeStores((line) => console.log(`[genie] ${line}`));
+    if (process.platform === 'linux') rememberPasswordStore(genieRoot(), safeStorage.getSelectedStorageBackend(), safeStorage.isEncryptionAvailable());
     // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
     // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
     restoreToolchainEnv({ platform: process.platform as Platform, env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
@@ -1089,10 +1384,10 @@ async function boot(): Promise<void> {
         console.error('[genie] could not give managed PHP a CA bundle', error);
     }
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
-    const store = new Store(genieHome());
+    const store = new Store(genieRoot());
     // Doctor mode reads this: that normal Genie is running, and which agents it has started (none yet) — doctor starts
     // an agent beside it only in an awake workspace where none of those is running (core/genie-running.ts).
-    markGenieRunning(genieHome(), []);
+    markGenieRunning(genieRoot(), []);
     // A local binding as well as the module-level one, so the callback below closes over a
     // Registry rather than a `Registry | null` that TypeScript cannot narrow inside a closure.
     const theRegistry = new Registry(store);
@@ -1101,7 +1396,7 @@ async function boot(): Promise<void> {
     // WORKSPACE COLOURS (genie#1300): every workspace has one — its project.json's `appearance.color`, or a palette colour
     // Genie writes there (main/workspace-color-host.ts). A pass runs when the estate changes: at once for a workspace
     // without a colour (one just added), and at most every 5 s otherwise, so an agent's edit of the colour is picked up.
-    const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
+    const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
     workspaceColors = colors;
     theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
     let colorPassAt = 0;
@@ -1115,7 +1410,8 @@ async function boot(): Promise<void> {
             colorPassQueued = false;
             colorPassAt = Date.now();
             // The rail's order — governed workspaces under their governor — so the colours beside each other differ.
-            const order = nestGoverned(ws, (id) => ws.find((w) => w.id === id)?.governedBy ?? null);
+            const current = theRegistry.snapshot().workspaces ?? [];
+            const order = nestGoverned(current, (id) => current.find((w) => w.id === id)?.governedBy ?? null);
             void colors.ensure(order.map((w) => ({ id: w.id, path: w.path }))).catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`));
         }, 0);
     });
@@ -1141,80 +1437,42 @@ async function boot(): Promise<void> {
      * Task-Manager kill, an installer — is ended here, BEFORE anything is started or restored, from that record only
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
-    const lifecycleLog = openLifecycleLog(runtimeDir(genieHome()));
+    const lifecycleLog = openLifecycleLog(runtimeDir(genieRoot()));
     rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
-    const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
-    spawnLedger.sweep(systemProcessTree, lifecycleLog);
-    // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
-    // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
-    // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
-    // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
-    // never what a running process was started from.
-    const supervisor = await prepareGenieSupervisor(runtimeDir(genieHome())).catch((error: unknown) => {
-        const why = error instanceof Error ? error.message : String(error);
-        lifecycleLog(`containment unready reason=${why}`);
-        console.error(`[genie] agents cannot start contained: ${why}`);
-        mainErrors.record('containment-unready', error);
-        return null;
-    });
-    if (supervisor !== null) {
-        void removeStaleSupervisorBuilds(runtimeDir(genieHome()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
-            (sweep) => {
-                for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
-                for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
-                for (const path of sweep.failed) lifecycleLog(`supervisor stale kept reason=remove-failed path=${path}`);
-                if (sweep.unread) lifecycleLog('supervisor stale kept reason=process-listing-unread');
-            },
-            (error: unknown) => lifecycleLog(`supervisor stale sweep failed reason=${error instanceof Error ? error.message : String(error)}`),
-        );
-    }
-    host = new SessionHost({
-        userData: genieHome(),
-        // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
-        currentRecord: (id) => registry?.find(id) ?? null,
-        lifecycle: {
-            spawned: (agentId, run, processes) => {
-                spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
-                lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
-            },
-            ended: (agentId, run, verdict) => {
-                if (verdict.verified) {
-                    spawnLedger.forget('agent', agentId, run);
-                    lifecycleLog(`exit kind=agent owner=${agentId} run=${run} verified ended=${verdict.ended}`);
-                    return;
-                }
-                // Kept in the ledger: the next boot ends what is still running. Said on the Deck — never a quiet success.
-                if (verdict.survivors.length > 0) spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes: verdict.survivors });
-                lifecycleLog(`refused kind=agent owner=${agentId} run=${run} survivors=${describeProcesses(verdict.survivors)} reason=${verdict.reason}`);
-                const name = registry?.find(agentId)?.name ?? agentId;
-                mainErrors.record('stop-unverified', new Error(`${name}: ${verdict.reason}`));
-            },
-            straggler: (agentId, run) => lifecycleLog(`straggler kind=agent owner=${agentId} run=${run} output after stop, not recorded`),
-        },
+    stallLog = lifecycleLog;
+    if (stallStacksWanted(process.env)) stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
+    stallWatchdog.start();
+    watchOutboundCalls(diagnosticsChannel, stallWatchdog);
+    ipcMain.on('genie:renderer-stall', (event, report: unknown) => stallWatchdog.renderer(report, windowNameOf(event.sender)));
+    app.on('child-process-gone', (_event, details) => stallWatchdog.processGone(details));
+    app.on('render-process-gone', (_event, contents, details) => stallWatchdog.processGone({ type: `renderer:${windowNameOf(contents)}`, reason: details.reason, exitCode: details.exitCode }));
+    for (const w of BrowserWindow.getAllWindows()) watchWindowHang(w);
+    app.on('browser-window-created', (_event, w) => watchWindowHang(w));
+    /*
+     * WHAT THE AGENT ENGINE TELLS AND ASKS ITS OWNER — the same callbacks wherever the engine runs: in `genie-host` (the
+     * host split, phase 1 — main/genie-host.ts, the default) or, as the fallback, in this process.
+     */
+    const engineCallbacks = {
         // Each turn's number is kept on the agent's record as the turn starts, so its next session numbers on at once.
-        onTurnNumbered: (agentId, n) => { void registry?.setLastTurn(agentId, n); },
+        onTurnNumbered: (agentId: AgentId, n: number) => { void registry?.setLastTurn(agentId, n); },
         // Each plan is kept on the agent's record as it arrives, so its next run (after a relaunch too) shows it at once.
-        onPlan: (agentId, steps) => { void registry?.setPlan(agentId, steps); },
+        onPlan: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => { void registry?.setPlan(agentId, steps); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
-        onAction: (agentId, kind) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
+        onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
-        onHeadroom: (provider, room) => { if (headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) broadcast('genie:headroom', headroomBoard.view()); },
+        onHeadroom: (provider: string, room: Headroom) => {
+            if (!headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) return;
+            for (const listener of headroomListeners) listener(headroomBoard.view());
+        },
         // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
         // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
         // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
-        onMcpServers: (agentId, reports) => recoverMissingMcp(agentId, reports),
+        onMcpServers: (agentId: AgentId, reports: readonly McpServerReport[]) => recoverMissingMcp(agentId, reports),
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
-        serviceEnvFor: (workspaceId) => services?.engines.envFor(workspaceId) ?? {},
-        // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
-        heldElsewhere: (record) => {
-            const hold = doctorHoldNow(genieHome());
-            return hold !== null && hold.workspaceId === record.workspaceId
-                ? `doctor mode is running an agent in this workspace (pid ${hold.pid}); stop it there, or close doctor mode, then start ${record.name}`
-                : null;
-        },
+        serviceEnvFor: (workspaceId: string) => services?.engines.envFor(workspaceId) ?? {},
         /**
          * THE LINE THAT MAKES RESUME REAL.
          *
@@ -1230,64 +1488,251 @@ async function boot(): Promise<void> {
          */
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
-        mcpServersFor: (record) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+        mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+        // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
+        // raised them; the host never prompts on its own.
+        elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
+        // Which php-cgi a site's pin runs, for the hosting replica's synchronous check: the same toolchain as the host's.
+        phpCgiFor: (pin: string | undefined) => resolvePhpCgi(pin, phpCgiBase()),
+        onToolCall: (call: ForwardedToolCall) => (windowToolRun ? windowToolRun(call) : Promise.resolve({ text: `${call.name}: Genie's window is still starting; call it again in a moment. Nothing was done.`, isError: true })),
+        // openFileForUser made while no window was here: shown now (once the tools are built).
+        onOpenFileLater: (call: ForwardedToolCall) => { if (windowToolRun) void windowToolRun(call); else openFilesLater.push(call); },
+        // A tool's moment, from the host's own tools: the glow, the thumbs-up, the action on the agent's row.
+        onToolSignal: (raw: unknown) => {
+            const signal = raw as { kind?: string; terminalId?: string; agentId?: string; action?: string; tool?: string; reason?: string };
+            if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
+            else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
+        },
         // Both providers wait for their own private Tynn identity. Workspace/cwd config never supplies a fallback key.
-        prepareMcpServers: async (record, _cwd, signal) => {
+        prepareMcpServers: async (record: AgentRecord, _cwd: string, signal: AbortSignal) => {
             if (!services) throw new Error('Agent services are not ready. Restart the agent after startup completes.');
             const privateServers = await services.prepareAgentMcp(record, signal);
             // Without its Tynn server it still starts (genie#1234): the reason is a note in its chat, never Broken.
             const tynnNote = services?.tynnNote(record.id) ?? null;
-            if (tynnNote) host?.notice(record.id, tynnNote);
-            return [...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)), ...privateServers];
+            if (tynnNote) void host?.notice(record.id, tynnNote);
+            // With genie-host, the Genie entry is the HOST's (P3.1: it owns the MCP server and the caller keys); only the
+            // agent's private servers are this window's to prepare.
+            return [...(agentEngineLink ? [] : genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id))), ...privateServers];
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
-        comms: (agentId, since) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
-        onThreadId: (agentId, threadId) => {
+        comms: (agentId: AgentId, since: number) => dashboardComms.read(agentId, since, Date.now()),
+        onThreadId: (agentId: AgentId, threadId: string) => {
             void theRegistry.recordThread(agentId, threadId).then((result) => {
                 if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
             });
         },
-    });
+        // A provider switch's carry-over went (Tynn story #380): the next prompt does not carry it again.
+        onCarryOverSent: (agentId: AgentId) => { void theRegistry.clearCarryOver(agentId); },
+        onRedockSent: (agentId: AgentId, at: string) => { void theRegistry.clearRedock(agentId, at).catch(() => lifecycleLog(`redock reorientation acknowledgement could not be saved for ${agentId}; it remains pending on disk`)); },
+        // Genie's own words went into the agent's thread (genie#1519): its record says so, for the next launch.
+        markGenieWords: (agentId: AgentId) => { void theRegistry.markGenieWords(agentId); },
+    };
+    /*
+     * THE AGENT ENGINE IN ITS OWN PROCESS (the host split, phase 1; the owner, 2026-10-31: "the actions agents take should
+     * not be routed through my UI … All work should be handled on the host side"). Every session — its provider, its ACP
+     * parsing, its ledger, its thread writes, its containment — runs in `genie-host`; this process keeps a replica it reads
+     * synchronously and sends commands to. A window that freezes, crashes or restarts no longer stops an agent, and an
+     * agent's work no longer runs on the thread that routes the person's keystrokes. There is no in-process MODE (the owner,
+     * 2026-11-01: "we split host from UI for good"): only a host that cannot start at all falls back to the EMERGENCY
+     * in-process engine below, said on the Deck (plan §4.1).
+     */
+    {
+        // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
+        // Electron copies the runtime; every failure answers the install, with the reason.
+        const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
+        const hostRuntime = await materializeHostRuntime({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog });
+        if (hostRuntime.error !== null) mainErrors.record('agent-host', new Error(hostRuntime.error));
+        agentEngineLink = await connectAgentEngine({
+            // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
+            onLinked: (client) => {
+                handProxyAnswers = () => reportProxies(client, lifecycleLog);
+                void handProxyAnswers();
+                publishBrowserFacts();
+                // How the host starts its updater helper (P5b): this executable, in a dev run this app's path, and the switches this
+                // window was started with that an Electron needs to start at all here (the sandbox, the display, the password store).
+                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...windowLaunchFlags(process.argv)] }).catch(() => {});
+                void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
+                cookieBridge?.relinked();
+                client.onBrowserEvent((event) => {
+                    if (event.kind === 'pages') browserPages.apply(event.pages);
+                    if (event.kind === 'browserUp') browserLinked = event.up;
+                    if (event.kind === 'cookies' || event.kind === 'cookiesWanted') cookieBridge?.onEvent(event);
+                    if (event.kind === 'poppedBack' && window && !window.isDestroyed()) window.webContents.send('site-panel:popped-back', event.panelKey);
+                });
+                void client.browserCall('browserUp', []).then((up) => { browserLinked = up === true; }, () => {});
+                void client.browserCall('pagesNow', []).then((pages) => { browserPages.apply(pages as BrowserPage[]); }, () => {});
+            },
+            callbacks: engineCallbacks,
+            launch: {
+                runtimeDir: runtimeDir(genieRoot()),
+                logsDir: join(genieRoot(), 'logs'),
+                // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
+                build: hostBuildNow,
+                hostScript: hostRuntime.hostScript,
+                execPath: hostRuntime.execPath,
+                genieHome: genieRoot(),
+                // What only Electron knows, for the host's hosting (hosting-inputs.ts): Genie 1's folder (its database, CA and
+                // toolchain), the app data folder, and the resources folder with the bundled Caddy.
+                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath, GENIE_INSTALL_EXEC: process.execPath },
+                log: lifecycleLog,
+            },
+            records: () => registry?.listAgents() ?? [],
+            onError: (kind, error) => mainErrors.record(kind, error),
+            agentName: (id) => registry?.find(id)?.name ?? id,
+            log: lifecycleLog,
+        });
+        if (agentEngineLink === null) mainErrors.record('agent-host', new Error('Genie could not start its agent host, so agents run inside the window this time (see logs/genie-host.log).'));
+        host = agentEngineLink?.client ?? null;
+        // THE HEARTBEAT (Tynn #386): every second, its pid and RSS, a notification; the client drops it while unlinked.
+        if (agentEngineLink) heartbeatNow = startHeartbeat({
+            send: (beat) => agentEngineLink?.client.heartbeat(beat),
+            pid: process.pid,
+            rss: () => process.memoryUsage.rss(),
+            // The main window's page beside it: genie-host's rss line says what grew (bringBackItsPage samples it).
+            rendererRss: () => pageMemory.bytes(),
+        });
+    }
+    /*
+     * EVERY PROCESS THIS WINDOW STARTS IS STARTED BY GENIE-HOST (the host split, P2.1; plan §11a): #1405's spawn host is
+     * the HOST's child now (two profiles: processes, terminals), reached over the engine link — so sites, queue workers
+     * and open terminals outlive this window, and what a previous window left running is taken back below. Only the
+     * emergency in-process fallback (no host at all) forks a spawn host of this window's own, as #1405 did.
+     * BEFORE anything runs a command: every execFileRunner call from here on is created there, never on main.
+     */
+    if (agentEngineLink) {
+        const engineLink = agentEngineLink.client;
+        // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them through the host, and
+        // re-reads them when another window (or the host) wrote — two windows, one registry. Before its load, below.
+        theRegistry.useStore(new HostRegistryStore(engineLink.stores()));
+        engineLink.stores().onRegistryChanged(() => { void theRegistry.refresh(); });
+        // This window reaches the `processes` child (exec and streams). Supervised processes and terminals are the host's
+        // own (P3.3b, P3.3e): their state comes by replica, so nothing here is taken back after a loss.
+        const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
+        engineLink.onSpawnFrame('processes', (frame) => processes.linkFrame(frame));
+        const reconcile = (): Promise<ListedPty[]> => processes.linkUp();
+        engineLink.onLink(
+            () => { void reconcile().catch((error: unknown) => lifecycleLog(`spawn host reconcile failed reason=${error instanceof Error ? error.message : String(error)}`)); },
+            (why) => { processes.linkDown(why); },
+        );
+        // The link is already up (it came up in connectAgentEngine): the first reconcile is now, before anything starts.
+        adoptablePtys = await reconcile().catch((error: unknown) => {
+            lifecycleLog(`spawn host list failed reason=${error instanceof Error ? error.message : String(error)}`);
+            return [];
+        });
+        if (adoptablePtys.length > 0) lifecycleLog(`spawn host found running=${adoptablePtys.length} (${adoptablePtys.map((p) => p.tag?.kind === 'process' ? p.tag.processId : p.tag?.kind ?? 'untagged').join(', ')})`);
+        spawnHostNow = processes;
+    } else {
+        spawnHostNow = startSpawnHost({ entry: join(here, 'spawn-host.js'), execPath: process.execPath, log: lifecycleLog });
+    }
+    routeExecThroughSpawnHost(spawnHostNow);
+    if (host === null) {
+        /*
+         * THE SPAWN LEDGER (hosting plan 1.5 / 1.6), when the engine runs HERE. Every agent run's processes are written down
+         * as they start and forgotten when a stop VERIFIES they ended; whatever a previous Genie left running — a crash, a
+         * Task-Manager kill, an installer — is ended here, BEFORE anything is started or restored, from that record only
+         * (pid, start time and name must all match). In `genie-host` the host does this itself, at its own start.
+         */
+        const spawnLedger = SpawnLedger.open(join(runtimeDir(genieRoot()), 'children.json'), randomUUID());
+        spawnLedger.sweep(systemProcessTree, lifecycleLog);
+        // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
+        // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
+        // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
+        // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
+        // never what a running process was started from.
+        const supervisor = await prepareGenieSupervisor(runtimeDir(genieRoot())).catch((error: unknown) => {
+            const why = error instanceof Error ? error.message : String(error);
+            lifecycleLog(`containment unready reason=${why}`);
+            console.error(`[genie] agents cannot start contained: ${why}`);
+            mainErrors.record('containment-unready', error);
+            return null;
+        });
+        if (supervisor !== null) {
+            void removeStaleSupervisorBuilds(runtimeDir(genieRoot()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
+                (sweep) => {
+                    for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
+                    for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
+                    for (const path of sweep.failed) lifecycleLog(`supervisor stale kept reason=remove-failed path=${path}`);
+                    if (sweep.unread) lifecycleLog('supervisor stale kept reason=process-listing-unread');
+                },
+                (error: unknown) => lifecycleLog(`supervisor stale sweep failed reason=${error instanceof Error ? error.message : String(error)}`),
+            );
+        }
+        host = new SessionHost({
+            userData: genieRoot(),
+            // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
+            currentRecord: (id) => registry?.find(id) ?? null,
+            lifecycle: {
+                readingFailed: (agentId, run, pids) => lifecycleLog(`reading failed kind=agent owner=${agentId} run=${run} pids=${pids.join(',')}: the machine could not be read after the spawn, twice, so these are recorded with no start time`),
+                spawned: (agentId, run, processes) => {
+                    spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
+                    lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
+                },
+                ended: (agentId, run, verdict) => {
+                    if (verdict.verified) {
+                        spawnLedger.forget('agent', agentId, run);
+                        lifecycleLog(`exit kind=agent owner=${agentId} run=${run} verified ended=${verdict.ended}`);
+                        return;
+                    }
+                    // Kept in the ledger: the next boot ends what is still running. Said on the Deck — never a quiet success.
+                    if (verdict.survivors.length > 0) spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes: verdict.survivors });
+                    lifecycleLog(`refused kind=agent owner=${agentId} run=${run} survivors=${describeProcesses(verdict.survivors)} reason=${verdict.reason}`);
+                    const name = registry?.find(agentId)?.name ?? agentId;
+                    mainErrors.record('stop-unverified', new Error(`${name}: ${verdict.reason}`));
+                },
+                straggler: (agentId, run) => lifecycleLog(`straggler kind=agent owner=${agentId} run=${run} output after stop, not recorded`),
+            },
+            // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
+            heldElsewhere: (record) => {
+                const hold = doctorHoldNow(genieRoot());
+                return hold !== null && hold.workspaceId === record.workspaceId
+                    ? `doctor mode is running an agent in this workspace (pid ${hold.pid}); stop it there, or close doctor mode, then start ${record.name}`
+                    : null;
+            },
+            // THE EMERGENCY ENGINE'S TRUST (genie#1519): this window's own hosting's verdicts — a known exception until P6.
+            untrustedFilesFor: async (record) => (await composedServices).untrustedFilesFor(record),
+            untrustedNow: (record) => composedNow?.untrustedNow(record) ?? true,
+            ...engineCallbacks,
+        });
+    }
 
     // Healthy means this process is up and answering, which is the only claim the local
     // workstation chip can honestly make from in here. A real health model belongs with
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
+    // The agent host reads each agent's record per call (genie#1188): every record now, and each change as it lands.
+    if (agentEngineLink) {
+        const client = agentEngineLink.client;
+        client.recordsChanged();
+        registry.subscribeAgentRecords(() => client.recordsChanged());
+    }
     /*
      * EVERY CHAT'S UNSENT DRAFT (genie#1261, main/chat-draft-store.ts), kept here so it survives a restart and a reload —
      * Genie 1 kept its part-typed answers in main the same way (v0.7.0-beta.342 main/ask/force-question.ts:1118, 1181-1217).
      * Opened only once the roster is in, so a prune never reads a registry not loaded yet as "every agent deleted"; then a
      * deleted agent's draft and files go on the change that removes it. Answered before any window exists.
      */
-    const drafts = await ChatDraftStore.open(genieHome());
+    // genie-host's when it runs (P3.2): one writer for the drafts file; this window's own only on the emergency path.
+    const drafts = agentEngineLink ? agentEngineLink.client.stores().drafts : await ChatDraftStore.open(genieRoot());
     const draftAgents = (): string[] => theRegistry.listAgents().map((a) => a.id);
     const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
-    await drafts.prune(draftAgents()).catch(pruneFailed);
-    registry.subscribe(() => { void drafts.prune(draftAgents()).catch(pruneFailed); });
-    ipcMain.handle('genie:chat-drafts-load', () => drafts.all());
-    ipcMain.handle('genie:chat-drafts-save', (_event, agentId: unknown, draft: unknown) => {
-        // Only an agent Genie has: a draft for one already deleted would never be pruned.
-        if (typeof agentId !== 'string' || (draft !== null && !theRegistry.find(agentId as AgentId))) return undefined;
-        return drafts.save(agentId, draft);
-    });
-    ipcMain.handle('genie:chat-drafts-put-file', (_event, bytes: unknown) =>
-        bytes instanceof Uint8Array && bytes.byteLength <= MAX_DRAFT_FILE_BYTES ? drafts.putFile(bytes) : null);
-    ipcMain.handle('genie:chat-drafts-read-file', (_event, ref: unknown) => drafts.readFile(ref));
-    ipcMain.handle('genie:chat-drafts-release', (_event, refs: unknown) => (Array.isArray(refs) ? drafts.release(refs) : undefined));
+    // Sent when the roster changes, not on every snapshot: a streaming agent touches the registry ~20 times a second.
+    const draftPruner = rosterPruner({ ids: draftAgents, prune: (ids) => drafts.prune(ids), failed: pruneFailed });
+    await draftPruner.start();
+    registry.subscribe(() => draftPruner.changed());
     // The first roster snapshot is in, and the session host was built above it: a question's agent can be judged now.
     askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
     await writeOsaHome({
-        dir: osaHomeDir(),
+        dir: osaHomeDir(genieRoot()),
         // On an Omarchy host, Omarchy's own agent skills come with it (main/omarchy-skills.ts); elsewhere, nothing about Omarchy.
-        files: osaHomeFiles('normal', { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieHome(), userData: app.getPath('userData'), omarchy: await omarchyFacts() }),
+        files: osaHomeFiles('normal', { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieRoot(), userData: app.getPath('userData'), omarchy: await omarchyFacts() }),
         fs: {
             read: async (p) => { try { return await readFileText(p, 'utf8'); } catch { return null; } },
             write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileText(p, text, 'utf8'); },
         },
     }).catch((error: unknown) => { console.error(`[genie] the OSA's home could not be written: ${(error as Error).message}`); });
     // The boot that imports Genie 1 is the one whose pty host just died — the only boot its orphaned shells are reaped.
-    const importBoot = !existsSync(join(genieHome(), 'v1-import.json'));
+    const importBoot = !existsSync(join(genieRoot(), 'v1-import.json'));
     await importFromV1(theRegistry);
     await reapV1Runtime(importBoot);
     registry.setProbe((id) => host?.probe(id) ?? null);
@@ -1295,21 +1740,24 @@ async function boot(): Promise<void> {
     /*
      * TERMINALS — for shells, builds, services and hosted sites. No agent has one.
      *
-     * The engine is fancy-term-host behind the PtyPort seam. Snapshots are encrypted with
-     * Electron's safeStorage; on a machine that genuinely cannot encrypt the engine takes its
-     * own documented plaintext fallback, which is its call and not decided here.
+     * The engine is fancy-term-host behind the PtyPort seam. It saves no scrollback (the owner, 2026-11-02).
      */
     // ONE pty engine, shared by the terminal host and the composition root's supervisor.
-    const ptyPort = realFancyTermPort(genieHome(), {
-        isAvailable: () => safeStorage.isEncryptionAvailable(),
-        encrypt: (bytes) => safeStorage.encryptString(bytes.toString('base64')),
-        decrypt: (bytes) => Buffer.from(safeStorage.decryptString(bytes), 'base64'),
     // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
-    }, () => services?.settings.snapshot() ?? {});
+    const ptyPort = realFancyTermPort(() => services?.settings.snapshot() ?? {});
     // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
-    terminals = new TerminalHost(ptyPort, { terminals: (workspaceId) => limitOf(services?.settings.snapshotFor(workspaceId) ?? {}, 'terminals') });
-    // §6.5: what the terminals showed at the last quit, handed back once per workspace.
-    snapshots = await TerminalSnapshots.open(genieHome());
+    // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
+    // the open ones a previous window left running are taken back with what they printed.
+    // THE TERMINALS ARE GENIE-HOST'S (P3.3e): their shells and scrollback outlive this window; it drives them by replica.
+    // This window's own only on the emergency path.
+    if (agentEngineLink) terminals = agentEngineLink.client.terminals();
+    else {
+        const own = new TerminalHost(spawnTerminalsNow ? spawnTerminalsNow.ptyPort() : ptyPort, { terminals: (workspaceId) => limitOf(services?.settings.snapshotFor(workspaceId) ?? {}, 'terminals') });
+        for (const pty of adoptablePtys) own.adopt(pty);
+        terminals = own;
+    }
+    // SCROLLBACK IS NOT SAVED (the owner, 2026-11-02): what an older Genie left is deleted, and nothing writes it again.
+    await removeSavedScrollback(genieRoot(), lifecycleLog);
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
     filesHost = new FilesHost({
         // Each opened file carries its git state (the persona's `· committed`).
@@ -1318,7 +1766,7 @@ async function boot(): Promise<void> {
         gitTree: gitTreeStatus,
         // Delete goes to the OS trash (Tynn #844), never an erase.
         trash: (absolutePath) => shell.trashItem(absolutePath),
-        workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
+        workspace: (id) => registry?.workspace(id) ?? null,
         agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => ({ id: a.id, name: a.name })),
         eventsOf: (agentId) => {
             const record = registry?.find(agentId as AgentId);
@@ -1327,87 +1775,122 @@ async function boot(): Promise<void> {
             return fileEventsOf(host.rowsFor(record.id), { id: record.id, name: record.name });
         },
     });
-    // One broadcast per batch, with the paths that changed (genie#921): the panel re-lists once and re-reads the open file only if it changed.
-    filesHost.onChange((workspaceId, paths) => broadcast('genie:files-changed', workspaceId, paths));
+    /*
+     * WHAT CHANGED ON DISK, AND GIT, PUSHED (the host split, P2.2): the watcher and git run in genie-host (files-watch-hub.ts);
+     * here a batch is recorded for `state()` and handed to the local protocol — the panel re-lists once and re-reads the open file only
+     * if it changed (genie#921) — and git's result goes to the views that asked for it, which no longer run git per batch.
+     */
+    const onFilesEvent = (event: FilesHubEvent): void => {
+        if (event.kind === 'changed') filesHost?.recordDiskChanges(event.workspaceId, event.changes);
+        for (const listener of filesEventListeners) listener(event);
+    };
+    if (agentEngineLink) {
+        const link = agentEngineLink.client;
+        link.onFilesEvent(onFilesEvent);
+        filesWatch = {
+            // A known view is retained by the engine client even while offline, then replayed on reconnect.
+            watch: (viewId, workspace, want) => { void link.filesWatch(viewId, workspace, want); return true; },
+            unwatch: (viewId) => { void link.filesUnwatch(viewId); },
+            close: () => {},
+        };
+    } else {
+        // The emergency path only (no host could start, §4.1): the same hub, in this window.
+        const local = new FilesWatchHub({ send: (_owner, event) => onFilesEvent(event), workspaceVisible: (id) => { const w = registry?.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: lifecycleLog });
+        registry?.subscribe(() => local.visibilityChanged());
+        filesWatch = {
+            watch: (viewId, workspace, want) => { local.subscribe('window', viewId, workspace, want); return true; },
+            unwatch: (viewId) => local.unsubscribe('window', viewId),
+            close: () => local.close(),
+        };
+    }
     // The popped-out panels (§4.3): tracked here, pushed as the whole list.
     // The Files panel's pop-out button: the person's click (genie#1235).
     filesWindows = new FilesWindows({ openWindow: (route) => openFilesWindow(route, 'user-gesture'), closeWindow: closeWindowAt });
     filesWindows.onChange((list) => broadcast('genie:files-windows-changed', list));
-    // Pushed, not polled (house rule). One channel per kind; the id rides the payload.
-    terminals.onData((id, data) => {
-        for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('genie:terminal-data', { id, data });
-        }
-    });
-    terminals.onExit((id, exitCode) => {
-        for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('genie:terminal-exit', { id, exitCode });
-        }
-    });
-
     /*
      * TAKE OVER (§1). The host opens the TUI in a workspace terminal and asks for a window on
      * it; the window is the session, so closing it closes the terminal. The registry reads
      * the host's probe to draw the Observed row. Nothing here manages the TUI.
      */
     const terminalsForTakeOver = terminals;
+    scratchTerminals = new ScratchTerminals({ terminals: terminalsForTakeOver, openWindow: (route) => openTakeOverWindow(route, 'user-gesture') });
     takeOvers = new TakeOverHost({
         terminals: terminalsForTakeOver,
         // Take Over is a button the person pressed (genie:take-over); nothing else starts one (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         // The Take Over contract (§1, §6.9): the loopback MCP endpoint, read at open time so a late-starting server still reaches the TUI.
-        mcp: () => { const e = mcp?.endpoint(); return e ? { mcpUrl: e.url, token: e.token } : null; },
+        mcp: () => { const e = mcpEndpointNow(); return e ? { mcpUrl: e.url, token: e.token } : null; },
     });
     const takeOversNow = takeOvers;
     theRegistry.setObservedProbe((id) => takeOversNow.probe(id));
 
     /*
-     * UPDATES (§7). The host drives electron-updater; the renderer asks and shows. The install
-     * directory is wherever this executable lives — `%LOCALAPPDATA%\Programs\Genie` when
-     * installed, Electron's own dist in a dev run — and §7.2's teardown scans exactly that.
-     * One check soon after boot and one every few hours (AUTO_CHECK) — v1 checked at boot, and
-     * 2.0.0-beta.5, which never did, could not learn that the next build existed (genie2#91).
-     * Nothing downloads by itself.
+     * UPDATES (§7), GENIE-HOST'S (the host split, P5b; updates-host.ts). The host holds the state, checks on its schedule —
+     * and with no window open downloads what it finds — and runs the install: the agents drained, its hosting stopped, the
+     * teardown scan, then its updater helper (Genie's own executable in its `--updater` mode) waits for every Genie process
+     * to be gone and runs the installer. This window reads the host's state through a replica and sends the person's check,
+     * download, install and channel. When the host answers an install it is on its way out: this window quits, asking
+     * nothing, and records nothing over the record the host's drain wrote.
      */
-    updates = new UpdateHost({
-        port: realElectronUpdaterPort(),
-        // What is in an update (core/update-notes.ts): GitHub's releases, whose bodies are our own Markdown notes. The repo
-        // is public, so no token; 10 s at most, and a failure says "unavailable" in the window, never blocks the update.
-        runningVersion: app.getVersion(),
-        releases: async () => {
-            const res = await fetch('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', {
-                headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Genie' },
-                signal: AbortSignal.timeout(10_000),
-            });
-            if (!res.ok) throw new Error(`GitHub releases: HTTP ${res.status}`);
-            return (await res.json()) as import('../core/update-notes.js').ReleaseLike[];
-        },
-        installDir: dirname(process.execPath),
-        ownPid: process.pid,
-        // Off the event loop (genie#1201): restart-to-install reads and kills without holding the window.
-        processes: listProcessesAsync,
-        kill: killProcessAsync,
-        // §7.4: every session ends with the upgrade; no agent is asked for a handoff first (the owner, 2026-10-12).
-        agents: {
-            live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
-            stopAll: recordThenStopAll({
-                markRecorded: () => quit.markRecorded(),
-                record: () => recordShutdownNow(),
-                stopAll: (onLeft) => host?.stopAll(onLeft) ?? Promise.resolve(),
-                onRecordError: (error) => {
-                    const why = error instanceof Error ? error.message : String(error);
-                    lifecycleLog(`shutdown-record failed reason=${why}`);
-                    console.error(`[genie] the agents to start again could not be recorded: ${why}`);
-                },
-            }),
-        },
-    });
-    updates.onChange((state) => {
-        refreshTray();
-        for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('genie:updates-changed', state);
-        }
-    });
+    if (agentEngineLink !== null) {
+        const replica = agentEngineLink.client.updates();
+        replica.onInstalling(() => {
+            lifecycleLog('update: the host is installing; this window quits');
+            quit.markRecorded();
+            quit.choose('shut-down');
+            setTimeout(() => { app.quit(); }, QUIT_DELAY_MS);
+        });
+        // Why the last install did not happen (the host read its record): said on the Deck, in words, with the log's path.
+        replica.onFailedInstall((notice) => {
+            mainErrors.record('update-failed', new Error(`Genie’s update was not installed: ${notice.reason} The details are in ${notice.log}.`));
+        });
+        updates = replica;
+    } else {
+        /*
+         * THE EMERGENCY PATH ONLY (no genie-host could start; plan §4.1): this window drives electron-updater itself, as it did
+         * before P5b, so a broken host can still be updated away from. Loaded lazily — the window's own import graph never
+         * holds the library (the helper mode's does).
+         */
+        const { realElectronUpdaterPort } = await import('./electron-updater-port.js');
+        const own = new UpdateHost({
+            port: realElectronUpdaterPort(),
+            // What is in an update (core/update-notes.ts): GitHub's releases, whose bodies are our own Markdown notes. The repo
+            // is public, so no token; 10 s at most, and a failure says "unavailable" in the window, never blocks the update.
+            runningVersion: app.getVersion(),
+            releases: async () => {
+                const res = await net.fetch('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', {
+                    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Genie' },
+                    signal: AbortSignal.timeout(10_000),
+                });
+                if (!res.ok) throw new Error(`GitHub releases: HTTP ${res.status}`);
+                return (await res.json()) as import('../core/update-notes.js').ReleaseLike[];
+            },
+            installDir: dirname(process.execPath),
+            ownPid: process.pid,
+            // Off the event loop (genie#1201): restart-to-install reads and kills without holding the window.
+            processes: listProcessesAsync,
+            kill: killProcessAsync,
+            // §7.4: every session ends with the upgrade; no agent is asked for a handoff first (the owner, 2026-10-12).
+            agents: {
+                live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
+                stopAll: recordThenStopAll({
+                    markRecorded: () => quit.markRecorded(),
+                    record: () => recordShutdownNow(),
+                    // Then the agent host itself, gracefully (the host split): it runs on Genie's binary, so the installer must
+                    // not find it running — the orphan scan would end it hard.
+                    stopAll: async (onLeft) => { await (host?.stopAll(onLeft) ?? Promise.resolve()); await agentEngineLink?.shutdown(); },
+                    onRecordError: (error) => {
+                        const why = error instanceof Error ? error.message : String(error);
+                        lifecycleLog(`shutdown-record failed reason=${why}`);
+                        console.error(`[genie] the agents to start again could not be recorded: ${why}`);
+                    },
+                }),
+            },
+        });
+        autoCheckStop = own.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
+        updates = own;
+    }
+    updates.onChange(() => { refreshTray(); });
     // Every copy button writes through main (main/clipboard-ipc.ts): in a sandboxed window the page's clipboard can fail silently.
     registerClipboardIpc(ipcMain, electronClipboardPort(clipboard, ClipboardItem));
     // The native window buttons follow the theme (the owner: "not following color theme"): the renderer sends the
@@ -1423,20 +1906,6 @@ async function boot(): Promise<void> {
     });
     // What the window's buttons were last painted with — read by the real-window smoke and by diagnostics.
     ipcMain.handle('genie:window-overlay-colors-current', (event) => overlayApplied.get(event.sender.id) ?? null);
-    ipcMain.handle('genie:updates-state', () => updates?.state() ?? null);
-    autoCheckStop = updates.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
-    ipcMain.handle('genie:updates-check', () => updates?.check() ?? null);
-    ipcMain.handle('genie:updates-download', () => updates?.download() ?? false);
-    // The update window opening reads the notes again if they were missing (beta.38, 2026-10-22).
-    ipcMain.handle('genie:updates-notes', () => updates?.refreshNotes() ?? null);
-    ipcMain.handle('genie:updates-install', async () => {
-        // The window has its restart screen at once (the `installing` state, genie#1201); the answer waits for the work.
-        const pending = updates?.install() ?? null;
-        if (!pending) return null;
-        const result = await pending;
-        console.log(`[updater] ${result.report}`);
-        return { report: result.report };
-    });
 
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 
@@ -1452,30 +1921,45 @@ async function boot(): Promise<void> {
         agentPush.watch(raw, on);
     });
 
+    /*
+     * START ON FIRST MESSAGE (the owner, 2026-11-01, q_04ce323c: "opening an agent must NOT start it"). One rule for every
+     * sender of work — the composer, a remote window's prompt, a flow (main/start-on-demand.ts): a session here is used as
+     * it is; an agent with none is started, unless its workspace is asleep or the agent cap refuses, said by name.
+     */
+    const startOnDemand = (record: AgentRecord): Promise<StartForWork> => startForWork({
+        probe: (id) => host?.probe(id) ?? null,
+        start: (r, cwd) => (host ? host.start(r, cwd) : { ok: false, reason: 'Genie’s agents are not running yet' }),
+        cwdFor,
+        startRefusal: (r) => startRefusal(workspaceOps, r, {
+            running: registry!.agentsOf(r.workspaceId).filter((a) => host?.probe(a.id)?.running === true).length,
+            cap: agentCapFrom(services?.settings.snapshotFor(r.workspaceId) ?? {}),
+        }),
+    }, record);
+    // THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): the same rule, and a new driver through the one
+    // Restart when the run's own stopped itself. `agentOps` is read when a message comes, never while main is wiring up.
+    const startForYours = (record: AgentRecord): Promise<StartForWork> => startForYourMessage({
+        startForWork: startOnDemand,
+        needsNewDriver: (id) => host?.needsNewDriver(id) ?? false,
+        restart: (id) => restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch()),
+        notice: (id, message) => host?.notice(id, message) ?? false,
+    }, record);
+
     ipcMain.handle('genie:open-agent', (_event, raw: unknown) => {
         // The renderer is not trusted to hand over a well-formed id. `asAgentId` returning
         // `null` is a refusal, not a repair: looking up `''` would find nothing and render an
         // empty session forever, which is the §0.4 failure reached through the bridge.
         const record = agentFromRenderer(raw);
         if (!record || !host) return { ok: false, reason: 'unknown agent' };
-
-        // An asleep workspace starts nothing (§6.1) — refused by name, never silently.
-        const asleep = startRefusal(workspaceOps, record, {
-            running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
-            cap: agentCapFrom(services?.settings.snapshotFor(record.workspaceId) ?? {}),
-        });
-        if (asleep) return { ok: false, reason: asleep };
-        // OPENING an agent (navigating to it): start or REATTACH. Starting one that is already running returns the same
-        // session rather than a second — two provider processes answering as one agent is how a user ends up with
-        // something they cannot stop. A Broken one is left as it is, to be read: no control in the window calls this to
-        // start an agent any more — Start and Restart are the one restart (genie#1238, `agent-restart`).
-        return host.start(record, cwdFor(record));
+        // OPENING an agent SHOWS it (q_04ce323c) — its history, its settings, its Start. It starts nothing: a session it
+        // has (running, or Broken to be read) is the one the window shows, as it is; one it has not stays stopped until
+        // something sends it work (`startOnDemand`) or the person presses Start (the one restart, genie#1238).
+        return { ok: true };
     });
 
-    ipcMain.handle('genie:stop-agent', (_event, raw: unknown) => {
+    ipcMain.handle('genie:stop-agent', async (_event, raw: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host) return { ok: false };
-        return { ok: host.stop(record.id) };
+        return { ok: await host.stop(record.id) };
     });
 
     // `Stop this turn` (the chat's context line, the Agent view's header): the current turn ends, the agent keeps
@@ -1494,12 +1978,18 @@ async function boot(): Promise<void> {
         return host.cancel(record.id);
     });
 
-    ipcMain.handle('genie:prompt', (_event, raw: unknown, text: unknown, files: unknown) => {
+    ipcMain.handle('genie:prompt', async (_event, raw: unknown, text: unknown, files: unknown) => {
         const record = agentFromRenderer(raw);
         const attachments = attachmentsFromRenderer(files);
         if (!record || !host || typeof text !== 'string' || attachments === null || (text.length === 0 && attachments.length === 0)) return { ok: false };
+        // THE FIRST MESSAGE STARTS IT (q_04ce323c): a stopped or never-started agent is started here, and the message
+        // waits in its session's queue for the start (the chat shows it waiting, then sent). A refused start is said. A
+        // run whose driver stopped itself (Claude's uncertain Stop, prism-acp 0.37.0) is started again on its conversation.
+        const started = await startForYours(record);
+        if (!started.ok) return { ok: false, reason: started.reason };
+        if (!host) return { ok: false };
         // The composer: the turn is started by YOU, and the ledger says so.
-        const sent = host.promptWith(record.id, text, attachments, 'you');
+        const sent = await host.promptWith(record.id, text, attachments, 'you');
         return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
     });
 
@@ -1575,6 +2065,8 @@ async function boot(): Promise<void> {
                 return null;
             }
         },
+        // What a provider switch carries (Tynn story #380): the agent's rows, asked of the agent host, which reads its own store.
+        history: async (record) => (host ? (await host.historyRows(record.id, { limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES })).rows : []),
         removeDir: (path) => rm(path, { recursive: true, force: true }),
         realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
         // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.
@@ -1604,16 +2096,17 @@ async function boot(): Promise<void> {
     settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
     // `Log in to <provider>` (the owner, 2026-10-18): the provider's own login in a scratch folder, in a window of its own.
     // Signed in (its status command exits 0), every agent that login signed out is restarted on its thread and told.
+    // GENIE'S SCRATCH (P7): this process's folder under `<root>/cache/tmp`, made on first use with no process-table read;
+    // the folders of Genies that are gone are swept deferred, and the sweep is stopped on quit.
+    const scratch = scratchArea(genieRoot());
+    scratchSweepStop = scheduleScratchSweep(genieRoot(), { log: (line) => console.warn(line) });
     const logins = new LoginHost({
+        scratch: () => scratch.directory(),
         terminals: terminalsForTakeOver,
         // A login starts from the tray or the agent view's Log in button only — the person's click (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
-        runStatus: (command, cwd) => new Promise<number>((resolve) => {
-            execFileCb(command, { shell: true, cwd, timeout: 30_000, windowsHide: true }, (error) => {
-                resolve(error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? ((error as { code: number }).code) : 1);
-            });
-        }),
+        runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
         onSignedIn: (provider) => {
             for (const id of host?.signedOutAgents(provider) ?? []) {
                 void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
@@ -1628,19 +2121,36 @@ async function boot(): Promise<void> {
     });
     loginHost = logins;
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
+    /*
+     * A WORKSPACE'S VERDICT CHANGES WHILE ITS AGENT RUNS (genie#1519, trust-verdict.ts). THE HOST OWNS TRUST: genie-host's
+     * TrustVerdicts act on its own sessions. Only this window's EMERGENCY engine (no host could start) is compared here —
+     * a known exception until P6.
+     */
+    const own = host instanceof SessionHost ? host : null;
+    if (own) {
+        trustVerdicts = new TrustVerdicts({
+            agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => a.id),
+            untrustedNow: (id) => { const record = registry?.find(id); return record ? (composedNow?.untrustedNow(record) ?? true) : false; },
+            launchedUntrusted: (id) => own.launchedUntrusted(id),
+            quiet: (id) => own.quiet(id),
+            inTurn: (id) => own.inTurn(id),
+            workWaiting: (id) => own.workWaiting(id),
+            releaseWork: (id) => { own.releaseWork(id); },
+            runOf: (id) => own.runOf(id),
+            hold: (id, text) => own.holdForNextWork(id, text),
+            withdraw: (id) => own.withdrawHeld(id),
+            notice: (id, text) => { own.notice(id, text); },
+            // Quitting ends it anyway, and the next launch reads the verdict.
+            restart: (id) => (quit.quitting ? Promise.resolve({ ok: true as const }) : restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch())),
+        });
+        own.subscribe((id) => trustVerdicts?.check(id));
+    }
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
         for (const id of host?.pausedAgents(provider) ?? []) {
             void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, ACCOUNT_BACK, 'genie'); }).finally(() => registry?.touch());
         }
     };
-    ipcMain.handle('genie:headroom', () => headroomBoard.view());
-    ipcMain.handle('genie:account-retry', (_event, raw: unknown) => {
-        const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
-        if (!record) return { ok: false, reason: 'No agent named.' };
-        retryPausedAccount?.(record.provider);
-        return { ok: true };
-    });
     ipcMain.handle('genie:design-login', (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
@@ -1653,52 +2163,6 @@ async function boot(): Promise<void> {
         const started = logins.start(record.provider);
         return started.ok ? { ok: true } : started;
     });
-    ipcMain.handle('genie:agent-restart', (_event, raw: unknown, kind: unknown) => {
-        if (typeof raw !== 'string' || (kind !== 'graceful' && kind !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
-        return restartAgent(agentOps, raw, kind).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-preview-delete', (_event, raw: unknown, outcome: unknown, also: unknown) => {
-        if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
-        return previewDelete(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []);
-    });
-    ipcMain.handle('genie:agent-delete', (_event, raw: unknown, outcome: unknown, also: unknown, handoff: unknown) => {
-        if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
-        return deleteAgent(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : [], { handoff: handoff === true }).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-switch-driver', (_event, raw: unknown, to: unknown) => {
-        if (typeof raw !== 'string' || typeof to !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
-        return switchDriver(agentOps, raw, to).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-set-mode', (_event, raw: unknown, mode: unknown) =>
-        (typeof raw === 'string' && (mode === 'automated' || mode === 'manual') ? setMode(agentOps, raw, mode).finally(() => registry?.touch()) : { ok: false, reason: 'mode is automated or manual' }));
-    ipcMain.handle('genie:agent-set-permissions', (_event, raw: unknown, permissions: unknown) =>
-        (typeof raw === 'string' && (permissions === 'all' || permissions === 'edits' || permissions === 'ask') ? setPermissions(agentOps, raw, permissions).finally(() => registry?.touch()) : { ok: false, reason: 'permissions are all, ask or edits' }));
-    // The provider's own model list for the agent's picker (the owner, 2026-10-21: "using actual available options from
-    // the providers"); `refresh` = ask the provider again.
-    ipcMain.handle('genie:agent-models', (_event, raw: unknown, refresh: unknown) =>
-        (typeof raw === 'string' ? listModels(agentOps, raw, refresh === true) : { ok: false, reason: 'unknown agent' }));
-    ipcMain.handle('genie:agent-set-model', (_event, raw: unknown, model: unknown) =>
-        (typeof raw === 'string' && (model === null || typeof model === 'string') ? setModel(agentOps, raw, model).finally(() => registry?.touch()) : { ok: false, reason: 'a model is a name, or null for the provider default' }));
-    // Autonomous or asked (Tynn #801): its next gated action reads it; nothing restarts.
-    ipcMain.handle('genie:agent-set-auto-approve', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setAutoApprove(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'autonomy is on or off' }));
-    // May manage the workspace's tabs (beta.35 item 36): the workspaceTabs tool is in its next tools/list.
-    ipcMain.handle('genie:agent-set-manage-tabs', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setManageTabs(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'managing tabs is on or off' }));
-    // May drive pages (browser rebuild step 7): the page tool is in its next tools/list.
-    ipcMain.handle('genie:agent-set-drive-pages', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setDrivePages(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'driving pages is on or off' }));
-    // What it hears from IssueWatch (Tynn #806): the setting is checked in setIssueWatch, which says why it refuses one.
-    ipcMain.handle('genie:agent-set-issue-watch', (_event, raw: unknown, setting: unknown) =>
-        (typeof raw === 'string' ? setIssueWatch(agentOps, raw, setting).finally(() => registry?.touch()) : { ok: false, reason: 'unknown agent' }));
-    ipcMain.handle('genie:agent-set-access-scope', (_event, raw: unknown, scope: unknown) =>
-        (typeof raw === 'string' && (scope === 'none' || scope === 'self' || scope === 'all') ? setAccessScope(agentOps, raw, scope).finally(() => registry?.touch()) : { ok: false, reason: 'scope is none, self or all' }));
-    ipcMain.handle('genie:agent-set-budget', (_event, raw: unknown, usd: unknown) => {
-        if (typeof raw !== 'string' || (usd !== null && !(typeof usd === 'number' && usd >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
-        return setBudget(agentOps, raw, usd as number | null).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-diagnose', (_event, raw: unknown) => (typeof raw === 'string' ? diagnose(agentOps, raw) : { ok: false, reason: 'diagnose names an agent' }));
-
     ipcMain.handle('genie:restart-with-handoff', async (_event, raw: unknown, finishedId: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
@@ -1710,6 +2174,25 @@ async function boot(): Promise<void> {
         return r;
     });
 
+    // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
+    const crashReports = crashReportHost({
+        view: () => agentEngineLink?.client.safeModeView() ?? null,
+        // The host's latest crash record and the reopened-window notice (Tynn #386): the draft is built from them.
+        record: () => agentEngineLink?.client.crashStateView()?.record ?? null,
+        notice: () => agentEngineLink?.client.crashStateView()?.notice ?? null,
+        agents: () => (registry?.listAgents() ?? []).map((a) => ({ id: a.id, name: a.name, provider: a.provider })),
+        workspaceNames: () => [...(registry?.listWorkspaces() ?? []).flatMap((w) => [w.id, basename(w.path)]), ...(registry?.workspaceSlugs().values() ?? [])],
+        genieVersion: app.getVersion(),
+        os: process.platform,
+        arch: process.arch,
+        tynnHost: TYNN_HOST,
+        identity: async () => (crashReportMachine ? crashReportMachine.identity(TYNN_HOST) : null),
+        authHeader: async () => { if (!crashReportMachine) throw new Error('no workstation identity'); return crashReportMachine.authHeader(TYNN_HOST); },
+        fetch: (url, init) => net.fetch(url, init),
+    });
+    ipcMain.handle('genie:crash-report-draft', () => crashReports.draft());
+    ipcMain.handle('genie:crash-report-send', (_event, text: unknown, notes: unknown) =>
+        typeof text === 'string' && typeof notes === 'string' ? crashReports.send(text, notes) : { ok: false, reason: 'A crash report needs its text.' });
     ipcMain.handle('genie:take-over', (_event, raw: unknown) => {
         if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
         const record = registry?.find(raw as AgentId) ?? null;
@@ -1719,67 +2202,20 @@ async function boot(): Promise<void> {
         // The TUI is the provider's own CLI, resolved the way a session resolves it. No MCP
         // URL is set: genie2 has no MCP server yet, and a fake one would be worse than none.
         const tui = providerBinary(record.provider) ?? record.provider;
-        return takeOvers.start(record, workspace.path, tui);
+        const started = takeOvers.start(record, workspace.path, tui);
+        // Its agent calls Genie's tools by this terminal: genie-host must know whose it is (P3.1).
+        pushHostView();
+        return started;
     });
 
-    ipcMain.handle('genie:terminal-open', (_event, rawWorkspaceId: unknown, rawOptions: unknown) => {
-        if (!terminals || typeof rawWorkspaceId !== 'string') return null;
-        const workspace = registry?.snapshot().workspaces?.find((w) => w.id === rawWorkspaceId) ?? null;
-        if (!workspace) return null;
-        const options = (rawOptions ?? {}) as { cols?: unknown; rows?: unknown; command?: unknown };
-        const cols = typeof options.cols === 'number' && options.cols > 0 ? Math.floor(options.cols) : undefined;
-        const rows = typeof options.rows === 'number' && options.rows > 0 ? Math.floor(options.rows) : undefined;
-        const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
-        try {
-            // cwd RESUME (§6.5): a new terminal opens where the workspace's last shell was, when tracking is on.
-            const trackCwd = (services?.settings.snapshot() ?? {}).track_cwd !== false;
-            const cwd = (trackCwd ? terminals.lastCwd(workspace.id) : null) ?? workspace.path;
-            // A shell in a workspace sees the workspace's service engines (DB_*, REDIS_URL…), like its processes do, and
-            // GENIE_MCP_URL / GENIE_MCP_TOKEN (§6.9); the pty port adds GENIE_TERMINAL_ID itself. The SAME function gives an
-            // agent's `manageTerminals create` its env (the `terminalEnv` part below).
-            const env = terminalEnvFor(services, workspace.id, mcpEnv());
-            return terminals.open({ workspaceId: workspace.id, cwd, command, cols, rows, ...(Object.keys(env).length > 0 ? { env } : {}) });
-        } catch (error: unknown) {
-            // The engine's own words, on the main process's stderr, where a VM run's
-            // installed-err.log catches them. The first fancy-pty failure on the installed app
-            // (2026-10-10) reached nobody: the port handed back pid -1 and nothing was logged.
-            console.error(`[terminal] open failed in ${workspace.path}: ${error instanceof Error ? error.message : String(error)}`);
-            throw error;
-        }
+    // THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace's folder, with the workspace's
+    // environment (the same `terminalEnvFor` as a workspace terminal), in a window of its own; closing it ends it.
+    ipcMain.handle('genie:scratch-terminal-open', (_event, rawWorkspaceId: unknown) => {
+        if (!scratchTerminals) return { ok: false, reason: 'Terminals are not ready yet.' };
+        const workspace = typeof rawWorkspaceId === 'string' ? registry?.snapshot().workspaces?.find((w) => w.id === rawWorkspaceId) ?? null : null;
+        if (!workspace) return { ok: false, reason: 'That workspace is not open in Genie.' };
+        return scratchTerminals.open({ workspaceId: workspace.id, cwd: workspace.path, env: terminalEnvFor(services, workspace.id, mcpEnv()) });
     });
-    ipcMain.handle('genie:terminal-write', (_event, id: unknown, data: unknown) =>
-        typeof id === 'string' && typeof data === 'string' ? (terminals?.write(id, data) ?? false) : false);
-    ipcMain.handle('genie:terminal-resize', (_event, id: unknown, cols: unknown, rows: unknown) =>
-        typeof id === 'string' && typeof cols === 'number' && typeof rows === 'number'
-            ? (terminals?.resize(id, Math.floor(cols), Math.floor(rows)) ?? false)
-            : false);
-    ipcMain.handle('genie:terminal-close', (_event, id: unknown) =>
-        typeof id === 'string' ? (terminals?.close(id) ?? false) : false);
-    ipcMain.handle('genie:terminal-list', (_event, rawWorkspaceId: unknown) =>
-        typeof rawWorkspaceId === 'string'
-            ? (terminals?.list().filter((t) => t.workspaceId === rawWorkspaceId).map(({ id, pid, shell }) => ({ id, pid, shell })) ?? [])
-            : []);
-
-    // JOIN a running terminal (§6.5 multi-attach): scrollback so far; null for another workspace's id or a gone one.
-    ipcMain.handle('genie:terminal-attach', (_event, workspaceId: unknown, id: unknown) => {
-        if ((typeof workspaceId !== 'string' && workspaceId !== null) || typeof id !== 'string') return null;
-        const joined = terminals?.attach(id) ?? null;
-        // The host's own windows may join any terminal (null); a named workspace must match.
-        if (!joined || (workspaceId !== null && joined.workspaceId !== workspaceId)) return null;
-        return { id: joined.id, pid: joined.pid, shell: joined.shell, scrollback: joined.scrollback };
-    });
-    ipcMain.handle('genie:terminal-previous', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? snapshots?.take(workspaceId) ?? null : null));
-
-    // THE FILE PANEL (§4.3). Confinement happens in the host; the renderer never sees a path it did not ask about.
-    ipcMain.handle('genie:files-last-committed', (_event, workspaceId: unknown, path: unknown) => (typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.lastCommitted(workspaceId, path) ?? null : null));
-    ipcMain.handle('genie:files-tree', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.tree(workspaceId) ?? null : null));
-    ipcMain.handle('genie:files-children', (_event, workspaceId: unknown, dir: unknown) => (typeof workspaceId === 'string' && typeof dir === 'string' ? filesHost?.children(workspaceId, dir) ?? null : null));
-    ipcMain.handle('genie:files-open', (_event, workspaceId: unknown, path: unknown) =>
-        typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.open(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
-    // A MEDIA TAB'S BYTES (the owner, 2026-10-21: an image showed broken): the Files panel's own viewer, so no plugin gate —
-    // the same confinement and size cap as the text read (files-host `readBytes`).
-    ipcMain.handle('genie:files-read-media', (_event, workspaceId: unknown, path: unknown) =>
-        typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.readBytes(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
     // RIGHT-CLICK A FILE (Tynn #841): the host OS's own app for it, or its file manager — a path confined to the workspace.
     ipcMain.handle('genie:files-open-external', async (_event, workspaceId: unknown, path: unknown) => {
         const abs = typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.absolute(workspaceId, path) ?? null : null;
@@ -1805,27 +2241,8 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:files-export', (event, workspaceId: unknown, path: unknown) =>
         typeof workspaceId === 'string' && typeof path === 'string' ? exporter.export(workspaceId, path, BrowserWindow.fromWebContents(event.sender)) : { ok: false, reason: 'bad arguments' });
-    // THE TREE'S FILE OPERATIONS (Tynn #844): confined, never overwriting, Delete to the trash — all in the host.
-    const fileOp = (run: (host: FilesHost) => Promise<unknown>) => (filesHost ? run(filesHost) : Promise.resolve({ ok: false, reason: 'no files host' }));
-    const str = (v: unknown): v is string => typeof v === 'string';
-    ipcMain.handle('genie:files-create', (_event, workspaceId: unknown, path: unknown, kind: unknown) =>
-        str(workspaceId) && str(path) && (kind === 'file' || kind === 'folder') ? fileOp((h) => h.create(workspaceId, path, kind)) : { ok: false, reason: 'bad arguments' });
-    ipcMain.handle('genie:files-rename', (_event, workspaceId: unknown, from: unknown, to: unknown) =>
-        str(workspaceId) && str(from) && str(to) ? fileOp((h) => h.rename(workspaceId, from, to)) : { ok: false, reason: 'bad arguments' });
-    ipcMain.handle('genie:files-duplicate', (_event, workspaceId: unknown, path: unknown) =>
-        str(workspaceId) && str(path) ? fileOp((h) => h.duplicate(workspaceId, path)) : { ok: false, reason: 'bad arguments' });
-    ipcMain.handle('genie:files-trash', (_event, workspaceId: unknown, path: unknown) =>
-        str(workspaceId) && str(path) ? fileOp((h) => h.trash(workspaceId, path)) : { ok: false, reason: 'bad arguments' });
     // A PLUGIN EDITOR'S BYTES (beta.33 item 14): through the plugin gate — an enabled plugin's own claimed and declared types only.
     const editorBytesDeps = (): EditorBytesDeps | null => (filesHost && services ? { gate: (pluginId, path) => services!.plugins.editorBytes(pluginId, path), files: filesHost } : null);
-    ipcMain.handle('genie:files-read-bytes', (_event, workspaceId: unknown, pluginId: unknown, path: unknown) => {
-        const deps = editorBytesDeps();
-        return deps ? editorRead(deps, workspaceId, pluginId, path) : { ok: false, path: typeof path === 'string' ? path : '', error: 'no files host' };
-    });
-    ipcMain.handle('genie:files-write-bytes', (_event, workspaceId: unknown, pluginId: unknown, path: unknown, base64: unknown, expectedSha: unknown) => {
-        const deps = editorBytesDeps();
-        return deps ? editorWrite(deps, workspaceId, pluginId, path, base64, expectedSha) : { ok: false, reason: 'no files host' };
-    });
     // THE OFFICIAL PANELS (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace (official-panels-host.ts).
     const panelsHost = (): PanelsHostDeps => ({
         workspacePath: (id) => registry?.workspace(id)?.path ?? null,
@@ -1833,12 +2250,6 @@ async function boot(): Promise<void> {
         send: async (agentId, text) => { if (services) await services.inbox.send({ from: HUMAN, to: agentId as AgentId, text }); },
         now: () => new Date().toISOString(),
     });
-    ipcMain.handle('genie:repo', (_event, op: unknown, workspaceId: unknown, rel: unknown, a: unknown, b: unknown) => repoCall(panelsHost(), op, workspaceId, rel, a, b));
-    ipcMain.handle('genie:artboard-read', (_event, workspaceId: unknown) => artboardRead(panelsHost(), workspaceId));
-    ipcMain.handle('genie:artboard-review', (_event, workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown) => artboardReview(panelsHost(), workspaceId, postId, verdict, comment));
-    ipcMain.handle('genie:files-git-status', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.gitStatus(workspaceId) ?? {} : {}));
-    ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
-    ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
     // WHICH BROWSER is decided by the window that asked (core/browser-connection.ts): this machine's sites, or — for a window
     // driving a Tynn workstation — that workstation's, over that window's own relay channel. Never by what it says.
@@ -1849,24 +2260,24 @@ async function boot(): Promise<void> {
         const remoteUrl = [...remoteWindows].find(([, w]) => !w.isDestroyed() && w.webContents === event.sender)?.[0] ?? null;
         const conn = browserConnectionFor({ remoteUrl, relays: [...relayChannels.values()].filter((c) => c.sender === event.sender) });
         if (conn.kind === 'refused') return { ok: false, error: conn.reason };
-        if (conn.kind === 'local') return browser.open(at, 'user-gesture');
+        if (conn.kind === 'local') return openLocalBrowser(at, 'user-gesture');
         const via = await remoteBrowsers.connect(conn.workstationId, conn.transport);
         const hosts = Array.isArray(rawHosts) ? rawHosts.filter(isGenHost) : [];
         const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
         return browser.open(at, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
     });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
-    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url === 'string') openRemoteWindow(url, typeof name === 'string' ? name : null); });
+    // A drone never connects out (audit M-b): refused HERE, from the role main read from Tynn, not only hidden in the window.
+    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url !== 'string') return; const refused = outboundDialRefusal(workstationRoleNow, url); if (refused) return { ok: false, reason: refused }; openRemoteWindow(url, typeof name === 'string' ? name : null); });
+    /*
+     * The tailnet socket is dialled by the remote window's renderer, which main otherwise never sees: every WebSocket an
+     * app window opens (they share the default session; the Genie browser has its own) is cancelled while this machine
+     * is a drone. Main's own sockets (the relay, Pusher) are Node's and do not pass through here. A desktop window no longer
+     * dials (genie:device-open, below, refuses first): this stays as defence in depth for anything else a window opens.
+     */
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
-    ipcMain.handle('genie:tynn-workstations', async () => {
-        const account = tynnAccount;
-        if (!account) return { ok: false, reason: 'this Genie has no Tynn account' };
-        const refused = droneRefusal(workstationRoleNow);
-        if (refused) return { ok: false, reason: refused };
-        // Every Tynn identity this machine holds, not only the one this launch registered (this-machine.ts).
-        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), await thisMachineIds()), rereadRole);
-    });
     // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): main classifies it against the Tynn this Genie is
     // signed in to, with the role Tynn gave this machine — never one the window sends — then opens the invite in the
     // browser or the workstation in its own window.
@@ -1876,18 +2287,6 @@ async function boot(): Promise<void> {
             openExternal: async (url) => { try { await shell.openExternal(url); return true; } catch { return false; } },
             openWorkstation: (id, name) => openRemoteWindow(`relay:${id}`, name ?? null),
         });
-    });
-    // CHANGE A WORKSTATION'S ROLE (genie#1278 W6): refused here first on a drone (the role main read from Tynn), then Tynn
-    // decides — the owner only, with a fresh authenticator code. This machine's own role is read again afterwards.
-    ipcMain.handle('genie:tynn-workstation-role', async (_event, workstationId: unknown, role: unknown, code: unknown) => {
-        const refused = droneRefusal(workstationRoleNow);
-        if (refused) return { ok: false, reason: refused };
-        if (typeof workstationId !== 'string' || (role !== 'pilot' && role !== 'drone') || typeof code !== 'string') return { ok: false, reason: 'not a role change' };
-        const account = tynnAccount;
-        if (!account?.status().signedIn) return { ok: false, reason: 'Sign in to Tynn to change a workstation’s role' };
-        const result = await setWorkstationRole((path, init) => account.request(path, init), workstationId, role, code);
-        if (result.ok) void readWorkstationRoleNow?.();
-        return result;
     });
     ipcMain.handle('genie:relay-open', async (event, workstationId: unknown) => {
         if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
@@ -1901,7 +2300,13 @@ async function boot(): Promise<void> {
         if (!grant.ok) return { ...(await wordTynnRefusal(grant, rereadRole)), stage: 'tynn' };
         // Tynn gave the way in: the window moves its step on to reaching the machine.
         if (!event.sender.isDestroyed()) event.sender.send('genie:relay-open-step', workstationId, 'relay');
-        const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop });
+        // A fresh grant for the SAME key before each one expires (genie#1401): the session lasts while the window stays.
+        const renew = async () => {
+            const now = tynnAccount;
+            if (!now?.status().signedIn) return { ok: false as const, reason: 'signed out of Tynn' };
+            return mintConnectGrant((path, init) => now.request(path, init), workstationId, pop.publicJwk);
+        };
+        const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop, renew });
         if (!opened.ok) return { ...opened, stage: 'relay' };
         const channel = `relay_${++nextRelayChannel}`;
         const sender = event.sender;
@@ -1921,29 +2326,43 @@ async function boot(): Promise<void> {
         if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
         return tynnAccount.request(path, init);
     };
-    ipcMain.handle('genie:tynn-share-links', (_event, workspaceId: unknown) => listShareLinks(shareRequest, ownWorkstation(), typeof workspaceId === 'string' ? workspaceId : null));
-    ipcMain.handle('genie:tynn-share-mint', (_event, input: unknown) => {
-        const i = (input ?? {}) as { workspaceId?: unknown; capability?: unknown; expiresInDays?: unknown };
-        return mintShareLink(shareRequest, ownWorkstation(), {
-            workspaceId: typeof i.workspaceId === 'string' ? i.workspaceId : null,
-            capability: i.capability === 'readonly' ? 'readonly' : 'control',
-            expiresInDays: typeof i.expiresInDays === 'number' ? i.expiresInDays : 7,
+    // ANOTHER MACHINE, BY ITS ADDRESS (P3.4 cut e, audit M-e): refused here on a drone, then the host dials, and holds the token. The window's frames use the relay's channels.
+    const deviceLinkNow = () => agentEngineLink?.client.deviceLink() ?? null;
+    let deviceLinkHeard: unknown = null;
+    const hearDeviceLink = (link: NonNullable<ReturnType<typeof deviceLinkNow>>) => {
+        if (deviceLinkHeard === link) return;
+        deviceLinkHeard = link;
+        link.onFrame((channel, text) => { const sender = deviceChannels.get(channel); if (sender && !sender.isDestroyed()) sender.send('genie:relay-message', channel, text); });
+        link.onClosed((channel, reason) => {
+            const sender = deviceChannels.get(channel);
+            deviceChannels.delete(channel);
+            if (sender && !sender.isDestroyed()) sender.send('genie:relay-closed', channel, reason);
         });
+    };
+    ipcMain.handle('genie:device-open', async (event, url: unknown) => {
+        const link = deviceLinkNow();
+        if (link) hearDeviceLink(link);
+        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, link: () => link });
+        if (!opened.ok) return opened;
+        const sender = event.sender;
+        deviceChannels.set(opened.channel, sender);
+        // The window went: its connection goes with it.
+        sender.once('destroyed', () => { if (deviceChannels.delete(opened.channel)) link?.close(opened.channel); });
+        return opened;
     });
-    ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId) : { ok: false, reason: 'not a link' }));
     // Only the window that opened a channel may use it.
     ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
+        if (typeof channel === 'string' && deviceChannels.get(channel) === event.sender && typeof text === 'string') { deviceLinkNow()?.send(channel, text); return; }
         const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;
         if (c && c.sender === event.sender && typeof text === 'string') c.transport.send(text);
     });
     ipcMain.on('genie:relay-close', (event, channel: unknown) => {
+        if (typeof channel === 'string' && deviceChannels.get(channel) === event.sender) { deviceLinkNow()?.close(channel); return; }
         const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;
         if (c && c.sender === event.sender) c.transport.close();
     });
     ipcMain.handle('genie:files-bringback', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.bringBack(workspaceId); });
     ipcMain.handle('genie:files-windows', () => filesWindows?.list() ?? []);
-    ipcMain.handle('genie:files-write', (_event, workspaceId: unknown, path: unknown, text: unknown, expectedSha: unknown) =>
-        (typeof workspaceId === 'string' && typeof path === 'string' && typeof text === 'string' ? filesHost?.write(workspaceId, path, text, typeof expectedSha === 'string' ? expectedSha : null) ?? { ok: false, reason: 'no files host' } : { ok: false, reason: 'bad arguments' }));
 
     /*
      * WORKSPACE OPERATIONS (§6.1). The plans live in core/workspace-model.ts, the sequencing in
@@ -1952,16 +2371,20 @@ async function boot(): Promise<void> {
      * write nothing; `confirmAdd` does the writes the plan showed.
      */
     const workspaceOps: WorkspaceOpsPorts = {
+        reverifyTrustBeforeRedock: async (id) => {
+            const view = await services?.workspaceTrust.refresh(id, 'redock');
+            if (!view) throw new Error('workspace trust is not available yet');
+        },
         fs: {
             // The same functions the first-commit test drives against a real folder and git (workspace-fs.ts).
             ...nodeWorkspaceFs(),
             // The clone's own stderr is the reason a person reads; a bare exit code is not — see git-ports.ts, measured against a real git.
             // Signed in to GitHub, a repository of an account the app is installed on (with Contents) clones with that sign-in
             // (core/github.ts cloneAuthFor); anything else with the person's own git credentials, as before.
-            gitClone: (url, into, branch) => gitClone(url, into, githubAccount?.cloneAuth(url) ?? undefined, branch),
+            gitClone: (url, into, branch) => (githubAccount ? githubAccount.gitClone(url, into, branch) : gitClone(url, into, undefined, branch)),
             // A Tynn project's repositories as submodules of the envelope Genie makes for it, with the same credential.
             // The envelope wizard's Local sources (a folder on disk) need protocol.file.allow, carried the same way (git-ports.ts).
-            gitAddSubmodule: (envelope, url, at, branch, local) => gitAddSubmodule(envelope, url, at, branch, githubAccount?.cloneAuth(url) ?? undefined, local),
+            gitAddSubmodule: (envelope, url, at, branch, local) => (githubAccount ? githubAccount.gitAddSubmodule(envelope, url, at, branch, local) : gitAddSubmodule(envelope, url, at, branch, undefined, local)),
         },
         registry: {
             workspace: (id) => registry?.workspace(id) ?? null,
@@ -2015,7 +2438,7 @@ async function boot(): Promise<void> {
         remote: {
             git: {
                 setOrigin: (path, url) => gitSetOrigin(path, url),
-                pushMain: (path, url) => gitPushMain(path, githubAccount?.pushAuth(url) ?? undefined),
+                pushMain: (path, url) => (githubAccount ? githubAccount.gitPushMain(path, url) : gitPushMain(path, undefined)),
             },
             github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null),
             // Read at call time: the Tynn account exists once main has opened it.
@@ -2044,7 +2467,7 @@ async function boot(): Promise<void> {
     // THE ENVELOPE WIZARD'S DISK (envelope-fs.ts): the same functions test/envelope-build.test.ts drives. Its git goes through
     // workspaceOps.fs above (gitAddSubmodule, gitCommit), so a submodule from a GitHub remote clones with the sign-in, as the clone does.
     // Fork rows (Add workspace parity item 12) fork with the GitHub sign-in, only while it is signed in.
-    const envelopePorts: EnvelopePorts = { ...nodeEnvelopePorts(), github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null) };
+    const envelopePorts: EnvelopePorts = { ...nodeEnvelopePorts({ stagingBase: () => scratch.directory() }), github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null) };
     // Import from Git's browser (item 8): what the sign-in reaches; signed out says so.
     const githubRepos = (): Promise<RepoListing> => (githubAccount ? githubAccount.repoListing() : Promise.resolve({ status: 'signed-out' }));
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
@@ -2058,40 +2481,7 @@ async function boot(): Promise<void> {
         },
         registry: { workspace: (id) => registry?.workspace(id) ?? null },
     };
-    ipcMain.handle('genie:workspace-repo-unlock', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoLockOf(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
-    ipcMain.handle('genie:workspace-repos', (_event, raw: unknown) => (typeof raw === 'string' ? listReposOf(repoOps, raw) : { ok: false, reason: 'name a workspace' }));
-    // The commits in the workspace's repos since a moment (an observed agent's index): git's own account.
-    ipcMain.handle('genie:workspace-commits-since', (_event, raw: unknown, since: unknown) => (typeof raw === 'string' && typeof since === 'number' ? commitsSinceIn(repoOps, raw, since) : { ok: false, reason: 'name a workspace and a moment' }));
-    // "Locate repo" on a Dashboard group fault: a real folder the user picks, inside the envelope; the manifest's path moves.
-    // The folder is picked in the window over the host's disk (Tynn #835); the manifest's path moves.
-    ipcMain.handle('genie:workspace-repo-locate', (_event, raw: unknown, slug: unknown, path: unknown) =>
-        (typeof raw === 'string' && typeof slug === 'string' && typeof path === 'string' && path !== '' ? relocateRepoIn(repoOps, raw, slug, path) : { ok: false, reason: 'name a workspace, a repo and its folder' }));
-    ipcMain.handle('genie:workspace-repo-add', (_event, raw: unknown, input: unknown) => {
-        const i = (typeof input === 'object' && input !== null ? input : {}) as { name?: unknown; path?: unknown };
-        return typeof raw === 'string' ? addRepoTo(repoOps, raw, { name: String(i.name ?? ''), path: String(i.path ?? '') }) : { ok: false, reason: 'name a workspace' };
-    });
-    ipcMain.handle('genie:workspace-repo-remove', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoFrom(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
-    // WORKSPACE SETTINGS (§6.1): the workspace-scoped keys with THIS workspace's effective values and its overrides.
-    ipcMain.handle('genie:workspace-settings', (_event, raw: unknown) =>
-        (typeof raw === 'string' && services ? { ok: true, values: services.settings.snapshotFor(raw), overridden: Object.keys(services.settings.workspaceValues(raw)) } : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:workspace-setting-set', async (_event, raw: unknown, key: unknown, value: unknown) => {
-        if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
-        try { await services.settings.setFor(raw, key, value); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
-    });
-    ipcMain.handle('genie:workspace-setting-reset', async (_event, raw: unknown, key: unknown) => {
-        if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
-        try { await services.settings.resetFor(raw, key); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
-    });
-    // OPS PROJECTS (§6.1): which workspaces this one governs.
-    ipcMain.handle('genie:workspace-set-governs', (_event, raw: unknown, children: unknown) =>
-        (typeof raw === 'string' && registry ? registry.setGoverns(raw, Array.isArray(children) ? children.filter((c): c is string => typeof c === 'string') : []) : { ok: false, reason: 'name a workspace' }));
-    // THE DEFAULT AGENT (Genie 1's): one of the workspace's own agents, or null.
-    ipcMain.handle('genie:workspace-set-color', (_event, raw: unknown, color: unknown) => setWorkspaceColor(raw, color));
-    ipcMain.handle('genie:workspace-set-default-agent', (_event, raw: unknown, agentId: unknown) =>
-        (typeof raw === 'string' && registry ? registry.setDefaultAgent(raw, typeof agentId === 'string' && agentId !== '' ? agentId : null) : { ok: false, reason: 'name a workspace' }));
     // The folder is picked IN THE WINDOW (Tynn #835: a FileBrowser over the host's disk) — no native dialog.
-    ipcMain.handle('genie:workspace-preview-add', async (_event, path: unknown) =>
-        (typeof path === 'string' && path !== '' ? previewAddWorkspace(workspaceOps, path) : { ok: false, reason: 'no folder picked' }));
     ipcMain.handle('genie:host-list-dir', (_event, path: unknown) => listHostDir(typeof path === 'string' ? path : '/'));
     // The folder picker's New folder: made on this machine, inside the folder the picker is in (host-fs.ts makeHostDir).
     ipcMain.handle('genie:host-mkdir', (_event, parent: unknown, name: unknown) =>
@@ -2101,22 +2491,6 @@ async function boot(): Promise<void> {
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
     // The parent is picked in the window over the host's disk (Tynn #835).
     const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
-    ipcMain.handle('genie:workspace-preview-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
-        (typeof rawUrl === 'string' && typeof rawParent === 'string' && rawParent !== '' ? previewGit(rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
-    ipcMain.handle('genie:workspace-confirm-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
-        (typeof rawUrl === 'string' && typeof rawParent === 'string' ? addWorkspaceFromGit(workspaceOps, rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
-    // OPEN EXISTING FOLDER / IMPORT FROM GIT (Add workspace parity item 7, Genie 1's wizard): read the source, then build a
-    // NEW <slug>.agi beside it — the source is never written. Submodules from a GitHub remote clone with the sign-in's
-    // credential, through git's environment, as the clone does.
-    ipcMain.handle('genie:workspace-read-source', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? readSource(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'no folder picked' }));
-    ipcMain.handle('genie:workspace-stage-git', (_event, raw: unknown) => (typeof raw === 'string' && raw.trim() !== '' ? stageFromGit(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'give a git URL' }));
-    ipcMain.handle('genie:workspace-register-existing', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? registerExisting(workspaceOps, raw) : { ok: false, reason: 'no folder picked' }));
-    ipcMain.handle('genie:workspace-build-envelope', (_event, raw: unknown, rawRemote: unknown) => buildFromWindow(raw, rawRemote));
-    ipcMain.handle('genie:workspace-discard-staged', (_event, raw: unknown) => (typeof raw === 'string' ? discardStaged(envelopePorts, raw) : { ok: true }));
-    ipcMain.handle('genie:workspace-github-repos', () => githubRepos());
-    // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
-    // host, and the plan for THAT project before anything is written.
-    ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
     // THE TYNN TAB (genie#1295): the workspace's own project's board, through the person's pairing — never an agent's key.
     ipcMain.handle('genie:workspace-tynn-board', (_event, rawId: unknown, rawScope: unknown) =>
         (typeof rawId === 'string' ? readTynnBoard(tynnBoardPorts(), rawId, (rawScope ?? {}) as BoardScope) : { ok: false, state: 'error', reason: 'name a workspace' }));
@@ -2128,7 +2502,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-tynn-board-watch', (event, rawId: unknown) =>
         (typeof rawId === 'string' ? watchTynnBoard(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
     ipcMain.handle('genie:workspace-tynn-board-unwatch', (_event, rawWatch: unknown) => {
-        if (typeof rawWatch === 'number') tynnBoardWatches.get(rawWatch)?.stop();
+        if (typeof rawWatch === 'number') tynnBoardWatches.get(rawWatch)?.();
     });
     // The tab's other pages (genie#1295: WIP, …), each read whole, as tynn.ai renders it.
     ipcMain.handle('genie:workspace-tynn-page', (_event, rawId: unknown, rawPage: unknown, rawQuery: unknown) =>
@@ -2150,21 +2524,6 @@ async function boot(): Promise<void> {
             return sacredNameOf(await tynnAccount.projects(), projectId);
         },
     };
-    ipcMain.handle('genie:workspace-imported-agents', (_event, raw: unknown) => (typeof raw === 'string' ? readImportedAgents(adoptionPorts, raw) : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:workspace-adopt-agent', (_event, rawId: unknown, rawName: unknown) =>
-        (typeof rawId === 'string' && typeof rawName === 'string' && rawName !== '' ? adoptAgent(adoptionPorts, rawId, rawName) : { ok: false, reason: 'name a workspace and an agent' }));
-    ipcMain.handle('genie:workspace-preview-add-tynn', (_event, rawId: unknown, rawParent: unknown) =>
-        (typeof rawId === 'string' && rawId.length > 0 && typeof rawParent === 'string' && rawParent !== '' ? previewAddFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'choose a Tynn project and a parent folder' }));
-    ipcMain.handle('genie:workspace-confirm-add-tynn', (_event, rawParent: unknown, rawId: unknown) =>
-        (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
-    ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
-    // A NEW workspace (Genie 1's): a name and a folder; Genie makes <folder>/<slug>.agi (main/workspace-ops-host.ts).
-    // Optionally linked to a Tynn project (Add workspace parity item 5): its id, looked up in Tynn's own list on this side.
-    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown, rawRemote: unknown, rawProject: unknown) =>
-        (typeof rawName === 'string' && typeof rawParent === 'string' ? createFromWindow(rawName, rawParent, rawRemote, typeof rawProject === 'string' && rawProject !== '' ? rawProject : undefined) : { ok: false, reason: 'give the workspace a name and a folder' }));
-    // The optional link's "New project" (Genie 1's CreateProjectForm): who may own it, and the project made on Tynn.
-    ipcMain.handle('genie:workspace-tynn-owner-options', () => listTynnOwners(workspaceOps));
-    ipcMain.handle('genie:workspace-create-tynn-project', (_event, raw: unknown) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : { ok: false, reason: 'give the project a name' }; });
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
     ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
@@ -2193,8 +2552,9 @@ async function boot(): Promise<void> {
      */
     // THE BACKGROUND PROCESSES THE PERSON KEEPS (§6.6, process-book.ts): opened once the services are composed;
     // until then every snapshot is the supervisor's alone. Late-bound so no closure below can meet it uninitialised.
-    let processBook: ProcessBook | null = null;
-    let processScheduler: ProcessScheduler | null = null;
+    // genie-host's when it runs (P3.3c): the book and its scheduler there, this window's replica here.
+    let processBook: ProcessBookApi | null = null;
+    let processScheduler: Pick<ProcessScheduler, 'runNow'> | null = null;
     // The features' ports: the kept processes, and every workspace's GitHub panel (Tynn #806).
     // The Tynn this Genie uses: Help → Genie documentation opens its docs (Tynn #762).
     const tynnHost = (): string => TYNN_HOST;
@@ -2214,17 +2574,19 @@ async function boot(): Promise<void> {
             return r;
         },
         install: async () => {
-            const r = await installTailscale();
+            const r = await installTailscale({ download: (url) => net.fetch(url) });
             openHttps(r.url);
             await refreshTailscale();
             return r;
         },
     };
     void refreshTailscale();
-    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    // Set once the feature push exists (below): Docker answering after a snapshot stopped waiting for it pushes again.
+    let requestFeaturePush = (): void => {};
+    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
-        tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
+        tailscale: () => execFileText(resolveProgram('tailscale'), ['status', '--json']),
         port: REMOTE_PORT,
         attach: attachWebSocketServer,
         // The phone's page (§6.8): the built renderer, from the same directory the window loads it from — and, named after
@@ -2234,12 +2596,12 @@ async function boot(): Promise<void> {
         // via `tailscale cert`, renewed in place each time the listener starts — Genie 1's main/mobile/tls.ts. Any failure
         // (MagicDNS or HTTPS certificates off on the tailnet) is http inside WireGuard, as Genie 1 fell back.
         cert: async (dnsName) => {
-            const dir = join(runtimeDir(genieHome()), 'mobile-tls');
+            const dir = join(runtimeDir(genieRoot()), 'mobile-tls');
             const certFile = join(dir, 'cert.pem');
             const keyFile = join(dir, 'key.pem');
             try {
                 await mkdir(dir, { recursive: true });
-                await new Promise<void>((resolve, reject) => { execFileCb('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { windowsHide: true, timeout: 60_000 }, (error) => (error ? reject(error) : resolve())); });
+                await execFileText(resolveProgram('tailscale'), ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { timeoutMs: 60_000 });
                 // The private key, the user's only (best effort; on Windows the per-user profile is the guard) — as Genie 1.
                 await chmod(keyFile, 0o600).catch(() => {});
                 return { cert: await readFileText(certFile, 'utf8'), key: await readFileText(keyFile, 'utf8') };
@@ -2254,7 +2616,7 @@ async function boot(): Promise<void> {
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
-    const caddyCopy = bundledCaddy === null ? null : await userCaddyCopy(bundledCaddy, join(runtimeDir(genieHome()), 'caddy-bin'));
+    const caddyCopy = bundledCaddy === null ? null : await userCaddyCopy(bundledCaddy, join(runtimeDir(genieRoot()), 'caddy-bin'));
     if (caddyCopy?.error) console.error(`[caddy] ${caddyCopy.error}`);
     /*
      * APPS AND SCRIPTS REPORT TO AGENTS (genie#1345; the owner, FTQ q_eb705239): a loopback door a Genie-hosted site, a
@@ -2262,11 +2624,16 @@ async function boot(): Promise<void> {
      * composition, so the sites compose starts are handed their own credential at their first start. Its port is
      * remembered (a script outside Genie keeps one address); the keys are app-inbox-keys.ts's.
      */
-    const appInboxKeys = await AppInboxKeys.open(genieHome());
-    const appInboxEndpointFile = join(genieHome(), 'app-inbox-endpoint.json');
+    // WITH GENIE-HOST LINKED THE DOOR AND ITS KEYS ARE THE HOST'S (P5a.2 ruling 3): every credential is minted there, window or
+    // no window. This window starts no door and opens no keys (one writer of app-inbox.json); it drives the host's through the
+    // replica — a script key's secret reaches it once, in the answer to its own create. Its own door only on the emergency path.
+    const linkedAppInbox = agentEngineLink ? agentEngineLink.client.appInbox() : null;
+    const ownAppInboxKeys = linkedAppInbox ? null : await AppInboxKeys.open(genieRoot());
+    const appInboxKeys: Pick<AppInboxReplica, 'createScriptKey' | 'scriptKeys' | 'revokeScriptKey' | 'rotate' | 'revokeSource' | 'allowSource' | 'sources' | 'revokedSources'> = linkedAppInbox ?? ownAppInboxKeys!;
+    const appInboxEndpointFile = join(genieRoot(), 'app-inbox-endpoint.json');
     let appInboxServer: AppInboxServer | null = null;
-    const appInboxService = new AppInboxService({
-        keys: appInboxKeys,
+    const appInboxService = ownAppInboxKeys ? new AppInboxService({
+        keys: ownAppInboxKeys,
         // Late-bound: a request that arrives while Genie is still composing is answered, never crashed on.
         inbox: {
             send: (input) => (services ? services.inbox.send(input) : Promise.reject(new Error('Genie is still starting; try again in a moment'))),
@@ -2276,11 +2643,12 @@ async function boot(): Promise<void> {
         roster: () => registry?.listAgents() ?? [],
         slugs: () => registry?.workspaceSlugs() ?? new Map(),
         defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
+        refusalForRecipient: (text, workspaceId) => registry?.mailRefusal(text, workspaceId) ?? null,
         enabled: (workspaceId) => services?.settings.snapshotFor(workspaceId).app_inbox !== false,
         siteHosts: (workspaceId) => services?.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host) ?? [],
         log: (line) => console.log(line),
-    });
-    try {
+    }) : null;
+    if (appInboxService) try {
         let remembered: number | undefined;
         try { const v = JSON.parse(readFileSync(appInboxEndpointFile, 'utf8')) as { port?: unknown }; if (typeof v.port === 'number') remembered = v.port; } catch { remembered = undefined; }
         appInboxServer = await startAppInboxServer({ service: appInboxService, port: remembered ?? APP_INBOX_PORT });
@@ -2290,10 +2658,44 @@ async function boot(): Promise<void> {
         console.error(`[app-inbox] the door for apps could not listen: ${error instanceof Error ? error.message : String(error)}`);
     }
     /** A site's or process's OWN credential — never the service env's (compose lays it over that one source only). */
-    const appInboxEnv = (source: AppEnvSource): Record<string, string> => appInboxEnvFor({ url: appInboxServer?.url ?? null, token: appInboxKeys.tokenFor(source) });
-    const composed = await composeServices({
-        userData: genieHome(),
+    const appInboxEnv = (source: AppEnvSource): Record<string, string> => (ownAppInboxKeys ? appInboxEnvFor({ url: appInboxServer?.url ?? null, token: ownAppInboxKeys.tokenFor(source) }) : {});
+    // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
+    // replicas of them. Only the emergency in-process engine opens them here.
+    // SAFE MODE, read before anything of this window's own starts: with no host, from the runtime files (Tynn #386).
+    windowSafe = WindowSafeMode.open({ link: agentEngineLink?.client ?? null, runtimeDir: runtimeDir(genieRoot()), log: (line) => { console.log(`[genie] ${line}`); lifecycleLog(line); } });
+    const engineForStores = agentEngineLink;
+    const composeWith = engineForStores
+        ? (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })
+        : composeServices;
+    const composed: WindowServices = await composeWith({
+        // A workspace's trust verdict moved (genie#1519): the trust step is pushed, and — on the emergency path, where this
+        // window runs the agents — its agents are compared with it. With a host, genie-host's TrustVerdicts do that.
+        onTrustVerdict: (workspaceId) => { trustVerdicts?.changed(workspaceId); requestFeaturePush(); },
+        // AgentInbox's automatic reply to a paused recipient reads the live sessions (genie#1515): the emergency stores only.
+        inboxSession: (id) => host?.probe(id) ?? null,
+        userData: genieRoot(),
+        // No host: this window's own flows, sites and engines start nothing by themselves in safe mode (Tynn #386).
+        safeMode: windowSafeNow,
+        heldSite: (siteId, name) => windowSafe?.own()?.hold('site', { id: siteId, name }),
+        safeModeLeft: (listener) => { windowSafe?.onChange((view) => { if (!view.active) listener(); }); },
+        // Said in the remote welcome (P10.1e): the same build the host's engine welcome says.
+        build: hostBuild(app.getVersion(), join(here, 'host.js')),
         pty: ptyPort,
+        // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
+        // main's own engine takes them only if the spawn host cannot start.
+        processPty: spawnHostNow ? spawnHostNow.ptyPort(ptyPort) : ptyPort,
+        // What a previous window left running under genie-host: adopted before any site or kept process starts.
+        adoptPtys: adoptablePtys,
+        // THE PROCESS SUPERVISOR IS GENIE-HOST'S (P3.3b): sites, workers and the front door run — and restart — there, with
+        // or without this window; a window restart neither starts them twice nor stops them.
+        ...(agentEngineLink ? { supervisor: agentEngineLink.client.supervisor() } : {}),
+        // GENIE'S HOSTING IS GENIE-HOST'S (P5a): the front door, the engines and the site routes are built there and kept with
+        // the UI closed; this window reads them (the front door's port and CA arrived before the link was ready) and drives
+        // them through the replica. Built here only on the emergency path.
+        ...(agentEngineLink ? { hosting: agentEngineLink.client.hosting() } : {}),
+        // FLOWS ARE GENIE-HOST'S (P3.3d): an armed flow fires on its clock with no window; this window edits, arms and runs
+        // them through the replica.
+        ...(agentEngineLink ? { flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() } } : {}),
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
@@ -2311,6 +2713,8 @@ async function boot(): Promise<void> {
         // is held back, never queued inside its turn.
         agentSessions: {
             session: (id) => host?.probe(id as AgentId) ?? null,
+            // A flow's prompt is work: an agent not running is started for it (q_04ce323c), under the same refusals.
+            start: async (id) => { const record = registry?.find(id as AgentId); return record ? (await startOnDemand(record)).ok : false; },
             rows: (id) => host?.rowsFor(id as AgentId) ?? [],
             prompt: (id, text, by) => host?.prompt(id as AgentId, text, by) ?? false,
             subscribe: (listener) => host?.subscribe((agentId) => listener(agentId)) ?? (() => {}),
@@ -2336,14 +2740,30 @@ async function boot(): Promise<void> {
         hostName: hostname(),
         // The tailnet listener, and the Tynn relay while it runs (Tynn #838).
         remoteTransport: remoteHub,
-        mcpEndpoint: () => mcp?.endpoint() ?? null,
+        mcpEndpoint: () => mcpEndpointNow(),
+        hostConfigSync: () => agentEngineLink?.client ?? null,
         // The account is opened after compose; private credentials are requested only when an agent starts.
         tynn: () => tynnAccount,
-        tynnCipher: {
-            isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
-            encrypt: (text) => safeStorage.encryptString(text),
-            decrypt: (bytes) => safeStorage.decryptString(bytes),
+        // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
+        tynnCipher: osCipher(safeStorage, process.platform),
+        secretsLog: (line) => keychainLog(line),
+        legacySecrets: () => gatherSources([
+            { file: 'tynn.json', covers: 'tynn/pairing', sources: async () => {
+                await settleStaleLegacyPairing({ file: join(genieRoot(), 'credentials', 'tynn.json'), legacyFile: join(genieRoot(), 'tynn.json'), log: (line) => keychainLog(line) }).catch(() => {});
+                return [tynnPairingSource({ file: join(genieRoot(), 'credentials', 'tynn.json'), legacyFile: join(genieRoot(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) })];
+            } },
+            { file: 'github.json', covers: 'github/', sources: () => githubSealedSources({ file: join(genieRoot(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }) },
+            { file: 'workstation.json', covers: 'workstation/', sources: () => workstationSealedSources({ file: join(genieRoot(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }) },
+        ]),
+        onSecretsMoved: () => {
+            void githubAccount?.reload().catch(() => {});
+            void registerWorkstationNow?.();
+            void tynnAccount?.reload().catch(() => {}).finally(() => recoverTynnAgents({ secretsMoved: true }));
         },
+        // An agent's key is the host's (genie#1457). A window running its own engine (the host could not start) holds it itself.
+        ...(agentEngineLink
+            ? { tynnSecrets: linkedAgentSecrets(agentEngineLink.client), tynnVault: linkedVault(agentEngineLink.client) }
+            : (() => { const keychain = new Keychain(); return { tynnSecrets: keychain, tynnVault: hostVault(keychain) }; })()),
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
@@ -2351,11 +2771,14 @@ async function boot(): Promise<void> {
         // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
         roster: () => registry?.listAgents() ?? [],
         workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
+        refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
+        inboxParticipantVisible: (id) => registry?.mailParticipantVisible(id) ?? true,
+        inboxVisibilityVersion: () => registry?.mailVisibilityVersion(),
         // Each site's own app credential (genie#1345), under its workspace's switch — compose never puts it in the service env.
         appInboxEnv: (source) => appInboxEnv(source),
         // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain
         // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
-        workspaces: () => registry?.listWorkspaces() ?? [],
+        workspaces: () => registry?.workspaceStates() ?? [],
         onWorkspacesChange: (listener) => registry?.subscribe(() => listener()) ?? (() => {}),
         // The rail's namer, so a question in the Deck and its window names the workspace the way the rail does.
         workspaceName: workspaceNameFor,
@@ -2363,30 +2786,86 @@ async function boot(): Promise<void> {
         workspaceColor: (path) => workspaceColors?.colorOf(path) ?? null,
         // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
         // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
-        askerLive: (id) => {
-            // Not heard yet: nothing is judged (undefined), never "gone" or "ended".
-            if (!askerLivenessKnown) return undefined;
-            const session = host?.probe(id as AgentId) ?? null;
-            if (session?.running) return { running: true, startedAt: session.startedAt };
-            const takeOver = takeOvers?.probe(id as AgentId) ?? null;
-            if (takeOver) return { running: true, startedAt: takeOver.startedAt };
-            return session ? { running: false, startedAt: session.startedAt } : null;
-        },
+        askerLive: askerLiveFrom({ known: () => askerLivenessKnown, engine: () => host, takeOvers: () => takeOvers }),
         /*
-         * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
-         * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
-         * any remote call arrives. The SOCKET is not wired yet — fancy-ws awaits its first npm publish
-         * — so nothing listens and Settings → Workstation says devices cannot connect yet.
+         * The common API for remote connections and migrated local families (§6.8, P4).
+         * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
          */
         remoteApi: buildHostApi({
+            localTerminals: createNativeTerminalPort({
+                terminals: () => terminals,
+                workspaces: () => registry?.snapshot().workspaces ?? [],
+                trackCwd: () => (services?.settings.snapshot() ?? {}).track_cwd,
+                environment: id => terminalEnvFor(services, id, mcpEnv()),
+                freshSnapshot: async id => {
+                    if (!terminals) return null;
+                    if (terminals.freshSnapshot) return terminals.freshSnapshot(id);
+                    const value = terminals.attach(id), position = terminals.streamSnapshot?.(id);
+                    return value ? { ...value, epoch: position?.epoch ?? null, endOffset: position?.endOffset ?? null } : null;
+                },
+                listen: (data, exit) => {
+                    const offData = terminals?.onData((id, text, position) => data({ id, data: text, ...(position ? { epoch: position.epoch, offset: position.offset } : {}) })) ?? (() => {});
+                    const offExit = terminals?.onExit((id, code, position) => exit({ id, exitCode: code, ...(position ?? {}) })) ?? (() => {});
+                    return () => { offData(); offExit(); };
+                },
+                openError: (path, error) => console.error(`[terminal] open failed in ${path}: ${error instanceof Error ? error.message : String(error)}`),
+            }),
+            filesWatch: {
+                exists: id => { const w = registry?.workspace(id); return !!w && w.asleep !== true; },
+                watch: (viewId, id, want) => { const workspace = registry?.workspace(id); return filesWatch && workspace && workspace.asleep !== true ? filesWatch.watch(viewId, { id: workspace.id, path: workspace.path }, want) : false; },
+                unwatch: viewId => { filesWatch?.unwatch(viewId); },
+                subscribe: listener => { filesEventListeners.add(listener); return () => { filesEventListeners.delete(listener); }; },
+            },
+            localOwner: {
+                appInbox: {
+                    state: (id) => appInboxState(id), workspaceExists: (id) => !!registry?.workspace(id),
+                    createKey: (id, name) => appInboxKeys.createScriptKey(id, name), scriptKeys: (id) => appInboxKeys.scriptKeys(id),
+                    revokeKey: (id) => appInboxKeys.revokeScriptKey(id), rotate: (kind, id) => appInboxKeys.rotate(kind, id),
+                    revokeSource: (source) => appInboxKeys.revokeSource(source), allowSource: (kind, id) => appInboxKeys.allowSource(kind, id),
+                    restartSource: (workspaceId, kind, id) => restartSource(workspaceId, kind, id),
+                },
+                deviceLink: {
+                    hosts: async () => (await deviceLinkNow()?.hosts()) ?? [],
+                    forget: async (url) => (await deviceLinkNow()?.forget(url)) ?? false,
+                    adopt: async (url, token) => (await deviceLinkNow()?.adopt(url, token)) ?? false,
+                },
+                tynnNetwork: {
+                    hasAccount: () => tynnAccount !== null, signedIn: () => tynnAccount?.status().signedIn === true, role: () => workstationRoleNow,
+                    workstations: async () => {
+                        const account = tynnAccount!;
+                        // Every identity this machine holds, not only this launch's registration (this-machine.ts).
+                        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), await thisMachineIds()), rereadRole);
+                    },
+                    // Tynn decides a role change with a fresh authenticator code (genie#1278 W6).
+                    setRole: (id, role, code) => {
+                        const account = tynnAccount!;
+                        return setWorkstationRole((path, init) => account.request(path, init), id, role, code);
+                    },
+                    rereadRole: () => { void readWorkstationRoleNow?.(); },
+                    shares: {
+                        list: (id) => listShareLinks(shareRequest, ownWorkstation(), id),
+                        mint: (input) => mintShareLink(shareRequest, ownWorkstation(), input),
+                        // Keep immediate revalidation of a revoked link's live guest session (audit M-c).
+                        revoke: (id) => revokeShareLink(shareRequest, ownWorkstation(), id, async () => { await relayHostNow?.revalidate(); }),
+                    },
+                },
+            },
             // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).
             activity: { feeds: (workspaceId) => activityOf(workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
+            headroom: {
+                view: () => headroomBoard.view(),
+                subscribe: (listener) => { headroomListeners.add(listener); return () => { headroomListeners.delete(listener); }; },
+            },
+            retryPausedAccount: (provider) => { retryPausedAccount?.(provider); },
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
             subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),
             find: (id) => registry?.find(id as AgentId) ?? null,
             detailFor: (id) => detailFor(id as AgentId),
             cwdFor,
+            // A remote window's message starts the agent as the composer's does (q_04ce323c).
+            startForWork: (record) => startOnDemand(record),
+            startForYourMessage: (record) => startForYours(record),
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),
@@ -2400,6 +2879,9 @@ async function boot(): Promise<void> {
                 subscribe: (cb) => host!.subscribe(cb),
             },
             // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
+            localFiles: { files: () => filesHost, editor: editorBytesDeps, repo: (op, id, rel, a, b) => repoCall(panelsHost(), op, id, rel, a, b) },
+            artboard: { read: id => artboardReadFiles(panelsHost(), id), review: (id, post, verdict, comment) => artboardReview(panelsHost(), id, post, verdict, comment) },
+            chatDrafts: engineDraftsPort(drafts, (method, args) => agentEngineLink?.client.call(method, args) ?? Promise.resolve({ ok: false, reason: 'The draft host is not connected.' })),
             files: {
                 children: async (workspaceId, dir) => (await filesHost?.children(workspaceId, dir)) ?? null,
                 open: (workspaceId, path) => filesHost?.open(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),
@@ -2455,26 +2937,29 @@ async function boot(): Promise<void> {
                 settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
                 setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
+                onSettingsChanged: (listener) => services!.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
                 setGoverns: (id, children) => registry!.setGoverns(id, children),
                 setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),
                 setColor: (id, color) => setWorkspaceColor(id, color),
             },
             agentOps: {
-                restart: (id, kind) => restartAgent(agentOps, id, kind),
+                restart: (id, kind) => restartAgent(agentOps, id, kind).finally(() => registry?.touch()),
                 previewDelete: (id, outcome, also) => previewDelete(agentOps, id, outcome, also),
-                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }),
-                switchDriver: (id, to) => switchDriver(agentOps, id, to),
-                setBudget: (id, usd) => setBudget(agentOps, id, usd),
-                setMode: (id, mode) => setMode(agentOps, id, mode),
-                setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope),
-                setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on),
-                setManageTabs: (id, on) => setManageTabs(agentOps, id, on),
-                setDrivePages: (id, on) => setDrivePages(agentOps, id, on),
-                setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting),
-                setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions),
-                setModel: (id, model) => setModel(agentOps, id, model),
+                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }).finally(() => registry?.touch()),
+                switchDriver: (id, to) => switchDriver(agentOps, id, to).finally(() => registry?.touch()),
+                setBudget: (id, usd) => setBudget(agentOps, id, usd).finally(() => registry?.touch()),
+                setMode: (id, mode) => setMode(agentOps, id, mode).finally(() => registry?.touch()),
+                setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope).finally(() => registry?.touch()),
+                setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on).finally(() => registry?.touch()),
+                setManageTabs: (id, on) => setManageTabs(agentOps, id, on).finally(() => registry?.touch()),
+                setDrivePages: (id, on) => setDrivePages(agentOps, id, on).finally(() => registry?.touch()),
+                setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting).finally(() => registry?.touch()),
+                setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions).finally(() => registry?.touch()),
+                setModel: (id, model) => setModel(agentOps, id, model).finally(() => registry?.touch()),
                 models: (id, refresh) => listModels(agentOps, id, refresh),
                 diagnose: (id) => diagnose(agentOps, id),
+                // A tool row's whole output, read by the agent host from its own store (Tynn story #386).
+                toolOutput: (id, toolCallId) => (host ? host.toolOutput(id as AgentId, toolCallId) : Promise.resolve({ ok: false as const, reason: 'Genie’s agents are not running yet' })),
             },
             features: {
                 snapshot: () => featureSnapshot(services!, featureState, processPorts()),
@@ -2486,27 +2971,36 @@ async function boot(): Promise<void> {
                       state: () => updates!.state(),
                       check: () => updates!.check(),
                       download: () => updates!.download(),
-                      install: () => { const r = updates!.install(); return r ? r.then((done) => ({ report: done.report })) : null; },
+                      install: () => {
+                          const pending = updates!.install();
+                          return pending ? pending.then((done) => { console.log(`[updater] ${done.report}`); return { report: done.report }; }) : null;
+                      },
+                      notes: () => updates!.refreshNotes(),
                       onChange: (cb) => updates!.onChange(cb),
                   }
                 : null,
         }),
     });
     services = composed;
-    const pushFeatures = () => {
-        void featureSnapshot(composed, featureState, processPorts()).then((data) => {
+    // What an emergency agent's launch was waiting for: its workspace's verdict (genie#1519). Until now nothing is trusted.
+    composedNow = composed;
+    servicesComposed(composed);
+    // Local calls and event subscriptions use late-bound services. Until now the door answers "Genie is still starting".
+    remoteHub.add(localDoor);
+    // ONE snapshot build at a time, the latest state always delivered last (core/latest-push.ts, genie#1393): every change
+    // used to build its own snapshot concurrently, and they landed out of order.
+    const featurePush = new LatestPush<FeatureData>({
+        build: () => featureSnapshot(composed, featureState, { ...processPorts(), onEngineStatusesLate: () => pushFeatures() }),
+        deliver: (data) => {
             // Every window: a flow editor window draws the flow's runs and armed state from the same snapshot (genie#1204).
             broadcast(FEATURE_CHANNELS.changed, data);
             for (const l of featureListeners) l(data);
-        });
-    };
+        },
+    });
+    const pushFeatures = () => featurePush.request();
+    requestFeaturePush = pushFeatures;
     composed.flows.onChange(pushFeatures);
     composed.settings.onChange(pushFeatures);
-    // A WORKSPACE setting changed — the tabs an agent made with workspaceTabs (beta.35 item 36): every window reloads that
-    // workspace's settings, so the tab shows at once.
-    composed.settings.onChange((_key, _value, workspaceId) => {
-        if (workspaceId) broadcast('genie:workspace-settings-changed', workspaceId);
-    });
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
@@ -2521,18 +3015,41 @@ async function boot(): Promise<void> {
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
     composed.engines.onChange(pushFeatures);
     composed.sites.onChange(pushFeatures);
+    // LINUX WITH NO KEYRING (linux-keyring.ts; the owner, 2026-11-01): what the session's keyring is, the card Settings
+    // shows when there is none, and its one button — install (pkexec), start, Restart Genie. Never fatal to boot.
+    if (process.platform === 'linux') {
+        try {
+            // With a host, the card is the host's: the secrets are in its keychain, and Chromium's store says nothing about them. Only a window running its own engine reads that store for it.
+            keyring = agentEngineLink ? agentEngineLink.client.keyring() : await LinuxKeyring.open(realKeyringPorts({
+                run: (binary, args, timeoutMs) => execFileRunner(binary, args, { timeoutMs: timeoutMs ?? 5_000 }).then((r) => ({ exitCode: r.exitCode, stdout: r.streams.stdout, stderr: r.streams.stderr })),
+                storage: () => ({ backend: safeStorage.getSelectedStorageBackend(), available: safeStorage.isEncryptionAvailable() }),
+                relaunch: () => {
+                    // Which sign-in to reopen after the restart — never a code or a token.
+                    if (tynnAccount && !tynnAccount.status().signedIn) markResumeSignIn(genieRoot(), 'tynn');
+                    app.relaunch();
+                    requestQuit();
+                },
+                onChange: () => pushFeatures(),
+            }), { unlockAtStart: true });
+        } catch (error) {
+            console.warn('[genie] the keyring check failed', error);
+        }
+        keyring?.onChange(() => {
+            pushFeatures();
+            if (keyring?.canKeepSecrets()) void services?.moveSecretsAgain();
+        });
+        console.log(`[genie] keyring: ${keyring?.canKeepSecrets() ? 'can keep secrets' : 'cannot keep secrets'} (backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'})`);
+    }
     // The scoped desktop credential stays encrypted in the main process. This isolated cookie jar is used only for
     // the one-time pairing exchange; ordinary API requests explicitly omit it.
     const tynnSession = session.fromPartition('persist:tynn');
-    tynnAccount = await TynnAccount.open({
+    // THE ACCOUNT IS THE HOST'S (P3.4 cut c); this window reads a replica. Only a window running its own engine (the host could not
+    // start) opens one here, and it keeps its pairing in the keychain just the same.
+    tynnAccount = agentEngineLink ? agentEngineLink.client.tynn({ openExternal: (url) => shell.openExternal(url) }) : await TynnAccount.open({
         host: () => TYNN_HOST,
-        file: join(genieHome(), 'credentials', 'tynn.json'),
-        legacyFile: join(genieHome(), 'tynn.json'),
-        cipher: {
-            isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
-            encrypt: (text) => safeStorage.encryptString(text),
-            decrypt: (bytes) => safeStorage.decryptString(bytes),
-        },
+        file: join(genieRoot(), 'credentials', 'tynn.json'),
+        legacyFile: join(genieRoot(), 'tynn.json'),
+        secrets: new Keychain(),
         // Tynn unreachable at launch is asked again on a bounded backoff (main/tynn-account.ts TYNN_RETRY_MS), not never.
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         cookies: {
@@ -2554,50 +3071,58 @@ async function boot(): Promise<void> {
         fetch: (url, init) => tynnSession.fetch(url, init),
         openExternal: (url) => shell.openExternal(url),
     });
+    // A move of an older Genie's pairing that finished before this line had nobody to tell.
+    void tynnAccount.reload().catch(() => {});
     tynnAccount.onChange(pushFeatures);
     // Signing in brings back the Tynn tools of the agents that started without them (genie#1234) — and once now, for an
     // account that signed in while it opened, before anyone was listening.
-    tynnAccount.onChange(recoverTynnAgents);
+    tynnAccount.onChange(() => recoverTynnAgents());
     recoverTynnAgents();
     afterTynnUrl = pushFeatures;
+    // A SIGN-IN THAT WAITED FOR THE KEYRING (linux-keyring.ts): the card's Restart Genie left a note (which sign-in, never
+    // a code); with the keyring working now, Tynn's sign-in opens again by itself, so the person is not left to find it.
+    if (takeResumeSignIn(genieRoot()) === 'tynn' && (keyring?.canKeepSecrets() ?? true) && !tynnAccount.status().signedIn) {
+        void tynnAccount.startSignIn().then(({ url }) => { featureState = { ...featureState, tynnSignInUrl: url, tynnMessage: null }; pushFeatures(); }, () => { /* the person signs in by hand */ });
+    }
     // GITHUB (beta.33 item 25; Genie 1's main/github/*): Genie 1's sign-in carried over — read from its genie.db, decrypted
     // with this Genie's safeStorage (the same userData, so the same key: measured) and kept encrypted in ~/.genie — or the
     // device flow. Every change reaches Settings and the Deck's signal at once; GitHub is read once now, and again on
     // Check again or after a sign-in (no polling of the API).
-    githubAccount = await GithubAccount.open({
-        file: join(genieHome(), 'github.json'),
-        cipher: {
-            isAvailable: () => safeStorage.isEncryptionAvailable(),
-            encrypt: (text) => safeStorage.encryptString(text),
-            decrypt: (bytes) => safeStorage.decryptString(bytes),
-        },
+    // THE ACCOUNT AND ITS TOKENS ARE THE HOST'S (P3.4 cut c): this window reads a replica and asks the host to act. Only a window running its own engine opens one here.
+    githubAccount = agentEngineLink ? agentEngineLink.client.github({ openExternal: (url) => shell.openExternal(url) }) : await GithubAccount.open({
+        file: join(genieRoot(), 'github.json'),
+        secrets: new Keychain(),
         fetch: (url, init) => net.fetch(url, init),
-        v1Settings: () => readV1Settings(v1DatabaseFile()),
         openExternal: (url) => shell.openExternal(url),
     });
     githubAccount.onChange(() => { pushFeatures(); registry?.touch(); });
+    // A move of an older Genie's sign-in that finished before this line had nobody to tell.
+    void githubAccount.reload().catch(() => {});
     void githubAccount.refresh();
     // THIS MACHINE ON THE TYNN NETWORK (Tynn #836; Genie 1's ensureLocalWorkstation): signed in, it registers with that
     // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a
     // sign-in landing during the launch's own check cannot make two workstations.
-    const identityCipher = {
-        isAvailable: () => safeStorage.isEncryptionAvailable(),
-        encrypt: (text: string) => safeStorage.encryptString(text),
-        decrypt: (bytes: Buffer) => safeStorage.decryptString(bytes),
-    };
-    const identities = workstationKeyStore(join(genieHome(), 'workstation.json'), identityCipher);
+    const identityCipher = osCipher(safeStorage, process.platform);
+    // THE KEY IS THE HOST'S (P3.4): this window asks it to sign. Only a window running its own engine holds one, in the keychain just the same.
+    const machineIdentity: WorkstationPort = crashReportMachine = agentEngineLink ? agentEngineLink.client.workstation() : new WorkstationService({
+        store: workstationKeyStore(join(genieRoot(), 'workstation.json'), new Keychain()),
+        request: (path, init) => tynnAccount ? tynnAccount.request(path, init) : Promise.reject(new Error('Sign in to Tynn first')),
+        host: () => tynnAccount?.host() ?? TYNN_HOST,
+        hostname,
+        machineKey: () => machineKey(),
+    });
     // GENIE 1'S RECORD OF THIS MACHINE (genie#1278 adopt on sign-in): its genie.db in the userData both share, its key
     // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
     // duplicate, on the next registration — once.
     const genie1Identity = async () => readGenie1Identity(readV1Settings(v1DatabaseFile()), identityCipher);
     // THIS MACHINE, ALL OF IT (this-machine.ts): this launch's registration, the identity Genie 2 stored for this Tynn,
     // and the one Genie 1 registered from the userData Genie 2 shares — "Your workstations" never lists any of them.
-    thisMachineIds = () => identities.read(tynnAccount?.host() ?? '').catch(() => null).then((stored) => thisMachineWorkstationIds({ registered: tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null, stored: stored?.workstationId ?? null, v1Settings: readV1Settings(v1DatabaseFile()) }));
+    thisMachineIds = () => machineIdentity.identity(tynnAccount?.host() ?? '').catch(() => null).then((stored) => thisMachineWorkstationIds({ registered: tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null, stored: stored?.workstationId ?? null, v1Settings: readV1Settings(v1DatabaseFile()) }));
     // THIS MACHINE'S STABLE KEY (genie#1278 W2): the OS machine id, never sent raw (machine-key.ts).
     const machineKey = (): Promise<string | null> => readMachineId({
         platform: process.platform,
         readFile: (path) => readFile(path, 'utf8'),
-        exec: (command, args) => new Promise<string>((resolve, reject) => { execFileCb(command, [...args], { windowsHide: true, timeout: 10_000 }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
+        exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
     }).then((id) => (id ? machineKeyOf(id) : null));
     // WHAT TYNN SAYS THIS MACHINE IS (genie#1278 W5): Tynn's answer only; signed in, no answer is a drone.
     readWorkstationRoleNow = () => readRole();
@@ -2623,7 +3148,10 @@ async function boot(): Promise<void> {
                 tynnWorkstationNow = { registered: false, reason: 'sign in to Tynn to register this machine', role: null };
                 return;
             }
-            const result = await ensureWorkstation({ host: () => host, hostname, request: (path, init) => account.request(path, init), store: identities, machineKey, legacy: genie1Identity })
+            // Genie 1's record, which only this window can open, goes to the host until that record is settled with Tynn.
+            const legacy = await genie1Identity().catch(() => null);
+            const settled = await machineIdentity.legacyDone(host).catch(() => null);
+            const result = await machineIdentity.ensure({ host, legacy: legacy && legacy.workstationId !== settled ? legacy : null })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
             tynnWorkstationNow = result.ok ? { registered: true, host, workstationId: result.workstationId, role: workstationRoleNow } : { registered: false, reason: result.reason, role: workstationRoleNow };
         })().finally(() => { registering = null; void applyRelayHost(); void readRole(); pushFeatures(); });
@@ -2642,15 +3170,14 @@ async function boot(): Promise<void> {
         relayFor = want;
         relayStatusNow = { state: 'off' };
         if (!want || !registered) { pushFeatures(); return; }
-        const stored = await identities.read(registered.host);
-        if (!stored || relayFor !== want) { pushFeatures(); return; }
-        const identity = identityFrom(stored);
+        const identity = await machineIdentity.identity(registered.host).catch(() => null);
+        if (!identity || relayFor !== want) { pushFeatures(); return; }
         relayHostNow = startRelayHost({
-            ports: relayHostPorts({ tynnHost: registered.host, workstationId: identity.workstationId, authHeader: () => identity.authHeader(), fetch }),
+            ports: relayHostPorts({ tynnHost: registered.host, workstationId: identity.workstationId, authHeader: () => machineIdentity.authHeader(registered.host), fetch: (url, init) => net.fetch(url, init) }),
             socket: relaySocket,
             workstationId: identity.workstationId,
             fingerprint: identity.fingerprint,
-            sign: (data) => identity.sign(data),
+            sign: (data) => machineIdentity.sign(registered.host, data),
             attach: (transport) => remoteHub.add(transport),
             onStatus: (status) => { relayStatusNow = status; pushFeatures(); },
             log: (message) => console.log(`[tynn relay] ${message}`),
@@ -2659,6 +3186,7 @@ async function boot(): Promise<void> {
         });
     };
     relayAfterSwitch = () => { void applyRelayHost(); };
+    registerWorkstationNow = registerWorkstation;
     tynnAccount.onChange(() => { void registerWorkstation(); });
     // Another account (or none): the relay windows opened under the last one hold its grants (M0 finding 2).
     tynnAccount.onChange(() => { closeRelayWindowsOfOtherAccounts(); });
@@ -2680,8 +3208,7 @@ async function boot(): Promise<void> {
     // WHO ASKED decides whether it may take the keyboard (genie#1235): the Hosting row's Open is the person's click and
     // brings the window up; an agent's `sites open` opens it behind whatever the person is doing.
     const openInBrowserFor = (activation: Activation): OpenInBrowser => async (url) => {
-        if (!genieBrowserWindow) return { ok: false, reason: 'Genie’s browser is not ready yet' };
-        const opened = genieBrowserWindow.open(url, activation);
+        const opened = await openLocalBrowser(url, activation);
         return opened.ok ? { ok: true } : { ok: false, reason: opened.error };
     };
     // AN AGENT'S `sites open` (genie#1265): in the background, and the workspace the site belongs to pulses for the person.
@@ -2694,39 +3221,61 @@ async function boot(): Promise<void> {
     };
     // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
     // Genie's own quit stops these through the supervisor and never touches the book, so a quit is not a stop.
-    processBook = await ProcessBook.open(genieHome(), {
-        supervisor: composed.supervisor,
-        envFor: (workspaceId) => composed.engines.envFor(workspaceId),
-        // Each kept process's own app credential (genie#1345), under its workspace's switch.
-        appEnv: (p) => composed.appEnv(p),
-        asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
-        // THE WORKSPACE'S BACKGROUND-PROCESS LIMIT (beta.33), read live from the workspace's settings.
-        limit: (workspaceId) => limitOf(composed.settings.snapshotFor(workspaceId), 'processes'),
-        // Genie 1's background processes, imported ONCE as the book opens (core/v1-processes.ts) — before the restore.
-        // Genie 1's SCHEDULED TASKS too (genie#1204): background processes with a schedule, imported PAUSED.
-        v1: { database: v1DatabaseFile(), workspaces: () => registry?.listWorkspaces() ?? [], roster: () => (registry?.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id)) },
-    });
-    // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
-    await moveScheduledTasksOutOfFlows(composed.flows, processBook, (id) => registry?.workspace(id)?.path ?? null).catch((error: unknown) => console.error(`[genie] scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
-    // SCHEDULED TASKS' CLOCK (genie#1204): one timer for the enabled ones; a nudge reaches its agent when its turn ends.
-    processScheduler = new ProcessScheduler({
-        book: processBook,
-        supervisor: composed.supervisor,
-        envFor: (workspaceId) => composed.engines.envFor(workspaceId),
-        appEnv: (p) => composed.appEnv(p),
-        asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
-        nudge: (address, text, from) => {
-            const found = composed.resolveAddress(address);
-            return found.kind === 'one' && host !== null ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
-        },
-        now: Date.now,
-        schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
-    });
-    processScheduler.plan();
-    // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
-    registry.subscribe(() => processScheduler?.plan());
-    const restoredProcesses = processBook.restore();
-    if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
+    if (agentEngineLink) {
+        // THE PROCESS BOOK AND ITS SCHEDULER ARE GENIE-HOST'S (P3.3c): what the person keeps running is restored there, and a
+        // scheduled task fires on its clock, with or without this window. This window lists and manages them by replica.
+        processBook = agentEngineLink.client.processBook();
+        processScheduler = agentEngineLink.client.processBook();
+    } else {
+        const ownBook = await ProcessBook.open(genieRoot(), {
+            supervisor: composed.supervisor,
+            envFor: (workspaceId) => composed.engines.envFor(workspaceId),
+            // Each kept process's own app credential (genie#1345), under its workspace's switch.
+            appEnv: (p) => composed.appEnv(p),
+            asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+            // Safe mode (Tynn #386): the restore starts no kept process; no scheduled task is armed.
+            safeMode: windowSafeNow,
+            // THE WORKSPACE'S BACKGROUND-PROCESS LIMIT (beta.33), read live from the workspace's settings.
+            limit: (workspaceId) => limitOf(composed.settings.snapshotFor(workspaceId), 'processes'),
+            // Genie 1's background processes, imported ONCE as the book opens (core/v1-processes.ts) — before the restore.
+            // Genie 1's SCHEDULED TASKS too (genie#1204): background processes with a schedule, imported PAUSED.
+            v1: { database: v1DatabaseFile(), workspaces: () => registry?.listWorkspaces() ?? [], roster: () => (registry?.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id)) },
+        });
+        // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
+        if (composed.ownFlows) await moveScheduledTasksOutOfFlows(composed.ownFlows, ownBook, (id) => registry?.workspace(id)?.path ?? null).catch((error: unknown) => console.error(`[genie] scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
+        // SCHEDULED TASKS' CLOCK (genie#1204): one timer for the enabled ones; a nudge reaches its agent when its turn ends.
+        const ownScheduler = new ProcessScheduler({
+            book: ownBook,
+            supervisor: composed.supervisor,
+            envFor: (workspaceId) => composed.engines.envFor(workspaceId),
+            appEnv: (p) => composed.appEnv(p),
+            asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+            // Safe mode (Tynn #386): the restore starts no kept process; no scheduled task is armed.
+            safeMode: windowSafeNow,
+            nudge: (address, text, from) => {
+                const found = composed.resolveAddress(address);
+                return found.kind === 'one' && host !== null ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
+            },
+            now: Date.now,
+            schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
+        });
+        ownScheduler.plan();
+        // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
+        let processVisibility = JSON.stringify(registry.workspaceStates().filter((w) => w.asleep).map((w) => w.id).sort());
+        registry.subscribe(() => {
+            ownScheduler.plan();
+            const key = JSON.stringify(registry!.workspaceStates().filter((w) => w.asleep).map((w) => w.id).sort());
+            if (key === processVisibility) return;
+            processVisibility = key; ownBook.visibilityChanged();
+        });
+        const restoredProcesses = ownBook.restore();
+        if (windowSafeNow()) for (const p of ownBook.kept()) if (restoredProcesses.heldBack.includes(p.id)) windowSafe?.own()?.hold('process', { id: p.id, name: p.name });
+        // Leaving safe mode arms the scheduled tasks again; it starts nothing by itself.
+        windowSafe?.onChange((view) => { if (!view.active) ownScheduler.plan(); });
+        if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
+        processBook = ownBook;
+        processScheduler = ownScheduler;
+    }
     // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
     // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.
     updates?.setChannel(channelFrom(composed.settings.snapshot().update_channel));
@@ -2736,19 +3285,27 @@ async function boot(): Promise<void> {
         // A Take Over terminal, or an agent SESSION by its caller key (`mcp-callers.ts`); anything else is nobody.
         // A FLOW calling Genie's tools as a step (genie#1204, main/flow-tools.ts) is a caller too: its own key, its workspace.
         const flowCallers = new FlowCallers((id) => registry?.workspace(id)?.path ?? null);
-        const resolveCaller = (terminalId: string) => flowCallers.callerFor(terminalId) ?? takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
-        const roster = () => (registry!.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id));
+        // A caller genie-host vouched for, for a tool it forwarded here (P3.1): its session keys are the host's now.
+        const vouchedCallers = new Map<string, Caller>();
+        const resolveCaller = (terminalId: string) => vouchedCallers.get(terminalId) ?? flowCallers.callerFor(terminalId) ?? takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
+        // The stores agents write to: genie-host's when it runs — its own tools write them there, and in this window they
+        // are never reached (hostOnly says so if anything tries). The stores themselves only on the emergency path.
+        const own = composed.own;
+        // Every agent, the OS agent included: a tool finds its caller here (genie-tool-deps.ts `toolRoster`, Tynn story #385).
+        const roster = () => toolRoster(registry!);
         // ONE builder for the tools' wiring (genie-tool-deps.ts) — doctor mode builds its agent's tools with it too.
-        const registrations = withActionSignal(allGenieTools(genieToolDeps({
+        const signalled = withActionSignal(allGenieTools(genieToolDeps({
             // agentinbox list: whether each peer is running, read-only — never started by asking (core/liveness.ts).
             liveness: (id) => livenessOf(host?.probe(id as AgentId) ?? null, host?.rowsFor(id as AgentId).at(-1)?.at ?? null),
-            inbox: composed.inbox,
-            attention: composed.attention,
-            knowledge: composed.knowledge,
+            inbox: own?.inbox ?? hostOnly<InboxStore>('the AgentInbox'),
+            attention: own?.attention ?? hostOnly<AttentionStore>('attention (questions, imDone, lists)'),
+            knowledge: own?.knowledge ?? hostOnly<KnowledgeStore>('the knowledge graph'),
             settings: composed.settings,
-            approve: (caller, action, detail, call) => composed.approvals.gate(caller, action, detail, call),
+            // ONE approval queue: genie-host's (a window tool's ask goes there), or this window's own on the emergency path.
+            approve: (caller, action, detail, call) => (own ? own.approvals.gate(caller, action, detail, call) : composed.approvals.gate(caller, action, detail, call)),
             roster,
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
+            refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
             resolveCaller,
             // createAgent: the workspace's default agent asks, the person approves in the Deck, the registry registers.
             agents: {
@@ -2761,7 +3318,7 @@ async function boot(): Promise<void> {
                 sites: (workspaceId) => composed.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host),
             },
             // pages (browser rebuild step 7): the Genie browser's tabs and the live site panels, each drivable.
-            pages: { open: () => drivablePages() },
+            pages: { open: () => [...drivablePages(), ...browserPages.list()] },
             userActive: () => powerMonitor.getSystemIdleTime() < 120,
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.
@@ -2811,20 +3368,57 @@ async function boot(): Promise<void> {
                         throw new Error(`${method} is not offered to plugins`);
                     },
                     // genie#871: sandboxed — its folder, the workspace only if declared, the declared hosts only.
-                    launch: launchSubprocessIn(join(genieHome(), 'plugin-sandbox')),
+                    launch: launchSubprocessIn(join(genieRoot(), 'plugin-sandbox')),
                     capabilities: input.manifest.capabilities,
                     timeoutMs: 30_000,
                     label: `${input.manifest.id}.${input.tool.name}`,
                 }),
             },
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
+        // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
+        const engineLink = agentEngineLink?.client ?? null;
+        const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
         // The endpoint is REMEMBERED across launches (a private file in Genie's home), so the URL and token config sync
         // wrote into workspaces stay valid after a restart.
         mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
-        const endpointFile = join(genieHome(), 'mcp-endpoint.json');
-        mcp = genieMcpServer({
+        const endpointFile = join(genieRoot(), 'mcp-endpoint.json');
+        if (engineLink) {
+            /*
+             * GENIE'S MCP SERVER IS GENIE-HOST'S (the host split, P3.1; plan §11d): agents keep its tools when this window
+             * closes. This window runs the tools that still need it (forwarded), and tells the host what those need of the
+             * registry and settings until P3.2 — the first time starts the host's server.
+             */
+            windowToolRun = windowToolRunner(() => registrations, vouchedCallers);
+            for (const call of openFilesLater.splice(0)) void windowToolRun(call);
+            const view = (): WindowView => {
+                return {
+                    workspaceNames: Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? w.id])),
+                    userActive: powerMonitor.getSystemIdleTime() < 120,
+                    callers: takeOvers?.callers() ?? {},
+                    pluginTools: composed.plugins.tools(),
+                };
+            };
+            let pushTimer: ReturnType<typeof setTimeout> | null = null;
+            pushHostView = () => {
+                if (pushTimer) return;
+                pushTimer = setTimeout(() => { pushTimer = null; void engineLink.pushWindowView(view()); }, 250);
+            };
+            registry?.subscribe(() => pushHostView());
+            // Whether the person is at the computer, for ForceTheQuestion's "they are away": re-said every half minute.
+            setInterval(() => pushHostView(), 30_000).unref?.();
+            // A reconnect (the host restarted): it learns all of it again.
+            engineLink.onLink(() => { void engineLink.pushWindowView(view()); }, () => {});
+            await engineLink.pushWindowView(view());
+            // Genie 1's memories and AgentInbox history, once — the host owns the stores; only this window knows where v1 lives.
+            void engineLink.v1Import(v1DatabaseFile());
+            const status = await engineLink.mcpStatus();
+            hostMcpEndpoint = status?.endpoint ?? null;
+            mcpVerified = status?.verified ?? { ok: false, reason: 'genie-host did not start its MCP server' };
+            if (status) mcpToolList = status.tools;
+        }
+        if (!engineLink) mcp = genieMcpServer({
             registrations,
             remember: {
                 read: () => {
@@ -2837,8 +3431,10 @@ async function boot(): Promise<void> {
             },
         });
         try {
-            await mcp.start();
-            mcpVerified = await mcp.verify();
+            if (mcp) {
+                await mcp.start();
+                mcpVerified = await mcp.verify();
+            }
             // THE WORKSPACE AGENT FILES (the owner: Genie 2 manages them all and upgrades Genie 1's): every workspace once the
             // endpoint is live, and every workspace added after — whichever path added it — by watching the registry.
             const synced = new Set<string>();
@@ -2877,24 +3473,42 @@ async function boot(): Promise<void> {
     // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
     // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
     // told to continue; the rest only with the setting on, unprompted.
-    void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(([running, interrupted]) => {
+    // SAFE MODE (Tynn #386): genie-host said so before ready; then nobody is started or resumed and both lists are KEPT.
+    void restoreAfterRelaunch({
+        safeMode: windowSafeNow,
+        takeRunningAtQuit: () => registry!.takeRunningAtQuit(),
+        takeInterruptedAtQuit: () => registry!.takeInterruptedAtQuit(),
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
         // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
-        // from before the ledger (beta.32 and earlier) left on an agent's thread.
-        sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
-        const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted });
-        for (const { agentId, at, resume } of plan) {
-            setTimeout(() => {
-                const record = registry?.find(agentId as AgentId);
-                if (!record || !host) return;
-                host.start(record, cwdFor(record));
-                // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
-                // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
-                if (resume && !host.prompt(record.id, RESUME_AFTER_RESTART, 'genie')) void host.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
-            }, at);
-        }
+        // from before the ledger (beta.32 and earlier) left on an agent's thread. Read off the loop (beta.53 freezes).
+        // NEVER from a window that ADOPTED a running agent host: its providers are the host's live agents, not leftovers.
+        // Only a host this window STARTED (or replaced) has no live agents yet; adopted or unreachable hosts hold live ones.
+        beforeStart: async () => {
+            if (agentEngineLink === null || agentEngineLink.how === 'started' || agentEngineLink.how === 'replaced') await sweepLeftoverProvidersAsync((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
+        },
+        schedule: (fn, ms) => { setTimeout(fn, ms); },
+        start: async (agentId, resume) => {
+            const record = registry?.find(agentId as AgentId);
+            if (!record || !host) return;
+            const engine = host;
+            await engine.start(record, cwdFor(record));
+            // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
+            // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
+            if (resume && !(await engine.prompt(record.id, RESUME_AFTER_RESTART, 'genie'))) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
+        },
+        log: lifecycleLog,
     });
+    // Safe mode reaches every window's snapshot (its banner), and follows the host's changes (a Leave from any window).
+    registry.setSafeMode(() => windowSafe?.view() ?? null);
+    windowSafe?.onChange(() => registry?.touch());
+    // No host: what a quit recorded is listed on the banner, and this window beats (it is the run).
+    windowSafe?.own()?.wasRunning([...registry.runningAtQuit(), ...registry.interruptedAtQuit()]);
+    if (windowSafe?.own()) startBeat({ started: () => (registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id), onChange: (l) => (host instanceof SessionHost ? host.subscribe(() => l()) : () => {}), beat: (ids) => { windowSafe?.beat(ids); } });
+    // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
+    registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
+    registry.setRendererNotice(() => rendererNotice);
+    agentEngineLink?.client.onCrashState(() => registry?.touch());
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
     // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
@@ -2918,33 +3532,49 @@ async function boot(): Promise<void> {
     // An agent's gated tool call (processes / services / sites / manageTerminals) parked or answered: the Deck shows it
     // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
     composed.approvals.onChange(() => registry?.touch());
-    // MAIL WAKES THE AGENT: the open-agent path — an asleep workspace or the agent cap refuses, and the notice waits.
+    // MAIL WAKES THE AGENT: started as Start would be (opening starts nothing since q_04ce323c) — an asleep workspace or the agent cap refuses, and the notice waits.
     // One path for every source that may wake an agent: mail, and IssueWatch's `push`.
-    const wakeAgent = (agentId: string): boolean => {
-        const record = registry?.find(agentId as AgentId);
-        if (!record || !host) return false;
-        const refused = startRefusal(workspaceOps, record, {
+    const wakeAgent = windowWake({
+        safeMode: windowSafeNow,
+        find: (agentId) => (host ? registry?.find(agentId as AgentId) ?? null : null),
+        running: (record) => host?.probe(record.id)?.running === true,
+        refusal: (record) => startRefusal(workspaceOps, record, {
             running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
             cap: agentCapFrom(composed.settings.snapshotFor(record.workspaceId) ?? {}),
-        });
-        if (refused) { console.log(`[genie] a notice for ${record.name} waits: ${refused}`); return false; }
-        return host.start(record, cwdFor(record)).ok;
-    };
-    // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
-    // An app's message (genie#1345, the owner's D1): an automated agent is told now — woken, at most once per window by
-    // apps; a manual agent hears it on its next turn.
-    const appWakes = new Map<string, number>();
-    wireInboxPush({
-        inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
-        wake: wakeAgent,
-        appMail: (to, message) => (isAppSender(message.from) ? appDelivery(registry?.find(to)?.mode ?? 'manual', appWakes.get(to) ?? null, Date.now()) : null),
-        appWoke: (agentId) => { appWakes.set(agentId, Date.now()); },
+        }),
+        start: async (record) => (host ? (await host.start(record, cwdFor(record))).ok : false),
+        log: (line) => console.log(line),
     });
-    // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own window only (preload `appInbox`); a key is
+    // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
+    // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told after the coalescing window — a busy one at its
+    // next step, as typed input arrives (genie#1411). An app's message starts a stopped agent only if it is automated and
+    // the app wake cap allows; a turn only apps' mail opens is spent from that cap, and past it the mail waits for the window.
+    // With genie-host the MAIL WAKE is the host's (P3.2, host-mail-wake.ts): an agent is told, and a stopped one started,
+    // with no window. This window's own runs only on the emergency path.
+    if (!agentEngineLink) wireInboxPush({
+        inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
+        delivered: (agentId, mail) => {
+            void composed.inbox.markDelivered(agentId, mail.map((m) => m.id))
+                .catch((error: unknown) => console.warn('A delivered mail receipt could not be saved:', error instanceof Error ? error.message : String(error)));
+        },
+        refused: (agentId, mail, refusal) => {
+            void composed.inbox.recordDeliveryRefusal(agentId, mail.map((m) => m.id), refusal)
+                .catch((error: unknown) => console.warn('A mail refusal receipt could not be saved:', error instanceof Error ? error.message : String(error)));
+        },
+        wake: wakeAgent,
+        // Each batch covers pending mail, so a new arrival mid-turn can be delivered at once (genie#1411).
+        cumulative: true,
+        ...appMailPushPorts({
+            modeOf: (agentId) => registry?.find(agentId)?.mode,
+            now: () => Date.now(),
+            schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        }),
+    });
+    // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own local window; a key is
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
     const appInboxState = (workspaceId: string) => ({
-        url: appInboxServer?.url ?? null,
+        url: appInboxServer?.url ?? linkedAppInbox?.url() ?? null,
         enabled: composed.settings.snapshotFor(workspaceId).app_inbox !== false,
         sources: appInboxKeys.sources(workspaceId),
         revoked: appInboxKeys.revokedSources(workspaceId),
@@ -2961,95 +3591,50 @@ async function boot(): Promise<void> {
         }
         return 'its next start uses it';
     };
-    const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
-    ipcMain.handle('genie:app-inbox-state', (_event, workspaceId: unknown) => (named(workspaceId) ? { ok: true, state: appInboxState(workspaceId) } : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:app-inbox-create-key', async (_event, workspaceId: unknown, name: unknown) => {
-        if (!named(workspaceId) || typeof name !== 'string') return { ok: false, reason: 'name a workspace and the key' };
-        if (!registry?.workspace(workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
-        try {
-            const made = await appInboxKeys.createScriptKey(workspaceId, name);
-            return { ok: true, id: made.id, name: name.trim(), token: made.token, state: appInboxState(workspaceId) };
-        } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-        }
-    });
-    ipcMain.handle('genie:app-inbox-revoke-key', async (_event, workspaceId: unknown, keyId: unknown) => {
-        if (!named(workspaceId) || !named(keyId)) return { ok: false, reason: 'name a workspace and the key' };
-        if (!appInboxKeys.scriptKeys(workspaceId).some((k) => k.id === keyId)) return { ok: false, reason: 'that key is not one of this workspace’s' };
-        await appInboxKeys.revokeScriptKey(keyId);
-        return { ok: true, state: appInboxState(workspaceId) };
-    });
-    ipcMain.handle('genie:app-inbox-source', async (_event, workspaceId: unknown, op: unknown, kind: unknown, id: unknown) => {
-        if (!named(workspaceId) || (op !== 'rotate' && op !== 'revoke' && op !== 'allow') || (kind !== 'site' && kind !== 'process') || !named(id)) return { ok: false, reason: 'rotate, revoke or allow a site or a process' };
-        try {
-            if (op === 'rotate') appInboxKeys.rotate(kind, id);
-            else if (op === 'revoke') await appInboxKeys.revokeSource({ kind, id, workspaceId });
-            else await appInboxKeys.allowSource(kind, id);
-            const after = await restartSource(workspaceId, kind, id);
-            return { ok: true, text: `${op === 'rotate' ? 'Rotated' : op === 'revoke' ? 'Revoked' : 'Allowed'}: ${after}`, state: appInboxState(workspaceId) };
-        } catch (error) {
-            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-        }
-    });
-    // ISSUEWATCH (Tynn #806): Tynn polls GitHub and pushes each project's entry on the person's own channel; the client
-    // listens with the Tynn token Genie already holds, and what changed reaches the agents of the linked workspace through
-    // the SAME delivery as mail — Genie's turn, told only when it ends — each agent by its own setting and in its mode.
-    const issueWatchDelivery = new IssueWatchDelivery({
-        agents: () => registry?.listAgents() ?? [],
-        defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
-        workspaceFor: (projectId) => {
-            for (const w of registry?.snapshot().workspaces ?? []) {
-                let manifest: string | null = null;
-                try { manifest = readFileSync(join(w.path, 'project.json'), 'utf8'); } catch { manifest = null; }
-                if (tynnProjectIdOf(manifest) === projectId) return { id: w.id, name: workspaceNameFor(w.path) };
-            }
-            return null;
+    // ISSUEWATCH AND THE LIVE BOARD (Tynn #806, genie#1295 B4; the host split, P5c): genie-host's. It hears Tynn on its own
+    // account and tells the linked workspace's agents through its own wake, window or no window; this window reads the state,
+    // plays the sounds the host says to play now, and follows its boards per view. Only on the emergency no-host path are
+    // they the window's own, loaded lazily, until P6.
+    // The sessions as they are here (narrowed): read later, inside the lazy start.
+    const windowSessions = host;
+    const windowIssueWatch = agentEngineLink ? null : import('./issue-watch-emergency.js').then((m) => m.startWindowIssueWatch({
+        account: () => tynnAccount,
+        projectFor: tynnProjectFor,
+        delivery: {
+            agents: () => registry?.listAgents() ?? [],
+            defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
+            workspaceFor: (projectId) => {
+                for (const w of registry?.snapshot().workspaces ?? []) {
+                    let manifest: string | null = null;
+                    try { manifest = readFileSync(join(w.path, 'project.json'), 'utf8'); } catch { manifest = null; }
+                    if (tynnProjectIdOf(manifest) === projectId) return { id: w.id, name: workspaceNameFor(w.path) };
+                }
+                return null;
+            },
         },
-    });
-    wireInboxPush({
-        inbox: { onSend: (listener) => issueWatchDelivery.onQueued(listener) },
-        host,
-        reminders: (input) => issueWatchDelivery.due(input),
-        settled: (agentId, delivered) => issueWatchDelivery.settled(agentId, delivered),
-        // `push` wakes a stopped agent as mail does; `next-turn` waits for it to be running.
-        wake: (agentId) => issueWatchDelivery.wakes(agentId) && wakeAgent(agentId),
-    });
-    const issueWatchClient = new IssueWatchClient({
-        // The signed-in Tynn SESSION (main/tynn-account.ts), on Genie 1's routes: the person's id and session-bound requests.
-        tynn: () => {
-            const account = tynnAccount;
-            const userId = tynnAccount?.userId() ?? null;
-            if (!account || userId === null) return null;
-            return { userId, request: (path, init) => account.request(path, init) };
-        },
-        socket: (url) => new WebSocket(url) as unknown as SocketLike,
-        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        onEvents: (projectId, events) => {
-            issueWatchRecent.set(projectId, [...[...events].reverse(), ...(issueWatchRecent.get(projectId) ?? [])].slice(0, PANEL_RECENT));
-            issueWatchDelivery.onEvents(projectId, events);
-            // The person's GitHub sound rows (core/alerts.ts): one per kind per batch, played by the window like any action.
-            for (const kind of issueWatchSoundKinds(events)) broadcast('genie:action', { agentId: null, kind });
-            pushFeatures();
-        },
-        onEntry: (entry) => {
-            issueWatchLatest.set(entry.projectId, entry);
-            issueWatchDelivered.set(entry.projectId, Date.now());
-            // The project's repo switches, read once when its first entry arrives (then after changes and Refresh).
-            if (!issueWatchWatched.has(entry.projectId)) void issueWatchLoadRepos(entry.projectId);
-            pushFeatures();
-        },
-        onState: (state) => {
-            issueWatchState = state.kind;
-            pushFeatures();
-            console.log(`[genie] issuewatch: ${state.kind}${'reason' in state && state.reason ? ` — ${state.reason}` : ''}`);
-        },
-    });
-    issueWatchRunning = issueWatchClient;
-    issueWatchChanged = pushFeatures;
-    issueWatchClient.start();
-    // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.
-    const restartIssueWatch = () => { issueWatchClient.stop(); issueWatchClient.start(); };
-    tynnAccount.onChange(restartIssueWatch);
+        host: windowSessions,
+        wake: (agentId) => wakeAgent(agentId),
+        onBoard: (event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); },
+        log: (line) => { console.log(`[genie] ${line}`); },
+    }));
+    if (agentEngineLink) {
+        const engineClient = agentEngineLink.client;
+        issueWatchNow = engineClient.issueWatch();
+        tynnBoardDoor = { watch: (viewId, workspaceId) => engineClient.tynnBoardWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnBoardUnwatch(viewId); } };
+        engineClient.onTynnBoardEvent((event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); });
+    } else if (windowIssueWatch) {
+        const own = windowIssueWatch;
+        const replica = new IssueWatchReplica(async (method, args) => (await own).issueWatch.call(method, args));
+        issueWatchNow = replica;
+        tynnBoardDoor = { watch: async (viewId, workspaceId) => (await own).board.watch(viewId, workspaceId), unwatch: (viewId) => { void own.then((w) => { w.board.unwatch(viewId); }); } };
+        void own.then((w) => {
+            replica.apply({ kind: 'dump', dump: w.issueWatch.dump() });
+            w.issueWatch.onEvent((event) => { replica.apply(event); });
+        }, (error: unknown) => { console.log(`[genie] IssueWatch could not start in the window: ${error instanceof Error ? error.message : String(error)}`); });
+    }
+    // The panel follows the host's state; a batch's sounds (one per kind, core/alerts.ts) are played by the window like any action.
+    issueWatchNow?.onChange(() => { pushFeatures(); });
+    issueWatchNow?.onSound((kind) => { broadcast('genie:action', { agentId: null, kind }); });
     // The human's conversation is in the features snapshot (an observed agent's chat): new mail and read receipts
     // push it, so a reply or a "read 14:07" lands without anyone polling.
     composed.inbox.onSend(() => { pushFeatures(); });
@@ -3061,8 +3646,8 @@ async function boot(): Promise<void> {
     composed.inbox.onSend(() => { registry?.touch(); });
     // One agent writing to another is the sender's action, with its own sound row (Tynn #766 C2a).
     composed.inbox.onSend((_to, message) => { const action = mailAction(message); if (action) broadcast('genie:action', action); });
-    // ...and the recipient's chat, whose system rows show it (the sender's own turn pushes the sender's).
-    composed.inbox.onSend((to) => { if (to !== 'human') pushAgent(to as AgentId); });
+    // The card is the notification: arrival, refusal and acceptance refresh both participants' watched chats.
+    wireInboxChatUpdates(composed.inbox, pushAgent);
     // THE TOOLCHAIN'S ACTIONS (toolchain-ops.ts): the real runner, process.env and the filesystem; progress is drawn as
     // the surface's busy line, pushed — nobody polls an install.
     const toolchainOps = (): ToolchainOpsPorts => ({
@@ -3200,6 +3785,18 @@ async function boot(): Promise<void> {
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser: openInBrowserFor('user-gesture'),
+        // "Leave safe mode" (Tynn #386): the host's; this window only asks.
+        safeMode: { leave: () => (windowSafe ? windowSafe.leave() : Promise.resolve({ ok: false as const, reason: 'Genie is still starting' })) },
+        // The brought-back page's notice: forget it.
+        rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); return { ok: true as const }; } },
+        // The reopened-window notice's two actions: forget it; or stop every agent — one click, the person's, never automatic.
+        hangNotice: {
+            dismiss: () => (agentEngineLink ? agentEngineLink.client.dismissHangNotice() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })),
+            stopAll: async () => {
+                if (!agentEngineLink) return { ok: false as const, reason: 'Genie’s host is not connected' };
+                try { await agentEngineLink.client.stopAll(); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; }
+            },
+        },
         // The flow editor's own window (genie#1204): Open, a row's name, Add a flow — the person's click.
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
@@ -3224,7 +3821,13 @@ async function boot(): Promise<void> {
                 const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager() });
                 return 'refused' in plan ? { refused: plan.refused } : { label: plan.label, elevated: plan.elevated };
             },
-            repair: () => checkAndRepair(toolchainOps()),
+            // Repaired here, in the window's environment — and pushed to genie-host's, so a site's php-cgi it starts next reads
+            // the new PHP_INI_SCAN_DIR and PATH with no host restart (P5a.2; config is hot-swappable).
+            repair: async () => {
+                const report = await checkAndRepair(toolchainOps());
+                await agentEngineLink?.client.pushEnv().catch((error: unknown) => console.error(`[toolchain] genie-host did not take the repaired environment: ${error instanceof Error ? error.message : String(error)}`));
+                return report;
+            },
             // T4: managed PHP versions (main/php-versions.ts) — the installer's progress is the same pushed busy line.
             php: {
                 list: (pins) => listPhpVersions(phpVersionsPorts(), pins),
@@ -3297,6 +3900,8 @@ async function boot(): Promise<void> {
                 remove: (version) => removeJavaVersion(version, javaVersionsPorts()),
             },
         },
+        // Which part of a features snapshot was slow (genie-test-windows, job Q0: an action took 20 s, main mostly free).
+        slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) },
     };
     // THE FORCETHEQUESTION WINDOW (§6.3; the owner, 2026-10-14: "a window that opens on top of all other windows"). It
     // reads the SAME items Pending Questions (the Deck) shows and answers through the same action, so the two stay one
@@ -3363,6 +3968,8 @@ async function boot(): Promise<void> {
         const waiting = needsYouCount(snapshot.deckItems ?? []);
         if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
     });
+    // Rare workspace visibility changes refresh all popped-out views; agent activity above stays main-window only.
+    registry.subscribeWorkspaceVisibility((snapshot) => broadcast('genie:changed', snapshot));
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
@@ -3373,14 +3980,12 @@ async function boot(): Promise<void> {
     // EVERY AGENT'S ACTIVITY FEED (beta.33 item 10): built from the session host's own ledgers and pushed to the window as
     // each session changes — what the workspace Dashboard's lanes draw. Never polled; one small feed per agent.
     activityFeeds = new ActivityFeeds({ host });
-    activityFeeds.subscribe((feed) => broadcast('genie:activity-changed', feed));
-    ipcMain.handle('genie:activity', (_event, raw: unknown) => activityOf(raw));
     host.subscribe((agentId) => {
         refreshTray();
         pushAgent(agentId);
         // Which agents are started, for doctor mode — rewritten only when that set changes.
         const started = host?.startedIds().sort() ?? [];
-        if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieHome(), started); }
+        if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieRoot(), started); }
         // A model or tool setting waiting for this agent to be free applies the moment it is.
         settingApplier?.changed(agentId);
         estate.request('estate');
@@ -3390,21 +3995,27 @@ async function boot(): Promise<void> {
 
     // TRAY-RESIDENT (core/tray-resident.ts): start minimised keeps the window in the tray at boot; closing it hides it
     // (Windows, Linux) and Genie keeps running — the agents, the terminals, the services. A quit is asked for.
-    window = createWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
-    wireCloseToTray(window, {
-        platform: process.platform,
-        quitting: () => quit.quitting,
-        settings: composed.settings,
-        notify: (notice) => {
-            if (!Notification.isSupported()) return;
-            const n = new Notification({ title: notice.title, body: notice.body });
-            n.on('click', () => { revealMainWindow('notification click'); });
-            n.show();
-        },
+    // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts
+    // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
+    const browserTrust = composed.browserTrust();
+    if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
+    // THE FRONT DOOR AS IT IS NOW (P5a.2): genie-host's, so it can come back on another port or with another CA. Every
+    // browser session reads these, and is routed again when they change.
+    frontDoorNow = { port: composed.frontDoorPort, caPem: browserTrust.caPem };
+    composed.onFrontDoorChange(() => {
+        const trust = composed.browserTrust();
+        if (frontDoorNow.port === composed.frontDoorPort && frontDoorNow.caPem === trust.caPem) return;
+        frontDoorNow = { port: composed.frontDoorPort, caPem: trust.caPem };
+        console.log(`[genie] browser: the front door is on :${frontDoorNow.port} now${trust.caPem === null ? ` with no CA (${trust.reason})` : ''}`);
+        followFrontDoorInPanes();
+        rerouteGenieBrowserSession({ frontDoorPort: frontDoorNow.port, caPem: frontDoorNow.caPem });
+        publishBrowserFacts?.();
     });
-    // Windows ends a session (shutdown, restart, sign-out) WITHOUT a before-quit (Electron documents it): quit on the
-    // way out so the shutdown runs, without a question nothing could answer.
-    window.on('session-end', () => { quit.force(); app.quit(); });
+    // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
+    // in the store of the site's own workspace.
+    livePanels = sitePanels({ window: () => window, genieHome: genieRoot(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? '_shared', openInWindow: (url, activation) => { void openLocalBrowser(url, activation); }, browserCall: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : null), restart: panelRestart(confirmTray, restartGenie) });
+    mainWindowDeps = { frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
+    mountMainWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
     // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
     void wireLoginItem(composed.settings, loginItemPort, {
         platform: process.platform,
@@ -3412,7 +4023,7 @@ async function boot(): Promise<void> {
         execPath: process.execPath,
         appImage: process.env.APPIMAGE ?? null,
         configHome: process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0 ? process.env.XDG_CONFIG_HOME : join(homedir(), '.config'),
-    });
+    }, leftRunning);
     trayHandlers = {
         onUpdate: () => { revealMainWindow('tray: update'); },
         onTaskManager: () => { revealMainWindow('tray: Task Manager'); showToPerson({ activation: 'user-gesture', route: 'genie://hosting?tab=processes', reason: 'tray: Task Manager' }); },
@@ -3428,20 +4039,37 @@ async function boot(): Promise<void> {
             if (r && !r.ok) console.error('[genie] Claude Design login:', r.reason);
         },
         onScratchTerminal: () => {
-            if (!terminals) return;
-            const r = openScratchTerminal({ terminals, openWindow: (route) => openTakeOverWindow(route, 'user-gesture'), home: homedir() });
+            if (!scratchTerminals) return;
+            const r = openScratchTerminal({ scratch: scratchTerminals, home: homedir() });
             if (!r.ok) console.error('[genie] scratch terminal:', r.reason);
         },
         onOpen: () => { revealMainWindow('tray: Open'); },
         onSettings: () => { revealMainWindow('Settings'); showToPerson({ activation: 'user-gesture', route: 'genie://settings', reason: 'Settings' }); },
         onCheckUpdates: () => { void updates?.check(); },
-        onQuit: requestQuit,
+        onQuit: () => { requestQuit(); },
+        // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
+        // ALWAYS ASK (the owner, 2026-11-02): Restart and Shut down everything confirm first, every time.
+        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) { leftRunning.set(false); requestQuit('shut-down'); } }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
     };
     trayImages = buildTrayImages(trayIconPath());
     tray = createTray(trayHandlers, trayWaiting > 0 ? trayImages.attention : trayImages.plain);
+    trayMenuNow = trayMenuTemplate(trayHandlers);
+    // THE TRAY PROBE — ONLY for the VM proof (scripts/quit-keeps-host-cdp.mjs, over the main process's inspector), and ONLY
+    // in a launch with GENIE_TRAY_PROBE=1 (core/tray-only.ts trayProbeEnabled): every real launch has none. Electron's Tray
+    // cannot be asked what it shows, nor clicked from outside: whether it is there, what it says, its menu — and an item's
+    // own click, the very handler the menu runs. On the main process's globalThis, which no renderer (context-isolated,
+    // sandboxed), no IPC handler, remote method or MCP tool reaches; nothing else in src/ names it (a source guard).
+    if (trayProbeEnabled(process.env)) {
+        (globalThis as Record<symbol, unknown>)[Symbol.for('genie.tray')] = {
+            present: () => tray !== null && !tray.isDestroyed(),
+            tooltip: () => trayTooltipNow,
+            labels: () => trayMenuNow.map((i) => i.label ?? '-'),
+            click: (label: string) => { const item = trayMenuNow.find((i) => i.label === label && i.click); item?.click?.(); return item !== undefined; },
+        };
+    }
     // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W
     // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {
@@ -3455,25 +4083,110 @@ async function boot(): Promise<void> {
         onWhatsNew: () => { revealMainWindow('menu: What is new'); showToPerson({ activation: 'user-gesture', route: WHATS_NEW_ROUTE, reason: 'menu: What is new' }); },
         onReportIssue: () => { void shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?title=${encodeURIComponent(`[v${app.getVersion()}] `)}`); },
     })));
-    // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts
-    // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
-    const browserTrust = composed.browserTrust();
-    if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
-    browserPane = new BrowserPane(electronBrowserView(window, { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem }), () => composed.routes());
     // THE GENIE BROWSER WINDOW (beta.35 item 36): the same front door and CA, its own session; the sites read at each use.
-    // LIVE SITE PANELS (beta.35 item 36, step 5): each workspace tab's site panel is a page in the browser's session, placed
-    // over its box in this window; a panel removed from its tabs closes its page.
-    const livePanels = sitePanels({ window, frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), openInWindow: (url, activation) => { genieBrowserWindow?.open(url, activation); } });
-    composed.settings.onChange((key, value, workspaceId) => {
-        if (key === 'workspace_tabs' && workspaceId && typeof value === 'string') livePanels.retainIn(workspaceId, sitePanelKeys(workspaceId, parseTabs(value)));
+    cookieBridge = new BrowserCookieBridge({
+        call: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : Promise.resolve(null)),
+        me: () => browserConnection,
+        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieRoot(), workspaceId, side: 'window', frontDoorPort: composed.frontDoorPort, caPem: frontDoorNow.caPem }).ses,
     });
-    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), ledger: activationLedger });
+    watchWorkspaceStores(cookieBridge);
+    publishBrowserFacts = () => {
+        if (agentEngineLink?.live !== true) return;
+        const facts = {
+            frontDoorPort: composed.frontDoorPort,
+            caPem: frontDoorNow.caPem,
+            hosts: composed.routes().map((r) => r.host),
+            workspaceOf: Object.fromEntries(composed.sites.list().map((s) => [s.host.toLowerCase(), s.workspaceId])),
+            launch: { file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--genie-browser', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=|genie-browser-debug-port=)/.test(a))] },
+        };
+        void agentEngineLink.client.browserCall('publish', [facts]).catch((error: unknown) => { rendererErrorLog?.(`the browser's facts could not be published: ${error instanceof Error ? error.message : String(error)}`); });
+    };
+    composed.sites.onChange(() => { publishBrowserFacts(); });
+    publishBrowserFacts();
+    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: frontDoorNow.caPem, enabledHosts: () => composed.routes().map((r) => r.host), ledger: activationLedger });
+    // TRAY-ONLY (P1b): while genie-host runs, one look every few seconds — what the tray says, and whether a tray-only
+    // Genie with nothing left running ends (core/tray-only.ts).
+    if (agentEngineLink) setInterval(watchTrayOnly, 5_000).unref?.();
+}
+
+/** What a (re)built main window needs from boot: set once the services are composed. */
+/** The front door's port and Genie's CA as the browser sessions use them now (P5a.2); set once the services are composed. */
+let frontDoorNow: { port: number; caPem: string | null } = { port: 0, caPem: null };
+let mainWindowDeps: { readonly frontDoorPort: () => number; readonly caPem: () => string | null; readonly routes: ConstructorParameters<typeof BrowserPane>[1]; readonly settings: Parameters<typeof wireCloseToTray>[1]['settings']; readonly pushFeatures: () => void } | null = null;
+/** The live site panels (once per process); each main window attached as it is built. */
+let livePanels: LiveSitePanels | null = null;
+
+/**
+ * THE MAIN WINDOW, BUILT — at boot, and again after "Just close the UI" (P1b) when the person opens Genie from the tray or
+ * launches it again. Everything bound to ONE window is bound here, every time: its close (hide to the tray), the OS ending
+ * the session, the Genie Browser pane, the site panels. Everything else reads `window` when it runs.
+ */
+function mountMainWindow(show: boolean, reason = 'launch'): void {
+    const deps = mainWindowDeps;
+    if (!deps) return;
+    window = createWindow(show);
+    // TRAY-RESIDENT (core/tray-resident.ts): start minimised keeps the window in the tray at boot; closing it hides it
+    // (Windows, Linux) and Genie keeps running — the agents, the terminals, the services. A quit is asked for.
+    wireCloseToTray(window, {
+        platform: process.platform,
+        quitting: () => quit.quitting,
+        settings: deps.settings,
+        notify: (notice) => {
+            if (!Notification.isSupported()) return;
+            const n = new Notification({ title: notice.title, body: notice.body });
+            n.on('click', () => { revealMainWindow('notification click'); });
+            n.show();
+        },
+    });
+    // Windows ends a session (shutdown, restart, sign-out) WITHOUT a before-quit (Electron documents it): quit on the
+    // way out so the shutdown runs, without a question nothing could answer.
+    window.on('session-end', () => { quit.force(); app.quit(); });
+    browserPane = new BrowserPane(electronBrowserView(window, { frontDoorPort: deps.frontDoorPort, caPem: deps.caPem }), deps.routes);
     // What the page did (a link, a redirect, back/forward) is the address bar and the history buttons — pushed, not polled.
     // A hidden pane reports no url; the surface keeps the last page it showed.
     browserPane.onChange((state) => {
         if (state.url === null) return;
         featureState = { ...featureState, browserUrl: state.url, browserCanGoBack: state.canGoBack, browserCanGoForward: state.canGoForward };
-        pushFeatures();
+        deps.pushFeatures();
+    });
+    livePanels?.attach(window);
+    bringBackItsPage(window);
+    if (reason !== 'launch') rendererErrorLog?.(`window built again (${reason}): the same host`);
+    refreshTray();
+}
+
+/**
+ * THE MAIN WINDOW'S PAGE, BROUGHT BACK WHEN IT ENDS (renderer-recovery.ts; the owner's black window of 2026-11-06, an oom
+ * with main alive and nothing reloading the page for 3.5 hours). Its memory is sampled for the beat and the crash record;
+ * an end reloads it (capped), a reload that throws builds the window again, and past the cap the plain page's two links —
+ * Restart Genie, Send a crash report — build the window again here, the same host, the notice kept for its report.
+ */
+function bringBackItsPage(win: BrowserWindow): void {
+    // As soon as the page has loaded (retried until its renderer reads a real value), and on the 5 s tick.
+    pageMemory.sample();
+    win.webContents.on('did-finish-load', () => { pageMemory.loaded(); });
+    const sampler = setInterval(() => { pageMemory.sample(); }, 5_000);
+    sampler.unref?.();
+    win.on('closed', () => { clearInterval(sampler); });
+    const rebuild = (why: string): void => {
+        if (window !== win) return;
+        window = null;
+        try { win.destroy(); } catch { /* gone already */ }
+        mountMainWindow(true, why);
+    };
+    recoverRenderer({
+        contents: win.webContents,
+        rendererMb: () => pageMemory.mb(),
+        onReloaded: (notice) => { rendererNotice = notice; registry?.touch(); },
+        onGaveUp: (notice) => { rendererNotice = notice; },
+        errorPage: rendererErrorPage,
+        recreate: () => { rebuild('renderer recovery: the reload failed'); },
+        log: (line) => { rendererErrorLog?.(line); },
+    });
+    win.webContents.on('will-navigate', (event, url) => {
+        if (url !== RECOVER_RESTART && url !== RECOVER_REPORT) return;
+        event.preventDefault();
+        rebuild(url === RECOVER_REPORT ? 'renderer recovery: Send a crash report' : 'renderer recovery: Restart Genie');
     });
 }
 
@@ -3531,40 +4244,39 @@ app.on('before-quit', (event) => {
         ready: host !== null && registry !== null,
         plan: () => {
             const running = registry!.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name);
-            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true });
+            // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
+            // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
+            const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
+            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
         },
-        ask: (plan) => dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 }) !== 0,
+        ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
     if (step === 'cancel') { event.preventDefault(); return; }
+    if (step === 'close-ui') { event.preventDefault(); closeUi('the quit’s answer'); return; }
+    crashRecorder.beforeQuit();
     autoCheckStop?.();
     autoCheckStop = null;
+    scratchSweepStop?.();
+    scratchSweepStop = null;
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
     if (step === 'record') {
         event.preventDefault();
-        // §6.5: the terminals' last screens, saved beside the running set, before the ptys go.
-        const shown = (terminals?.list() ?? []).map((t) => ({ workspaceId: t.workspaceId, scrollback: terminals?.scrollback(t.id) ?? '' }));
-        void Promise.all([recordShutdownNow(), snapshots?.save(shown) ?? Promise.resolve()]).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
+        void recordShutdownNow().catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
         return;
     }
     // The shutdown already ran (a second quit request arrived while the running set was being written): nothing twice.
     if (step === 'pass') return;
     // HELD until the sessions' last rows are written (bounded): Electron exits WITHOUT running what is still queued, so
     // a reply the stop closes, or a turn's last row still landing, was lost with its thread's lock file left behind
-    // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes from drainWritesThenQuit, as a 'pass'.
+    // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes when runQuit is done, as a 'pass'.
+    // "Just close the UI" (P1b) stops no agent, closes no terminal and never ends the host: core/quit.ts runQuit.
     event.preventDefault();
-    host?.stopAll();
-    // The stops' readings and reaps run off main (genie#1201); drainWritesThenQuit waits for them too, bounded.
-    // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
-    keepaliveNow?.stop();
-    // Every supervised process, the front door, an in-flight flow run, the knowledge database.
-    void services?.shutdown();
-    void remoteSocketNow?.stop();
-    void filesHost?.close();
-    // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
-    // OpenConsole.exe processes with no message, because nothing reaped them.
-    terminals?.closeAll();
-    clearGenieRunning(genieHome());
-    void drainWritesThenQuit();
+    // runQuit runs to its end: the drain bounded inside it, then the host ended, itself bounded (agent-engine.ts). A race
+    // around the whole of it let the window exit before the host was told to end (ss-repeat5, 2026-11-05).
+    void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
+        .catch(() => { /* an unwritten row never blocks a quit */ })
+        // No host: this window was the run, and its clean end writes the marker, last (Tynn #386). With a host: nothing.
+        .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); windowSafe?.endCleanly('the window quit'); app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */
@@ -3572,13 +4284,34 @@ const QUIT_EXIT_WAIT_MS = 2_000;
 /** The whole wait's bound: a quit is never held past it, written or not. */
 const QUIT_WRITES_MS = 5_000;
 
-/** The shutdown pass's wait (SessionHost.drained), bounded, and then the quit again — which before-quit lets through. */
-function drainWritesThenQuit(): Promise<void> {
-    let bound: ReturnType<typeof setTimeout> | undefined;
-    const drained = (host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve()).catch(() => { /* an unwritten row never blocks a quit */ });
-    return Promise.race([drained, new Promise<void>((r) => { bound = setTimeout(r, QUIT_WRITES_MS); })])
-        .finally(() => { clearTimeout(bound); app.quit(); });
-}
+/** What each quit answer does here (core/quit.ts runQuit decides which, and in what order). */
+const quitPorts: QuitPorts = {
+    // The stops' readings and reaps run off main (genie#1201); the drain below waits for them too, bounded.
+    stopAgents: () => { host?.stopAll(); },
+    closeWindow: () => {
+        // Main's own sampler ends first: on a slow machine its restarts held main for seconds, in a loop with the watchdog
+        // (genie-test-windows, job Q0), and a quit needs main for its own steps.
+        stallProfiler?.stop();
+        // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
+        keepaliveNow?.stop();
+        // Every supervised process, the front door, an in-flight flow run, the knowledge database.
+        void services?.shutdown();
+        // The spawn host ends whatever is still running in it (the supervisor's stops above went first, in order), then
+        // itself. Over the host's link it is the host's: nothing to end from here.
+        void spawnHostNow?.stop();
+        void remoteSocketNow?.stop();
+        localDoor.dispose();
+        void filesHost?.close();
+        filesWatch?.close();
+        clearGenieRunning(genieRoot());
+    },
+    // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
+    // OpenConsole.exe processes with no message, because nothing reaped them.
+    closeTerminals: () => { terminals?.closeAll(); },
+    drained: () => host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve(),
+    // With the agent host (the host split): its sessions' writes drained, then the host itself ended gracefully.
+    shutDownHost: () => agentEngineLink?.shutdown(QUIT_WRITES_MS) ?? Promise.resolve(),
+};
 
 // THE LINUX PASSWORD STORE (Tynn #846; Genie 1's genie#379/#588): Chromium picks its secret store from the desktop's
 // name and does not know Hyprland (Omarchy) — so safeStorage could encrypt nothing there. Chosen from what owns the
@@ -3586,8 +4319,10 @@ function drainWritesThenQuit(): Promise<void> {
 applyLinuxPasswordStore({
     platform: process.platform,
     argv: process.argv,
-    probe: () => probeOwnedBusNames(passwordStoreBusNames()),
-    remembered: () => readRememberedPasswordStore(genieHome()),
+    // An installed-but-not-yet-started Secret Service (Omarchy at login, before any app asked for a secret) is ACTIVATED
+    // first, so a Genie that starts at login does not land on the plaintext store (linux-password-store.ts).
+    probe: () => probeOwnedBusNames(passwordStoreBusNames(), undefined, { activateSecretService: true }),
+    remembered: () => readRememberedPasswordStore(genieRoot()),
     appendSwitch: (key, value) => app.commandLine.appendSwitch(key, value),
 });
 
@@ -3611,7 +4346,7 @@ app.on('window-all-closed', () => { /* Genie stays in the tray */ });
 
 // macOS and Linux announce a shutdown, restart or sign-out: delay it, quit without a question nothing could answer.
 // Waking from sleep: a Genie that shows signed out to Tynn asks again (the network is often what was missing).
-powerMonitor.on('resume', () => { if (tynnAccount && !tynnAccount.status().signedIn) void tynnAccount.recheck(); });
+powerMonitor.on('resume', () => { void handProxyAnswers?.(); if (tynnAccount && !tynnAccount.status().signedIn) void tynnAccount.recheck(); });
 powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
     event?.preventDefault();
     quit.force();

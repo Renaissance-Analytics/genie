@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon, Tabs } from '@particle-academy/react-fancy';
 import { tabStrip, type TabsState } from '../../core/workspace-tabs.js';
 import { TynnLogo } from './TynnLogo.js';
 import { wsStyle } from '../workspace-colors.js';
@@ -44,8 +44,13 @@ const STATE_DOT: Record<string, string> = {
 };
 
 export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, onView, onAdd, onOpenAgent, planToggle, color = null }: WorkspaceTabsProps) {
-    const underline = color ? 'border-[var(--ws)]' : 'border-[var(--fg-1)]';
-    const tab = (on: boolean) => `border-b-2 px-3 text-[12px] ${on ? `${underline} text-[var(--fg-1)]` : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`;
+    // Literal classes, dark: included: react-fancy's underline tab carries its own dark: colours, and only a class with the
+    // same variant replaces one.
+    const underline = color ? 'border-[var(--ws)] dark:border-[var(--ws)]' : 'border-[var(--fg-1)] dark:border-[var(--fg-1)]';
+    // The tab on screen: the agent's page, or the workspace view. react-fancy Tabs marks it (role="tab", aria-selected) and
+    // moves between tabs with the arrow keys; the route stays the source of truth, so a pick navigates and nothing else.
+    const selected = current.kind === 'agent' ? `agent:${current.id}` : current.view;
+    const tab = (on: boolean) => `border-b-2 px-3 py-0 text-[12px] font-normal ${on ? `${underline} text-[var(--fg-1)] dark:text-[var(--fg-1)]` : 'border-transparent text-[var(--fg-3)] hover:border-transparent hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]'}`;
     return (
         <nav
             data-workspace-tabs=""
@@ -53,34 +58,40 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
             style={wsStyle(color)}
             className={`flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
         >
+            {/* TABS, NOT BUTTONS (the owner, 2026-11-01: "those should not be buttons, it's a menu"). The + stays a Button: it
+                is an action, sitting where the owner put it (just before Settings); the arrow keys skip it. */}
+            <Tabs activeTab={selected} onTabChange={(v) => (v.startsWith('agent:') ? onOpenAgent(v.slice('agent:'.length)) : onView(v))} className="flex min-w-0 items-stretch">
+            <Tabs.List className="items-stretch border-b-0">
             {tabStrip(designed, agents, { github, tynn }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
                 if (t.kind === 'add') {
                     return (
-                        <button key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={onAdd} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
+                        <Button variant="ghost" size="xs" labelClassName="contents" key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={onAdd} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
                             <Icon name="plus" size="xs" />
-                        </button>
+                        </Button>
                     );
                 }
                 if (t.kind === 'agent') {
                     const on = current.kind === 'agent' && current.id === t.id;
                     const state = agents.find((a) => a.id === t.id)?.state ?? 'idle';
                     return (
-                        <button key={`agent:${t.id}`} type="button" data-workspace-tab={`agent:${t.id}`} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onOpenAgent(t.id)} title={`${t.name} · ${state}`} className={`flex shrink-0 items-center gap-1.5 ${tab(on)}`}>
+                        <Tabs.Tab key={`agent:${t.id}`} value={`agent:${t.id}`} data-workspace-tab={`agent:${t.id}`} title={`${t.name} · ${state}`} className={`flex shrink-0 items-center gap-1.5 ${tab(on)}`}>
                             <span data-agent-state={state} className={`size-1.5 rounded-full ${STATE_DOT[state] ?? 'bg-[var(--fg-4)]'}`} />
                             {t.name}
-                        </button>
+                        </Tabs.Tab>
                     );
                 }
                 const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
-                    <button key={view} type="button" data-workspace-tab={view} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onView(view)} className={tab(on)}>
+                    <Tabs.Tab key={view} value={view} data-workspace-tab={view} className={`shrink-0 ${tab(on)}`}>
                         {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : 'Settings'}
-                    </button>
+                    </Tabs.Tab>
                 );
             })}
+            </Tabs.List>
+            </Tabs>
             {planToggle ? (
-                <button
+                <Button variant="ghost" size="xs" labelClassName="contents"
                     type="button"
                     data-action="toggle-plan-column"
                     aria-pressed={planToggle.open ? 'true' : 'false'}
@@ -91,7 +102,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                 >
                     <Icon name={planToggle.open ? 'panel-right-close' : 'panel-right-open'} size="xs" />
                     Plan
-                </button>
+                </Button>
             ) : null}
         </nav>
     );

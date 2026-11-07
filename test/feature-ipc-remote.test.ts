@@ -43,7 +43,7 @@ afterEach(async () => {
 describe('the remote section', () => {
     it('is MEASURED at boot: the host name, no URL until a transport listens, unlocked, no PIN, no devices, no links, nobody connected', async () => {
         const snap = await featureSnapshot(services, state());
-        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: false, firewall: false, firewallOutcome: null, tailscale: null, tailscaleOutcome: null, tynnWorkstation: null, pairRequests: [] });
+        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], connections: [], enabled: false, firewall: false, firewallOutcome: null, tailscale: null, tailscaleOutcome: null, tynnWorkstation: null, pairRequests: [] });
     });
 
     it('carries this machine’s Tynn registration as main reads it (Tynn #836)', async () => {
@@ -84,19 +84,5 @@ describe('the remote section', () => {
         expect(snap.remote!.connections).toEqual([{ id: expect.any(String), label: 'glenn’s phone', isOwner: true, workspaceId: null, driving: false }]);
         const after = await handleFeatureAction(services, { kind: 'remote.revokeDevice', deviceId: snap.remote!.devices[0]!.id }, state());
         expect(after.remote!.devices).toEqual([]);
-    });
-
-    it('minting a share link serves its URL ONCE — in the mint’s answer, never in a later snapshot; the roster shows it served; revoke refuses it', async () => {
-        const minted = await handleFeatureAction(services, { kind: 'remote.mintShare', workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 3_600_000 }, state());
-        expect(minted.remote!.servedLink).toMatchObject({ id: expect.stringMatching(/^share_/), url: expect.stringMatching(/\/share\/share_[^#]+#.+$/) });
-        expect(minted.remote!.shares).toEqual([{ id: minted.remote!.servedLink!.id, workspaceId: 'tynn', grantedTo: 'wren', expiresAt: expect.any(Number), served: true, revoked: false }]);
-
-        const later = await featureSnapshot(services, state());
-        expect(later.remote!.servedLink).toBeNull();
-        expect(later.remote!.shares[0]!.served).toBe(true);
-
-        const revoked = await handleFeatureAction(services, { kind: 'remote.revokeShare', shareId: minted.remote!.servedLink!.id }, state());
-        expect(revoked.remote!.shares[0]!.revoked).toBe(true);
-        await expect(handleFeatureAction(services, { kind: 'remote.revokeShare', shareId: 'share_nope' }, state())).rejects.toThrow(/no share link/);
     });
 });

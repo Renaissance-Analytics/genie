@@ -105,7 +105,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]   # no macOS: dropped for now (owner, 2026-10-11)
+        os: [ubuntu-latest]   # Windows has its own protected signing job below; no macOS.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -118,6 +118,9 @@ jobs:
       # Windows gets the 30 s per-test budget CI's unit (windows) job has (test/ci-windows-test-budget.test.ts says why:
       # the beta.37 release failed here on a 5019 ms test); Linux keeps vitest's 5 s default.
       - run: npm test ${{ runner.os == 'Windows' && '-- --testTimeout=30000' || '' }}
+      # Out of `npm test`, not out of a release (vitest.zip64.config.mts). The check itself skips Windows.
+      - run: npm run verify:zip64
+        if: runner.os != 'Windows'
       - run: npm run build
       # electron-builder finds the draft guard made for this tag on the repository named in
       # electron-builder.yml and uploads the installer, its blockmap and latest*.yml into it. There is no macOS job:
@@ -139,10 +142,68 @@ jobs:
           echo "uploading v$tag into its draft"
           npx electron-builder --publish always
 
+  # Separate job: environment and id-token permission are job-scoped, so putting them on
+  # the old matrix would grant Linux the Windows signing identity as well.
+  publish-windows:
+    name: sign, verify and upload Windows into the draft
+    needs: guard
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # Normal CI gates the unit suite. Follow its packaging build, including build:main's Windows launcher.
+      - run: npm run build
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+      - uses: azure/login@v2
+        env:
+          AZURE_CORE_OUTPUT: none
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: build and sign without uploading
+        run: npx electron-builder --publish never
+      - name: verify every Windows signature before upload
+        shell: pwsh
+        run: ./scripts/verify-windows-signatures.ps1
+      - name: read the beta.59 reference release asset names
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view v2.0.0-beta.59 --repo "$GITHUB_REPOSITORY" --json tagName,assets --jq '{tagName,assets:[.assets[]|{name,size}]}' > release/signature-evidence/beta59-release-assets.json
+      - name: prove the signed installer's updater metadata and asset names
+        run: node scripts/verify-windows-update.cjs release release/signature-evidence/beta59-release-assets.json
+      - name: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Upload the exact verified bytes; invoking builder again would rebuild the installer.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          # Recheck after the environment approval/build: do not upload if someone published
+          # the draft while Windows was signing. A lookup failure also refuses the upload.
+          if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != true ]; then
+            echo "::error::Windows upload requires an existing draft release"
+            exit 1
+          fi
+          echo "uploading verified Windows v$tag into its draft"
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            "release/Genie-$tag-setup.exe" "release/Genie-$tag-setup.exe.blockmap" release/latest.yml --clobber
+
   verify:
     name: write the notes and verify the draft (it stays a draft)
     # Every platform leg of `publish` must succeed; a failed or cancelled leg skips this job, and the draft stays a draft.
-    needs: publish
+    needs: [publish, publish-windows]
     permissions:
       contents: write
     runs-on: ubuntu-latest

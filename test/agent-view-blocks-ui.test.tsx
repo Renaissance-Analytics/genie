@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { LiveSession } from '../src/core/roster.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE RIGHT COLUMN'S BLOCKS PER THE BOARD: the persona block (`.agents/sable/AGENT.md`) shown in the empty state so
@@ -20,7 +21,9 @@ describe('the empty state', () => {
         const html = render();
         expect(html).toContain('No events yet');
         expect(html).toMatch(/data-action="chat"[^>]*>[^<]*(<[^>]*>[^<]*)*Message sable/);
-        expect(html).toMatch(/data-action="edit-persona"[^>]*>Edit <span[^>]*>\.agents\/sable\/AGENT\.md<\/span>/);
+        const edit = control(html, 'data-action="edit-persona"');
+        expect(edit).toMatchObject({ tag: 'button', fancy: true, text: 'Edit .agents/sable/AGENT.md' });
+        expect(edit!.inner).toMatch(/<span[^>]*>\.agents\/sable\/AGENT\.md<\/span>/);
     });
 
     it('an agent whose record names no persona gets no persona block — absent, not an empty row', () => {

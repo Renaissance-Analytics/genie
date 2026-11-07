@@ -34,9 +34,9 @@ async function fixture(seed = true) {
 
 it('production pairing storage is inside its own directory and declares the old file for migration', async () => {
     const source = await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    const main = source.match(/tynnAccount = await TynnAccount\.open\(\{[\s\S]*?\n    \}\)/)?.[0];
-    expect(main).toMatch(/file:\s*join\(genieHome\(\),\s*'credentials',\s*'tynn\.json'\)/);
-    expect(main).toMatch(/legacyFile:\s*join\(genieHome\(\),\s*'tynn\.json'\)/);
+    const main = source.match(/await TynnAccount\.open\(\{[\s\S]*?\n    \}\)/)?.[0];
+    expect(main).toMatch(/file:\s*join\(genieRoot\(\),\s*'credentials',\s*'tynn\.json'\)/);
+    expect(main).toMatch(/legacyFile:\s*join\(genieRoot\(\),\s*'tynn\.json'\)/);
 });
 
 describe.skipIf(process.platform === 'win32')('Tynn account credential migration', () => {
@@ -67,12 +67,12 @@ describe.skipIf(process.platform === 'win32')('Tynn account credential migration
         expect((await stat(t.home)).mode & 0o777).toBe(0o755);
     });
 
-    it('fails closed without overwriting either file when old and new locations both contain credentials', async () => {
+    it('BOTH LOCATIONS: the current one is the sign-in. Opening overwrites neither and refuses nothing, and the older file is closed up (the beta.56 upgrade acceptance)', async () => {
         const t = await fixture(); const original = await readFile(t.legacy, 'utf8');
         await mkdir(dirname(t.next.file)); await writeFile(t.next.file, original);
         const account = await TynnAccount.open(t.next);
-        expect(account.status().signedIn).toBe(false); expect((await account.signIn(CODE)).ok).toBe(false);
-        expect(t.calls).toEqual([]); expect(await readFile(t.next.file, 'utf8')).toBe(original);
+        // It used to refuse here, which left a real sign-in unmoved and the person signed out with no word. A sign-in can go ahead.
+        expect((await account.signIn(CODE)).ok).toBe(true);
         expect(await readFile(t.legacy, 'utf8')).toBe(original); expect((await stat(t.legacy)).mode & 0o777).toBe(0o600);
     });
 

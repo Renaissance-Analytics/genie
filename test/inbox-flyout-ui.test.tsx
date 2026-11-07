@@ -156,7 +156,8 @@ describe('the open thread', () => {
     it('the person’s thread: each message rendered, its attachments by name and size (a press downloads), and a composer', () => {
         const out = html(props({ openKey: humanKey, thread: thread(humanKey) }));
         expect(out).toContain('Your direct thread');
-        expect(out).toMatch(/you → atlas[\s\S]*Ship the cache driver\?[\s\S]*atlas → you[\s\S]*<strong>diff attached<\/strong>/);
+        // Newest on top by default (the owner, 2026-11-01).
+        expect(out).toMatch(/atlas → you[\s\S]*<strong>diff attached<\/strong>[\s\S]*you → atlas[\s\S]*Ship the cache driver\?/);
         expect(out).toMatch(/data-inbox-attachment="att_1"[\s\S]*diff\.patch · 2\.0 kB/);
         expect(out).toContain('data-inbox-composer');
         expect(out).not.toContain('data-inbox-readonly');
@@ -206,5 +207,139 @@ describe('the route value', () => {
         expect(inboxTarget('')).toEqual({ kind: 'list' });
         expect(inboxTarget('msg_12')).toEqual({ kind: 'message', id: 'msg_12' });
         expect(inboxTarget(humanKey)).toEqual({ kind: 'thread', key: humanKey });
+    });
+});
+
+/**
+ * SORT, SEARCH AND THE FTQ EXPAND (the owner, 2026-11-01: "msgs in the inbox should be sortable and searchable, sort newest
+ * on top by default." and "for FTQ responses in the inbox, the id should be a link that expands to show the questions
+ * asked."). Icons over words; every control a react-fancy Button; every action shows it is running, then the result or
+ * the failure with Retry.
+ */
+const order = (out: string): string[] => [...out.matchAll(/data-inbox-message="([^"]+)"/g)].map((x) => x[1]!);
+const QID = 'q_e07a0573-1b2c-4d5e-8f90-123456789abc';
+const answerMail = { seq: 900, id: 'msg_900', from: 'human', to: 'agent_atlas', text: `Answer to your question ${QID}:\n- **Deploy** — Ship now?\n  → Yes`, attachments: [], sentAt: new Date(T - 10_000).toISOString(), readAt: null };
+const record = {
+    id: QID, agentName: 'atlas', askedAt: new Date(T - 20_000).toISOString(), at: new Date(T - 10_000).toISOString(), outcome: 'answered' as const,
+    questions: [
+        { header: 'Deploy', question: 'Ship **now**?', options: [{ label: 'Yes', description: 'Deploy at once' }, { label: 'No', description: 'Wait for Monday' }] },
+        { header: 'Notify', question: 'Who hears?', multiSelect: true, options: [{ label: 'Team' }, { label: 'Owner', description: 'Only the owner' }, { label: 'Nobody' }] },
+    ],
+    selections: [['Yes'], ['Team', 'Owner']], notes: ['', 'cc me'], note: 'thanks',
+};
+const ftqThread = (): InboxThreadView => ({ key: humanKey, messages: [answerMail] as never, more: false, limit: 50, focus: null });
+
+describe('the open thread’s order', () => {
+    it('newest on top by DEFAULT (positive control: the same thread oldest-first is the other way round)', () => {
+        expect(order(html(props({ openKey: humanKey, thread: thread(humanKey) })))).toEqual(['msg_2', 'msg_1']);
+        expect(order(html(props({ openKey: humanKey, thread: thread(humanKey), order: 'oldest' })))).toEqual(['msg_1', 'msg_2']);
+    });
+
+    it('one icon button toggles it — pressed, it asks for the other order; its name says what it shows', () => {
+        const asked: string[] = [];
+        const [btn] = findAll(InboxFlyoutView(props({ openKey: humanKey, thread: thread(humanKey), onOrder: (o) => asked.push(o) })), (p) => p['data-action'] === 'inbox-sort');
+        expect(btn!['data-order']).toBe('newest');
+        expect(btn!.icon).toBe('arrow-down-wide-narrow');
+        expect(btn!['aria-label']).toBe('Newest first');
+        expect(btn!.children ?? null).toBeNull();
+        (btn!.onClick as () => void)();
+        const [back] = findAll(InboxFlyoutView(props({ openKey: humanKey, thread: thread(humanKey), order: 'oldest', onOrder: (o) => asked.push(o) })), (p) => p['data-action'] === 'inbox-sort');
+        expect(back!.icon).toBe('arrow-up-narrow-wide');
+        (back!.onClick as () => void)();
+        expect(asked).toEqual(['oldest', 'newest']);
+    });
+
+    it('Load older follows the order: at the END newest-first, at the TOP oldest-first; spins while it loads', () => {
+        const newest = html(props({ openKey: humanKey, thread: thread(humanKey, { more: true }) }));
+        expect(newest.indexOf('data-action="inbox-load-older"')).toBeGreaterThan(newest.lastIndexOf('data-inbox-message='));
+        const oldest = html(props({ openKey: humanKey, thread: thread(humanKey, { more: true }), order: 'oldest' }));
+        expect(oldest.indexOf('data-action="inbox-load-older"')).toBeLessThan(oldest.indexOf('data-inbox-message='));
+        expect(html(props({ openKey: humanKey, thread: thread(humanKey, { more: true }), loadingOlder: true }))).toMatch(/data-action="inbox-load-older"[^>]*disabled|disabled[^>]*data-action="inbox-load-older"/);
+    });
+
+    it('a trimmed buffer (the newest end dropped after paging far back) offers a way back to the newest', () => {
+        const back: number[] = [];
+        expect(html(props({ openKey: humanKey, thread: thread(humanKey) }))).not.toContain('data-action="inbox-back-to-newest"');
+        const [btn] = findAll(InboxFlyoutView(props({ openKey: humanKey, thread: thread(humanKey, { newer: true }), onBackToNewest: () => back.push(1) })), (p) => p['data-action'] === 'inbox-back-to-newest');
+        (btn!.onClick as () => void)();
+        expect(back).toEqual([1]);
+    });
+});
+
+describe('searching the open thread', () => {
+    it('a search field on the thread; typing asks for a search', () => {
+        const q: string[] = [];
+        const [field] = findAll(InboxFlyoutView(props({ openKey: humanKey, thread: thread(humanKey), onThreadQuery: (v) => q.push(v) })), (p) => p['data-inbox-thread-search'] !== undefined);
+        (field!.onValueChange as (v: string) => void)('cache');
+        expect(q).toEqual(['cache']);
+    });
+
+    it('while it runs: visible progress, and the thread’s own messages are not passed off as results', () => {
+        const out = html(props({ openKey: humanKey, thread: thread(humanKey), threadQuery: 'cache', search: { query: 'cache', status: 'searching', hits: [], total: 0, error: null } }));
+        expect(out).toContain('data-inbox-searching');
+        expect(order(out)).toEqual([]);
+    });
+
+    it('hits: each with the match marked, the count, newest first; a press jumps to it in the thread', () => {
+        const hits = mail.slice(0, 2).reverse() as never;
+        const p = props({ openKey: humanKey, thread: thread(humanKey), threadQuery: 'ship', search: { query: 'ship', status: 'done', hits, total: 2, error: null } });
+        const out = html(p);
+        expect(out).toMatch(/data-inbox-search-count="2"/);
+        expect(out).toMatch(/<mark[^>]*data-search-hit=""[^>]*>Ship<\/mark>/);
+        expect([...out.matchAll(/data-inbox-search-hit="([^"]+)"/g)].map((x) => x[1])).toEqual(['msg_2', 'msg_1']);
+        const jumped: string[] = [];
+        const [first] = findAll(InboxFlyoutView({ ...p, onJump: (h) => jumped.push(h.id) }), (x) => x['data-inbox-search-hit'] !== undefined);
+        (first!.onClick as () => void)();
+        expect(jumped).toEqual(['msg_2']);
+    });
+
+    it('no hits says so; a failure says why, with Retry', () => {
+        expect(html(props({ openKey: humanKey, thread: thread(humanKey), threadQuery: 'zzz', search: { query: 'zzz', status: 'done', hits: [], total: 0, error: null } }))).toContain('data-inbox-no-matches');
+        const retried: number[] = [];
+        const p = props({ openKey: humanKey, thread: thread(humanKey), threadQuery: 'x', search: { query: 'x', status: 'error', hits: [], total: 0, error: 'host gone' }, onRetrySearch: () => retried.push(1) });
+        expect(html(p)).toMatch(/data-inbox-search-error[\s\S]*host gone/);
+        for (const b of findAll(InboxFlyoutView(p), (x) => x['data-action'] === 'inbox-search-retry')) (b.onClick as () => void)();
+        expect(retried).toEqual([1]);
+    });
+});
+
+describe('an FTQ answer’s question id', () => {
+    it('is a link Button, shortened, the full id on hover; the "Answer to…" line is not repeated under it', () => {
+        const toggled: string[] = [];
+        const p = props({ openKey: humanKey, thread: ftqThread(), onToggleQuestion: (id) => toggled.push(id) });
+        const out = html(p);
+        expect(out).toMatch(/<a[^>]*data-question-ref="q_e07a0573-1b2c-4d5e-8f90-123456789abc"/);
+        expect(out).toContain('q_e07a0573…');
+        expect(out).toMatch(new RegExp(`title="${esc(QID)}"`));
+        expect(out).toContain('aria-expanded="false"');
+        expect(out).not.toContain('Answer to your question');
+        const [ref] = findAll(InboxFlyoutView(p), (x) => x['data-question-ref'] !== undefined);
+        let prevented = false;
+        (ref!.onClick as (e: { preventDefault: () => void }) => void)({ preventDefault: () => { prevented = true; } });
+        expect([toggled, prevented]).toEqual([[QID], true]);
+    });
+
+    it('expanded: every question with ALL its options and descriptions, the chosen ones marked, the notes shown', () => {
+        const out = html(props({ openKey: humanKey, thread: ftqThread(), expandedQuestions: [QID], questions: { [QID]: { status: 'ok', record } } }));
+        expect(out).toContain('aria-expanded="true"');
+        expect(out).toMatch(/data-question-panel="q_e07a0573[^"]*"/);
+        for (const text of ['Deploy', 'Notify', 'Who hears?', 'Deploy at once', 'Wait for Monday', 'Only the owner', 'cc me', 'thanks']) expect(out).toContain(text);
+        expect(out).toContain('<strong>now</strong>');
+        const chosen = [...out.matchAll(/data-option="([^"]+)" data-chosen="(true|false)"/g)].map((x) => `${x[1]}:${x[2]}`);
+        expect(chosen).toEqual(['Yes:true', 'No:false', 'Team:true', 'Owner:true', 'Nobody:false']);
+    });
+
+    it('collapsed again: no panel (positive control above)', () => {
+        expect(html(props({ openKey: humanKey, thread: ftqThread(), questions: { [QID]: { status: 'ok', record } } }))).not.toContain('data-question-panel');
+    });
+
+    it('loading shows progress; a record that is gone is said plainly; a failure has Retry', () => {
+        expect(html(props({ openKey: humanKey, thread: ftqThread(), expandedQuestions: [QID], questions: { [QID]: { status: 'loading' } } }))).toContain('data-question-loading');
+        expect(html(props({ openKey: humanKey, thread: ftqThread(), expandedQuestions: [QID], questions: { [QID]: { status: 'gone' } } }))).toMatch(/data-question-gone[\s\S]*no longer kept/);
+        const retried: string[] = [];
+        const p = props({ openKey: humanKey, thread: ftqThread(), expandedQuestions: [QID], questions: { [QID]: { status: 'error', error: 'host gone' } }, onRetryQuestion: (id) => retried.push(id) });
+        expect(html(p)).toMatch(/data-question-error[\s\S]*host gone/);
+        for (const b of findAll(InboxFlyoutView(p), (x) => x['data-action'] === 'inbox-question-retry')) (b.onClick as () => void)();
+        expect(retried).toEqual([QID]);
     });
 });

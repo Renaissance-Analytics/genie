@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { FlowEditor, FlowViewer, getNodeKind, type FlowEditorApi, type FlowGraph } from '@particle-academy/fancy-flow';
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
@@ -47,6 +48,7 @@ export interface FlowEditorWindowProps {
     /** The flow to open; `null` = a new one, in `workspaceId`. */
     readonly flowId: string | null;
     readonly workspaceId: string | null;
+    readonly hibernated?: boolean;
     readonly data: FeatureData;
     readonly workspaces: readonly { id: string; path: string; name?: string | undefined }[];
     readonly act: (action: FeatureAction) => Promise<FeatureData>;
@@ -58,13 +60,16 @@ export interface FlowEditorWindowProps {
     readonly onSaved?: (flowId: string) => void;
 }
 
-export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, Editor = FlowEditor as unknown as AnyComponent, Viewer = FlowViewer as unknown as AnyComponent, now = Date.now(), onSaved }: FlowEditorWindowProps) {
+export function FlowEditorWindow({ flowId, workspaceId, hibernated = false, data, workspaces, act, Editor = FlowEditor as unknown as AnyComponent, Viewer = FlowViewer as unknown as AnyComponent, now = Date.now(), onSaved }: FlowEditorWindowProps) {
     const flows = data.flows?.flows ?? null;
     // GENIE'S TOOLS AS STEPS (genie#1204): their kinds arrive in the snapshot and are registered BEFORE any graph is read
     // or the canvas mounts — a canvas that mounted first would draw them as bare boxes (Genie 1's lesson,
     // FlowEditorPanel.tsx:43-54). Idempotent, so every render may call it.
     if (data.flows?.toolKinds) registerToolKinds(data.flows.toolKinds);
-    const flow = flowId !== null ? flows?.find((f) => f.id === flowId) ?? null : null;
+    const reportedFlow = flowId !== null ? flows?.find((f) => f.id === flowId) ?? null : null;
+    const remembered = useRef(reportedFlow);
+    if (reportedFlow) remembered.current = reportedFlow;
+    const flow = reportedFlow ?? (hibernated && remembered.current?.id === flowId ? remembered.current : null);
     const [graph, setGraph] = useState<FlowGraph | null>(() => (flows === null ? null : flowId === null ? documentToGraph(starterDocument()) : flow ? documentToGraph(flow.document) : null));
     const [name, setName] = useState(flow?.name ?? '');
     const [serverProblems, setServerProblems] = useState<readonly FlowProblem[]>([]);
@@ -86,8 +91,8 @@ export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, E
         }
     }, [flow, flows, flowId, graph]);
     useEffect(() => {
-        if (typeof document !== 'undefined') document.title = `${name || 'New flow'} — Flow`;
-    }, [name]);
+        if (typeof document !== 'undefined') document.title = hibernated ? 'Hibernated workspace — Flow' : `${name || 'New flow'} — Flow`;
+    }, [name, hibernated]);
     useEffect(() => {
         const el = shell.current;
         if (!el || typeof ResizeObserver === 'undefined') return;
@@ -110,6 +115,8 @@ export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, E
     }, [live, serverProblems]);
     const value = useMemo(() => (graph ? withProblems(graph, problems) : null), [graph, problems]);
 
+    const notice = <WindowMessage>This workspace is hibernated. Redock it to continue; your unsaved graph is kept.</WindowMessage>;
+    if (hibernated && !flow && flowId !== null) return notice;
     if (flowId !== null && flows !== null && !flow) return <WindowMessage>That flow no longer exists.</WindowMessage>;
     if (flowId === null && !ws) return <WindowMessage>This window was opened without a workspace for the new flow.</WindowMessage>;
     if (graph === null || value === null) return <WindowMessage>Opening…</WindowMessage>;
@@ -141,7 +148,7 @@ export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, E
     const nameOf = (id: string | undefined) => (id === undefined ? 'the flow' : nodeName(graph, id));
 
     return (
-        <div data-flow-editor={flowId ?? 'new'} className="flex h-screen min-h-0 flex-col bg-[var(--bg-1)] text-[var(--fg-1)]">
+        <><div hidden={hibernated} inert={hibernated} data-flow-editor={flowId ?? 'new'} className="flex h-screen min-h-0 flex-col bg-[var(--bg-1)] text-[var(--fg-1)]">
             <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--border-1)] px-4 py-2">
                 <input
                     aria-label="Flow name"
@@ -165,7 +172,7 @@ export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, E
                         ))}
                     </select>
                 ) : null}
-                <button type="button" disabled={busy || run !== null} onClick={() => void save()} className="rounded-lg bg-[var(--primary)] px-3 py-1 text-sm text-white disabled:opacity-50">Save</button>
+                <Button size="xs" type="button" disabled={busy || run !== null} onClick={() => void save()} className="rounded-lg bg-[var(--primary)] px-3 py-1 text-sm text-white disabled:opacity-50">Save</Button>
             </div>
             {note ? <p data-flow-note className="shrink-0 border-b border-[var(--border-1)] px-4 py-1 text-xs text-[var(--fg-2)]">{note}</p> : null}
             {problems.length > 0 && run === null ? (
@@ -218,7 +225,7 @@ export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, E
                     />
                 )}
             </div>
-        </div>
+        </div>{hibernated ? notice : null}</>
     );
 }
 

@@ -1,3 +1,4 @@
+import { fakeKeychain } from './helpers/tynn-storage.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,10 +20,9 @@ function fixture() {
     const calls: Array<{ path: string; origin: string; init: any }> = [];
     const state = { encryption: true, live: false, session: false, scopes: SCOPES, exchanges: 0, error: '' };
     const file = join(dir, 'tynn.json');
-    // Fake keychain port: verifies use of the cipher boundary, not a claim that base64 is encryption.
-    const cipher = { isAvailable: () => state.encryption, encrypt: (text: string) => Buffer.from(`sealed:${text}`), decrypt: (bytes: Buffer) => bytes.toString().slice('sealed:'.length) };
+    const secrets = { ...fakeKeychain(), probe: async () => (state.encryption ? { ok: true as const } : { ok: false as const, reason: 'no keyring' }) };
     const ports = {
-        host: () => HOST, file, cipher,
+        host: () => HOST, file, secrets,
         cookies: { set: async (_host: string, name: string, value: string) => { jar.set(name, value); }, get: async (_host: string, name: string) => jar.get(name) ?? null, clear: async () => { jar.clear(); } },
         fetch: async (url: string, init: any) => {
             const target = new URL(url); const path = target.pathname;
@@ -49,8 +49,8 @@ function fixture() {
             return answer(authenticated || session ? 200 : 404, { data: [] });
         },
     };
-    const saved = (token = TOKEN) => writeFile(file, JSON.stringify({ version: 1, state: 'signed-in', host: HOST, userId: USER.id, scopes: SCOPES, tokenEnc: cipher.encrypt(token).toString('base64') }));
-    return { ports: ports as unknown as TynnAccountPorts, state, calls, jar, file, cipher, saved };
+    const saved = (token = TOKEN) => { secrets.held.set('tynn/pairing', token); return writeFile(file, JSON.stringify({ version: 1, state: 'signed-in', host: HOST, userId: USER.id, scopes: SCOPES })); };
+    return { ports: ports as unknown as TynnAccountPorts, state, calls, jar, file, secrets, saved };
 }
 
 describe('Tynn scoped bearer transport', () => {
@@ -78,12 +78,13 @@ describe('Tynn scoped bearer transport', () => {
         expect((await TynnAccount.open(t.ports)).status().signedIn).toBe(true);
     });
 
-    it('keeps the one-time pairing credential encrypted, clears exchange cookies, and omits cookies on subsequent writes', async () => {
+    it('keeps the one-time pairing credential in the keychain, clears exchange cookies, and omits cookies on subsequent writes', async () => {
         const t = fixture(); const a = await TynnAccount.open(t.ports);
         expect((await a.signIn(CODE)).ok).toBe(true);
         const disk = await readFile(t.file, 'utf8');
         expect(disk).not.toContain(TOKEN);
-        expect(t.cipher.decrypt(Buffer.from(JSON.parse(disk).tokenEnc, 'base64'))).toBe(TOKEN);
+        expect(JSON.parse(disk).tokenEnc).toBeUndefined();
+        expect(t.secrets.held.get('tynn/pairing')).toBe(TOKEN);
         expect(t.jar.size).toBe(0);
         await a.request('/api/v1/projects', { method: 'POST', body: { name: 'Project' } });
         expect(t.calls.at(-1)?.init).toMatchObject({ credentials: 'omit', redirect: 'error', headers: { Authorization: `Bearer ${TOKEN}` } });
@@ -106,7 +107,7 @@ describe('Tynn scoped bearer transport', () => {
         expect(t.calls.every((c) => c.init.credentials === 'omit')).toBe(true);
     });
 
-    it('refuses to mint a credential without OS encryption', async () => {
+    it('refuses to mint a credential without a keychain', async () => {
         const t = fixture(); t.state.encryption = false;
         const a = await TynnAccount.open(t.ports);
         expect(await a.signIn(CODE)).toMatchObject({ ok: false });

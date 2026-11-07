@@ -1,4 +1,4 @@
-import { Icon, VirtualList } from '@particle-academy/react-fancy';
+import { Button, Icon, VirtualList } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { STREAM_LIVE_ROWS, StreamPrep } from '../../core/stream-prep.js';
@@ -8,6 +8,7 @@ import {
     type StreamFilter,
     type TimedEvent,
 } from '../../core/stream-view.js';
+import type { ToolOutputReply } from '../../core/tool-row-bound.js';
 import { StreamRow, type StreamMarkup } from './StreamRow.js';
 
 /**
@@ -63,6 +64,8 @@ export interface StreamProps {
     cursorId?: string | null | undefined;
     /** What an agent message's pills may open, and the opener for a person's click (genie#1263). Absent = words only. */
     markup?: StreamMarkup | undefined;
+    /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386). Keep it stable. */
+    loadToolOutput?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
 }
 
 /**
@@ -76,7 +79,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup, loadToolOutput }: StreamProps) {
     countRender('Stream');
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
@@ -181,15 +184,15 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 {onChat || (persona && onEditPersona) ? (
                     <div className="mt-1 flex items-center gap-2">
                         {onChat ? (
-                            <button type="button" data-action="chat" onClick={onChat} className="flex items-center gap-1.5 rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">
+                            <Button size="xs" labelClassName="contents" type="button" data-action="chat" onClick={onChat} className="flex items-center gap-1.5 rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">
                                 Message {agentName ?? 'the agent'}
                                 <span className="font-mono text-[10px] opacity-80">⌘J</span>
-                            </button>
+                            </Button>
                         ) : null}
                         {persona && onEditPersona ? (
-                            <button type="button" data-action="edit-persona" onClick={onEditPersona} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]">
+                            <Button size="xs" labelClassName="contents" type="button" data-action="edit-persona" onClick={onEditPersona} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]">
                                 Edit <span className="font-mono">{persona}</span>
-                            </button>
+                            </Button>
                         ) : null}
                     </div>
                 ) : null}
@@ -200,9 +203,9 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
     return (
         <div data-stream="rows" className="flex h-full flex-col">
             {view.behind > 0 ? (
-                <button type="button" data-stream-earlier={view.behind} onClick={() => { parkedStart.current = Math.max(0, view.behind - STREAM_LIVE_ROWS); setExtra((n) => n + STREAM_LIVE_ROWS); }} className="shrink-0 self-center py-1 font-mono text-[11px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">
+                <Button size="xs" type="button" data-stream-earlier={view.behind} onClick={() => { parkedStart.current = Math.max(0, view.behind - STREAM_LIVE_ROWS); setExtra((n) => n + STREAM_LIVE_ROWS); }} className="shrink-0 self-center py-1 font-mono text-[11px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">
                     {view.behind.toLocaleString('en-US')} earlier {view.behind === 1 ? 'row' : 'rows'} · show more
-                </button>
+                </Button>
             ) : null}
             <div className="relative min-h-0 flex-1">
             <VirtualList
@@ -217,7 +220,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onUnseenChange={setUnseen}
                 scrollToId={at}
                 renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} />
+                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} loadFull={loadToolOutput} />
                 )}
             />
 
@@ -243,17 +246,22 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
              */}
             <div data-stream-status="" className="flex h-7 shrink-0 items-center justify-end gap-2 border-t border-[var(--border-1)] bg-[var(--surface)] px-3">
             {following ? (
-                <span data-follow="live" className="rounded-full border border-[var(--border-1)] bg-[var(--surface-raised)] px-2.5 py-0.5 font-mono text-[10px] text-[var(--fg-4)]">Following live</span>
+                // A STATUS, not a control (real buttons, 2026-11-01): plain words and a live dot, nothing shaped like a button.
+                <span data-follow="live" role="status" className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--fg-4)]"><span className="size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--success)]" />Following live</span>
             ) : (
-                <button
+                // The door back to the live end: a real Button.
+                <Button
                     type="button"
+                    size="xs"
+                    icon="arrow-down-to-line"
                     data-follow="parked"
                     {...(unseen > 0 ? { 'data-unseen': unseen } : {})}
+                    title="Back to the live end"
                     onClick={() => setFollowing(true)}
-                    className="rounded-full border border-[var(--border-2)] bg-[var(--surface-raised)] px-2.5 py-0.5 font-mono text-[10px] text-[var(--fg-2)] shadow-md hover:bg-[var(--bg-2)]"
+                    className="py-0.5 font-mono text-[10px]"
                 >
-                    Parked{unseen > 0 ? ` · ↓ ${unseen} new` : ''}
-                </button>
+                    {`Parked${unseen > 0 ? ` · ↓ ${unseen} new` : ''}`}
+                </Button>
             )}
             </div>
         </div>

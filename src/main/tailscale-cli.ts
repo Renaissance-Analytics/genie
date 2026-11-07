@@ -485,31 +485,140 @@ const WIN_INSTALLER_URL = 'https://pkgs.tailscale.com/stable/tailscale-setup-lat
  * Tailscale's official signed installer and launch it (the user clicks through
  * Tailscale's own UI). On macOS/Linux the install path differs (App Store /
  * package manager), so hand back the download-page URL for the caller to open.
- * The signed installer is only ever fetched from Tailscale's own `pkgs.` host.
+ * The installer is only ever fetched from Tailscale's own `pkgs.` host, and runs only on Windows' verdict that it is validly signed by Tailscale (genie#1497).
  *
  * Returns `{ started: true }` when the Windows installer was launched, or a `url`
  * for the caller to open instead (other platforms, or a download failure).
  */
-export async function installTailscale(): Promise<{
+/** Windows' verdict on a file, in its own words, and who signed it. */
+export interface AuthenticodeAnswer { readonly status: string; readonly subject: string | null }
+
+/** The publisher, read from the real installer's certificate table (2026-11-03): CN and O, both this, under DigiCert's code-signing CA. */
+const TAILSCALE_PUBLISHER = 'Tailscale Inc.';
+
+/** A certificate subject's parts by name. A value with a comma in it is quoted, so it is split outside quotes only, and a name further along cannot pass for the first. */
+function subjectParts(subject: string): Map<string, string> {
+    const parts = new Map<string, string>();
+    for (const piece of subject.match(/(?:[^,"]|"[^"]*")+/g) ?? []) {
+        const at = piece.indexOf('=');
+        if (at > 0) parts.set(piece.slice(0, at).trim(), piece.slice(at + 1).trim().replace(/^"(.*)"$/, '$1'));
+    }
+    return parts;
+}
+
+/** Why this file is not to be run, or null. Anything but Windows' own "Valid", from Tailscale, is a reason. */
+export function refusalOf(answer: AuthenticodeAnswer): string | null {
+    if (answer.status !== 'Valid') return `its signature is ${answer.status || 'unreadable'}`;
+    const parts = subjectParts(answer.subject ?? '');
+    if (parts.get('CN') === TAILSCALE_PUBLISHER && parts.get('O') === TAILSCALE_PUBLISHER) return null;
+    return `it is signed by ${parts.get('CN') ?? 'nobody it could read'}, not ${TAILSCALE_PUBLISHER}`;
+}
+
+/**
+ * WINDOWS' OWN CHECK: WinVerifyTrust, the documented API, reached from PowerShell 5.1 through Add-Type. Not Get-AuthenticodeSignature: on CI's Windows runner its module would not load ("the module could not be loaded"),
+ * with PSModulePath removed and with the policy bypassed, so it cannot be relied on being there. An embedded signature is what is asked about, which is what Tailscale's installer carries; a catalogue is not consulted.
+ * Revocation is not checked online: the check must not hang on a person's network. The script goes as -EncodedCommand and the file's name in the environment, so neither is quoted, and PowerShell by its full path.
+ */
+const AUTHENTICODE_SCRIPT = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -TypeDefinition @'",
+    'using System;',
+    'using System.Runtime.InteropServices;',
+    'public static class GenieTrust {',
+    '    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
+    '    struct FileInfo { public uint cbStruct; [MarshalAs(UnmanagedType.LPWStr)] public string path; public IntPtr file; public IntPtr subject; }',
+    '    [StructLayout(LayoutKind.Sequential)]',
+    '    struct Data { public uint cbStruct; public IntPtr policy; public IntPtr sip; public uint ui; public uint revocation; public uint union; public IntPtr file; public uint state; public IntPtr stateData; public IntPtr url; public uint flags; public uint context; public IntPtr settings; }',
+    '    [DllImport("wintrust.dll", CharSet = CharSet.Unicode)]',
+    '    static extern int WinVerifyTrust(IntPtr window, ref Guid action, ref Data data);',
+    '    public static int Check(string path) {',
+    '        var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");',
+    '        var info = new FileInfo { cbStruct = (uint)Marshal.SizeOf(typeof(FileInfo)), path = path };',
+    '        var memory = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(FileInfo)));',
+    '        try {',
+    '            Marshal.StructureToPtr(info, memory, false);',
+    '            var data = new Data { cbStruct = (uint)Marshal.SizeOf(typeof(Data)), ui = 2, revocation = 0, union = 1, file = memory, state = 1 };',
+    '            var result = WinVerifyTrust(new IntPtr(-1), ref action, ref data);',
+    '            data.state = 2;',
+    '            WinVerifyTrust(new IntPtr(-1), ref action, ref data);',
+    '            return result;',
+    '        } finally { Marshal.FreeHGlobal(memory); }',
+    '    }',
+    '}',
+    "'@",
+    '$code = [GenieTrust]::Check($env:GENIE_AUTHENTICODE_FILE)',
+    '$subject = $null',
+    'try { $subject = [System.Security.Cryptography.X509Certificates.X509Certificate]::CreateFromSignedFile($env:GENIE_AUTHENTICODE_FILE).Subject } catch { $subject = $null }',
+    "[pscustomobject]@{ code = $code; subject = $subject } | ConvertTo-Json -Compress",
+].join('\n');
+
+/** WinVerifyTrust's answers, in the words people search for. */
+export function trustWords(code: number): string {
+    const unsigned = code >>> 0;
+    if (unsigned === 0) return 'Valid';
+    if (unsigned === 0x800b0100) return 'NotSigned';
+    if (unsigned === 0x80096010) return 'HashMismatch';
+    if (unsigned === 0x800b0109 || unsigned === 0x800b0004 || unsigned === 0x800b0111) return 'NotTrusted';
+    if (unsigned === 0x800b0101) return 'Expired';
+    return `UnknownError 0x${unsigned.toString(16)}`;
+}
+
+export function readAuthenticode(file: string): Promise<AuthenticodeAnswer> {
+    const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const encoded = Buffer.from(AUTHENTICODE_SCRIPT, 'utf16le').toString('base64');
+    return new Promise((resolve, reject) => {
+        execFile(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { env: { ...process.env, GENIE_AUTHENTICODE_FILE: file }, windowsHide: true, timeout: 60_000 }, (error, stdout) => {
+            if (error) { reject(error); return; }
+            try {
+                const parsed = JSON.parse(String(stdout)) as { code?: unknown; subject?: unknown };
+                if (typeof parsed.code !== 'number') { reject(new Error('no answer from WinVerifyTrust')); return; }
+                resolve({ status: trustWords(parsed.code), subject: typeof parsed.subject === 'string' ? parsed.subject : null });
+            } catch (parseError) { reject(parseError as Error); }
+        });
+    });
+}
+
+export interface InstallPorts {
+    readonly platform: NodeJS.Platform;
+    readonly installed: () => string | null;
+    readonly download: (url: string) => Promise<Response>;
+    readonly verify: (file: string) => Promise<AuthenticodeAnswer>;
+    readonly launch: (file: string) => void;
+}
+
+export async function installTailscale(over: Partial<InstallPorts> & Pick<InstallPorts, 'download'>): Promise<{
     started: boolean;
     url?: string;
     message?: string;
 }> {
-    if (tailscaleCliPath()) {
+    if ((over.installed ?? tailscaleCliPath)()) {
         return { started: false, message: 'Tailscale is already installed.' };
     }
-    if (process.platform !== 'win32') {
+    if ((over.platform ?? process.platform) !== 'win32') {
         // macOS / Linux: open the official download page; install is OS-specific.
         return { started: false, url: TAILSCALE_DOWNLOAD_PAGE };
     }
     try {
-        const res = await fetch(WIN_INSTALLER_URL);
+        const res = await over.download(WIN_INSTALLER_URL);
         if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
         const buf = Buffer.from(await res.arrayBuffer());
-        const dest = path.join(os.tmpdir(), `tailscale-setup-${Date.now()}.exe`);
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'tailscale-setup-'));
+        const dest = path.join(folder, 'tailscale-setup.exe');
         fs.writeFileSync(dest, buf);
+        // Windows' verdict before anything runs. A check that cannot run is a refusal, never a pass.
+        let refusal: string | null;
+        try {
+            refusal = refusalOf(await (over.verify ?? readAuthenticode)(dest));
+        } catch {
+            refusal = 'its signature could not be checked';
+        }
+        if (refusal) {
+            fs.rmSync(folder, { recursive: true, force: true });
+            return { started: false, url: TAILSCALE_DOWNLOAD_PAGE, message: `The Tailscale installer was not run: ${refusal}.` };
+        }
         // Launch detached so Tailscale's installer outlives this call; the user
         // drives its UI. Not windowsHide — the user needs to see the installer.
+        if (over.launch) { over.launch(dest); return { started: true }; }
         const child = spawn(dest, [], { detached: true, stdio: 'ignore' });
         child.unref();
         return { started: true };

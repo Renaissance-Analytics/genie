@@ -8,6 +8,7 @@ import { prepareProcessTree } from '@particle-academy/prism-acp';
 // the root, so this is the module file itself — the same file prism-acp's own process-tree.js imports, so the bundle
 // holds one copy and the key is of exactly what prism-acp builds. A prism-acp that moves it fails the build, loudly.
 import { SUPERVISOR_CS } from '../../node_modules/@particle-academy/prism-acp/dist/process-tree-supervisor-cs.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * GENIE'S SUPERVISOR FOLDER IS KEYED BY THE SUPERVISOR'S SOURCE (genie#1259).
@@ -115,7 +116,7 @@ const WIN32_IMAGES = 'Get-CimInstance Win32_Process | Where-Object { $_.Executab
 export async function supervisorImagesRunning(): Promise<readonly string[] | null> {
     if (process.platform !== 'win32') return [];
     try {
-        const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN32_IMAGES], { encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+        const { stdout } = await execFileAsync(resolveProgram('powershell'), ['-NoProfile', '-NonInteractive', '-Command', WIN32_IMAGES], { encoding: 'utf8', timeout: 30_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
         const images = stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
         // Genie itself is always running: a listing without it is not a reading.
         return images.some((p) => samePath(p, process.execPath)) ? images : null;

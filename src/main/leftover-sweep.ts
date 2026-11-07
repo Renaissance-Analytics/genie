@@ -1,5 +1,7 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { leftoverProviders, type ProcessRow } from '../core/leftover-providers.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE BOOT SWEEP (Tynn #796, part 2): before Genie resumes any agent, end every provider still running one of its
@@ -15,10 +17,9 @@ export interface SweepIo {
     end(pid: number): void;
 }
 
-function win32List(): ProcessRow[] {
-    const out = execFileSync('powershell', ['-NoProfile', '-Command',
-        'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Compress'],
-    { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+const WIN32_LIST_SCRIPT = 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Compress';
+
+function parseWin32List(out: string): ProcessRow[] {
     const parsed = JSON.parse(out.trim() || '[]') as unknown;
     const list = Array.isArray(parsed) ? parsed : [parsed];
     return list.flatMap((p) => {
@@ -28,19 +29,26 @@ function win32List(): ProcessRow[] {
     });
 }
 
-function posixList(): ProcessRow[] {
-    const out = execFileSync('ps', ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8', timeout: 20_000, maxBuffer: 32 * 1024 * 1024 });
+function parsePosixList(out: string): ProcessRow[] {
     return out.split('\n').flatMap((line) => {
         const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
         return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3]! }] : [];
     });
 }
 
+function win32List(): ProcessRow[] {
+    return parseWin32List(execFileSync(resolveProgram('powershell'), ['-NoProfile', '-Command', WIN32_LIST_SCRIPT], { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true }));
+}
+
+function posixList(): ProcessRow[] {
+    return parsePosixList(execFileSync(resolveProgram('ps'), ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8', timeout: 20_000, maxBuffer: 32 * 1024 * 1024 }));
+}
+
 export const systemSweepIo: SweepIo = {
     list: () => (process.platform === 'win32' ? win32List() : posixList()),
     end: (pid) => {
         try {
-            if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
+            if (process.platform === 'win32') execFileSync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
             else process.kill(pid, 'SIGKILL');
         } catch {
             // already gone
@@ -63,6 +71,57 @@ export function sweepLeftoverProviders(
     const found = leftoverProviders(rows, sessions, process.pid);
     for (const { agent, pids } of found) {
         for (const pid of pids) io.end(pid);
+        log(`[genie] leftover providers: ended ${pids.length} process(es) still running ${agent}'s session from a previous Genie (${pids.join(', ')})`);
+    }
+    return found;
+}
+
+/**
+ * THE SAME SWEEP, OFF THE LOOP (beta.53 freezes: measured on genie-test-windows, the synchronous listing held main ~2 s
+ * at every boot, before any agent could resume). The listing and each end are child processes Genie waits for without
+ * holding the event loop; the rules (`leftoverProviders`) and what is logged are the synchronous sweep's.
+ */
+export interface SweepIoAsync {
+    list(): Promise<ProcessRow[]>;
+    end(pid: number): Promise<void>;
+}
+
+const execFileAsync = promisify(execFile);
+
+export const systemSweepIoAsync: SweepIoAsync = {
+    list: async () => {
+        if (process.platform === 'win32') {
+            const { stdout } = await execFileAsync(resolveProgram('powershell'), ['-NoProfile', '-Command', WIN32_LIST_SCRIPT], { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+            return parseWin32List(stdout);
+        }
+        const { stdout } = await execFileAsync(resolveProgram('ps'), ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8', timeout: 20_000, maxBuffer: 32 * 1024 * 1024 });
+        return parsePosixList(stdout);
+    },
+    end: async (pid) => {
+        try {
+            if (process.platform === 'win32') await execFileAsync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { timeout: 20_000, windowsHide: true });
+            else process.kill(pid, 'SIGKILL');
+        } catch {
+            // already gone
+        }
+    },
+};
+
+export async function sweepLeftoverProvidersAsync(
+    sessions: readonly { readonly name: string; readonly threadId: string | null }[],
+    io: SweepIoAsync = systemSweepIoAsync,
+    log: (line: string) => void = (line) => console.log(line),
+): Promise<Array<{ agent: string; pids: number[] }>> {
+    let rows: ProcessRow[];
+    try {
+        rows = (await io.list()).filter((r) => r.pid !== process.pid);
+    } catch (error) {
+        log(`[genie] leftover providers: could not list processes, nothing swept (${error instanceof Error ? error.message : String(error)})`);
+        return [];
+    }
+    const found = leftoverProviders(rows, sessions, process.pid);
+    for (const { agent, pids } of found) {
+        await Promise.all(pids.map((pid) => io.end(pid)));
         log(`[genie] leftover providers: ended ${pids.length} process(es) still running ${agent}'s session from a previous Genie (${pids.join(', ')})`);
     }
     return found;

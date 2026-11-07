@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { GenieBrowserChrome } from '../src/renderer/components/GenieBrowserChrome.js';
 import type { BrowserSnapshot } from '../src/main/genie-browser-window.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE GENIE BROWSER WINDOW'S CHROME (beta.35 item 36, step 2 — Genie 1's renderer/pages/testing-browser.tsx): the title
@@ -12,10 +13,19 @@ import type { BrowserSnapshot } from '../src/main/genie-browser-window.js';
 
 const presets = [{ id: 'fit', label: 'Fit' }, { id: 'desktop', label: 'Desktop 1280' }, { id: 'laptop', label: 'Laptop 1024' }, { id: 'tablet', label: 'Tablet 768' }, { id: 'mobile', label: 'Mobile 390' }];
 const tab = (id: string, over: Partial<BrowserSnapshot['tabs'][number]> = {}) => ({ id, url: `https://${id}.gen/`, title: null, loading: false, canGoBack: false, canGoForward: false, error: null, ...over });
-const snap = (over: Partial<BrowserSnapshot> = {}): BrowserSnapshot => ({ tabs: [], active: null, presetId: 'fit', presets, sites: ['tynn.gen', 'moic.gen'], ...over });
+const snap = (over: Partial<BrowserSnapshot> = {}): BrowserSnapshot => ({ notice: null, tabs: [], active: null, presetId: 'fit', presets, sites: ['tynn.gen', 'moic.gen'], ...over });
 const noop = () => {};
 const handlers = { onNavigate: noop, onOpen: noop, onActivate: noop, onClose: noop, onNewTab: noop, onBack: noop, onForward: noop, onReload: noop, onPreset: noop };
 const render = (s: BrowserSnapshot, extra: { refusal?: string | null } = {}) => renderToStaticMarkup(<GenieBrowserChrome snapshot={s} refusal={extra.refusal ?? null} {...handlers} />);
+
+describe('a notice', () => {
+    it('says in its own line what the browser cannot do now', () => {
+        expect(render(snap({ notice: 'Genie sites need Genie open' }))).toMatch(/data-browser-notice=""[^>]*>[\s\S]*?Genie sites need Genie open/);
+    });
+    it('CONTROL: none, nothing drawn', () => {
+        expect(render(snap())).not.toContain('data-browser-notice');
+    });
+});
 
 describe('the tabs', () => {
     it('each tab by its title (else its address), the active one marked, a × each, and +', () => {
@@ -32,8 +42,8 @@ describe('the tabs', () => {
 describe('the toolbar follows the ACTIVE tab', () => {
     it('back and forward as the page allows; the address is the page’s, in a text field with the lock', () => {
         const html = render(snap({ tabs: [tab('tynn', { canGoBack: true, url: 'https://tynn.gen/deals' })], active: 'tynn' }));
-        expect(html).not.toMatch(/data-browser-nav="back"[^>]*disabled=""/);
-        expect(html).toMatch(/data-browser-nav="forward"[^>]*disabled=""/);
+        expect(control(html, 'data-browser-nav="back"')!.open).not.toMatch(/\sdisabled=""/);
+        expect(control(html, 'data-browser-nav="forward"')!.open).toMatch(/\sdisabled=""/);
         expect(html).toMatch(/<input[^>]*data-browser-address[^>]*/);
         expect(html).toMatch(/data-browser-address[^>]*value="https:\/\/tynn\.gen\/deals"|value="https:\/\/tynn\.gen\/deals"[^>]*data-browser-address/);
         expect(html).not.toMatch(/data-browser-address[^>]*type="url"|type="url"[^>]*data-browser-address/);

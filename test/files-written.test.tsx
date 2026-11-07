@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FilesHost } from '../src/main/files-host.js';
+import type { FilesWatchHub } from '../src/main/files-watch-hub.js';
+import { watchInto } from './helpers/watch-into.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
 
 /**
@@ -15,19 +17,21 @@ import { AgentView } from '../src/renderer/components/AgentView.js';
 describe('the host keeps when it saw each disk change', () => {
     let root: string;
     let host: FilesHost;
+    let hub: FilesWatchHub | null = null;
     let now = 1_760_000_000_000;
     beforeEach(async () => {
         root = await mkdtemp(join(tmpdir(), 'genie2-written-'));
         await mkdir(join(root, 'src'), { recursive: true });
         await writeFile(join(root, 'src', 'a.ts'), 'a\n');
         now = 1_760_000_000_000;
-        host = new FilesHost({ workspace: (id) => (id === 'tynn' ? { id: 'tynn', path: root } : null), agentsOf: () => [], eventsOf: () => [], now: () => now });
+        host = new FilesHost({ workspace: (id) => (id === 'tynn' ? { id: 'tynn', path: root } : null), agentsOf: () => [], eventsOf: () => [] });
     });
-    afterEach(async () => { await host.close(); await rm(root, { recursive: true, force: true }); });
+    afterEach(async () => { hub?.close(); hub = null; await host.close(); await rm(root, { recursive: true, force: true }); });
 
     it('diskChanges carries the path and the clock, newest first; empty before anything changed', async () => {
         expect((await host.state('tynn'))!.diskChanges).toEqual([]);
-        await host.watch('tynn');
+        // WHEN Genie saw it is the watcher's clock now (the hub stamps each path as it sees it, files-watch-hub.ts).
+        hub = watchInto(host, { id: 'tynn', path: root }, { now: () => now });
         now = 1_760_000_005_000;
         await writeFile(join(root, 'src', 'a.ts'), 'b\n');
         await vi.waitFor(async () => { expect((await host.state('tynn'))!.diskChanges).toEqual([{ path: 'src/a.ts', at: 1_760_000_005_000 }]); }, { timeout: 5_000, interval: 50 });

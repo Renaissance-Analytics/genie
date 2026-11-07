@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { RemoteAccess } from '../src/renderer/components/FeatureSurfaces.js';
 import type { RemoteSection } from '../src/renderer/features.js';
 import type { TailscaleStatus } from '../src/main/tailscale-cli.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * TAILSCALE FROM GENIE (Tynn #821; Genie 1's tailscale.status / install / up + openAuth). Remote access runs over the
@@ -10,7 +11,7 @@ import type { TailscaleStatus } from '../src/main/tailscale-cli.js';
  * the one action that moves it on: Install, Connect (which may hand back a sign-in link), Sign in. Running, it names this
  * machine on the tailnet and counts its peers.
  */
-const base: RemoteSection = { host: 'alphar', url: null, unavailable: 'Tailscale is not installed', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: true, firewall: false };
+const base: RemoteSection = { host: 'alphar', url: null, unavailable: 'Tailscale is not installed', locked: false, pin: null, devices: [], connections: [], enabled: true, firewall: false };
 const ts = (over: Partial<TailscaleStatus>): TailscaleStatus => ({ installed: true, running: false, state: 'needs-login', self: null, peers: [], authUrl: null, remedy: null, ...over });
 const render = (tailscale: TailscaleStatus | null) => renderToStaticMarkup(<RemoteAccess remote={{ ...base, tailscale }} workspaces={[]} onAction={() => {}} />);
 
@@ -25,7 +26,11 @@ describe('Settings → Remote access → Tailscale', () => {
     it('needs sign-in: Connect; with a sign-in link, Sign in opens it', () => {
         expect(render(ts({ state: 'needs-login' }))).toContain('data-action="tailscale-up"');
         const withLink = render(ts({ state: 'needs-login', authUrl: 'https://login.tailscale.com/a/abc123' }));
-        expect(withLink).toMatch(/data-action="tailscale-signin"[^>]*href="https:\/\/login\.tailscale\.com\/a\/abc123"/);
+        // A LINK, in Button's link form: an <a> to Tailscale's page, opened outside Genie.
+        const signIn = control(withLink, 'data-action="tailscale-signin"');
+        expect(signIn).toMatchObject({ tag: 'a', fancy: true, text: 'Sign in' });
+        expect(signIn!.open).toContain('href="https://login.tailscale.com/a/abc123"');
+        expect(signIn!.open).toContain('target="_blank"');
     });
 
     it('stopped (or needs an operator): the remedy, with its exact command', () => {
