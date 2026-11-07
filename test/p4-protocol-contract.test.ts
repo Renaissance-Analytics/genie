@@ -51,6 +51,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.confirmAddFromTynn': [ROOT, 'project_1'], 'workspaces.hibernate': ['work'],
     'workspaces.wake': ['work'], 'workspaces.remove': ['work'], 'workspaces.listRepos': ['work'],
     'workspaces.tynnBoard': ['work', 'all'], 'workspaces.tynnBoardAction': ['work', { kind: 'refresh' }],
+    'workspaces.tynnPage': ['work', 'wip', { view: 'attention' }],
     'workspaces.addRepo': ['work', { name: 'repo', path: 'repos/repo' }], 'workspaces.removeRepo': ['work', 'repo'],
     'workspaces.removeRepoLock': ['work', 'repo'], 'workspaces.locateRepo': ['work', 'repo', ROOT],
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],

@@ -327,7 +327,7 @@ function crumbsOf(level: BoardLevel, activeVersion: Row | null, activeStory: Row
     return crumbs;
 }
 
-function parseClaims(raw: unknown): BoardClaims | null {
+export function parseClaims(raw: unknown): BoardClaims | null {
     if (!isRow(raw)) return null;
     const mode = (BOARD_CLAIMS.modes as readonly unknown[]).includes(raw.mode) ? (raw.mode as ClaimMode) : null;
     if (mode === null) return null;

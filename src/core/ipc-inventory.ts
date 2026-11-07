@@ -79,6 +79,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:workspace-tynn-board-watch', 'protocol:workspaces.tynnBoardWatch'],
     ['genie:workspace-tynn-board-unwatch', 'protocol:workspaces.tynnBoardUnwatch'],
     ['genie:workspace-tynn-board-action', 'protocol:workspaces.tynnBoardAction'],
+    ['genie:workspace-tynn-page', 'protocol:workspaces.tynnPage'],
     ['genie:workspace-hibernate', 'protocol:workspaces.hibernate'],
     ['genie:workspace-wake', 'protocol:workspaces.wake'],
     ['genie:workspace-remove', 'protocol:workspaces.remove'],

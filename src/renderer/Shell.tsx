@@ -1,5 +1,5 @@
 import { useActivityFeeds } from './use-activity-feeds.js';
-import type { TynnBoardHost } from '../core/tynn-board.js';
+import type { TynnTabHost } from '../core/tynn-pages.js';
 import { rateLimitAlert, type Headroom } from '../core/headroom.js';
 import { deviceExpiryAlert } from '../core/device-expiry.js';
 import { PairPrompt } from './components/PairPrompt.js';
@@ -200,7 +200,7 @@ export interface ShellProps {
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
     loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
-    tynnBoard?: TynnBoardHost | undefined;
+    tynnBoard?: TynnTabHost | undefined;
     /** NOT DRAWN since 2026-10-19: a workspace's file panel shows inline or pops out. Removed with the pin model. */
     filesWorkspaceId?: string | null | undefined;
     /** Pin or unpin a workspace's file panel into the single dock slot (§4.4). */

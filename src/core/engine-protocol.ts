@@ -76,6 +76,8 @@ export const ENGINE_METHODS = [
     // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
     'engine.tynnBoardWatch',
     'engine.tynnBoardUnwatch',
+    // Other Tynn pages are read on this host's pairing and workspace registry, for local windows only.
+    'engine.tynnPage',
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',
