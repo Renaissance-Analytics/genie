@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chatMessages } from '../src/core/chat-view.js';
 import { agentRecord, mintAgentId, type AgentId } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
@@ -61,7 +62,69 @@ async function rig(options: { asleep?: boolean; cap?: string; sessionEvents?: bo
 }
 
 describe('mail wakes an agent in genie-host', () => {
-    it('Tynn #672: IDLE, one refused handoff, then timers alone deliver the actual message within 5 s exactly once', async () => {
+    it('Tynn #672 (A) RETRY: IDLE, one refused handoff, then timers alone deliver that message id within 5 s exactly once', async () => {
+        const r = await rig({ sessionEvents: false });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        const handOff = vi.spyOn(r.host, 'handOff');
+        try {
+            expect(r.host.start(r.atlas, process.cwd())).toEqual({ ok: true });
+            expect(r.host.prompt(r.atlas.id, 'warm up', 'you')).toBe(true);
+            const fake = fakes.get(r.atlas.id)!;
+            fake.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(r.host.probe(r.atlas.id)?.turnState).toBe('idle');
+            expect(r.host.probe(r.atlas.id)?.cooling).toBe(false);
+            expect(r.host.inTurn(r.atlas.id)).toBe(false);
+            expect(r.host.deliverable(r.atlas.id)).not.toBeNull();
+            expect(fake.prompts).toEqual(['warm up']);
+            await r.host.settled();
+            handOff.mockClear();
+
+            handOff.mockImplementationOnce(() => { throw new Error('injected transient handoff refusal'); });
+            const text = 'The deployment finished; the requested result is ready.';
+            const arrivedAt = Date.now();
+            const message = await r.inbox.send({ from: r.other.id, to: r.atlas.id, text });
+            expect(handOff).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1_500);
+            expect(handOff.mock.results[0]?.type).toBe('throw');
+            expect(handOff.mock.results[0]?.value).toEqual(new Error('injected transient handoff refusal'));
+
+            // Only timer progression follows the one arrival; no input, receive, ready or session event can rescue it.
+            await vi.advanceTimersByTimeAsync(3_500);
+            expect(Date.now() - arrivedAt).toBe(5_000);
+            const successfulForMessage = () => handOff.mock.calls.filter((call, index) => {
+                const result = handOff.mock.results[index];
+                return result?.type === 'return' && result.value?.queued === null
+                    && call[3]?.mail?.some((m) => m.id === message.id);
+            });
+            expect(handOff).toHaveBeenCalledTimes(2);
+            expect(successfulForMessage()).toHaveLength(1);
+            expect(fake.prompts.slice(1)).toHaveLength(1); // the fake provider actually accepted the retry
+
+            const deliveredMail = () => r.host.rowsFor(r.atlas.id).flatMap(({ event }) =>
+                event.kind === 'message' && event.speaker === 'peer' && event.peerName === 'genie' ? event.mail ?? [] : []);
+            expect(deliveredMail()).toEqual([expect.objectContaining({ id: message.id, from: r.other.id, fromName: 'other', text })]);
+            const deliveredCards = () => chatMessages({ agent: { ...r.atlas, fidelity: 'declared' },
+                session: r.host.probe(r.atlas.id), rows: r.host.rowsFor(r.atlas.id) })
+                .filter((card) => card.mail?.some((m) => m.id === message.id));
+            expect(deliveredCards().map(({ delivered, mail }) => ({ delivered, mail }))).toEqual([
+                { delivered: true, mail: [{ id: message.id, from: 'other', subject: text }] },
+            ]);
+
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(handOff).toHaveBeenCalledTimes(2);
+            expect(successfulForMessage()).toHaveLength(1);
+            expect(fake.prompts.slice(1)).toHaveLength(1);
+            expect(deliveredMail()).toHaveLength(1);
+            expect(deliveredCards()).toHaveLength(1);
+        } finally {
+            handOff.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
+    // NEXT CHUNK: deliberately plain RED until the provider gets the sender/body instead of an unread/collect nudge.
+    it('Tynn #672 (B) BODY / no-nudge — NEXT CHUNK: actual sender and body reach the provider within 5 s exactly once', async () => {
         const r = await rig({ sessionEvents: false });
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
         const handOff = vi.spyOn(r.host, 'handOff');
@@ -99,6 +162,7 @@ describe('mail wakes an agent in genie-host', () => {
                 deliveredPrompts: [expect.stringContaining(text)],
             });
             // The card IS the message: its sender/body/identity reach the chat as well as the provider, with no nudge.
+            expect(fake.prompts.slice(1).join('\n')).toContain('other');
             expect(fake.prompts.slice(1).join('\n')).not.toMatch(/unread AgentInbox|collect .*agentinbox receive/);
             const deliveredMail = () => r.host.rowsFor(r.atlas.id).flatMap(({ event }) =>
                 event.kind === 'message' && event.speaker === 'peer' && event.peerName === 'genie' ? event.mail ?? [] : []);
