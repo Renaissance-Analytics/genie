@@ -468,6 +468,10 @@ jobs:
       - name: a hung window is ended and opened again
         if: ${{ !cancelled() }}
         run: timeout 540 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/hang-cdp.mjs
+      # A WINDOW'S PAGE THAT ENDS IS BROUGHT BACK (Tynn #386; the owner's black window of 2026-11-06, an oom).
+      - name: a window's page that ends is brought back
+        if: ${{ !cancelled() }}
+        run: timeout 420 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/renderer-crash-cdp.mjs
 
       - name: electron's own output
         # `always()`, not `failure()`: a timeout-cancelled job is neither success nor failure
@@ -749,6 +753,13 @@ jobs:
         run: |
           node scripts/hang-cdp.mjs
           if ($LASTEXITCODE -ne 0) { throw "hang-cdp failed (exit $LASTEXITCODE)" }
+      # A WINDOW'S PAGE THAT ENDS IS BROUGHT BACK, as on Linux above.
+      - name: a window's page that ends is brought back
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          node scripts/renderer-crash-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "renderer-crash-cdp failed (exit $LASTEXITCODE)" }
 
       - name: the app's own output, on failure
         if: failure()

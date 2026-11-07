@@ -59,6 +59,7 @@ import { InstallScreen } from './components/InstallScreen.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { SafeModeBanner } from './components/SafeModeBanner.js';
 import { HangNoticeBar } from './components/HangNoticeBar.js';
+import { RendererNoticeBar } from './components/RendererNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 
@@ -565,6 +566,13 @@ export function Shell({
                 notice={snapshot.hangNotice}
                 onStopAll={async () => ((await onFeature({ kind: 'hangNotice.stopAll' })) as ActOutcome | undefined) ?? { ok: true }}
                 onDismiss={async () => ((await onFeature({ kind: 'hangNotice.dismiss' })) as ActOutcome | undefined) ?? { ok: true }}
+                crashReport={crashReport}
+            />
+
+            {/* THE BROUGHT-BACK PAGE (Tynn #386): this window's page ended and was reloaded — the agents kept running. */}
+            <RendererNoticeBar
+                notice={snapshot.rendererNotice}
+                onDismiss={async () => ((await onFeature({ kind: 'rendererNotice.dismiss' })) as ActOutcome | undefined) ?? { ok: true }}
                 crashReport={crashReport}
             />
 
