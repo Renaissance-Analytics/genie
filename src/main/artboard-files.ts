@@ -41,7 +41,7 @@ export async function readArtboardFiles(root: string, io: ArtifactIo = IO): Prom
         let canonical: string;
         try {
             const stat = await io.lstat(directory, { bigint: true });
-            if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('not a regular board directory');
+            if (!stat.isDirectory() && !stat.isSymbolicLink()) throw new Error('not a regular board directory'); // BREAK PROBE: a linked board folder is followed
             canonical = await io.realpath(directory);
         } catch (error) { return (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? { posts: [] } : { posts: [], error: 'The ArtBoard directory could not be inspected.' }; }
         let posts: BoardPost[];
