@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BLOB_READ_BYTES, type BlobSource } from '../src/core/local-blobs.js';
 import { LocalFilesContent } from '../src/main/local-files-content.js';
+import { fileSymlinkSkipReason, itWithFileSymlinks } from './helpers/file-symlinks.js';
 
 const load = async () => { const file: string = '../src/main/artboard-files.js'; return import(file); };
 const cleanups: Array<() => Promise<void>> = [];
@@ -65,11 +66,46 @@ it('a missing artifact stays listed with its stat failure and refuses a blob ope
     expect(board.posts).toHaveLength(1); expect(board.posts[0].artifact).toMatchObject({ size: null, error: expect.stringMatching(/missing|not found|ENOENT/i) });
     await expect(board.posts[0].artifact.open()).rejects.toThrow(/missing|not found|ENOENT/i); expect(f.io.open).not.toHaveBeenCalled();
 });
-it('a symlink outside the board cannot become an artifact source or expose foreign bytes', async () => {
+// Needs a FILE symlink: where this machine cannot make one (a standard Windows user, EPERM), the row is skipped with the
+// reason, never run into a setup failure (test/helpers/file-symlinks.ts). On CI it runs: the row below that checks so.
+itWithFileSymlinks('a symlink outside the board cannot become an artifact source or expose foreign bytes', async () => {
     const f = await fixture(1), foreign = join(f.root, 'outside.png'); await writeFile(foreign, 'outside-secret'); await rm(join(f.board, 'image.png')); await symlink(foreign, join(f.board, 'image.png'), 'file');
     const { readArtboardFiles } = await load(), board = await readArtboardFiles(f.root, f.io);
     expect(board.posts).toHaveLength(1); await expect(board.posts[0].artifact.open()).rejects.toThrow(/confined|symbolic|regular|board/i);
     expect(f.io.open).not.toHaveBeenCalled(); expect(JSON.stringify(board)).not.toContain('outside-secret');
+});
+it('CONTROL: on CI the file-symlink row above runs; it is never skipped there', () => {
+    // GitHub's runners (Administrator on Windows, any user on Linux) can make one; a skip there would hide the guard.
+    if (process.env.GITHUB_ACTIONS === 'true') expect(fileSymlinkSkipReason).toBeNull();
+});
+/*
+ * A BOARD FOLDER THAT IS A LINK OUT (the beta.60 suite on Azure: a standard user cannot make a file symlink, but anyone can
+ * make a JUNCTION, `mklink /J`, with no privilege). A post's `file` is a bare file name (core/artboard.ts isBareFilename),
+ * so the one folder a link can stand for is the board itself: `.artboard` -> a folder outside, with its own index and an
+ * image of foreign bytes. Nothing in it may be listed or opened. On Windows a junction; elsewhere a directory symlink.
+ */
+it('a board folder that is a link outside (a junction on Windows) is not read: no post, no foreign bytes', async () => {
+    const f = await fixture(1);
+    // Elsewhere: a real board with the fixture's own index (so it parses) and an image of foreign bytes.
+    const elsewhere = join(f.root, 'elsewhere'), foreign = join(elsewhere, '.artboard');
+    await mkdir(foreign, { recursive: true });
+    await writeFile(join(foreign, 'index.json'), await readFile(join(f.board, 'index.json'), 'utf8'));
+    await writeFile(join(foreign, 'image.png'), 'outside-secret');
+    const { readArtboardFiles } = await load();
+    // CONTROL: that board IS read where it is a real folder: one post, its artifact listed. Refused through a link below
+    // for the link, not because the board was unreadable.
+    const direct = await readArtboardFiles(elsewhere);
+    expect(direct.posts).toHaveLength(1);
+    expect(direct.posts[0].artifact.size).toBe('outside-secret'.length);
+    await rm(f.board, { recursive: true, force: true });
+    await symlink(foreign, f.board, process.platform === 'win32' ? 'junction' : 'dir');
+    // CONTROL: the link really leads out (a link that was not made proves nothing).
+    expect(await realpath(f.board)).toBe(await realpath(foreign));
+    const board = await readArtboardFiles(f.root, f.io);
+    expect(board.posts).toEqual([]);
+    expect(JSON.stringify(board)).not.toContain('outside-secret');
+    expect(f.io.open).not.toHaveBeenCalled();
+    expect(f.io.readFile).not.toHaveBeenCalled();
 });
 it.each(['size', 'same-size'])('refuses a %s artifact edit between stat-only listing and blob.open', async change => {
     const f = await fixture(1), { readArtboardFiles } = await load(), board = await readArtboardFiles(f.root, f.io);
