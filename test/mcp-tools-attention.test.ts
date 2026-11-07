@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attentionTools, type AttentionToolsDeps } from '../src/main/mcp-tools-attention.js';
 import type { Caller } from '../src/main/mcp-tools.js';
+import { itWithFileSymlinks } from './helpers/file-symlinks.js';
 
 /**
  * THE ATTENTION TOOL (§6.3): `openFileForUser` puts a file in front of the person — a path CONFINED to the caller's
@@ -58,18 +59,7 @@ describe('openFileForUser', () => {
 });
 
 /** Whether this machine lets an unprivileged process make a FILE symlink (Windows needs Developer Mode or admin). */
-const canFileSymlink = (() => {
-    const probe = mkdtempSync(join(tmpdir(), 'genie2-symprobe-'));
-    try {
-        writeFileSync(join(probe, 't'), 'x');
-        symlinkSync(join(probe, 't'), join(probe, 'l'), 'file');
-        return true;
-    } catch {
-        return false;
-    } finally {
-        rmSync(probe, { recursive: true, force: true });
-    }
-})();
+// Where this machine cannot make a file symlink, the rows that need one are skipped with the reason (test/helpers/file-symlinks.ts).
 
 /*
  * genie#1354: the confinement is the SHARED one (workspace-confine.ts), so a link inside the workspace that points out of
@@ -102,7 +92,7 @@ describe('openFileForUser — after links (genie#1354)', () => {
         expect(opened).toEqual([]);
     });
 
-    it.runIf(canFileSymlink)('a FILE symlink inside the workspace that points out is refused', async () => {
+    itWithFileSymlinks('a FILE symlink inside the workspace that points out is refused', async () => {
         await symlink(join(outside, 'secret.txt'), join(ws, 'innocent.md'), 'file');
         expect(await callIn({ path: 'innocent.md' })).toMatchObject({ ok: false, isError: true });
         expect(opened).toEqual([]);
