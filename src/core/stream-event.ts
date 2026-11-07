@@ -39,8 +39,11 @@ export interface NoticeMail {
 
 export type StreamEvent =
     | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[]; mail?: readonly NoticeMail[]; pending?: { id: string; content: readonly PromptBlock[] | null } }
-    /** A queued message's receipt. Separate rows preserve the original message, time and append-only wire. */
-    | { kind: 'prompt_delivery'; id: string; status: 'sent' | 'undelivered' | 'discarded' }
+    /**
+     * A queued message's receipt. Separate rows preserve the original message, time and append-only wire. `unconfirmed`:
+     * steered into a running turn with an uncertain outcome (Codex, Tynn #440) — maybe delivered, so never sent again.
+     */
+    | { kind: 'prompt_delivery'; id: string; status: 'sent' | 'undelivered' | 'discarded' | 'unconfirmed' }
     | {
           kind: 'think';
           text: string;
