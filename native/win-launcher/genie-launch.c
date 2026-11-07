@@ -20,10 +20,16 @@
  *     process (the caller's limit) closes the job, and the job ends every process in it. A child that ends by itself
  *     leaves what it started as it is: the kill is lifted first (the behaviour without the job).
  *
- * Exit 125 = this could not start the child (the reason on stderr). No CRT beyond what MSVC links; no other dependency.
+ *   genie-launch.exe pipe-owner-only <pipe>
+ *     Not a launch: genie-host's named pipe gets a protected DACL, its user and SYSTEM only (Tynn #398). Node cannot
+ *     give a pipe a descriptor of its own, so genie-host runs this once it has bound the pipe.
+ *
+ * Exit 125 = this could not start the child, or set the pipe's DACL (the reason on stderr). No CRT beyond what MSVC links; no other dependency.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
@@ -179,9 +185,63 @@ static int job(int argc, wchar_t **argv) {
     return (int)code;
 }
 
+/*
+ * pipe-owner-only <pipe>: the named pipe gets a protected DACL allowing this process's user and SYSTEM, nothing else.
+ * Node creates its pipes with Windows' default descriptor, and offers no way to pass one, so this opens the pipe it
+ * serves (as a client, with WRITE_DAC; the default lets the creator's own user do that) and sets the DACL on it. A
+ * pipe's descriptor belongs to the pipe, not to one instance, so the instances Node creates later are covered too.
+ * FILE_ALL_ACCESS keeps FILE_CREATE_PIPE_INSTANCE, which the server needs to go on creating them. Prints the
+ * descriptor as read back (SDDL) and exits 0; anything else exits 125 with the reason on stderr.
+ */
+static int pipe_owner_only(int argc, wchar_t **argv) {
+    if (argc != 3) { fwprintf(stderr, L"genie-launch: pipe-owner-only <pipe>\n"); return LAUNCH_FAILED; }
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) { say(L"the process token could not be read", GetLastError()); return LAUNCH_FAILED; }
+    DWORD size = 0;
+    GetTokenInformation(token, TokenUser, NULL, 0, &size);
+    TOKEN_USER *user = (TOKEN_USER *)malloc(size);
+    if (!user || !GetTokenInformation(token, TokenUser, user, size, &size)) { say(L"the token's user could not be read", GetLastError()); return LAUNCH_FAILED; }
+    CloseHandle(token);
+    wchar_t *sid = NULL;
+    if (!ConvertSidToStringSidW(user->User.Sid, &sid)) { say(L"the user's SID could not be written", GetLastError()); return LAUNCH_FAILED; }
+    wchar_t sddl[256];
+    if (swprintf(sddl, 256, L"D:P(A;;FA;;;%ls)(A;;FA;;;SY)", sid) < 0) { say(L"the descriptor could not be written", ERROR_INSUFFICIENT_BUFFER); return LAUNCH_FAILED; }
+    LocalFree(sid);
+    free(user);
+    PSECURITY_DESCRIPTOR wanted = NULL;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &wanted, NULL)) { say(L"the descriptor could not be built", GetLastError()); return LAUNCH_FAILED; }
+    BOOL present = FALSE, defaulted = FALSE;
+    PACL dacl = NULL;
+    if (!GetSecurityDescriptorDacl(wanted, &present, &dacl, &defaulted) || !present) { say(L"the descriptor has no DACL", GetLastError()); return LAUNCH_FAILED; }
+
+    HANDLE pipe = INVALID_HANDLE_VALUE;
+    for (int tries = 0; tries < 20; tries++) {
+        pipe = CreateFileW(argv[2], READ_CONTROL | WRITE_DAC, 0, NULL, OPEN_EXISTING, 0, NULL);
+        if (pipe != INVALID_HANDLE_VALUE) break;
+        if (GetLastError() != ERROR_PIPE_BUSY) { say(L"the pipe could not be opened", GetLastError()); return LAUNCH_FAILED; }
+        WaitNamedPipeW(argv[2], 250);
+    }
+    if (pipe == INVALID_HANDLE_VALUE) { say(L"the pipe stayed busy", ERROR_PIPE_BUSY); return LAUNCH_FAILED; }
+    DWORD set = SetSecurityInfo(pipe, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, dacl, NULL);
+    if (set != ERROR_SUCCESS) { say(L"the pipe's DACL could not be set", set); CloseHandle(pipe); return LAUNCH_FAILED; }
+    PSECURITY_DESCRIPTOR now = NULL;
+    DWORD got = GetSecurityInfo(pipe, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, NULL, NULL, &now);
+    CloseHandle(pipe);
+    LocalFree(wanted);
+    if (got != ERROR_SUCCESS) { say(L"the pipe's DACL could not be read back", got); return LAUNCH_FAILED; }
+    wchar_t *text = NULL;
+    if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(now, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &text, NULL)) { say(L"the DACL read back could not be written", GetLastError()); return LAUNCH_FAILED; }
+    wprintf(L"%ls\n", text);
+    fflush(stdout);
+    LocalFree(text);
+    LocalFree(now);
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv) {
     if (argc >= 2 && wcscmp(argv[1], L"detach") == 0) return detach(argc, argv);
     if (argc >= 2 && wcscmp(argv[1], L"job") == 0) return job(argc, argv);
-    fwprintf(stderr, L"genie-launch: detach <log file> <program> [args...] | job <program> [args...]\n");
+    if (argc >= 2 && wcscmp(argv[1], L"pipe-owner-only") == 0) return pipe_owner_only(argc, argv);
+    fwprintf(stderr, L"genie-launch: detach <log file> <program> [args...] | job <program> [args...] | pipe-owner-only <pipe>\n");
     return LAUNCH_FAILED;
 }
