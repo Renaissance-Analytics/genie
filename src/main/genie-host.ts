@@ -15,6 +15,7 @@ import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
+import { readTynnPage } from './tynn-page-client.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
@@ -42,13 +43,15 @@ import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
-import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
-import { killProcessAsync, listProcessesAsync } from './process-list.js';
+import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
+import { windowReleased } from './window-release.js';
 import { channelFrom } from '../core/update-channel.js';
 import type { ReleaseLike } from '../core/update-notes.js';
 import { hostIdleMs, hostIdleStep } from '../core/host-idle.js';
 import { NO_BROWSER_HERE, NO_UPDATES_HERE, hostCapabilities } from '../core/host-runtime.js';
 import { fts5Refusal } from './fts5-check.js';
+import { restrictHostPipe } from './host-pipe-acl.js';
 import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
@@ -107,6 +110,7 @@ import { Store } from './store.js';
 import { HostRegistry } from './host-registry.js';
 import { wireHostMailWake } from './host-mail-wake.js';
 import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
+import { TYNN_ISSUES_FEED } from './tynn-issues-live.js';
 import type { SocketLike } from './issue-watch-client.js';
 import { dialTynnSocket } from './tynn-socket.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
@@ -191,6 +195,10 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
+    // THE PIPE ANSWERS ITS OWN USER ONLY (Tynn #398; host-pipe-acl.ts): on Windows, before host.json names it to anyone.
+    const pipeAcl = await restrictHostPipe(server, endpoint);
+    if (pipeAcl?.ok === true) lifecycleLog(`host pipe: its user and SYSTEM only (${pipeAcl.sddl})`);
+    else if (pipeAcl) { say(`the host pipe keeps Windows' default access: ${pipeAcl.reason}`); lifecycleLog(`host pipe: NOT restricted: ${pipeAcl.reason}`); }
     /*
      * SAFE MODE (Tynn #386; safe-mode-host.ts), opened here: only the host that holds the endpoint reads and removes the
      * clean-exit marker (a second host exited above, touching nothing). With no marker the last run did not end cleanly,
@@ -257,6 +265,9 @@ async function main(): Promise<void> {
     if (safeMode.active()) void Promise.all([registryStore.readRunningAtQuit(), registryStore.readInterruptedAtQuit()]).then(([running, interrupted]) => safeMode.wasRunning([...running, ...interrupted]), () => {});
     const hostRegistry = new HostRegistry(registryStore);
     await hostRegistry.refresh();
+    const hiddenWorkspaces = () => hostRegistry.workspaceStates().filter((w) => w.asleep === true).map((w) => w.id);
+    own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
+    own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to), () => hostRegistry.mailVisibilityVersion());
     let engineRef: SessionEngineServer | null = null;
     const approvals = new ApprovalQueue({
         autoApproved: (caller) => hostRegistry.listAgents().some((a) => a.id === caller.agentId && a.autoApprove === true),
@@ -312,6 +323,7 @@ async function main(): Promise<void> {
         roster: () => hostRegistry.listAgents(),
         slugs: () => hostRegistry.workspaceSlugs(),
         defaultAgentOf: (workspaceId) => hostRegistry.defaultAgentOf(workspaceId),
+        refusalForRecipient: (text, workspaceId) => hostRegistry.mailRefusal(text, workspaceId),
         enabled: (workspaceId) => settings.snapshotFor(workspaceId).app_inbox !== false,
         siteHosts: (workspaceId) => hostingNow?.sites.list(workspaceId).map((s) => s.host) ?? [],
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
@@ -340,7 +352,7 @@ async function main(): Promise<void> {
             settings,
             appEnv: (source) => appInboxDoor.envFor(source),
             elevate: (steps) => hostingElevation.run(steps),
-            workspaces: () => hostRegistry.listWorkspaces(),
+            workspaces: () => hostRegistry.workspaceStates(),
             // Safe mode: no site and no stopped engine starts by itself; the held sites go on the banner.
             safeMode: safeNow,
             heldSite: (siteId, name) => safeMode.hold('site', { id: siteId, name }),
@@ -361,9 +373,10 @@ async function main(): Promise<void> {
     /** A registered workspace's folder takes Genie's files only once trusted; with no hosting, none is. */
     const hostMayWriteInto = (folder: string): Promise<boolean> => (hostingStack
         ? hostingStack.trust.mayWriteInto(folder)
-        : Promise.resolve(!hostRegistry.listWorkspaces().some((w) => w.path === folder)));
+        : Promise.resolve(!hostRegistry.workspaceStates().some((w) => w.path === folder)));
     const hostingService = hostingStack ? new HostingService(hostingStack, {
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
+        registeredFolders: () => hostRegistry.workspaceStates().map((w) => w.path),
         elevation: hostingElevation,
         // An engine's dependents name the running processes; the workspaces are the registry's.
         onChange: (listener) => {
@@ -462,6 +475,15 @@ async function main(): Promise<void> {
         send: (owner, event) => { engineRef?.tynnBoardEvent(owner, event); },
         log: say,
     });
+    const tynnIssues = new TynnBoardHub({
+        tynn: () => hostTynn,
+        socket: tynnSocket,
+        schedule: tynnTimer,
+        projectFor: workspaceTynnProject,
+        feed: TYNN_ISSUES_FEED,
+        send: (owner, event) => { engineRef?.tynnIssuesEvent(owner, event); },
+        log: say,
+    });
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now; and once the account opens.
     void tynnOpening.then((account) => {
         account.onChange(() => { issueWatch.restart(); });
@@ -548,7 +570,7 @@ async function main(): Promise<void> {
             stopHosted: async () => { browserService.quit(); await stopHostedOnce(); },
         },
         startHelper: (launch) => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); },
-        defaultLaunch: { file: process.execPath, args: ['--updater'] },
+        defaultLaunch: updaterDefaultLaunch(process.env, process.execPath),
         windowConnected: () => engineRef?.windowConnected() ?? false,
         exit: () => { void shutdown('an update is installing'); },
         log: (line) => { say(line); lifecycleLog(line); },
@@ -579,6 +601,8 @@ async function main(): Promise<void> {
     const hangWatchdog = new HangWatchdog({
         write: (record) => { writeCrashRecord(join(runtime, 'crash'), record); crashState.recorded(record); },
         kill: (pid) => killProcessAsync(pid),
+        // The new window after the ended one has let go of its process and sockets (Tynn #400), bounded at 10 s.
+        released: (pid) => windowReleased(pid, { alive: pidAlive, sockets: tcpSocketsOwnedByAsync }),
         alive: pidAlive,
         hostRss: () => process.memoryUsage.rss(),
         cpuMs: () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; },
@@ -688,6 +712,18 @@ async function main(): Promise<void> {
         },
         issueWatch,
         tynnBoard,
+        tynnIssues,
+        tynnPages: {
+            read: async (workspaceId, page, query) => {
+                // Opening has its own deadline; never mistake a pairing still opening for a signed-out owner.
+                const account = await tynnOpening;
+                return readTynnPage({
+                    signedIn: () => account.status().signedIn === true,
+                    projectFor: workspaceTynnProject,
+                    request: (path, init) => account.request(path, init),
+                }, workspaceId, page, query);
+            },
+        },
         files: {
             subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
             unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
@@ -695,7 +731,8 @@ async function main(): Promise<void> {
         },
     });
     engineRef = engine;
-    files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), gitTree: gitTreeStatus, repoStatus, log: say });
+    files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
+    stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
     const host = new SessionHost({
         userData: home,
@@ -799,6 +836,7 @@ async function main(): Promise<void> {
     const openFlows = (databasePath: string): Promise<void> => {
         flowsOpening ??= (async () => {
             const store = await FlowStore.open(home);
+            store.setHiddenWorkspaces(hiddenWorkspaces);
             // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
             await runV1FlowImport(store, { database: databasePath, workspaces: hostRegistry.listWorkspaces() }).catch((error: unknown) => say(`v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
             // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
@@ -848,7 +886,14 @@ async function main(): Promise<void> {
             clocks.push(engineFlows);
             planners.push(engineFlows.scheduler);
             // A hibernate or a wake changes what may fire: plan again on every registry write.
-            stores.onEvent((event) => { if (event.store === 'registry') engineFlows.scheduler.plan(); });
+            let flowVisibility = JSON.stringify(hiddenWorkspaces().sort());
+            stores.onEvent((event) => {
+                if (event.store !== 'registry') return;
+                engineFlows.scheduler.plan();
+                const key = JSON.stringify(hiddenWorkspaces().sort());
+                if (key === flowVisibility) return;
+                flowVisibility = key; store.visibilityChanged();
+            });
             lifecycleLog(`flows open: ${store.list().length} flow(s)`);
         })();
         return flowsOpening;
@@ -887,7 +932,14 @@ async function main(): Promise<void> {
             clocks.push(scheduler);
             planners.push(scheduler);
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
-            stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
+            let processVisibility = JSON.stringify(hiddenWorkspaces().sort());
+            stores.onEvent((event) => {
+                if (event.store !== 'registry') return;
+                scheduler.plan();
+                const key = JSON.stringify(hiddenWorkspaces().sort());
+                if (key === processVisibility) return;
+                processVisibility = key; processBook.visibilityChanged();
+            });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             processBookNow = processBook;
             const restored = processBook.restore();

@@ -75,7 +75,7 @@ let id = 0;
 const pending = new Map();
 ws.addEventListener('message', (e) => {
     const frame = JSON.parse(e.data);
-    pending.get(frame.id)?.(frame);
+    { const done = pending.get(frame.id); if (typeof done === 'function') done(frame); }
     pending.delete(frame.id);
 });
 const evaluate = (expression) =>

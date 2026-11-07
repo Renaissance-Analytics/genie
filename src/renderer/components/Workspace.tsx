@@ -1,10 +1,13 @@
 import type { ActivityFeed } from '../../core/activity-feed.js';
+import { flushSync } from 'react-dom';
+import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import { useMinuteTick } from '../use-activity-feeds.js';
 import { PathBrowse } from './HostPathPicker.js';
 import { IssueWatchPanel } from './IssueWatchPanel.js';
-import { TynnBoardTab } from './TynnBoardPanel.js';
+import { TynnTab } from './TynnTab.js';
 import { ErrorBoundary } from './ErrorBoundary.js';
-import type { TynnBoardHost } from '../../core/tynn-board.js';
+import type { TynnTabHost } from '../../core/tynn-pages.js';
+import type { TynnIssuesHost } from '../../core/tynn-issues.js';
 import type { IssueWatchPanelView } from '../../core/issue-watch.js';
 import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import { DesignedTab } from './DesignedTab.js';
@@ -173,7 +176,9 @@ export interface WorkspaceProps {
     /** The GitHub panel's Refresh (Tynn reads the repos now). Absent = no Refresh. */
     onRefreshIssueWatch?: (() => void) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295): the board of THIS workspace's linked project. Absent = no Tynn tab. */
-    tynnBoard?: TynnBoardHost | undefined;
+    tynnBoard?: TynnTabHost | undefined;
+    /** The Tynn tab's Issues page (genie#1295 I1); absent = the tab has no Issues page. */
+    tynnIssues?: TynnIssuesHost | undefined;
     /** A Watched repos checkbox (Tynn's switch). Absent = the switches are shown, not settable. */
     onSetIssueWatchRepo?: ((owner: string, repo: string, change: { enabled: boolean } | { includeUpstream: boolean }) => void) | undefined;
     panel?: 'files' | null | undefined;
@@ -229,8 +234,9 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
+    const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
     const wsColor = useWorkspaceColor(workspace.id);
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
@@ -281,18 +287,6 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
     /** A pane size the engine can be opened at, so the first paint is not the wrong shape. */
     const lastSize = useRef<{ cols: number; rows: number }>({ cols: 120, rows: 30 });
 
-    // Output and exits for EVERY terminal arrive on the same channel; the reducer drops what is
-    // not this workspace's. Subscribed once per mount, released on unmount — the old build
-    // leaked one listener per reopened panel.
-    useEffect(() => {
-        const offData = terminals.onData((id, data) => setState((s) => terminalData(s, id, data)));
-        const offExit = terminals.onExit((id, code) => setState((s) => terminalExited(s, id, code)));
-        return () => {
-            offData();
-            offExit();
-        };
-    }, [terminals]);
-
     // Re-attach to terminals already open in this workspace — a reloaded window joins a running
     // build rather than losing it (§6.5). Their scrollback comes with the open.
     // Under genie-host they survive a window restart too (the host split, P2.1), and the workspace says where it is:
@@ -313,15 +307,15 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
 
     const openTerminal = useCallback((): Promise<string> => {
         return terminals.open(workspace.id, { ...lastSize.current }).then((opened) => {
+            if (!opened) throw new Error('The terminal could not be opened; its workspace or terminal service is unavailable.');
             setState((s) => terminalOpened(s, { id: opened.id, workspaceId: workspace.id, shell: opened.shell, pid: opened.pid, exited: null }, opened.scrollback));
             return opened.id;
-        });
+        }).catch(error => { setTerminalError(error instanceof Error ? error.message : String(error)); throw error; });
     }, [terminals, workspace.id]);
 
     const closeTerminal = useCallback(
         (id: string) => {
-            terminals.close(id);
-            setState((s) => terminalClosed(s, id));
+            terminalAction(async () => { await terminals.close(id); setState((s) => terminalClosed(s, id)); }, setTerminalError);
         },
         [terminals],
     );
@@ -338,6 +332,18 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
     // LAYOUT (§6.5): the workspace's own setting decides how many panes show; the grid is for that count only.
     const layout = layoutModeFrom(ops?.settings?.values ?? {});
     const shown = visiblePanes(state, layout);
+    const terminalMembership = JSON.stringify([...new Set(onScreen === 'terminals'
+        ? shown.filter(id => state.terminals.some(terminal => terminal.id === id))
+        : onScreen.startsWith('tab:') ? (designed.tabs.find(tab => `tab:${tab.id}` === onScreen)?.cells ?? []).flatMap(cell => cell?.kind === 'terminal' && cell.ref !== null ? [cell.ref] : []) : [])]);
+    useEffect(() => {
+        const stops = (JSON.parse(terminalMembership) as string[]).map(id => watchTerminal(terminals, workspace.id, id, {
+            snapshot: joined => flushSync(() => { setState(value => ({ ...value, output: { ...value.output, [id]: joined.scrollback } })); setTerminalError(null); }),
+            data: text => flushSync(() => setState(value => terminalData(value, id, text))),
+            exit: code => flushSync(() => setState(value => terminalExited(value, id, code))),
+            error: error => setTerminalError(error.message),
+        }));
+        return () => { for (const stop of stops) stop(); };
+    }, [terminals, workspace.id, terminalMembership]);
     // SPLITS (§4.6): remembered per workspace and per arrangement; a stored split that does not fit is equal panes.
     const splits = splitsFrom(ops?.settings?.values ?? {}, layout, shown.length);
     const template = gridTemplate(layout, shown.length, splits);
@@ -476,7 +482,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                 <button
                     type="button"
                     data-terminal-add=""
-                    onClick={() => { void openTerminal(); }}
+                    onClick={() => { void openTerminal().catch(() => {}); }}
                     className="flex items-center gap-1.5 px-3 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
                 >
                     <Icon name="plus" className="h-3.5 w-3.5" />
@@ -555,10 +561,10 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                             paneId={id}
                                             output={state.output[id] ?? ''}
                                             readOnly={t.exited !== null}
-                                            onData={(data) => terminals.write(id, data)}
+                                            onData={(data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
                                             onResize={({ cols, rows }) => {
                                                 lastSize.current = { cols, rows };
-                                                terminals.resize(id, cols, rows);
+                                                terminalAction(() => terminals.resize(id, cols, rows), setTerminalError);
                                             }}
                                             root={workspace.path}
                                             onOpenFile={(file) => {
@@ -578,7 +584,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                         <button
                             type="button"
                             data-terminal-add-empty=""
-                            onClick={() => { void openTerminal(); }}
+                            onClick={() => { void openTerminal().catch(() => {}); }}
                             className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]"
                         >
                             Open a terminal
@@ -590,6 +596,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
 
     return (
         <section data-surface="workspace" data-workspace={workspace.id} className="flex h-full min-h-0 flex-col">
+            {terminalError ? <p role="alert" className="p-2 text-sm text-[var(--danger)]">{terminalError}</p> : null}
             {trustStep && onTrust ? <TrustStep step={trustStep} onTrust={onTrust} /> : null}
             {/* View header, 56px — the workspace's name and path, like the Dashboard's group header. */}
             {/*
@@ -906,8 +913,8 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
             {onScreen === 'terminals' ? <ErrorBoundary surface="Terminals" resetKeys={[workspace.id]}>{terminalsBody}</ErrorBoundary> : null}
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
             {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="GitHub" resetKeys={[workspace.id]}><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></ErrorBoundary></div> : null}
-            {/* THE TYNN TAB (genie#1295): the linked project's board, natively — no user menu, no project picker. */}
-            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnBoardTab workspaceId={workspace.id} host={tynnBoard} /></ErrorBoundary></div> : null}
+            {/* THE TYNN TAB (genie#1295): the linked project's workspace (its pages, the board among them), natively — no user menu, no project picker. */}
+            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnTab workspaceId={workspace.id} host={tynnBoard} issues={tynnIssues} /></ErrorBoundary></div> : null}
             {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
             {onScreen.startsWith('tab:') ? (() => {
                 const tab = designed.tabs.find((t) => `tab:${t.id}` === view);
@@ -941,10 +948,10 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                         output={p.ref === null ? '' : state.output[p.ref] ?? ''}
                                         Pane={Pane}
                                         root={workspace.path}
-                                        onData={(id, data) => terminals.write(id, data)}
-                                        onResize={(id, { cols, rows }) => { lastSize.current = { cols, rows }; terminals.resize(id, cols, rows); }}
+                                        onData={(id, data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
+                                        onResize={(id, { cols, rows }) => { lastSize.current = { cols, rows }; terminalAction(() => terminals.resize(id, cols, rows), setTerminalError); }}
                                         onOpenFile={(file) => { const target = workspaceFileOf(workspace.path, file); if (target) onOpenFile?.(target.path, target.line); }}
-                                        onStart={() => { if (at >= 0) void openTerminal().then((id) => placeTerminal(tab.id, at, id)); }}
+                                        onStart={() => { if (at >= 0) void openTerminal().then((id) => placeTerminal(tab.id, at, id)).catch(() => {}); }}
                                     />
                                 );
                             }

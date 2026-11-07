@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import { ReminderBook } from '../src/core/inbox-reminders.js';
+import { deliveryHeader, summarizeInboxPrompt } from './helpers/inbox-delivery.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
@@ -13,7 +14,7 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * take a turn (`run` is not `null`: not mid-turn, not starting, running), and EXACTLY ONCE PER ARRIVAL BATCH: told once,
  * not repeated; a newer message is a new batch, told at once; a new run has been told nothing. TOLD MEANS DELIVERED: a
  * notice handed out is sending until it settles — delivered, it is told; not (refused, crashed, stopped), it is untold
- * and told again. The text says how many and how to collect (agentinbox receive). The book is pure; the composed service pairs it with the inbox and reports
+ * and told again. The book's token says how many; the composed service pairs it with actual mail content and reports
  * what to send, never sends.
  */
 
@@ -93,8 +94,10 @@ afterEach(async () => {
 
 describe('services.inboxReminders', () => {
     // Each notice names the mail it tells about (beta.33 item 18: the owner wants the CONTEXT of a delivery in the chat) —
-    // the prompt's words are unchanged; `mail` is what its ledger row carries.
+    // the full prompt is checked separately; `mail` is what its ledger row carries.
     const told = (text: string) => ({ id: expect.stringMatching(/^msg_/), from: HUMAN, fromName: null, text, sentAt: expect.any(String) });
+    const notices = (run: (id: string) => number | null) => services.inboxReminders({ run })
+        .map((r) => ({ ...r, text: summarizeInboxPrompt(r.text) }));
     it('reports what to send for every registered agent with mail it has not been told about whose session can take a turn', async () => {
         onRoster('agent_a', 'atlas', 'tynn');
         onRoster('agent_b', 'bolt', 'tynn');
@@ -102,17 +105,17 @@ describe('services.inboxReminders', () => {
         await services.inbox.send({ from: HUMAN, to: 'agent_b' as never, text: 'pong' });
         const runs = new Map<string, number>([['agent_a', 1]]);
         const run = (id: string): number | null => runs.get(id) ?? null;
-        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.', mail: [told('ping')] }]);
+        expect(notices(run)).toEqual([{ agentId: 'agent_a', text: deliveryHeader(1), mail: [told('ping')] }]);
         services.inboxNoticeSettled('agent_a', true);
         // Atlas's batch was told; bolt can now take a turn and gets its own.
         runs.set('agent_b', 2);
-        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_b', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.', mail: [told('pong')] }]);
+        expect(notices(run)).toEqual([{ agentId: 'agent_b', text: deliveryHeader(1), mail: [told('pong')] }]);
         services.inboxNoticeSettled('agent_b', true);
         expect(services.inboxReminders({ run })).toEqual([]);
         // Atlas collects; a new message for it is a new batch, told at once.
         await services.inbox.receive({ participant: 'agent_a' as never });
         expect(services.inboxReminders({ run })).toEqual([]);
         await services.inbox.send({ from: HUMAN, to: 'agent_a' as never, text: 'again' });
-        expect(services.inboxReminders({ run })).toEqual([{ agentId: 'agent_a', text: 'You have 1 unread AgentInbox message; collect it with agentinbox receive.', mail: [told('again')] }]);
+        expect(notices(run)).toEqual([{ agentId: 'agent_a', text: deliveryHeader(1), mail: [told('again')] }]);
     });
 });

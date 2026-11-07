@@ -39,6 +39,8 @@ export const ICON_NAMES: readonly string[] = [
     'rocket', 'shield-check', 'circle-check', 'ban', 'trash-2', 'user',
     // Its detail flyout: list marks (tasks, features, produces) and a story's facts (outcome, risk).
     'square-check', 'tag', 'package', 'target', 'triangle-alert',
+    // The Tynn tab's pages (row W1 on): tynn.ai's nav icons, and WIP's lens chips, story heading and steps.
+    'columns-3', 'circle-play', 'book-open',
     // Its claims (row B3): Claim + Start and Assign to.
     'hand', 'user-plus',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
@@ -125,6 +127,9 @@ export const ICON_NAMES: readonly string[] = [
     'clock',
     // The Tynn tab's live board (genie#1295 B4): following Tynn, or reconnecting to it.
     'radio', 'wifi-off',
+    // The Tynn tab's Issues (genie#1295 I1): each issue type's icon (named in data, ISSUE_TYPE_LOOK; tynn.ai's `broom` is
+    // `brush-cleaning` in the kit's Lucide).
+    'book', 'shield', 'archive', 'brush-cleaning',
     // The file panel's word-wrap toggle (beta.33 item 15; Genie 1's IconWrap).
     'wrap-text',
     // The Open existing / Import from Git wizard (Add workspace parity item 7): its header and its Next.

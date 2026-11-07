@@ -94,7 +94,7 @@ class Cdp {
         cdp.#socket.addEventListener('message', (event) => {
             const frame = JSON.parse(event.data);
             const resolve = cdp.#pending.get(frame.id);
-            if (!resolve) return;
+            if (typeof resolve !== 'function') return;
             cdp.#pending.delete(frame.id);
             resolve(frame);
         });
@@ -329,22 +329,26 @@ check(
  * was green, because each one rendered the feature directly rather than asking whether the
  * screen would. **The only check that would have caught it is a click.**
  */
+// Seeded manual agents are Stopped: hidden by default, reachable through the persistent count button.
+check(await cdp.evaluate(`document.querySelector('[data-dashboard-filter="stopped"]')?.getAttribute('aria-pressed') === 'false' && document.querySelectorAll('[data-surface="dashboard"] [data-agent][data-state="stopped"]').length === 0`), '16a. Stopped agents are hidden by default');
+await cdp.evaluate(`document.querySelector('[data-dashboard-filter="stopped"]').click(); true`);
+await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])'))`, 'the seeded stopped agents after revealing them');
 const agentRow = await cdp.evaluate(`
     (() => {
-        // A WORKSPACE agent's row: genie's own group comes first on the Dashboard (the design mockup, 2026-10-19).
-        const row = document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]');
+        const row = document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])');
         return row ? JSON.stringify({ id: row.getAttribute('data-agent'), text: row.textContent }) : null;
     })()
 `);
 check(typeof agentRow === 'string', '16. the seeded agent appears on the Dashboard', String(agentRow));
-// 60. GENIE'S OWN GROUP, FIRST (the design mockup): `genie · default agent · not in a workspace`, above every workspace.
-check(await cdp.evaluate(`(() => { const g = document.querySelector('[data-genie-group]'); const w = document.querySelector('[data-surface="dashboard"] div[data-workspace]'); return Boolean(g && w && (g.compareDocumentPosition(w) & Node.DOCUMENT_POSITION_FOLLOWING) && /default agent · not in a workspace/.test(g.textContent ?? '')); })()`), '60. the Dashboard opens with genie’s own group, above the workspaces', await cdp.evaluate(`document.querySelector('[data-genie-group]')?.textContent?.slice(0, 80) ?? null`));
+const flatRows = await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-surface="dashboard"] [data-dashboard-list] [data-agent]')].map((r) => ({ name: r.querySelector('span.font-medium')?.textContent?.trim() ?? '', workspace: Boolean(r.querySelector('[data-column="workspace"]')) })))`);
+const flat = JSON.parse(flatRows || '[]');
+check(flat.length === 3 && flat.every((r) => r.workspace) && flat.map((r) => r.name).join('|') === ['atlas', 'genie', 'wren'].join('|') && await cdp.evaluate(`!document.querySelector('[data-genie-group], [data-group-toggle]')`), '60. one alphabetical table includes genie and every agent with a Workspace cell', flatRows);
 
 if (typeof agentRow === 'string') {
     // 17. A ROW CLICK OPENS THAT AGENT'S CHAT BESIDE THE DASHBOARD, WHICH STAYS (genie#1209; the owner, 2026-10-26: "on the
     // dashboard page I should be able to click on agent to bring up their chat and stay on the dashboard").
     const rowId = JSON.parse(agentRow).id;
-    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]').click(); true`);
+    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])').click(); true`);
     const chatted = await waitFor(
         cdp,
         `Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${rowId}"]')) && Boolean(document.querySelector('[data-surface="dashboard"]'))`,
@@ -484,18 +488,15 @@ if (typeof agentRow === 'string') {
     check(backHome, '23. Back leaves the agent for the Dashboard (opening the chat is no history entry), the chat still docked');
     check(backHome, '24. Back returns to the Dashboard');
 
-    // 52. THE BOARD'S DOORS ARE REAL (board audit, 2026-10-12: "Open workspace →" was a span, no By status, no Chat ⌘J,
-    // the group header named the workspace by its id). The header names the seeded workspace by its NAME (never a
-    // 26-char id), offers the segmented control and Chat ⌘J, and `Open workspace →` is a button that lands on the
-    // workspace; Back returns to the Dashboard.
+    // 52. The Workspace cell opens the workspace, both persistent state filters and Chat are real buttons.
     const doors = await cdp.evaluate(`JSON.stringify({
         open: document.querySelectorAll('button[data-open-workspace]').length,
-        toggle: Boolean(document.querySelector('[data-group-toggle] [role="radio"]')),
+        filters: ['sleeping', 'stopped'].every((s) => document.querySelector('button[data-dashboard-filter="' + s + '"]')),
         chat: Boolean(document.querySelector('button[data-action="chat-genie"]')),
-        header: (document.querySelector('[data-workspace] .font-semibold')?.textContent ?? ''),
+        workspace: (document.querySelector('button[data-open-workspace="tynn"]')?.textContent ?? '').trim(),
     })`);
     const d = JSON.parse(doors || '{}');
-    check(d.open >= 1 && d.toggle && d.chat && d.header.length > 0 && !/^[0-9a-z]{26}$/i.test(d.header), '52. the Dashboard\'s doors are real: Open workspace, By status, Chat ⌘J, and the group header names the workspace', doors);
+    check(d.open >= 1 && d.filters && d.chat && d.workspace.length > 0 && !/^[0-9a-z]{26}$/i.test(d.workspace), '52. the Dashboard has named Workspace buttons, both state filters and Chat', doors);
     await cdp.evaluate(`document.querySelector('button[data-open-workspace]').click(); true`);
     const landed = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the workspace after Open workspace →');
     check(landed, '53. Open workspace → lands on the workspace');
@@ -1087,7 +1088,7 @@ if (!approvalEnabled) {
     await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]').click(); true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard');
     // The agent's PAGE, by its route (a row click opens its chat beside the board, genie#1209).
-    await cdp.evaluate(`(() => { const id = document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]')?.getAttribute('data-agent'); if (id) window.location.hash = '#genie://agent/' + id + '?tab=stream'; return true; })()`);
+    await cdp.evaluate(`(() => { const id = document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])')?.getAttribute('data-agent'); if (id) window.location.hash = '#genie://agent/' + id + '?tab=stream'; return true; })()`);
     const onAgent = await waitFor(cdp, `Boolean(document.querySelector('[data-action="take-over"]'))`, 'the Agent view with its Take over control');
     if (onAgent) {
         await cdp.evaluate(`document.querySelector('[data-action="take-over"]').click(); true`);

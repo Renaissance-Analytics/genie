@@ -30,7 +30,6 @@ async function list(liveness: GenieToolsDeps['liveness']) {
     const tools = genieTools({
         inbox, attention, roster: () => roster,
         resolveCaller: (key) => (key === 'me' ? { agentId: me.id, agentName: me.name, workspaceId: 'ws', workspacePath: dir } : null),
-        workspaceSetting: () => ({ scope: 'self' }),
         userActive: () => true, glow: () => true, thumbsUp: () => {},
         ...(liveness ? { liveness: (id: string) => { started.push(`asked ${id}`); return liveness(id); } } : {}),
     } as GenieToolsDeps);

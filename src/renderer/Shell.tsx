@@ -1,5 +1,6 @@
 import { useActivityFeeds } from './use-activity-feeds.js';
-import type { TynnBoardHost } from '../core/tynn-board.js';
+import type { TynnTabHost } from '../core/tynn-pages.js';
+import type { TynnIssuesHost } from '../core/tynn-issues.js';
 import { rateLimitAlert, type Headroom } from '../core/headroom.js';
 import { deviceExpiryAlert } from '../core/device-expiry.js';
 import { PairPrompt } from './components/PairPrompt.js';
@@ -184,6 +185,7 @@ export interface ShellProps {
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
+    onWakeWorkspace?: ((workspaceId: string) => void) | undefined;
     /** The rail's Browser row opens the Genie browser window (beta.35 item 36); absent = the browser surface, as before. */
     onOpenBrowser?: (() => void) | undefined;
     /** The terminal half of the bridge, handed to the Workspace surface. Keyed by workspace, never agent. */
@@ -199,7 +201,9 @@ export interface ShellProps {
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
     loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
-    tynnBoard?: TynnBoardHost | undefined;
+    tynnBoard?: TynnTabHost | undefined;
+    /** The Tynn tab's Issues (genie#1295 I1); absent = the tab has no Issues page in this window. */
+    tynnIssues?: TynnIssuesHost | undefined;
     /** NOT DRAWN since 2026-10-19: a workspace's file panel shows inline or pops out. Removed with the pin model. */
     filesWorkspaceId?: string | null | undefined;
     /** Pin or unpin a workspace's file panel into the single dock slot (§4.4). */
@@ -230,7 +234,8 @@ export interface ShellProps {
     /** "Stop agent" — END the agent's session (§6.2 stop): the Agent view's operations menu. Not the turn's Stop. */
     onStopAgent?: ((agentId: string) => void) | undefined;
     /** `Stop this turn` — the Agent view's header and the chat's context line: the turn ends, the agent keeps running. */
-    onCancelTurn?: ((agentId: string) => void) | undefined;
+    /** `intent`: `stop` (the default) latches the agent until the person acts; `interrupt` does not (Tynn #672 part 3). */
+    onCancelTurn?: ((agentId: string, intent?: 'stop' | 'interrupt') => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
     onProviderLogin?: ((agentId: string) => void) | undefined;
@@ -318,7 +323,7 @@ export function Shell({
     featureAsk,
     pickFiles,
     onBrowserBounds,
-    agentDetail,
+    agentDetail: suppliedAgentDetail,
     agentResolved,
     selectedRowId,
     chatThread,
@@ -330,6 +335,7 @@ export function Shell({
     onChatAgent: onChatAgentProp,
     onAddAgent,
     onAddWorkspace,
+    onWakeWorkspace,
     onOpenBrowser,
     terminals = NO_TERMINALS,
     files = NO_FILES,
@@ -339,6 +345,7 @@ export function Shell({
     readCommits,
     loadToolOutput,
     tynnBoard,
+    tynnIssues,
     onPopOutFiles,
     onBringBackFiles,
     onPauseAgent,
@@ -393,6 +400,8 @@ export function Shell({
     onConfirmAdd,
     onCancelAdd,
 }: ShellProps) {
+    const hiddenWorkspaces = new Set([...(snapshot.hibernatedWorkspaces ?? []).map((w) => w.id), ...(snapshot.workspaces ?? []).filter((w) => w.asleep).map((w) => w.id)]);
+    const agentDetail = suppliedAgentDetail?.agent.workspaceId && hiddenWorkspaces.has(suppliedAgentDetail.agent.workspaceId) ? null : suppliedAgentDetail;
     // Without the window's pick (a test, a remote window) a Dashboard row opens the agent's page, as before.
     const onChatAgent = onChatAgentProp ?? onOpenAgent;
     const parsed = parseRoute(route);
@@ -582,7 +591,8 @@ export function Shell({
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
                     deckCount={snapshot.deckItems === null ? null : needsYouCount(snapshot.deckItems)}
                     // Genie 1's row: the pulse from the agents' sessions, and the process / site indicators from Hosting.
-                    workspaces={railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] })}
+                    workspaces={[...railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] }), ...(snapshot.hibernatedWorkspaces ?? []).map((workspace) => ({ ...workspace, count: null, alert: null }))]}
+                    onWakeWorkspace={onWakeWorkspace}
                     onOpenProcesses={(workspaceId) => setRuntimeModal({ kind: 'processes', workspaceId })}
                     onOpenSites={(workspaceId) => setRuntimeModal({ kind: 'sites', workspaceId })}
                     // On an agent's page its workspace stays the highlighted row (Tynn #805).
@@ -612,7 +622,7 @@ export function Shell({
                      * state a person cannot recover from without knowing a shortcut, and it is
                      * indistinguishable from a load that failed.
                      */}
-                    {canServe && parsed.surface === 'dashboard' && snapshot.workspaces !== null && snapshot.workspaces.length === 0 ? (
+                    {canServe && parsed.surface === 'dashboard' && snapshot.workspaces !== null && snapshot.workspaces.length === 0 && !snapshot.hibernatedWorkspaces?.length ? (
                         <Onboarding
                             state={{
                                 workspaces: snapshot.workspaces.length,
@@ -639,7 +649,7 @@ export function Shell({
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
                      * board audit. The skeleton (`workspaces === null`) still belongs to the Dashboard.
                      */}
-                    {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
+                    {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0 || !!snapshot.hibernatedWorkspaces?.length) ? (
                         <ErrorBoundary surface="Dashboard">
                         <Dashboard
                             pulsing={pulsingWorkspaces}
@@ -650,6 +660,7 @@ export function Shell({
                             // Genie's own row, its group first (the design mockup).
                             genie={snapshot.osAgent ?? null}
                             workspaces={snapshot.workspaces}
+                            hasHibernatedWorkspaces={!!snapshot.hibernatedWorkspaces?.length}
                             // A row click opens that agent's CHAT beside the Dashboard, which stays (genie#1209) — EVERY row,
                             // a waiting one too (the owner, 2026-10-28: "Dashboard should stay active while the chat changes
                             // to that agent chat"). A pending question no longer sends the click to the Deck: Genie 1 never let
@@ -660,8 +671,6 @@ export function Shell({
                             onAddWorkspace={onAddWorkspace}
                             onAddWorkspaceFromGit={onAddWorkspaceFromGit}
                             onAddWorkspaceFromTynn={onAddWorkspaceFromTynn}
-                            group={parsed.group}
-                            onGroup={(group) => onNavigate(formatRoute({ ...parsed, group }))}
                             // The row tray's doors (Open agent / Terminal / Files).
                             onNavigate={onNavigate}
                             onOpenWorkspace={(id) => onNavigate(`genie://workspace/${id}`)}
@@ -811,6 +820,7 @@ export function Shell({
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
                             tynnBoard={tynnBoard}
+                            tynnIssues={tynnIssues}
                             onRefreshIssueWatch={() => onFeature({ kind: 'issueWatch.refresh', workspaceId: parsed.workspaceId })}
                             onSetIssueWatchRepo={(owner, repo, change) => onFeature({ kind: 'issueWatch.setRepo', workspaceId: parsed.workspaceId, owner, repo, ...change })}
                             rows={snapshot.agents}
@@ -951,9 +961,10 @@ export function Shell({
                         {...(featureAsk ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
                         onRestartAndSend={onRestartAndSend}
                         onDiscardDraft={onDiscardDraft}
-                        onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
-                        // Interrupt and send (item 21): the same Stop-this-turn path; what waits is already with the provider and runs next.
-                        onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
+                        onStopTurn={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId, 'stop') : undefined}
+                        // Interrupt and send (item 21): the same cancel, but an INTERRUPT: what waits is already with the provider and runs next,
+                        // so the agent is not held for the person to type again, and Genie's notices still reach it (Tynn #672 part 3).
+                        onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId, 'interrupt') : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { provider: snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                         onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}

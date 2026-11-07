@@ -49,7 +49,7 @@ class Cdp {
         c.#ws.addEventListener('message', (ev) => {
             const f = JSON.parse(ev.data);
             const r = c.#pending.get(f.id);
-            if (r) { c.#pending.delete(f.id); r(f); }
+            if (typeof r === 'function') { c.#pending.delete(f.id); r(f); }
         });
         await new Promise((res, rej) => {
             c.#ws.addEventListener('open', res, { once: true });

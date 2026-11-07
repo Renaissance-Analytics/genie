@@ -3,6 +3,8 @@ import type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js
 export type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
 import { localSession, type LocalProtocolControl, type WorkspaceProtocolKey } from './local-session.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
+import type { TynnPage, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
+import type { IssueActionInput, IssueFilters, TynnIssuesHost } from '../core/tynn-issues.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -86,6 +88,8 @@ export interface GenieSnapshot {
      * answered — a confident claim about a machine nobody had asked. An older test caught it.
      */
     workspaces: readonly RailWorkspace[] | null;
+    /** Known folders only: consumed exclusively by the sidebar's explicit Show hibernated control. */
+    hibernatedWorkspaces?: readonly { id: string; path: string; name: string; asleep: true }[];
     /**
      * The attention band, or `null` until the queue has been read.
      *
@@ -241,7 +245,8 @@ export interface GenieBridge {
      * running (prism-acp's turn cancel). `ok: true` = the provider was asked; `reason` names why nothing was stopped —
      * `no-turn`, `not-running`, `unsupported` (this agent cannot stop a turn; it was not killed instead) or `refused`.
      */
-    cancelTurn(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `intent`: `stop` (Stop this turn, the default) latches the agent until the person acts; `interrupt` (Interrupt and send) does not. */
+    cancelTurn(agentId: string, intent?: 'stop' | 'interrupt'): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Resume now`: the agent's provider login, held for its rate limit, opens at once (Tynn #794). */
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */
@@ -353,10 +358,20 @@ export interface GenieBridge {
         tynnBoard?(workspaceId: string, scope: BoardScope): ReturnType<TynnBoardHost['read']>;
         /** One action on that board, by the workspace-UX contract's id (`task.start`, `story.move`…). */
         tynnBoardAction?(workspaceId: string, input: BoardActionInput): ReturnType<TynnBoardHost['act']>;
+        /** The tab's other pages (WIP, …), read whole, of the same project. Optional: an older host has none. */
+        tynnPage?(workspaceId: string, page: TynnPage, query: TynnPageQuery): ReturnType<NonNullable<TynnTabHost['page']>>;
         /** Row B4: what changed on that board since a cursor. Optional: an older host (and a remote one) has none. */
         tynnBoardChanges?(workspaceId: string, scope: BoardScope, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnBoardHost['changes']>>;
         /** Row B4: follow that board (its live state and rings) until the answer is called. */
         tynnBoardWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
+        /** Row I1, the Tynn tab's Issues: the workspace's OWN project's issue queue under the page's filters. Optional: an older host has none. */
+        tynnIssues?(workspaceId: string, filters: Partial<IssueFilters>): ReturnType<TynnIssuesHost['read']>;
+        /** One action on that queue, by the workspace-UX contract's id (`issue.create`, `issue.resolve`…). */
+        tynnIssueAction?(workspaceId: string, input: IssueActionInput): ReturnType<TynnIssuesHost['act']>;
+        /** What changed in that queue since a cursor. Optional: an older host (and a remote one) has none. */
+        tynnIssueChanges?(workspaceId: string, filters: Partial<IssueFilters>, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnIssuesHost['changes']>>;
+        /** Follow that queue (its live state and rings) until the answer is called. */
+        tynnIssuesWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
@@ -432,9 +447,9 @@ export interface GenieBridge {
             workspaceId: string,
             options: { cols: number; rows: number; command?: string },
         ): Promise<{ id: string; pid: number; shell: string; scrollback: string }>;
-        write(id: string, data: string): void;
-        resize(id: string, cols: number, rows: number): void;
-        close(id: string): void;
+        write(id: string, data: string): void | Promise<void>;
+        resize(id: string, cols: number, rows: number): void | Promise<void>;
+        close(id: string): void | Promise<void>;
         /** Open terminals in one workspace — so a window that reloads can re-attach (§6.5). */
         list(workspaceId: string): Promise<readonly { id: string; pid: number; shell: string }[]>;
         /**
@@ -622,7 +637,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
@@ -638,18 +653,41 @@ const pageBridges = new WeakMap<PreloadBridge, GenieBridge>();
  * B4; a remote host has neither, and its tab is simply not live). Undefined when the bridge has no Tynn tab. Build it once
  * per bridge (App memoises it): the tab keys its read and its live subscription on this object.
  */
-export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnBoardHost | undefined {
+export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnTabHost | undefined {
     const ws = bridge?.workspaces;
     if (!ws?.tynnBoard || !ws.tynnBoardAction) return undefined;
     const read = ws.tynnBoard;
     const act = ws.tynnBoardAction;
     const changes = ws.tynnBoardChanges;
     const watch = ws.tynnBoardWatch;
+    const page = ws.tynnPage;
     return {
         read: (id, scope) => read(id, scope),
         act: (id, input) => act(id, input),
+        ...(page ? { page: (id: string, p: TynnPage, query: TynnPageQuery) => page(id, p, query) } : {}),
         ...(changes && watch ? {
             changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => changes(id, scope, cursor, ids),
+            watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),
+        } : {}),
+    };
+}
+
+/**
+ * The Tynn tab's Issues host over a bridge (genie#1295 I1): its read and actions, and — where the bridge can — its live
+ * queue. Undefined when the bridge has no Issues. Build it once per bridge (App memoises it), as the board's.
+ */
+export function tynnIssuesHostOf(bridge: GenieBridge | undefined): TynnIssuesHost | undefined {
+    const ws = bridge?.workspaces;
+    if (!ws?.tynnIssues || !ws.tynnIssueAction) return undefined;
+    const read = ws.tynnIssues;
+    const act = ws.tynnIssueAction;
+    const changes = ws.tynnIssueChanges;
+    const watch = ws.tynnIssuesWatch;
+    return {
+        read: (id, filters) => read(id, filters),
+        act: (id, input) => act(id, input),
+        ...(changes && watch ? {
+            changes: (id: string, filters: Partial<IssueFilters>, cursor: string, ids: readonly string[]) => changes(id, filters, cursor, ids),
             watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),
         } : {}),
     };
@@ -667,6 +705,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
         files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
+        terminals: local.terminals,
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
     if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;

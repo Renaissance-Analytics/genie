@@ -84,6 +84,8 @@ export function threadKeyFor(id: AgentId): string {
  * `prism-acp`. It is not configuration, and it is not this record's business.
  */
 export interface AgentRecord {
+    /** A workspace was redocked: its next accepted turn must check staleness and reorient. */
+    readonly redockAt?: string;
     readonly id: AgentId;
     readonly workspaceId: string;
     readonly provider: AcpProvider;

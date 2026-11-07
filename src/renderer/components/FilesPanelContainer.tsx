@@ -25,9 +25,10 @@ import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile, type P
  * them when the host says the workspace changed (push, never a poll), keeps the open tabs. The pure
  * rendering is `FilesPanel`, which is what the tests render. One container per workspace surface.
  */
-export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange, routeFile, routeFilter, onRouteChange, routeLine = null }: {
+export function FilesPanelContainer({ workspace, files, visible = true, pinned, onPin, onClose, popped, onPopOut, onPause, onResume, single, onOpenInPane, onDirtyChange, routeFile, routeFilter, onRouteChange, routeLine = null }: {
     workspace: { id: string; name?: string | undefined; path: string };
     files: GenieBridge['files'];
+    visible?: boolean | undefined;
     pinned: boolean;
     onPin?: (() => void) | undefined;
     onClose: () => void;
@@ -168,6 +169,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     }, [files, workspace.id, single, lazy, loadDir, lockedRoot]);
 
     useEffect(() => {
+        if (!visible) return;
         refresh();
         // Git is read ONCE here; after that it comes pushed with the batches (the host split, P2.2), computed once on the
         // host however many views want it — never a git run per view per batch.
@@ -187,7 +189,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             });
         }
         return files.onChange((id, paths) => { if (id === workspace.id) { onBatch(paths); readGit(); } });
-    }, [files, workspace.id, refresh, readGit, single, lazy, loadDir]);
+    }, [files, workspace.id, refresh, readGit, single, lazy, loadDir, visible]);
 
     // Every folder that is open is listed (opening one is what loads it).
     useEffect(() => {
@@ -202,10 +204,12 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
 
     // A dirty tab is NEVER auto-reloaded (§4.3); a clean one follows the disk — text re-read, a plugin editor remounted.
     // Only the tabs among the changes (genie#921): a build elsewhere in the workspace re-reads nothing.
-    useEffect(() => files.onChange((id, paths) => {
+    useEffect(() => visible ? files.onChange((id, paths) => {
         if (id !== workspace.id) return;
         act({ kind: 'disk-changed', paths: paths ?? benchRef.current.tabs });
-    }), [files, workspace.id, act]);
+    }) : undefined, [files, workspace.id, act, visible]);
+    // A redock rereads clean tabs while the bench preserves dirty buffers and their conflict baseline.
+    useEffect(() => { if (visible) act({ kind: 'disk-changed', paths: benchRef.current.tabs }); }, [visible, act]);
     const rereadKey = bench.reread.join('\n');
     useEffect(() => { for (const path of benchRef.current.reread) load(path); }, [rereadKey, load]);
 

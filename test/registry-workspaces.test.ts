@@ -33,7 +33,8 @@ describe('asleep', () => {
         expect(registry.snapshot().workspaces!.find((w) => w.id === 'tynn')!.asleep).toBe(false);
         expect(await registry.setAsleep('tynn', true)).toBe(true);
         expect(registry.workspace('tynn')?.asleep).toBe(true);
-        expect(registry.snapshot().workspaces!.find((w) => w.id === 'tynn')!.asleep).toBe(true);
+        expect(registry.snapshot().workspaces!.some((w) => w.id === 'tynn')).toBe(false);
+        expect(registry.snapshot().hibernatedWorkspaces!.find((w) => w.id === 'tynn')!.asleep).toBe(true);
         expect(await registry.setAsleep('nope', true)).toBe(false);
 
         const reopened = new Registry(new Store(dir));

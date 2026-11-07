@@ -5,7 +5,7 @@ import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Wo
 
 /**
  * WORKSPACE SETTINGS ON THE WORKSPACE SURFACE (§6.1). The settings registered with `scope: 'workspace'`
- * — default agent, approval gates, running-agents cap, who may message agents here — are edited where the
+ * — default agent, approval gates, running-agents cap — are edited where the
  * workspace is, with THIS workspace's effective values, and a row says when it is overriding the
  * workstation value. Nothing is drawn without the ops.
  */
@@ -28,7 +28,8 @@ describe('workspace settings section', () => {
         const html = render(ops);
         expect(html).toContain('data-workspace-settings');
         expect(html).toContain('data-ws-setting="agent_cap"');
-        expect(html).toContain('data-ws-setting="inbox_access"');
+        expect(html).not.toContain('data-ws-setting="inbox_access"');
+        expect(html).not.toContain('Who may message agents here');
         expect(html).toContain('data-ws-setting="default_agent"');
         expect(html).toContain('data-ws-setting="approval_gates"');
         expect(html).toMatch(/<option value="2" selected=""/);

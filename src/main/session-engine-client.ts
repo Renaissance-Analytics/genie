@@ -1,5 +1,6 @@
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -33,7 +34,7 @@ import type { Attachment } from '../core/prompt-content.js';
 import type { GateView } from '../core/rate-limit-gate.js';
 import type { ClientTransport } from '../core/remote-protocol.js';
 import type { LiveSession } from '../core/roster.js';
-import type { CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
+import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
@@ -81,6 +82,7 @@ export type Awaitable<T> = T | Promise<T>;
 export interface EngineClientOptions {
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
     readonly onCarryOverSent?: (agentId: AgentId) => void;
+    readonly onRedockSent?: (agentId: AgentId, at: string) => void;
     /** Genie's own words are in this agent's thread now (genie#1519). */
     readonly markGenieWords?: (agentId: AgentId) => void;
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
@@ -158,6 +160,8 @@ export class SessionEngineClient {
     /** The board views this window follows in the host (P5c), sent again after a reconnect: the host dropped them with the link. */
     readonly #boardViews = new Map<string, string>();
     readonly #boardListeners = new Set<(event: TynnBoardHubEvent) => void>();
+    readonly #issuesViews = new Map<string, string>();
+    readonly #issuesListeners = new Set<(event: TynnBoardHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
     #hosting: HostingReplica | null = null;
@@ -318,6 +322,7 @@ export class SessionEngineClient {
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
         for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
         for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
+        for (const [viewId, workspaceId] of this.#issuesViews) void this.call('engine.tynnIssuesWatch', [viewId, workspaceId]);
     }
 
     #onEvent(channel: string, payload: unknown): void {
@@ -418,6 +423,9 @@ export class SessionEngineClient {
             case 'tynnBoard.event':
                 for (const l of [...this.#boardListeners]) l(payload as TynnBoardHubEvent);
                 return;
+            case 'tynnIssues.event':
+                for (const l of [...this.#issuesListeners]) l(payload as TynnBoardHubEvent);
+                return;
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
                 return;
@@ -445,6 +453,7 @@ export class SessionEngineClient {
         switch (c.name) {
             case 'threadId': o.onThreadId?.(c.agentId as AgentId, c.threadId); return;
             case 'carryOverSent': o.onCarryOverSent?.(c.agentId as AgentId); return;
+            case 'redockSent': o.onRedockSent?.(c.agentId as AgentId, c.at); return;
             case 'genieWords': o.markGenieWords?.(c.agentId as AgentId); return;
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;
@@ -767,6 +776,31 @@ export class SessionEngineClient {
         return this.#value('engine.tynnBoardUnwatch', [viewId], false).then((v) => v === true);
     }
 
+    /** The host owns Issues subscriptions; remember the intended views across a reconnect. */
+    tynnIssuesWatch(viewId: string, workspaceId: string): Promise<boolean> {
+        this.#issuesViews.set(viewId, workspaceId);
+        return this.#value('engine.tynnIssuesWatch', [viewId, workspaceId], false).then((v) => {
+            if (v !== true) this.#issuesViews.delete(viewId);
+            return v === true;
+        });
+    }
+
+    tynnIssuesUnwatch(viewId: string): Promise<boolean> {
+        this.#issuesViews.delete(viewId);
+        return this.#value('engine.tynnIssuesUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    onTynnIssuesEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
+        this.#issuesListeners.add(listener);
+        return () => { this.#issuesListeners.delete(listener); };
+    }
+
+    /** The host reads the workspace's Tynn page; a disconnected or refusing host is a visible error. */
+    async tynnPage(workspaceId: string, page: unknown, query: unknown): ReturnType<typeof readTynnPage> {
+        const reply = await this.call('engine.tynnPage', [workspaceId, page, query]);
+        return reply.ok ? reply.value as Awaited<ReturnType<typeof readTynnPage>> : { ok: false, state: 'error', reason: reply.reason };
+    }
+
     /** The rings and states for this window's board views. */
     onTynnBoardEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
         this.#boardListeners.add(listener);
@@ -964,8 +998,8 @@ export class SessionEngineClient {
         return this.#value('engine.promptWith', [agentId, text, wire, by], { ok: false, reason: NOT_CONNECTED });
     }
 
-    cancel(agentId: AgentId, by: string | null = 'you'): Promise<CancelOutcome> {
-        return this.#value<CancelOutcome>('engine.cancel', [agentId, by], { ok: false, reason: 'refused' });
+    cancel(agentId: AgentId, by: string | null = 'you', intent: CancelIntent = 'stop'): Promise<CancelOutcome> {
+        return this.#value<CancelOutcome>('engine.cancel', [agentId, by, intent], { ok: false, reason: 'refused' });
     }
 
     deliver(agentId: AgentId, text: string, by: string | null = 'you'): Promise<boolean> {

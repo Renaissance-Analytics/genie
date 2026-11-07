@@ -16,7 +16,7 @@ import { listRepos } from '../core/repo-registry.js';
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export interface TrustWatchPorts {
-    workspaces(): readonly { id: string; path: string }[];
+    workspaces(): readonly { id: string; path: string; asleep?: boolean }[];
     readText(path: string): Promise<string | null>;
     /** A cheap reading of one file (its size and time), or `null` when it is not there. */
     fingerprint(path: string): Promise<string | null>;
@@ -67,10 +67,15 @@ export class TrustWatch {
     /** Every workspace once. The first takes the readings; after that, a change reads the verdict again. */
     async pass(): Promise<void> {
         if (this.#stopped) return;
-        const now = this.#ports.workspaces();
-        const ids = new Set(now.map((w) => w.id));
-        for (const id of [...this.#watched.keys()]) if (!ids.has(id)) this.#forget(id);
+        this.suspendHidden();
+        const now = this.#ports.workspaces().filter((w) => !w.asleep);
         for (const workspace of now) await this.#check(workspace.id, workspace.path);
+    }
+
+    /** Close hidden folders synchronously, with metadata alone: no reads while other consumers finish syncing. */
+    suspendHidden(): void {
+        const ids = new Set(this.#ports.workspaces().filter((w) => !w.asleep).map((w) => w.id));
+        for (const id of [...this.#watched.keys()]) if (!ids.has(id)) this.#forget(id);
     }
 
     stop(): void {
@@ -90,24 +95,32 @@ export class TrustWatch {
         this.#watched.delete(id);
     }
 
-    async #text(path: string): Promise<string | null> {
+    #awake(id: string, root: string): boolean {
+        const awake = !this.#stopped && this.#ports.workspaces().some((w) => w.id === id && w.path === root && !w.asleep);
+        if (!awake) this.#forget(id);
+        return awake;
+    }
+
+    async #text(path: string, mayRead: () => boolean): Promise<string | null> {
+        if (!mayRead()) return null;
         try { return await this.#ports.readText(path); } catch { return null; }
     }
 
     /** The git config files of one folder: its `.git` folder's, or, for a submodule or a worktree, where its `.git` file points. */
-    async #gitFiles(folder: string): Promise<string[]> {
-        const pointer = /^gitdir:\s*(.+?)\s*$/m.exec((await this.#text(join(folder, '.git'))) ?? '')?.[1];
+    async #gitFiles(folder: string, mayRead: () => boolean): Promise<string[]> {
+        const pointer = /^gitdir:\s*(.+?)\s*$/m.exec((await this.#text(join(folder, '.git'), mayRead)) ?? '')?.[1];
         const gitDir = pointer ? resolve(folder, pointer) : join(folder, '.git');
         return [join(gitDir, 'config'), join(gitDir, 'config.worktree')];
     }
 
-    async #filesOf(root: string): Promise<string[]> {
+    async #filesOf(root: string, mayRead: () => boolean): Promise<string[]> {
         let manifest: unknown = null;
-        try { manifest = JSON.parse((await this.#text(join(root, 'project.json'))) ?? 'null'); } catch { /* the slow pass reads it again */ }
+        try { manifest = JSON.parse((await this.#text(join(root, 'project.json'), mayRead)) ?? 'null'); } catch { /* the slow pass reads it again */ }
         const folders = [root, ...(isRecord(manifest) ? listRepos(manifest) : []).filter((r) => r.path !== '.').map((r) => join(root, ...r.path.split('/')))];
         const files = [join(root, 'project.json')];
         for (const folder of folders) {
-            files.push(...OF_EACH_FOLDER.map((parts) => join(folder, ...parts)), ...(await this.#gitFiles(folder)));
+            if (!mayRead()) return [];
+            files.push(...OF_EACH_FOLDER.map((parts) => join(folder, ...parts)), ...(await this.#gitFiles(folder, mayRead)));
         }
         return files;
     }
@@ -122,18 +135,21 @@ export class TrustWatch {
     }
 
     async #check(id: string, root: string): Promise<void> {
-        if (this.#stopped) return;
+        if (!this.#awake(id, root)) return;
         const watched = this.#entry(id);
         if (watched.running) { watched.again = true; return; }
         watched.running = true;
         try {
             do {
                 watched.again = false;
-                const files = await this.#filesOf(root);
+                const mayRead = () => this.#awake(id, root) && this.#watched.get(id) === watched;
+                const files = await this.#filesOf(root, mayRead);
+                if (!mayRead()) return;
                 const readings = await Promise.all(files.map(async (file) => {
+                    if (!mayRead()) return null;
                     try { return await this.#ports.fingerprint(file); } catch { return null; }
                 }));
-                if (this.#stopped || this.#watched.get(id) !== watched) return;
+                if (!mayRead()) return;
                 const reading = files.map((file, i) => `${file}=${readings[i] ?? '-'}`).join('\n');
                 const changed = watched.reading !== null && watched.reading !== reading;
                 watched.reading = reading;
@@ -150,6 +166,7 @@ export class TrustWatch {
             if (!folders.has(folder)) { stop(); watched.stops.delete(folder); }
         }
         for (const folder of folders) {
+            if (!this.#awake(id, root) || this.#watched.get(id) !== watched) return;
             if (watched.stops.has(folder)) continue;
             const stop = this.#ports.watchFolder(folder, () => this.#settle(id, root, watched));
             if (stop) watched.stops.set(folder, stop);
@@ -157,7 +174,7 @@ export class TrustWatch {
     }
 
     #settle(id: string, root: string, watched: Watched): void {
-        if (this.#stopped || this.#watched.get(id) !== watched) return;
+        if (!this.#awake(id, root) || this.#watched.get(id) !== watched) return;
         if (watched.timer) clearTimeout(watched.timer);
         watched.timer = setTimeout(() => {
             watched.timer = null;

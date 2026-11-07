@@ -61,7 +61,6 @@ beforeEach(async () => {
         attention,
         roster: () => roster,
         resolveCaller: (terminalId) => terminals[terminalId] ?? null,
-        workspaceSetting: (workspaceId) => (workspaceId === 'fancy' ? { scope: 'all' } : { scope: 'self' }),
         userActive: () => userActive,
         glow: (terminalId) => { glowed.push(terminalId); return true; },
         thumbsUp: (caller, reason) => { thumbs.push({ caller, reason }); },

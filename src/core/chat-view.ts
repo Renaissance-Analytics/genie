@@ -1,4 +1,5 @@
 import { limitTitle, limitWords } from './limit-words.js';
+import { isSleeping } from './agent-status.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import { repeatsCompaction, type TimedEvent } from './stream-view.js';
@@ -33,7 +34,7 @@ import { messageLines } from './chat-window.js';
  * `system`: one line Genie says about the thread (`Compacted the context`).
  * `mail`: a piece of the agent's AgentInbox mail — with the person or another agent, either way — `you → atlas`, its
  * whole text, opening that message in the AgentInbox (beta.33 items 7 + 18: an FTQ answer is one).
- * `delivery`: Genie's notice turn — the messages it told the agent about, each by who wrote it and what it says.
+ * `delivery`: a legacy thread payload; its row is ignored now that the mail card is the notification.
  * `stopped`: a turn that was stopped — one line where its reply ends, `Stopped by you`, so a reply cut short reads as
  * stopped and not as the agent's last word.
  */
@@ -66,8 +67,7 @@ export interface ChatMessage {
     /** Epoch ms, or `null` when the event carried none — never synthesised. */
     at: number | null;
     /**
-     * Your inbox mail to an observed agent only: when it read it (epoch ms), or `null` = not read yet. Absent on
-     * every other message — a session prompt has no read receipt, and claiming one would be a guess.
+     * Legacy observed-chat bubble receipt. Current mail cards use `delivered`, from the existing inbox readAt.
      */
     read?: number | null;
     /**
@@ -172,10 +172,19 @@ export function chatContext(detail: ChatDetail): ChatContext {
     if (s.running && (s.background ?? 0) > 0) return { text: `Working · ${s.background} in the background`, tone: 'ok' };
     // COOLING (core/session.ts COOLING_MS): the 15 s after a turn that replied.
     if (s.running && s.cooling === true) return { text: 'Cooling', tone: 'cool' };
+    if (isSleeping(s, Date.now())) return { text: 'Sleeping', tone: 'muted' };
     return { text: 'Idle', tone: 'muted' };
 }
 
-export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = []): ChatMessage[] {
+/** Provider bookkeeping is not another chat message: the actual mail card is the notification. */
+function inboxNotice(event: StreamEvent): boolean {
+    return event.kind === 'message' && event.speaker === 'peer' && (
+        (event.mail?.length ?? 0) > 0
+        || (event.peerName === 'genie' && /^You have \d+ unread AgentInbox messages?; collect (?:it|them) with agentinbox receive\.$/.test(event.text))
+    );
+}
+
+export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []): ChatMessage[] {
     const out: ChatMessage[] = [];
     const waiting = waitingMessages(detail.rows);
     const deliveries = promptDeliveries(detail.rows);
@@ -218,19 +227,7 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         if (e.kind !== 'message') continue;
         const delivery = e.pending ? deliveries.get(e.pending.id) : undefined;
         if (delivery === 'discarded') continue;
-        // GENIE'S NOTICE, WITH ITS CONTEXT (beta.33 item 18): not its instruction to the agent ("collect it with
-        // agentinbox receive") but the messages it told about — who wrote each and what it says. A notice recorded
-        // before notices carried their mail has nothing to list, and stays Genie's message as it was.
-        if (e.speaker === 'peer' && e.mail && e.mail.length > 0) {
-            const n = e.mail.length;
-            out.push({
-                id: row.id, who: 'delivery', from: `${e.peerName ?? 'genie'} → ${detail.agent.name}`,
-                text: `told ${detail.agent.name} about ${n} AgentInbox message${n === 1 ? '' : 's'}`,
-                delivered: true, at: row.at,
-                mail: e.mail.map((m) => ({ id: m.id, from: m.from === 'human' ? 'you' : rows.find((r) => r.id === m.from)?.name ?? m.fromName ?? m.from, subject: mailSubject(m.text) })),
-            });
-            continue;
-        }
+        if (inboxNotice(e)) continue;
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
         const delivered = delivery === undefined || delivery === 'sent';
@@ -329,6 +326,7 @@ export function chatTailStart(ledger: readonly TimedEvent[], lines: number): num
     let i = ledger.length - 1;
     for (; i >= 0; i -= 1) {
         const e = ledger[i]!.event;
+        if (inboxNotice(e)) continue;
         if (e.kind === 'message' || e.kind === 'think') seen += messageLines(e);
         else if (e.kind === 'stopped' || e.kind === 'divider') seen += 1;
         if (seen >= lines) break;
@@ -408,7 +406,7 @@ export function rememberThread(opened: readonly string[], id: string): string[] 
 const SUBJECT_CHARS = 160;
 
 /**
- * ONE LINE OF WHAT A MESSAGE SAYS — a delivery's entry. The whole message, not its first line: an FTQ answer's first line
+ * ONE LINE OF WHAT A MESSAGE SAYS — a mail card's preview. The whole message, not its first line: an FTQ answer's first line
  * is `Answer to your question q_…:`, which says nothing, and what matters (the question's header, the option chosen, the
  * note) is on the lines under it. Markdown marks and list bullets go, lines join, a `Note:` is set off with `·`; capped.
  */
@@ -428,7 +426,9 @@ export function mailSubject(text: string): string {
  * at all (the owner, beta.33: "I did not see the msg post from answering the FTQ appear").
  */
 export function chatCommsOf(messages: readonly MailLike[]): MailLike[] {
-    return messages.map((m) => ({ id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt }));
+    return messages.map((m) => ({ id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt,
+        ...(m.deliveryRefusal ? { deliveryRefusal: m.deliveryRefusal } : {}),
+    }));
 }
 
 /**
@@ -437,14 +437,20 @@ export function chatCommsOf(messages: readonly MailLike[]): MailLike[] {
  * agents is not this agent's.
  */
 function commsRows(detail: ChatDetail, rows: readonly AgentRow[]): ChatMessage[] {
-    if (!detail.comms) return [];
-    const self = detail.agent.id;
-    const name = (id: string): string => (id === 'human' ? 'you' : id === self ? detail.agent.name : rows.find((r) => r.id === id)?.name ?? id);
-    return detail.comms
+    return mailRows(detail.comms ?? [], detail.agent.id, detail.agent.name, rows);
+}
+
+/** One mail record and receipt in declared and observed chats, on either side of the conversation. */
+function mailRows(messages: readonly MailLike[], self: string, selfName: string, rows: readonly AgentRow[]): ChatMessage[] {
+    const name = (id: string): string => (id === 'human' ? 'you' : id === self ? selfName : rows.find((r) => r.id === id)?.name ?? id);
+    return messages
         .filter((m) => m.from === self || m.to === self)
         .map((m) => {
             const at = Date.parse(m.sentAt);
-            return { id: m.id, who: 'mail' as const, from: `${name(m.from)} → ${name(m.to)}`, text: m.text, delivered: true, at: Number.isNaN(at) ? null : at, mailId: m.id };
+            const delivered = m.readAt != null;
+            return { id: m.id, who: 'mail' as const, from: `${name(m.from)} → ${name(m.to)}`, text: m.text, delivered, at: Number.isNaN(at) ? null : at, mailId: m.id,
+                ...(!delivered && m.deliveryRefusal ? { reason: m.deliveryRefusal.reason } : {}),
+            };
         });
 }
 
@@ -489,27 +495,18 @@ export interface MailLike {
     readonly text: string;
     readonly sentAt: string;
     readonly readAt: string | null;
+    readonly deliveryRefusal?: { readonly attempts: number; readonly reason: string; readonly at: string };
 }
 
 /**
- * AN OBSERVED AGENT'S CHAT IS ITS INBOX THREAD (§4.4). Your mail to it, with whether it has read each one, and its
- * mail to you by name, oldest first; `unread` counts its mail you have not read. A Take Over window's replies in its
+ * AN OBSERVED AGENT'S CHAT IS ITS INBOX THREAD (§4.4). Shared mail cards include its peer conversations and receipts;
+ * `unread` still counts its mail to the person that the person has not read. A Take Over window's replies in its
  * terminal are not here — that TUI does not report them. `recent === null` (the inbox not read yet) gives `unread:
  * null`, never `0`, which would claim you are up to date.
  */
-export function observedMail(recent: readonly MailLike[] | null, agentId: string, name: string): { messages: ChatMessage[]; unread: number | null } {
+export function observedMail(recent: readonly MailLike[] | null, agentId: string, name: string, rows: readonly AgentRow[] = []): { messages: ChatMessage[]; unread: number | null } {
     if (recent === null) return { messages: [], unread: null };
-    const messages: ChatMessage[] = [];
-    let unread = 0;
-    for (const m of recent) {
-        if (m.from === 'human' && m.to === agentId) {
-            messages.push({ id: m.id, who: 'you', from: 'you', text: m.text, delivered: true, at: Date.parse(m.sentAt), read: m.readAt === null ? null : Date.parse(m.readAt) });
-        } else if (m.from === agentId && m.to === 'human') {
-            messages.push({ id: m.id, who: 'agent', from: name, text: m.text, delivered: true, at: Date.parse(m.sentAt) });
-            if (m.readAt === null) unread++;
-        }
-    }
-    return { messages, unread };
+    return { messages: mailRows(recent, agentId, name, rows), unread: recent.filter(m => m.from === agentId && m.to === 'human' && m.readAt === null).length };
 }
 
 /**

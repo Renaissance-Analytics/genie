@@ -173,6 +173,11 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: build and sign without uploading
         run: npx electron-builder --publish never
+      # Which files the build signed, by electron-builder's own rule and electron-builder.yml's signExts (the rest keep
+      # their own publisher's signature): the verifier below reads it (scripts/win-sign-plan.mjs; test/win-sign-plan.test.ts).
+      - name: the sign plan, for the verifier
+        shell: pwsh
+        run: node scripts/win-sign-plan.mjs release/win-unpacked electron-builder.yml --json release/signature-evidence/win-sign-plan.json
       - name: verify every Windows signature before upload
         shell: pwsh
         run: ./scripts/verify-windows-signatures.ps1

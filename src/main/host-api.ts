@@ -1,11 +1,13 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
+import type { NativeTerminalPort } from './local-terminal-native.js';
+import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import type { Headroom } from '../core/headroom.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
-import type { CancelOutcome } from '../core/session.js';
+import { cancelIntent, type CancelIntent, type CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
 import { LOCAL_EVENTS, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
@@ -69,6 +71,7 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    localTerminals?: NativeTerminalPort;
     artboard?: LocalArtboardPort;
     chatDrafts?: LocalDraftsStore;
     filesWatch?: FilesWatchPort;
@@ -101,7 +104,7 @@ export interface HostApiDeps {
         resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
-        cancel(agentId: AgentRecord['id']): CancelOutcome | Promise<CancelOutcome>;
+        cancel(agentId: AgentRecord['id'], intent?: CancelIntent): CancelOutcome | Promise<CancelOutcome>;
         /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
         resumeLimit(provider: string): void;
         /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
@@ -175,6 +178,11 @@ export interface HostApiDeps {
         /** The Tynn tab (genie#1295): the workspace's Tynn board at a scope, and one action on it. Optional: refused where absent. */
         tynnBoard?(workspaceId: string, scope: unknown): Promise<unknown>;
         tynnBoardAction?(workspaceId: string, input: unknown): Promise<unknown>;
+        /** The tab's other pages (WIP, …), read whole. Optional: refused where absent. */
+        tynnPage?(workspaceId: string, page: unknown, query: unknown): Promise<unknown>;
+        /** The Tynn tab's Issues (genie#1295 I1): the workspace's issue queue under filters, and one action on it. */
+        tynnIssues?(workspaceId: string, filters: unknown): Promise<unknown>;
+        tynnIssueAction?(workspaceId: string, input: unknown): Promise<unknown>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<unknown>;
         removeRepo(workspaceId: string, slug: string): Promise<unknown>;
         /** Optional: a host without it answers the call with a refusal rather than failing to build its deps. */
@@ -251,6 +259,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     };
 
     const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+        if (isLocalTerminalMethod(method)) {
+            if (!deps.localTerminals) throw new Error('the local terminal service is not available');
+            const name = method.slice('terminals.local'.length).toLowerCase();
+            if (!['open', 'write', 'resize', 'close', 'list', 'attach'].includes(name)) throw new Error('terminal stream control requires its authenticated local connection');
+            return deps.localTerminals.invoke(name, decodeTerminalNativeArguments(name, args));
+        }
         if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
         if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
         if (isLocalArtboardMethod(method)) return invokeLocalArtboard(deps.artboard, method, args);
@@ -335,7 +349,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'cancelTurn': {
                 const r = agent(args[0]);
-                return r ? deps.host.cancel(r.id) : { ok: false, reason: 'unknown agent' };
+                // A remote window's Stop this turn or Interrupt and send: only `interrupt` is an interrupt (Tynn #672 part 3).
+                return r ? deps.host.cancel(r.id, cancelIntent(args[1])) : { ok: false, reason: 'unknown agent' };
             }
             case 'prompt': {
                 const r = agent(args[0]);
@@ -504,9 +519,18 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.tynnBoard':
                 if (!deps.workspaceOps.tynnBoard) throw new Error('this host has no Tynn tab');
                 return deps.workspaceOps.tynnBoard(str(args[0]), args[1]);
+            case 'workspaces.tynnPage':
+                if (!deps.workspaceOps.tynnPage) throw new Error('this host has no Tynn tab');
+                return deps.workspaceOps.tynnPage(str(args[0]), args[1], args[2]);
             case 'workspaces.tynnBoardAction':
                 if (!deps.workspaceOps.tynnBoardAction) throw new Error('this host has no Tynn tab');
                 return deps.workspaceOps.tynnBoardAction(str(args[0]), args[1]);
+            case 'workspaces.tynnIssues':
+                if (!deps.workspaceOps.tynnIssues) throw new Error('this host has no Tynn tab');
+                return deps.workspaceOps.tynnIssues(str(args[0]), args[1]);
+            case 'workspaces.tynnIssueAction':
+                if (!deps.workspaceOps.tynnIssueAction) throw new Error('this host has no Tynn tab');
+                return deps.workspaceOps.tynnIssueAction(str(args[0]), args[1]);
             case 'workspaces.listRepos':
                 return deps.workspaceOps.listRepos(str(args[0]));
             case 'workspaces.addRepo': {
@@ -616,6 +640,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     return {
         invoke,
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
+        ...(deps.localTerminals ? { localTerminals: deps.localTerminals } : {}),
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
         // A terminal's workspace, remembered once seen: its exit is pushed after it has left the list.
         workspaceOfTerminal: (terminalId) => {

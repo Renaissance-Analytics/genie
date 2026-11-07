@@ -147,7 +147,7 @@ export class Cdp {
         const c = new Cdp();
         c.#label = label;
         c.#ws = new WebSocket(url);
-        c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (r) { c.#pending.delete(f.id); r(f); } });
+        c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (typeof r === 'function') { c.#pending.delete(f.id); r(f); } });
         c.#ws.addEventListener('close', () => { for (const r of c.#pending.values()) r({ error: { message: 'socket closed' } }); c.#pending.clear(); });
         await within(15_000, `the ${label} socket`, new Promise((res, rej) => {
             c.#ws.addEventListener('open', res, { once: true });

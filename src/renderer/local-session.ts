@@ -1,4 +1,5 @@
 import type { LocalFramePort } from '../core/local-frame.js';
+import { bindTerminalViews, watchTerminal } from './local-terminal-client.js';
 import type { GenieBridge, LocalOwnerBridge } from './bridge.js';
 import { localTransport } from './local-transport.js';
 import { connectRemote, type RemoteClient } from './remote-bridge.js';
@@ -32,7 +33,7 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
@@ -110,7 +111,23 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     };
     // The same admitted local client, with the same read/rejection and recovery semantics as the other moved families.
     const ownerRead = <T>(call: (owner: LocalOwnerBridge) => Promise<T>): Promise<T> => read(() => call(client!.localOwner!));
+    const terminals: GenieBridge['terminals'] = {
+        open: (id, options) => read(b => b.terminals.open(id, options)),
+        write: (id, text) => read(async b => { await b.terminals.write(id, text); }),
+        resize: (id, cols, rows) => read(async b => { await b.terminals.resize(id, cols, rows); }),
+        close: id => read(async b => { await b.terminals.close(id); }),
+        list: id => read(b => b.terminals.list(id)), attach: (id, terminal) => read(b => b.terminals.attach(id, terminal)),
+        onData: listener => subscribe(b => b.terminals.onData(listener)),
+        onExit: listener => subscribe(b => b.terminals.onExit(listener)),
+    };
+    bindTerminalViews(terminals, (workspaceId, id, observer) => {
+        let alive = true;
+        const off = subscribe(b => watchTerminal(b.terminals, workspaceId, id, observer));
+        void read(async () => {}).catch(error => { if (alive) observer.error(error instanceof Error ? error : new Error(String(error))); });
+        return () => { alive = false; off(); };
+    });
     return {
+        terminals,
         artboard: { read: id => read(b => b.artboard!.read(id)), review: (id, post, verdict, comment) => read(b => b.artboard!.review(id, post, verdict, comment)) },
         chatDrafts: {
             load: () => read(b => b.chatDrafts!.load()), save: (id, draft) => read(b => b.chatDrafts!.save(id, draft)),

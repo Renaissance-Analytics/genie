@@ -121,7 +121,10 @@ function startHost(home: string, fd: number | null): { child: ChildProcess; log:
      */
     const child = fd === null
         ? spawn(electron, argv, { env, stdio: ['ignore', 'pipe', 'pipe'] })
-        : spawn('/bin/sh', ['-c', 'exec 7<&3 3<&-; exec "$0" "$@"', electron, ...argv], { env, stdio: ['ignore', 'pipe', 'pipe', fd] });
+        // The shell's text is a constant; what it runs is read from its environment, quoted, so no path is in its command line.
+        : spawn('/bin/sh', ['-c', 'exec 7<&3 3<&-; exec "$PTY_FDS_ELECTRON" --import tsx "$PTY_FDS_HOST_ENTRY"'], {
+            env: { ...env, PTY_FDS_ELECTRON: electron, PTY_FDS_HOST_ENTRY: argv[2] }, stdio: ['ignore', 'pipe', 'pipe', fd],
+        });
     child.stdout!.on('data', (c: Buffer) => { log += c.toString(); });
     child.stderr!.on('data', (c: Buffer) => { log += c.toString(); });
     return { child, log: () => log };

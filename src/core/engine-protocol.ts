@@ -76,6 +76,11 @@ export const ENGINE_METHODS = [
     // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
     'engine.tynnBoardWatch',
     'engine.tynnBoardUnwatch',
+    // Issues uses its own host-owned feed and connection-owned views, under the same local-only boundary.
+    'engine.tynnIssuesWatch',
+    'engine.tynnIssuesUnwatch',
+    // Other Tynn pages are read on this host's pairing and workspace registry, for local windows only.
+    'engine.tynnPage',
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',
@@ -223,6 +228,7 @@ export interface EngineGlobalView {
 export type EngineCallback =
     | { readonly name: 'threadId'; readonly agentId: string; readonly threadId: string }
     | { readonly name: 'carryOverSent'; readonly agentId: string }
+    | { readonly name: 'redockSent'; readonly agentId: string; readonly at: string }
     // Genie's own words are in the agent's thread now (genie#1519): its record says so, as the window's registry writes it.
     | { readonly name: 'genieWords'; readonly agentId: string }
     | { readonly name: 'plan'; readonly agentId: string; readonly steps: readonly { content: string; status: string }[] }
@@ -237,7 +243,7 @@ export type EngineCallback =
     | { readonly name: 'toolSignal'; readonly signal: unknown };
 
 /** Callbacks that change the window's stores: queued while no window is connected. The rest are moment-only. */
-export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'carryOverSent', 'genieWords', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
+export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'carryOverSent', 'redockSent', 'genieWords', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
 
 /** An attachment on the wire: its bytes as base64 (JSON has no bytes). */
 export interface WireAttachment {

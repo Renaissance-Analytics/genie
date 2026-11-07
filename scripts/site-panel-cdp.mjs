@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { codeLiteral } from './code-literal.mjs';
 
 if (process.env.CI !== 'true' && process.env.SITE_PANEL_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 
@@ -44,7 +45,7 @@ class Cdp {
     static async connect(url) {
         const cdp = new Cdp();
         cdp.#socket = new WebSocket(url);
-        cdp.#socket.addEventListener('message', (event) => { const frame = JSON.parse(event.data); const done = cdp.#pending.get(frame.id); if (done) { cdp.#pending.delete(frame.id); done(frame); } });
+        cdp.#socket.addEventListener('message', (event) => { const frame = JSON.parse(event.data); const done = cdp.#pending.get(frame.id); if (typeof done === 'function') { cdp.#pending.delete(frame.id); done(frame); } });
         await new Promise((resolve, reject) => { cdp.#socket.addEventListener('open', resolve, { once: true }); cdp.#socket.addEventListener('error', () => reject(new Error('CDP socket error')), { once: true }); });
         return cdp;
     }
@@ -93,7 +94,7 @@ try {
 
     const webviews = async () => (await targets()).filter((t) => t.type === 'webview');
     if (LOCKED) {
-        const refused = await cdp.evaluate(`window.genie.sitePanels.prepare(${JSON.stringify(HOST)})`);
+        const refused = await cdp.evaluate(`window.genie.sitePanels.prepare(${codeLiteral(HOST)})`);
         check(refused.ok === false && refused.locked === true, 'no key: a site is refused, and says why', JSON.stringify(refused));
         // No keyring at all (basic): the words say none is available and what to install, never "unlock it".
         check(/no system keyring is available/.test(refused.error ?? '') && /GNOME Keyring or KWallet/.test(refused.error ?? '') && !/unlock/i.test(refused.error ?? ''), 'no keyring: the panel’s words say none is there and what to install', JSON.stringify(refused.error));
@@ -105,7 +106,7 @@ try {
         console.log(failures.length === 0 ? 'site-panel-cdp locked: all passed' : `site-panel-cdp locked: FAILED ${failures.join('; ')}`);
         end(failures.length === 0 ? 0 : 1);
     }
-    const addTag = (src) => cdp.evaluate(`(() => { const v = document.createElement('webview'); v.setAttribute('src', ${JSON.stringify(src)}); document.body.appendChild(v); return true; })()`);
+    const addTag = (src) => cdp.evaluate(`(() => { const v = document.createElement('webview'); v.setAttribute('src', ${codeLiteral(src)}); document.body.appendChild(v); return true; })()`);
 
     // The tag exists at all, in this window: without webviewTag it is an inert element with no getWebContentsId.
     await addTag('about:blank');
@@ -123,19 +124,19 @@ try {
 
     // A site waits for the person's first start; this is that click's action.
     const prepared = await until(`${HOST} to be served`, 45_000, async () => {
-        const r = await cdp.evaluate(`window.genie.sitePanels.prepare(${JSON.stringify(HOST)})`);
+        const r = await cdp.evaluate(`window.genie.sitePanels.prepare(${codeLiteral(HOST)})`);
         if (r.ok) return r;
         const state = await cdp.evaluate(`window.genie.features.snapshot().then((d) => JSON.stringify((d.hosting?.sites ?? []).map((x) => ({ id: x.id, host: x.host, state: x.state, reason: x.reason ?? x.error ?? null }))))`);
         console.log(`  prepare: ${JSON.stringify(r)}; sites: ${state}`);
         const site = JSON.parse(state ?? '[]').find((x) => x.host === HOST);
-        if (site) console.log(`  start: ${JSON.stringify(await cdp.evaluate(`window.genie.features.act({ kind: 'hosting.startSite', siteId: ${JSON.stringify(site.id)} }).then((r) => JSON.stringify(r ?? null), (e) => String(e))`))}`);
+        if (site) console.log(`  start: ${JSON.stringify(await cdp.evaluate(`window.genie.features.act({ kind: 'hosting.startSite', siteId: ${codeLiteral(site.id)} }).then((r) => JSON.stringify(r ?? null), (e) => String(e))`))}`);
         return null;
     });
     check(prepared?.ok === true, 'CONTROL an enabled site is allowed, with its store routed', JSON.stringify(prepared));
 
     // Through the product: the tab's panel, not a tag of ours.
     const tabs = { tabs: [{ id: 'sitetab', name: 'SiteTab', layout: 'single', cells: [{ kind: 'site', ref: HOST }] }] };
-    const set = await cdp.evaluate(`window.genieTest.workspaces.setSetting(${JSON.stringify(WORKSPACE)}, 'workspace_tabs', ${JSON.stringify(JSON.stringify(tabs))})`);
+    const set = await cdp.evaluate(`window.genieTest.workspaces.setSetting(${codeLiteral(WORKSPACE)}, 'workspace_tabs', ${codeLiteral(JSON.stringify(tabs))})`);
     console.log(`  setSetting: ${JSON.stringify(set)}`);
     await cdp.evaluate(`window.location.hash = '#genie://workspace/${WORKSPACE}?view=tab:sitetab'; true`);
     const opened = await until('the tab', 20_000, () => cdp.evaluate(`!!document.querySelector('[data-site-panel-box]')`));
@@ -144,7 +145,7 @@ try {
 
     const guest = await until('the guest', 20_000, async () => (await webviews()).find((t) => t.url.includes(HOST)) ?? null);
     check(guest !== null, 'the panel made a guest, under the window\'s real CSP', JSON.stringify((await webviews()).map((t) => t.url)));
-    const placed = await cdp.evaluate(`(() => { const b = document.querySelector('[data-site-panel-box]')?.getBoundingClientRect(); const v = [...document.querySelectorAll('webview')].find((w) => (w.getAttribute('src') || '').includes(${JSON.stringify(HOST)})); if (!b || !v) return null; const r = v.getBoundingClientRect(); return { box: [b.left, b.top, b.width, b.height].map(Math.round), view: [r.left, r.top, r.width, r.height].map(Math.round), visibility: getComputedStyle(v).visibility }; })()`);
+    const placed = await cdp.evaluate(`(() => { const b = document.querySelector('[data-site-panel-box]')?.getBoundingClientRect(); const v = [...document.querySelectorAll('webview')].find((w) => (w.getAttribute('src') || '').includes(${codeLiteral(HOST)})); if (!b || !v) return null; const r = v.getBoundingClientRect(); return { box: [b.left, b.top, b.width, b.height].map(Math.round), view: [r.left, r.top, r.width, r.height].map(Math.round), visibility: getComputedStyle(v).visibility }; })()`);
     check(placed !== null && placed.visibility === 'visible' && placed.view.join() === placed.box.join() && placed.box[2] > 0, 'the page sits over the panel\'s box', JSON.stringify(placed));
 
     if (guest) {
@@ -170,7 +171,7 @@ try {
     await held.evaluate('window.kept = 42; true');
     await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
     await sleep(1500);
-    const hidden = await cdp.evaluate(`(() => { const v = [...document.querySelectorAll('webview')].find((w) => (w.getAttribute('src') || '').includes(${JSON.stringify(HOST)})); return v ? getComputedStyle(v).visibility : 'no such webview'; })()`);
+    const hidden = await cdp.evaluate(`(() => { const v = [...document.querySelectorAll('webview')].find((w) => (w.getAttribute('src') || '').includes(${codeLiteral(HOST)})); return v ? getComputedStyle(v).visibility : 'no such webview'; })()`);
     check(hidden === 'hidden', 'off screen, the page is hidden', String(hidden));
     check((await webviews()).find((t) => t.url.includes(HOST))?.id === before && before !== undefined, 'and the same guest is still there', String(before));
     // And back: Genie's Workspace mounts again, before its settings have arrived. Batch SS on omarchy-test: the page was closed here.
@@ -179,7 +180,7 @@ try {
     await sleep(2000);
     check((await webviews()).find((t) => t.url.includes(HOST))?.id === before, 'back on the tab: the same guest', JSON.stringify((await webviews()).map((t) => t.id)));
     check(await held.evaluate('String(window.kept)').catch((e) => e.message) === '42', 'back on the tab: its page as it was left');
-    check(await cdp.evaluate(`[...document.querySelectorAll('webview')].filter((w) => (w.getAttribute('src') || '').includes(${JSON.stringify(HOST)})).map((w) => getComputedStyle(w).visibility).join()`) === 'visible', 'back on the tab: one page, visible');
+    check(await cdp.evaluate(`[...document.querySelectorAll('webview')].filter((w) => (w.getAttribute('src') || '').includes(${codeLiteral(HOST)})).map((w) => getComputedStyle(w).visibility).join()`) === 'visible', 'back on the tab: one page, visible');
     held.close();
     cdp.close();
 } catch (error) {

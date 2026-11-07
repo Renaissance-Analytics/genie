@@ -63,7 +63,6 @@ beforeEach(async () => {
         attention,
         roster: () => roster,
         resolveCaller: (terminalId) => terminals[terminalId] ?? null,
-        workspaceSetting: () => ({ scope: 'self' }),
         userActive: () => true,
         glow: () => true,
         thumbsUp: () => {},

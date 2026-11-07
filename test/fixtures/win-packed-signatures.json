@@ -1,0 +1,175 @@
+{
+  "source": "measure/sign-plan, run 42377299413: the unsigned package of 55d88d8c (--config.win.signExecutable=false), each file read with Get-AuthenticodeSignature on windows-latest",
+  "files": [
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/pty.node",
+      "kind": "invalid",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-x64/pty.node",
+      "kind": "invalid",
+      "signer": null
+    },
+    {
+      "file": "d3dcompiler_47.dll",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/build/Release/conpty/conpty.dll",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/build/Release/conpty/OpenConsole.exe",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/conpty/conpty.dll",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/conpty/OpenConsole.exe",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/conpty/conpty.dll",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/third_party/conpty/1.23.251008001/win10-arm64/conpty.dll",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/third_party/conpty/1.23.251008001/win10-arm64/OpenConsole.exe",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/third_party/conpty/1.23.251008001/win10-x64/conpty.dll",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/third_party/conpty/1.23.251008001/win10-x64/OpenConsole.exe",
+      "kind": "third-party",
+      "signer": "Microsoft Corporation"
+    },
+    {
+      "file": "dxcompiler.dll",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "electron_wer.dll",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "ffmpeg.dll",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "Genie.exe",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/@particle-academy/fancy-pty/bin/win32-arm64/fancy-pty-helper.exe",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/@particle-academy/fancy-pty/bin/win32-x64/fancy-pty-helper.exe",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/conpty_console_list.node",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/conpty.node",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/pty.node",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/winpty-agent.exe",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/winpty.dll",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/conpty_console_list.node",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/conpty.node",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/pty.node",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/winpty-agent.exe",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/winpty.dll",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/bin/genie-launch.exe",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "resources/runtime/caddy.exe",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "vk_swiftshader.dll",
+      "kind": "unsigned",
+      "signer": null
+    },
+    {
+      "file": "vulkan-1.dll",
+      "kind": "unsigned",
+      "signer": null
+    }
+  ]
+}

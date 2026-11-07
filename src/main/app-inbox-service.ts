@@ -73,6 +73,8 @@ export interface AppInboxServiceDeps {
     readonly roster: () => readonly AgentRecord[];
     readonly slugs?: () => ReadonlyMap<string, string>;
     readonly defaultAgentOf?: (workspaceId: string) => string | null;
+    /** Called only after authentication, limited to this credential's workspace. */
+    readonly refusalForRecipient?: (address: string, workspaceId: string) => string | null;
     /** The workspace's "Apps and scripts may message agents here" (setting `app_inbox`, on by default). */
     readonly enabled: (workspaceId: string) => boolean;
     /** The workspace's own `.gen` hosts: the only places a message's `link` may point. */
@@ -151,6 +153,8 @@ export class AppInboxService {
         const parsed = parseAppMessage(raw, { siteHosts: this.#deps.siteHosts(source.workspaceId).map((x) => x.toLowerCase()) });
         if (!parsed.ok) return refuse(parsed.status, parsed.error);
         const msg = parsed.value;
+        const refusal = msg.to === undefined ? null : this.#deps.refusalForRecipient?.(msg.to, source.workspaceId);
+        if (refusal) return refuse(409, refusal);
         const slugs = this.#slugs();
         const target = appTarget(msg.to, this.#deps.roster(), source.workspaceId, { slugs, defaultAgentId: this.#deps.defaultAgentOf?.(source.workspaceId) ?? null });
         if (target.kind === 'refused') return refuse(target.status, target.error);

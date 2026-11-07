@@ -16,6 +16,8 @@ import { RATE_LIMIT_META, headroomFromMeta, rateLimitWarning, type Headroom } fr
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
 import { randomUUID } from 'node:crypto';
+import { SLEEPING_AFTER_IDLE_MS } from './agent-status.js';
+import { redockReorientation } from './redock.js';
 import { providerProblemWords } from './claude-cli-version.js';
 
 /**
@@ -205,6 +207,18 @@ export type TurnState = 'idle' | 'working' | 'failed' | 'stopped' | 'unknown';
 export type CancelOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: 'not-running' | 'no-turn' | 'unsupported' | 'refused' };
 
 /**
+ * WHY A TURN IS CANCELLED (Tynn #672 part 3). `stop`: the person's "Stop this turn"; the session then waits for them
+ * (genie#1565, `#stoppedByYou`). `interrupt`: "Interrupt and send", which cancels the turn so the person's message, already
+ * handed over, runs next. That message is the next work, so nothing latches.
+ */
+export type CancelIntent = 'stop' | 'interrupt';
+
+/** An intent from outside (IPC, the remote protocol, the engine): only `interrupt` is an interrupt; anything else is a Stop. */
+export function cancelIntent(raw: unknown): CancelIntent {
+    return raw === 'interrupt' ? 'interrupt' : 'stop';
+}
+
+/**
  * How a stop ended (`AgentSession.stop`). `verified` only when a fresh reading shows every process the run was seen to
  * own is gone. Unverified says why, and names what is still running (`survivors`, empty when it could not look).
  */
@@ -275,6 +289,9 @@ export interface AgentSessionOptions {
      */
     carryOver?: CarryOver | null;
     onCarryOverSent?: () => void;
+    /** Independent of provider carry-over and held trust words; consumed only by an accepted first prompt. */
+    redockAt?: string;
+    onRedockSent?: (at: string) => void;
     /**
      * Notified for every ledger row, so a surface can render without re-reading the thread.
      *
@@ -383,6 +400,8 @@ export class AgentSession {
     #overloadCancel: (() => void) | null = null;
     /** The Cooling wait (COOLING_MS) after a turn that ended cleanly, while it runs; `null` = not cooling. One per session. */
     #coolingCancel: (() => void) | null = null;
+    #idleSince: number | null = null;
+    #sleepingCancel: (() => void) | null = null;
     #turnState: TurnState = 'idle';
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
@@ -429,6 +448,8 @@ export class AgentSession {
      * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
      */
     #stopAskedBy: string | null = null;
+    /** Why the pending cancel was asked (`CancelIntent`): only a Stop latches `#stoppedByYou` (Tynn #672 part 3). */
+    #stopIntent: CancelIntent = 'stop';
     /**
      * STOP MEANS STOP UNTIL THE PERSON ACTS (genie#1565): the person stopped the last turn they saw running, and has not
      * sent anything since. While set no inbox notice is handed over (`deliverable`); at the stop itself only what the person
@@ -535,6 +556,7 @@ export class AgentSession {
     #subagentCalls = new Map<string, string>();
     /** The carry-over waiting for the next prompt, and the one sent with the turn now running (Tynn story #380). */
     #carryOver: CarryOver | null = null;
+    #redockAt: string | null = null;
     #carryInFlight: CarryOver | null = null;
     /** Per-agent provider reading; a turn end arms delivery with the next accepted input. */
     #latestHeadroom: Headroom | null = null;
@@ -560,6 +582,7 @@ export class AgentSession {
         this.#options = options;
         this.agentId = options.agentId;
         this.#carryOver = options.carryOver ?? null;
+        this.#redockAt = options.redockAt ?? null;
         if (options.turnsBefore !== undefined && options.turnsBefore >= 0) { this.#turns = options.turnsBefore; this.#marked = options.turnsBefore; }
     }
 
@@ -631,11 +654,24 @@ export class AgentSession {
         return this.#coolingCancel !== null && this.#turnState === 'idle';
     }
 
+    /** A clock for display only; prompts and mail never wait on Sleeping. */
+    get idleSince(): number | null { return this.#turnState === 'idle' && !this.cooling ? this.#idleSince : null; }
+
+    #startIdle(): void {
+        this.#sleepingCancel?.();
+        this.#idleSince = this.#now();
+        this.#sleepingCancel = this.#later(SLEEPING_AFTER_IDLE_MS, () => {
+            this.#sleepingCancel = null;
+            if (this.#turnState === 'idle' && !this.cooling && this.running) this.#changed();
+        });
+    }
+
     /** Begin the Cooling wait, replacing one already running; its end is announced, so the board redraws it Idle. */
     #startCooling(): void {
         this.#stopCooling();
         this.#coolingCancel = this.#later(COOLING_MS, () => {
             this.#coolingCancel = null;
+            this.#startIdle();
             this.#changed();
         });
     }
@@ -643,6 +679,9 @@ export class AgentSession {
     #stopCooling(): void {
         this.#coolingCancel?.();
         this.#coolingCancel = null;
+        this.#sleepingCancel?.();
+        this.#sleepingCancel = null;
+        this.#idleSince = null;
     }
 
     /** The injected timer, or `setTimeout` — unref'd, so a wait that only redraws a status never holds the process open. */
@@ -1223,9 +1262,13 @@ export class AgentSession {
                     // reply simply ending mid-way. Who stopped it is whoever asked (`cancel`), and nobody when no one
                     // here did.
                     const stopper = this.#stopAskedBy;
+                    const intent = this.#stopIntent;
                     this.#stopAskedBy = null;
-                    // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once.
-                    const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you';
+                    this.#stopIntent = 'stop';
+                    // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once. Only the
+                    // person's STOP latches: an interrupt-and-send cancels the turn so their message runs next, and that
+                    // message is the next work, so Genie's notices are not held for them to type again (Tynn #672 part 3).
+                    const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you' && intent === 'stop';
                     if (stoppedByYou) this.#stoppedByYou = true;
                     if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
                     // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
@@ -1383,6 +1426,7 @@ export class AgentSession {
             this.#starting = true;
             const done = (): void => {
                 this.#starting = false;
+                if (this.#turnState === 'idle' && this.#idleSince === null) this.#startIdle();
                 this.#changed();
             };
             // A prompt queued while it started opens its turn in the flush. That needs no announcement of its own: the
@@ -1405,6 +1449,7 @@ export class AgentSession {
         // and never prompted showed `Turn 0 · running`, a `Stop this turn`, `Working` in the rail, and a setting change
         // waited for a turn that never came. It is idle until a prompt opens a turn or the provider starts working.
         this.#turnState = 'idle';
+        if (!this.#starting) this.#startIdle();
     }
 
     /**
@@ -1458,15 +1503,21 @@ export class AgentSession {
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
         // A switch's carry-over goes above the person's words, once (Tynn story #380): only what the provider gets.
         const carry = this.#carryOver;
+        const redockAt = this.#inTurn ? null : this.#redockAt;
+        const redock = redockAt === null ? null : redockReorientation(redockAt);
         // Recheck the newest reading and its reset at delivery, not when this turn's notice was armed.
         const rateWarning = this.#rateWarningPending ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
-        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}`;
+        const above = `${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
         const held = this.#inTurn ? null : this.#heldForNextWork;
         const handed = held === null ? text : `${held}\n\n${text}`;
         const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
         this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
+        if (redockAt !== null) {
+            this.#redockAt = null;
+            this.#options.onRedockSent?.(redockAt);
+        }
         this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
@@ -1486,6 +1537,7 @@ export class AgentSession {
             this.#limitThisTurn = false;
         }
         // What the turn carried, marked where it happened: the exact text sent, opened from the chat — never your message.
+        if (redock) void this.#emitRow({ kind: 'notice', level: 'info', message: redock });
         if (carry) void this.#emitRow({ kind: 'notice', level: 'info', message: carriedLabel(carry), carried: { from: carry.from, turns: carry.turns, text: carry.text } });
         if (rateWarning) void this.#emitRow({ kind: 'notice', level: 'warning', message: rateWarning });
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
@@ -1780,7 +1832,8 @@ export class AgentSession {
         return driver.setModel(modelId);
     }
 
-    cancel(by: string | null = 'you'): CancelOutcome {
+    /** `intent`: why (`CancelIntent`); only a Stop latches the session until the person acts (Tynn #672 part 3). */
+    cancel(by: string | null = 'you', intent: CancelIntent = 'stop'): CancelOutcome {
         const driver = this.#driver;
         if (!driver || this.#exited || !this.#alive) return { ok: false, reason: 'not-running' };
         if (!this.#inTurn) return { ok: false, reason: 'no-turn' };
@@ -1791,8 +1844,10 @@ export class AgentSession {
         }
 
         this.#stopAskedBy = by;
+        this.#stopIntent = intent;
         const refused = (cause: unknown): void => {
             this.#stopAskedBy = null;
+            this.#stopIntent = 'stop';
             const why = cause instanceof Error ? cause.message : String(cause);
             void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn could not be stopped: ${why}. It is still running; Stop agent ends the session.` });
             this.#changed();

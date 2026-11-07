@@ -66,10 +66,10 @@ export function globalAction(press: KeyPress): GlobalAction | null {
     return null;
 }
 
-export type DashboardAction = 'next-row' | 'prev-row' | 'open' | 'cycle-group' | 'reveal' | 'tray';
+export type DashboardAction = 'next-row' | 'prev-row' | 'open' | 'reveal' | 'tray';
 
 /**
- * The Dashboard's keys (§4.1): `J`/`K` move the row cursor, `↵` opens the focused agent, `G` cycles the grouping.
+ * The Dashboard's keys (§4.1): `J`/`K` move the row cursor, `↵` opens the focused agent.
  * `A`/`D` are deliberately unbound here — the Dashboard resolves nothing. Unmodified letters only, and never while a
  * human is typing.
  */
@@ -79,7 +79,6 @@ export function dashboardAction(press: KeyPress): DashboardAction | null {
         case 'j': case 'J': return 'next-row';
         case 'k': case 'K': return 'prev-row';
         case 'Enter': return 'open';
-        case 'g': case 'G': return 'cycle-group';
         // The collaborator reveal on the row cursor (§4.1).
         case 'c': case 'C': return 'reveal';
         // The row tray on the row cursor (§4.1).

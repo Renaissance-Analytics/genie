@@ -165,17 +165,12 @@ describe('the agent’s breadcrumb is react-fancy Breadcrumbs', () => {
 });
 
 describe('the segmented filters are a react-fancy MultiSwitch (a radio group)', () => {
-    it('Dashboard: By workspace | By status, the grouping in use aria-checked="true"', () => {
-        const render = (group: 'workspace' | 'status') =>
-            renderToStaticMarkup(<Dashboard rows={[]} workspaces={[{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }]} onOpenAgent={() => {}} onAddAgent={() => {}} group={group} onGroup={() => {}} />);
-        const html = render('workspace');
-        expect(html).toMatch(/data-react-fancy-multi-switch=""[^>]*role="radiogroup"|role="radiogroup"[^>]*data-react-fancy-multi-switch=""/);
-        expect(html).toMatch(/<div[^>]*data-group-toggle=""[^>]*aria-label="Group the agents"/);
-        expect(radios(html)).toEqual([['By workspace', 'true'], ['By status', 'false']]);
-        expect(radios(render('status'))).toEqual([['By workspace', 'false'], ['By status', 'true']]);
-        expect(html).not.toContain('data-current');
+    it('Dashboard: Sleeping and Stopped are separate Fancy count Buttons, not view modes', () => {
+        const html = renderToStaticMarkup(<Dashboard rows={[]} workspaces={[{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }]} onOpenAgent={() => {}} onAddAgent={() => {}} />);
+        expect(control(html, 'data-dashboard-filter="sleeping"')).toMatchObject({ tag: 'button', fancy: true, text: 'Sleeping 0' });
+        expect(control(html, 'data-dashboard-filter="stopped"')).toMatchObject({ tag: 'button', fancy: true, text: 'Stopped 0' });
+        expect(radios(html)).toEqual([]); expect(html).not.toContain('data-group-toggle');
     });
-
     it('Files: All | Changed N, the filter in use aria-checked="true"; `data-changes` on the switch while there are changes', () => {
         const base: FilesPanelProps = {
             workspace: { id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }, tree: [], tabs: [], open: null, pinned: false,

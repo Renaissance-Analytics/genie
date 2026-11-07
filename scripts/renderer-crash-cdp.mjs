@@ -101,7 +101,11 @@ try {
     check(plain !== null, 'C2. no fourth reload: the plain page', plain?.url?.slice(0, 40) ?? 'none');
     if (plain) {
         const cdp = await Cdp.connect(plain.webSocketDebuggerUrl, 'plain page');
-        const text = await cdp.evaluate('document.body.innerText', 10_000);
+        // The plain page is a data: URL that can still be parsing when its target appears: `document.body` was null twice
+        // ("plain page threw: TypeError: Cannot read properties of null (reading 'innerText')", jobs 128296453480 and
+        // 128367673835). Wait for its body and its words, at most 15 s, then read it once more for C3 as before.
+        const bodyText = `document.body ? document.body.innerText : ''`;
+        const text = String((await until(async () => { const t = String(await cdp.evaluate(bodyText, 5_000)); return /Restart Genie/.test(t) ? t : null; }, 15_000, 200)) ?? await cdp.evaluate(bodyText, 5_000));
         check(/Restart Genie/.test(text) && /Send a crash report/.test(text), 'C3. with Restart Genie and Send a crash report', text.slice(0, 160).replace(/\n/g, ' | '));
         step('D1', 'Restart Genie');
         await cdp.evaluate(`document.querySelector('[data-action="renderer-restart"]').click(); true`, 10_000).catch(() => null);

@@ -38,7 +38,7 @@ const vcvars = join(vs, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat');
 if (!vs || !existsSync(vcvars)) fail('no MSVC x64 tools');
 
 // One cmd: the compiler's environment, then cl. Warnings are errors; no CRT DLL (static), so the exe stands alone.
-const cmd = `call "${vcvars}" >nul && cl /nologo /O2 /W4 /WX /MT /DUNICODE /D_UNICODE "${source}" /Fo"${join(outDir, 'genie-launch.obj')}" /Fe"${out}" /link /SUBSYSTEM:CONSOLE kernel32.lib`;
+const cmd = `call "${vcvars}" >nul && cl /nologo /O2 /W4 /WX /MT /DUNICODE /D_UNICODE "${source}" /Fo"${join(outDir, 'genie-launch.obj')}" /Fe"${out}" /link /SUBSYSTEM:CONSOLE kernel32.lib advapi32.lib`;
 try {
     execFileSync('cmd.exe', ['/d', '/s', '/c', `"${cmd}"`], { stdio: 'inherit', windowsVerbatimArguments: true });
 } catch (error) { fail(`cl failed: ${error.message}`); }

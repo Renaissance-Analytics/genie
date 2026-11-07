@@ -64,45 +64,40 @@ describe('addressing', () => {
 });
 
 describe('reachable — PERMISSION, not liveness', () => {
-    const allow = (scope: 'none' | 'self' | 'specific' | 'all', workspaces: string[] = []) =>
-        () => ({ scope, workspaces });
-
     it('two agents in one workspace reach each other under the defaults', () => {
         const a = agent('tynn', 'claude', 'a');
         const b = agent('tynn', 'claude', 'b');
-        expect(reachable(a, b, allow('self'))).toBe(true);
+        expect(reachable(a, b)).toBe(true);
     });
 
-    it('cross-workspace needs BOTH tiers: the target workspace setting AND the target agent scope', () => {
+    it('cross-workspace access depends on the target agent scope alone', () => {
         const a = agent('tynn', 'claude', 'a');
-        // Workspace says all, agent says self → no.
+        // An agent limited to its own workspace refuses an outside sender.
         const bSelf = agent('fancy', 'claude', 'b', 'self');
-        expect(reachable(a, bSelf, allow('all'))).toBe(false);
-        // Agent says all, workspace says self → no.
+        expect(reachable(a, bSelf)).toBe(false);
+        // Opening the agent itself is sufficient.
         const bAll = agent('fancy', 'claude', 'b', 'all');
-        expect(reachable(a, bAll, allow('self'))).toBe(false);
-        // Both say all → yes. The POSITIVE CONTROL for the two refusals above.
-        expect(reachable(a, bAll, allow('all'))).toBe(true);
+        expect(reachable(a, bAll)).toBe(true);
     });
 
-    it('`specific` names workspaces, and is checked at both tiers', () => {
+    it('`specific` permits the named workspaces and its own workspace only', () => {
         const a = agent('tynn', 'claude', 'a');
         const b = agent('fancy', 'claude', 'b', 'specific');
-        expect(reachable(a, b, allow('specific', ['tynn']), { agentWorkspaces: ['tynn'] })).toBe(true);
-        expect(reachable(a, b, allow('specific', ['prism']), { agentWorkspaces: ['tynn'] })).toBe(false);
-        expect(reachable(a, b, allow('specific', ['tynn']), { agentWorkspaces: ['prism'] })).toBe(false);
+        expect(reachable(a, b, { agentWorkspaces: ['tynn'] })).toBe(true);
+        expect(reachable(a, b, { agentWorkspaces: ['prism'] })).toBe(false);
+        expect(reachable(agent('fancy', 'codex', 'local'), b)).toBe(true);
     });
 
     it('`none` is unreachable even from the same workspace', () => {
         const a = agent('tynn', 'claude', 'a');
         const b = agent('tynn', 'claude', 'b', 'none');
-        expect(reachable(a, b, allow('all'))).toBe(false);
+        expect(reachable(a, b)).toBe(false);
     });
 
     it('the human reaches every agent, and every agent reaches the human', () => {
         const hidden = agent('fancy', 'claude', 'b', 'none');
-        expect(reachable(HUMAN, hidden, allow('none'))).toBe(true);
-        expect(reachable(hidden, HUMAN, allow('none'))).toBe(true);
+        expect(reachable(HUMAN, hidden)).toBe(true);
+        expect(reachable(hidden, HUMAN)).toBe(true);
     });
 });
 

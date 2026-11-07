@@ -22,7 +22,7 @@ import { mailSignals, type MailSignal } from '../core/mail-signals.js';
 import { arrive, NO_PULSES, pulse, pulsingIds, type Pulses } from '../core/view-requests.js';
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
-import { chatSubjectFor } from '../core/chat-scope.js';
+import { chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
@@ -37,7 +37,7 @@ import { chatAgentsKey, chatSendFor, chatThreadFrom, observedMail, rememberThrea
 import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { copyToClipboard } from './clipboard.js';
-import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, tynnIssuesHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -247,7 +247,14 @@ function useAgentDetail(
         return () => { live = false; off?.(); };
     }, [bridge, agentId]);
 
-    return state;
+    return agentId === null ? { detail: null, resolved: false } : state;
+}
+
+/** Once the roster is known, a stale route cannot keep watching an identity the host has hidden. */
+function visibleAgentSubject(snapshot: GenieSnapshot, subject: string | null): string | null {
+    if (subject === null || snapshot.workspaces === null) return subject;
+    if (subject === 'genie' || subject === snapshot.osAgent?.id) return subject;
+    return resolveChatAgent(subject, snapshot.agents) ? subject : null;
 }
 
 /** The own window's cached bridge, including local protocol families and retained native window/channel ports. */
@@ -668,7 +675,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     }, []);
     const view = mobileView(hash);
     const go = (next: Parameters<typeof mobileHash>[0]) => { window.location.hash = mobileHash(next); };
-    const agentId = view.kind === 'agent' ? view.agentId : null;
+    const agentId = visibleAgentSubject(snapshot, view.kind === 'agent' ? view.agentId : null);
     const { detail } = useAgentDetail(bridge, agentId);
     const [sending, setSending] = useState(false);
     const [sendRefusal, setSendRefusal] = useState<string | null>(null);
@@ -860,6 +867,8 @@ function DesktopApp({ bridge }: AppProps) {
      * a new socket (the B4 end-to-end run on omarchy-test: 10 whole-board re-reads and 8 channel signatures for one tab).
      */
     const tynnBoardHost = useMemo(() => tynnBoardHostOf(resolvedBridge), [resolvedBridge]);
+    /** The Tynn tab's Issues host (genie#1295 I1), one per bridge for the same reason. */
+    const tynnIssuesHost = useMemo(() => tynnIssuesHostOf(resolvedBridge), [resolvedBridge]);
     /**
      * THE ONE RESTART (genie#1238): every Start and Restart in this window — the Agent view's header, the Dashboard's
      * broken row and lane, the chat — calls this, and it is main's `restartAgent(…, 'graceful')`: it works from every
@@ -984,7 +993,7 @@ function DesktopApp({ bridge }: AppProps) {
     };
 
     const parsed = parseRoute(route);
-    const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
+    const agentId = visibleAgentSubject(snapshot, parsed.surface === 'agent' ? parsed.agentId : null);
     const { detail, resolved } = useAgentDetail(resolvedBridge, agentId);
     // Every conversation you open is remembered, newest first (eight), across restarts: a workspace's chat opens on the latest.
     const [openedThreads, setOpenedThreads] = useState<readonly string[]>(() => {
@@ -995,7 +1004,7 @@ function DesktopApp({ bridge }: AppProps) {
     // The agent picked on the Dashboard (genie#1209): the window's, never the address's; gone once the Dashboard is left.
     const [dashboardChat, setDashboardChat] = useState<string | null>(null);
     useEffect(() => { if (parsed.surface !== 'dashboard') setDashboardChat(null); }, [parsed.surface]);
-    const chatSubject = chatSubjectFor(parsed, snapshot.agents, snapshot.workspaces ?? [], dashboardChat);
+    const chatSubject = visibleAgentSubject(snapshot, chatSubjectFor(parsed, snapshot.agents, snapshot.workspaces ?? [], dashboardChat));
     // The chat SUBJECT's detail — never the route's `chat=` alone (the owner, 2026-10-19, three times: "THE CHAT DOES NOT
     // EVER CLOSE"). The subject is permanent (the route's, else the agent the view says); loading only for `chat=` left
     // every page reached without it showing an empty chat, which reads as a closed one. The flyout's transcript is derived
@@ -1641,10 +1650,11 @@ function DesktopApp({ bridge }: AppProps) {
     const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, chatAgents, Date.now, chatLines)), [chatDetail, chatSubject, chatAgents, chatLines]);
     const chatRunning = chatDetail !== null && chatBase !== null && chatDetail.agent.id === chatBase.agentId && chatDetail.session?.running === true;
     const inboxRecent = features.inbox?.recent ?? null;
+    const observedRecent = chatBase?.loaded ? chatDetail?.comms ?? inboxRecent : inboxRecent;
     // The same thread object until something it shows changed, so the chat does not draw again for nothing.
     const chatDrafts: ChatThread | null = useMemo(() => chatBase === null
         ? null
-        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(inboxRecent, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatRunning }), [chatBase, inboxRecent, drafts, chatRunning]);
+        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(observedRecent, chatBase.agentId, chatBase.name, chatAgents) } : chatBase, drafts, { running: chatRunning }), [chatBase, observedRecent, chatAgents, drafts, chatRunning]);
     const chatThread: ChatThread | null = useMemo(() => (chatDrafts === null || Object.keys(draftProblems).length === 0 ? chatDrafts : { ...chatDrafts, messages: chatDrafts.messages.map((m) => {
         const problem = draftProblems[m.id];
         return problem ? { ...m, draftProblem: problem } : m;
@@ -1706,6 +1716,11 @@ function DesktopApp({ bridge }: AppProps) {
     // stale address — the one state a person cannot get out of without knowing a shortcut.
     // It happens in practice: a hash left over from a previous version survives an upgrade.
     const surface = parsed.surface;
+    const hiddenWorkspaceIds = new Set([...(snapshot.hibernatedWorkspaces ?? []).map((w) => w.id), ...(snapshot.workspaces ?? []).filter((w) => w.asleep).map((w) => w.id)]);
+    const lastFlowOwner = useRef<{ id: string; workspaceId: string } | null>(null);
+    const currentFlow = parsed.surface === 'flow' ? features.flows?.flows.find((flow) => flow.id === parsed.flowId) : null;
+    if (currentFlow) lastFlowOwner.current = { id: currentFlow.id, workspaceId: currentFlow.workspaceId };
+    const flowWorkspaceId = parsed.surface === 'flow' ? parsed.workspaceId ?? (lastFlowOwner.current?.id === parsed.flowId ? lastFlowOwner.current.workspaceId : null) : null;
     useEffect(() => {
         if (!SERVABLE.includes(surface)) window.location.replace(`#${DEFAULT_ROUTE}`);
     }, [surface]);
@@ -1721,6 +1736,7 @@ function DesktopApp({ bridge }: AppProps) {
             <FlowEditorWindow
                 flowId={parsed.flowId}
                 workspaceId={parsed.workspaceId}
+                hibernated={flowWorkspaceId !== null && hiddenWorkspaceIds.has(flowWorkspaceId)}
                 data={features}
                 workspaces={snapshot.workspaces ?? []}
                 act={(action) => (resolvedBridge ? resolvedBridge.features.act(action) : Promise.reject(new Error('This runs inside Genie.')))}
@@ -1730,11 +1746,12 @@ function DesktopApp({ bridge }: AppProps) {
     }
     // THE FILE PANEL IN ITS OWN WINDOW (§4.3): the panel and nothing else; closing the window docks it back.
     if (parsed.surface === 'files') {
-        const ws = snapshot.workspaces?.find((w) => w.id === parsed.workspaceId) ?? null;
+        const ws = snapshot.workspaces?.find((w) => w.id === parsed.workspaceId && !w.asleep) ?? null;
         return (
             <PluginEditorsContext.Provider value={pluginEditors}>
             <FilesWindow
                 workspace={ws}
+                hibernated={hiddenWorkspaceIds.has(parsed.workspaceId)}
                 loading={snapshot.workspaces === null}
                 files={resolvedBridge?.files ?? NO_FILES}
                 onBringBack={() => window.close()}
@@ -1803,6 +1820,13 @@ function DesktopApp({ bridge }: AppProps) {
             route={route}
             address={shownAddress}
             snapshot={snapshot}
+            onWakeWorkspace={(workspaceId) => {
+                if (!resolvedBridge) return;
+                void resolvedBridge.workspaces.wake(workspaceId).then((result) => {
+                    if (result.ok) navigate(`genie://workspace/${workspaceId}`);
+                    else showAlert({ title: 'Could not redock workspace', body: result.reason });
+                }, (error: unknown) => showAlert({ title: 'Could not redock workspace', body: error instanceof Error ? error.message : String(error) }));
+            }}
             chatDrafts={keptDrafts}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
@@ -1945,6 +1969,7 @@ function DesktopApp({ bridge }: AppProps) {
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
             tynnBoard={tynnBoardHost}
+            tynnIssues={tynnIssuesHost}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => {
                 if (r.ok) return r.commits;
                 // A workspace with nothing to read is an empty list. Git not answering is a failure the view shows.
@@ -1979,7 +2004,7 @@ function DesktopApp({ bridge }: AppProps) {
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
             onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] restart refused:', r.reason); }); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
-            onCancelTurn={(agentId) => { void resolvedBridge?.cancelTurn(agentId); }}
+            onCancelTurn={(agentId, intent) => { void resolvedBridge?.cancelTurn(agentId, intent); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
             onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}

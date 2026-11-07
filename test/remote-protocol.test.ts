@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { LOCAL_TERMINAL_METHODS } from '../src/core/local-terminals.js';
 import { AGENT_SCOPED_METHODS, capabilityOf, inMemoryPair, parseMessage, REMOTE_METHODS, remoteBadge, WORKSPACE_SCOPED_METHODS, type WireMessage } from '../src/core/remote-protocol.js';
 
 /**
@@ -81,13 +82,23 @@ describe('the capability table', () => {
         // owner-only on a host (they act as the host's Tynn person), scoped to their workspace.
         // 85 since the phone's files (genie#1346): `files.children`, `files.open`, `files.readMedia` (reads) and `files.upload`
         // (a write) — workspace-scoped, through the panel's confined files host.
+        expect(capabilityOf('workspaces.tynnPage')).toBe('read');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnPage');
         // 88 with P4's local-only notes, headroom and account retry; activity interests are connection controls.
         // 100 with family5's twelve owner operations; every one starts local.
         // 115 with local Files; 120 with drafts; 122 with the two explicitly local ArtBoard operations;
         // 123 with agents.toolOutput, a tool row's whole output when a person opens it (Tynn story #386).
-        expect(REMOTE_METHODS.length).toBe(123);
+        // 136 with family8B's six native-local aliases and seven owner-scoped stream controls.
+        // 137 with the Tynn tab's other pages (genie#1295 W1): a read, owner-only and workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(139);
+        for (const method of LOCAL_TERMINAL_METHODS) expect(capabilityOf(method)).toBe('local');
         for (const method of ['artboard.read', 'artboard.review'] as const) expect(capabilityOf(method)).toBe('local');
         for (const method of ['chatDrafts.load', 'chatDrafts.save', 'chatDrafts.putFile', 'chatDrafts.readFile', 'chatDrafts.release'] as const) expect(capabilityOf(method)).toBe('local');
+        // Two Issues methods: owner-only, scoped to the workspace, read/write respectively (genie#1295 I1).
+        expect(capabilityOf('workspaces.tynnIssues')).toBe('read');
+        expect(capabilityOf('workspaces.tynnIssueAction')).toBe('write');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnIssues');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnIssueAction');
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');

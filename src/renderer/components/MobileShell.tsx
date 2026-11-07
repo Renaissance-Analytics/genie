@@ -102,10 +102,15 @@ function Reconnecting() {
     );
 }
 
-export function MobileShell({ host, locked, refusal, items, answering, onAnswer, onDisconnect, agents, workspaces, selectedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+    const hibernated = new Set((registeredWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
+    const workspaces = registeredWorkspaces?.filter((workspace) => !hibernated.has(workspace.id)) ?? registeredWorkspaces;
+    const selectedWorkspace = requestedWorkspace !== null && hibernated.has(requestedWorkspace) ? null : requestedWorkspace;
+    const items = reportedItems?.filter((item) => item.workspaceId === null || !hibernated.has(item.workspaceId)) ?? reportedItems;
+    const activeRows = agents?.rows?.filter((row) => !hibernated.has(row.workspaceId)) ?? agents?.rows;
     const wsLabel = (id: string | null): string | null => (id === null ? null : workspaceLabel(workspaces, id));
     const shownItems = items === null || selectedWorkspace === null ? items : items.filter((i) => i.workspaceId === selectedWorkspace);
-    const shownRows = agents?.rows == null || selectedWorkspace === null ? agents?.rows ?? null : agents.rows.filter((r) => r.workspaceId === selectedWorkspace);
+    const shownRows = activeRows == null || selectedWorkspace === null ? activeRows ?? null : activeRows.filter((row) => row.workspaceId === selectedWorkspace);
     return (
         <div data-mobile="shell" className={SCREEN}>
             <header className={`flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 pb-3 ${SAFE_TOP}`}>
@@ -202,7 +207,9 @@ const ALL_WORKSPACES = '';
  * react-fancy Tabs in the pills variant, not Buttons (the owner, 2026-11-01: "those should not be buttons, it's a menu"):
  * each is role="tab", the one in view aria-selected.
  */
-export function MobileWorkspaces({ workspaces, agents, items, selected, onSelect }: MobileWorkspacesProps) {
+export function MobileWorkspaces({ workspaces: registered, agents, items, selected: requested, onSelect }: MobileWorkspacesProps) {
+    const workspaces = registered.filter((w) => w.asleep !== true);
+    const selected = requested !== null && registered.some((w) => w.id === requested && w.asleep) ? null : requested;
     return (
         <nav data-mobile-workspaces aria-label="Workspaces" className="shrink-0 overflow-x-auto overscroll-x-contain border-b border-[var(--border-1)] px-4 py-2">
             <Tabs variant="pills" activeTab={selected ?? ALL_WORKSPACES} onTabChange={(id) => onSelect(id === ALL_WORKSPACES ? null : id)}>
@@ -216,7 +223,6 @@ export function MobileWorkspaces({ workspaces, agents, items, selected, onSelect
                                 <span>{w.name ?? workspaceLabel(workspaces, w.id)}</span>
                                 <span className="font-mono text-[11px] text-[var(--fg-4)]">{count}</span>
                                 {waiting > 0 ? <span data-mobile-ws-waiting={w.id} className="rounded-full bg-[var(--warning)] px-1.5 text-[11px] font-semibold text-black">{waiting}</span> : null}
-                                {w.asleep ? <span data-mobile-ws-asleep={w.id} className="text-[11px] text-[var(--fg-4)]">asleep</span> : null}
                             </Tabs.Tab>
                         );
                     })}

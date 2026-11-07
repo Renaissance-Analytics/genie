@@ -27,8 +27,7 @@ import type { PromptBlock } from './prompt-content.js';
 /**
  * A piece of AgentInbox mail a Genie notice told the agent about (beta.33 item 18), as it was when told: the inbox's id
  * (so the chat can open THAT message), who sent it (`human` or an agent id) and the name that agent had then, and what
- * it says. The notice's prompt stays short — the agent collects the mail with `receive` — so this is the context a
- * person reads in the chat.
+ * it says. This is the chat's preview context; the provider receives the full original mail in its delivery prompt.
  */
 export interface NoticeMail {
     readonly id: string;

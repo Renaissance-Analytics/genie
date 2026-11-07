@@ -91,6 +91,7 @@ import {
     type DriverEvents,
     type PermissionOutcomeLike,
     type CancelOutcome,
+    type CancelIntent,
     type PermissionRequestLike,
     type PromptContext,
     type SessionDriverFactory,
@@ -507,6 +508,7 @@ export class SessionHost {
     readonly #leftovers = new Map<AgentId, readonly ProcessInfo[]>();
     readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
     readonly #onCarryOverSent: ((agentId: AgentId) => void) | undefined;
+    readonly #onRedockSent: ((agentId: AgentId, at: string) => void) | undefined;
     readonly #comms: ((agentId: AgentId, since: number) => Comms | null) | undefined;
     readonly #heldElsewhere: ((record: AgentRecord) => string | null) | undefined;
 
@@ -538,6 +540,7 @@ export class SessionHost {
         onThreadId?: (agentId: AgentId, threadId: string) => void;
         /** A provider switch's carry-over went with a turn that replied (Tynn story #380): the record's is cleared. */
         onCarryOverSent?: (agentId: AgentId) => void;
+        onRedockSent?: (agentId: AgentId, at: string) => void;
         /**
          * The agent's record AS IT IS NOW (the registry's), for what is decided per call rather than at start — a Claude
          * agent's tool setting (genie#1188). Absent = the record the session started with.
@@ -625,6 +628,7 @@ export class SessionHost {
         this.#lifecycle = options.lifecycle;
         this.#onThreadId = options.onThreadId;
         this.#onCarryOverSent = options.onCarryOverSent;
+        this.#onRedockSent = options.onRedockSent;
         this.#currentRecord = options.currentRecord;
         this.#comms = options.comms;
         this.#heldElsewhere = options.heldElsewhere;
@@ -932,6 +936,7 @@ export class SessionHost {
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
             // A provider switch's carry-over, attached once to this run's first prompt that goes (Tynn story #380).
             ...(record.carryOver ? { carryOver: record.carryOver, onCarryOverSent: () => this.#onCarryOverSent?.(record.id) } : {}),
+            ...(record.redockAt ? { redockAt: record.redockAt, onRedockSent: (at: string) => this.#onRedockSent?.(record.id, at) } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
             onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
@@ -1389,11 +1394,12 @@ export class SessionHost {
      * slot, its provider and its conversation untouched — and the turn ends when the provider reports it cancelled.
      * Ending the agent is `stop` below, a different action. `not-running` for an agent with no session here.
      */
-    cancel(agentId: AgentId, by: string | null = 'you'): CancelOutcome {
+    cancel(agentId: AgentId, by: string | null = 'you', intent: CancelIntent = 'stop'): CancelOutcome {
         const entry = this.#running.get(agentId);
         if (!entry) return { ok: false, reason: 'not-running' };
 
-        const outcome = entry.session.cancel(by);
+        // `intent`: a Stop latches the session until the person acts; an interrupt-and-send does not (Tynn #672 part 3).
+        const outcome = entry.session.cancel(by, intent);
         this.#emit(agentId);
         return outcome;
     }
@@ -1663,6 +1669,8 @@ export class SessionHost {
             // COOLING (core/session.ts COOLING_MS): derived here, once, so the window, the remote, the phone and a replica
             // of this probe all read the same status. Display only: `turnState` is `idle` while it is true.
             cooling: session.cooling,
+            idleSince: session.idleSince,
+            stoppedByYou: session.stoppedByYou,
             inTurn: session.inTurn,
             starting: session.starting,
             startedAt,

@@ -31,9 +31,11 @@ export type StoresCall = (store: StoreName, method: string, args: readonly unkno
 export class InboxReplica {
     #messages: InboxMessage[] = [];
     #cursors: Record<string, number> = {};
+    #filtered = false;
     readonly #involving = new InvolvingCache<InboxMessage>();
     readonly #sendListeners = new Set<(to: Participant, message: InboxMessage) => void>();
     readonly #readListeners = new Set<(reader: Participant, ids?: readonly string[]) => void>();
+    readonly #messageListeners = new Set<(messages: readonly InboxMessage[]) => void>();
     readonly #call: StoresCall;
 
     constructor(call: StoresCall) {
@@ -41,20 +43,34 @@ export class InboxReplica {
     }
 
     rebase(mail: StoresDump['inbox']): void {
+        const changed = new Map(this.#messages.map(m => [m.id, m]));
+        for (const message of mail.messages) changed.set(message.id, message);
         this.#messages = [...mail.messages];
         this.#cursors = { ...mail.cursors };
+        this.#filtered = mail.filtered === true;
+        this.#messagesChanged([...changed.values()]);
     }
 
     apply(event: Extract<StoresEvent, { store: 'inbox' }>): void {
         if (event.kind === 'delta') {
+            const changed = [...event.appended, ...event.updated];
             if (event.updated.length > 0 || event.removed.length > 0) {
                 // A NEW array for a change in place: the involving cache reads array and length as "unchanged".
                 const updated = new Map(event.updated.map((m) => [m.id, m]));
                 const removed = new Set(event.removed);
-                this.#messages = this.#messages.filter((m) => !removed.has(m.id)).map((m) => updated.get(m.id) ?? m);
+                this.#messages = this.#messages.filter((m) => {
+                    if (!removed.has(m.id)) return true;
+                    changed.push(m);
+                    return false;
+                }).map((m) => updated.get(m.id) ?? m);
             }
-            for (const m of event.appended) this.#messages.push(m);
+            // The involving cache's append fast path assumes old entries stayed put. Restored older mail replaces the array.
+            const last = this.#messages.at(-1)?.seq ?? -Infinity;
+            if (event.appended.some((m) => m.seq < last)) this.#messages = [...this.#messages, ...event.appended].sort((a, b) => a.seq - b.seq);
+            else for (const m of event.appended) this.#messages.push(m);
             this.#cursors = { ...event.cursors };
+            this.#filtered = event.filtered === true;
+            this.#messagesChanged(changed);
             return;
         }
         if (event.kind === 'sent') {
@@ -79,6 +95,18 @@ export class InboxReplica {
         return () => { this.#readListeners.delete(listener); };
     }
 
+    onMessagesChanged(listener: (messages: readonly InboxMessage[]) => void): () => void {
+        this.#messageListeners.add(listener);
+        return () => { this.#messageListeners.delete(listener); };
+    }
+
+    #messagesChanged(messages: readonly InboxMessage[]): void {
+        if (messages.length === 0) return;
+        for (const listener of [...this.#messageListeners]) {
+            try { listener(messages); } catch { /* One view cannot interrupt another view or inbox events. */ }
+        }
+    }
+
     involving(participant: Participant, limit = 200): readonly InboxMessage[] {
         return this.#involving.read(this.#messages, participant, limit);
     }
@@ -92,7 +120,8 @@ export class InboxReplica {
     }
 
     unread(participant: Participant): InboxMessage[] {
-        return unreadOf(this.#view(), participant);
+        const messages = unreadOf(this.#view(), participant);
+        return this.#filtered ? messages.filter((m) => m.readAt === null) : messages;
     }
 
     unreadCount(participant: Participant): number {
@@ -114,6 +143,14 @@ export class InboxReplica {
         const { signal: _signal, ...rest } = input;
         void _signal;
         return (await this.#call('inbox', 'receive', [{ ...rest, wait: false }])) as ReceivePage;
+    }
+
+    async markDelivered(participant: Participant, ids: readonly string[]): Promise<void> {
+        await this.#call('inbox', 'markDelivered', [participant, ids]);
+    }
+
+    async recordDeliveryRefusal(participant: Participant, ids: readonly string[], refusal: { readonly attempts: number; readonly reason: string }): Promise<void> {
+        await this.#call('inbox', 'recordDeliveryRefusal', [participant, ids, refusal]);
     }
 
     async deleteThread(a: Participant, b: Participant): Promise<number> {

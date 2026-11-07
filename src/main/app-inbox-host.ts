@@ -35,6 +35,7 @@ export interface AppInboxHostDeps {
     readonly roster: () => readonly AgentRecord[];
     readonly slugs?: () => ReadonlyMap<string, string>;
     readonly defaultAgentOf?: (workspaceId: string) => string | null;
+    readonly refusalForRecipient?: (address: string, workspaceId: string) => string | null;
     /** The workspace's "Apps and scripts may message agents here" (`app_inbox`, on by default). */
     readonly enabled: (workspaceId: string) => boolean;
     readonly siteHosts: (workspaceId: string) => readonly string[];
@@ -71,6 +72,7 @@ export class AppInboxHost {
             roster: deps.roster,
             ...(deps.slugs ? { slugs: deps.slugs } : {}),
             ...(deps.defaultAgentOf ? { defaultAgentOf: deps.defaultAgentOf } : {}),
+            ...(deps.refusalForRecipient ? { refusalForRecipient: deps.refusalForRecipient } : {}),
             enabled: deps.enabled,
             siteHosts: deps.siteHosts,
             log,

@@ -22,10 +22,9 @@ import { confineRead, confineWrite } from './workspace-confine.js';
  * ## Read semantics, which are the whole point
  *
  * - A participant's cursor is the `seq` of the last message they ACKNOWLEDGED. `receive` with
- *   the default `acknowledge: true` advances it to the last message of the page it returned —
- *   and that is the only operation that does. Nothing marks mail read on your behalf: not a
- *   send, not a listing, not the Deck. v1 lost messages exactly where a surface "helpfully"
- *   committed a cursor for a reader that never saw the page.
+ *   the default `acknowledge: true` advances it to the last message of the page it returned.
+ *   The host also acknowledges a captured batch after the provider
+ *   accepts the actual mail (markDelivered); a queued or refused prompt is never acknowledged.
  * - The cursor REWINDS. `receive({ cursor: n })` pages from `n` regardless of the committed
  *   position, and acknowledging that page recommits from there — possibly backwards. That is
  *   the recovery path for mail marked read that did not reach you.
@@ -58,6 +57,8 @@ export interface InboxMessage {
     readonly sentAt: string;
     /** When the recipient's acknowledged receive returned it. `null` = unread. */
     readonly readAt: string | null;
+    /** The host's last repeated handoff refusal while this mail waits; cleared when it is acknowledged. */
+    readonly deliveryRefusal?: { readonly attempts: number; readonly reason: string; readonly at: string };
     /** Genie-generated status, not an agent-authored reply or a grant of conversation-opening permission. */
     readonly automaticReply?: { readonly kind: 'paused'; readonly inReplyTo: string };
     /**
@@ -159,6 +160,31 @@ export class InboxStore {
     readonly #readListeners = new Set<(reader: Participant, ids?: readonly string[]) => void>();
     readonly #now: () => string;
     readonly #sessionOf: InboxSessionProbe;
+    #visible: ((message: InboxMessage) => boolean) | null = null;
+    #visibilityVersion: (() => unknown) | undefined;
+    #viewVersion: unknown;
+    #viewSource: readonly InboxMessage[] | null = null;
+    #viewLength = -1;
+
+    /** Host-owned view policy. Hidden mail stays stored and unacknowledged. */
+    setVisibility(test: (message: InboxMessage) => boolean, version?: () => unknown): void {
+        this.#visible = test;
+        this.#visibilityVersion = version;
+        this.#viewSource = null;
+    }
+    #view: readonly InboxMessage[] = [];
+
+    #viewMessages(): readonly InboxMessage[] {
+        if (!this.#visible) return this.#mail.messages;
+        const version = this.#visibilityVersion?.();
+        if (this.#visibilityVersion && this.#viewSource === this.#mail.messages && this.#viewLength === this.#mail.messages.length && this.#viewVersion === version) return this.#view;
+        const next = this.#mail.messages.filter(this.#visible);
+        if (next.length !== this.#view.length || next.some((m, i) => m !== this.#view[i])) this.#view = next;
+        this.#viewSource = this.#mail.messages;
+        this.#viewLength = this.#mail.messages.length;
+        this.#viewVersion = version;
+        return this.#view;
+    }
 
     private constructor(dir: string, mail: MailFile, now: () => string, sessionOf: InboxSessionProbe) {
         this.#dir = dir;
@@ -198,13 +224,13 @@ export class InboxStore {
         // READ ONCE PER CHANGE (genie#1200): the estate snapshot asks for every agent's mail twenty times a second while
         // agents work; filtering the whole mailbox each time cost main agents × messages per snapshot. Every change to
         // the mail either grows the array (send) or replaces it (read, delete, import), so array + length says "unchanged".
-        return this.#involving.read(this.#mail.messages, participant, limit);
+        return this.#involving.read(this.#viewMessages(), participant, limit);
     }
     readonly #involving = new InvolvingCache<InboxMessage>();
 
     /** Every message, oldest first — what the AgentInbox flyout's threads are read from (core/inbox-threads.ts). */
     all(): InboxMessage[] {
-        return [...this.#mail.messages];
+        return [...this.#viewMessages()];
     }
 
     /**
@@ -214,6 +240,7 @@ export class InboxStore {
      */
     async attachmentForPerson(attachmentId: string): Promise<{ name: string; bytes: Buffer }> {
         for (const message of this.#mail.messages) {
+            if (this.#visible?.(message) === false) continue;
             const attachment = message.attachments.find((a) => a.id === attachmentId);
             if (attachment) return { name: attachment.name, bytes: await readFile(join(this.attachmentsDir, attachment.sha256)) };
         }
@@ -227,11 +254,16 @@ export class InboxStore {
      */
     async deleteThread(a: Participant, b: Participant): Promise<number> {
         const before = this.#mail.messages.length;
+        const removed: InboxMessage[] = [];
         this.#mail.lastSeq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0);
-        this.#mail.messages = this.#mail.messages.filter((m) => !((m.from === a && m.to === b) || (m.from === b && m.to === a)));
+        this.#mail.messages = this.#mail.messages.filter((m) => {
+            const gone = (m.from === a && m.to === b) || (m.from === b && m.to === a);
+            if (gone) removed.push(m);
+            return !gone;
+        });
         const gone = before - this.#mail.messages.length;
         if (gone > 0) {
-            await this.#flush();
+            await this.#flush(removed);
             for (const l of this.#readListeners) l(a, []);
         }
         return gone;
@@ -288,7 +320,7 @@ export class InboxStore {
         // One durable write before either arrival is announced. No recursive send: two paused agents cannot loop.
         this.#mail.lastSeq = arrivals.at(-1)!.seq;
         this.#mail.messages.push(...arrivals);
-        await this.#flush();
+        await this.#flush(arrivals);
 
         for (const arrival of arrivals) {
             for (const w of [...this.#waiters]) {
@@ -302,11 +334,11 @@ export class InboxStore {
     async receive(input: ReceiveInput): Promise<ReceivePage> {
         const participant = input.participant;
         const from = input.cursor ?? this.#cursorOf(participant);
-        let page = this.#after(participant, from, input.limit);
+        let page = this.#after(participant, from, input.limit, input.cursor === undefined);
 
         if (page.length === 0 && input.wait && !input.signal?.aborted) {
             await this.#waitFor(participant, Math.min(input.timeoutMs ?? DEFAULT_WAIT_MS, MAX_WAIT_MS), input.signal);
-            page = this.#after(participant, from, input.limit);
+            page = this.#after(participant, from, input.limit, input.cursor === undefined);
         }
         // The caller went away (genie#1360): nobody will read this answer, so nothing is marked read — the mail waits
         // for the next receive instead of being lost to a closed connection.
@@ -315,20 +347,58 @@ export class InboxStore {
         if (page.length > 0 && input.acknowledge !== false) {
             const last = page.at(-1)!.seq;
             const readAt = this.#now();
-            this.#mail.cursors[participant] = last;
+            const deferred = this.#visible && this.#mail.messages.find((m) => m.to === participant && m.readAt === null && m.seq > from && m.seq <= last && !this.#visible!(m));
+            this.#mail.cursors[participant] = deferred ? deferred.seq - 1 : last;
             // WHICH messages this receive read (genie#1209): the Dashboard marks each one's signal read.
             const read: string[] = [];
+            const changed: InboxMessage[] = [];
+            const returned = new Set(page.map((m) => m.id));
             this.#mail.messages = this.#mail.messages.map((m) => {
-                if (!(m.to === participant && m.readAt === null && m.seq > from && m.seq <= last)) return m;
+                if (!returned.has(m.id) || m.readAt !== null) return m;
                 read.push(m.id);
-                return { ...m, readAt };
+                const { deliveryRefusal: _refusal, ...message } = m;
+                const next = { ...message, readAt };
+                changed.push(next);
+                return next;
             });
-            await this.#flush();
+            await this.#flush(changed);
             page = page.map((m) => this.#mail.messages.find((x) => x.seq === m.seq)!);
             for (const l of this.#readListeners) l(participant, read);
         }
 
         return { messages: page, cursor: this.#cursorOf(participant) };
+    }
+
+    /** A provider accepted these message IDs. Never skip unread mail or acknowledge a later arrival. */
+    async markDelivered(participant: Participant, ids: readonly string[]): Promise<void> {
+        const captured = new Set(ids);
+        const pending = this.unread(participant);
+        let count = 0;
+        while (count < pending.length && captured.has(pending[count]!.id)) count += 1;
+        if (pending.slice(count).some((m) => captured.has(m.id))) {
+            throw new Error('the delivered batch is not the next pending mail; no receipt was changed');
+        }
+        // Idempotent when a receive or an earlier acknowledgement already read these IDs.
+        if (count > 0) await this.receive({ participant, limit: count });
+    }
+
+    /** Persist a repeated refusal only on captured mail that still waits for this participant. No cursor moves. */
+    async recordDeliveryRefusal(participant: Participant, ids: readonly string[], refusal: { readonly attempts: number; readonly reason: string }): Promise<void> {
+        if (!Number.isSafeInteger(refusal.attempts) || refusal.attempts < 5 || typeof refusal.reason !== 'string') {
+            throw new Error('a delivery refusal needs a reason and at least five consecutive attempts');
+        }
+        const captured = new Set(ids);
+        const pending = new Set(this.unread(participant).filter((m) => captured.has(m.id)).map((m) => m.id));
+        if (pending.size === 0) return;
+        const deliveryRefusal = { attempts: refusal.attempts, reason: refusal.reason.slice(0, 2_000), at: this.#now() };
+        const changed: InboxMessage[] = [];
+        this.#mail.messages = this.#mail.messages.map((m) => {
+            if (!pending.has(m.id)) return m;
+            const next = { ...m, deliveryRefusal };
+            changed.push(next);
+            return next;
+        });
+        await this.#flush(changed);
     }
 
     /** Mail for `participant` after their committed cursor. The UI's reminder count. */
@@ -338,15 +408,15 @@ export class InboxStore {
 
     /**
      * The unread mail itself, WITHOUT committing anything — what the Deck's unread-dm source and the
-     * chat flyout read. Only the participant's own `receive` marks it read.
+     * chat flyout read. Explicit receive or actual provider delivery acknowledges it.
      */
     unread(participant: Participant): InboxMessage[] {
-        return unreadOf(this.#mail, participant);
+        return this.#visible ? this.#after(participant, this.#cursorOf(participant), undefined, true) : unreadOf(this.#mail, participant);
     }
 
     /** What `from` sent, newest first, with whether each was read. */
     receipts(from: Participant, limit = 20): Receipt[] {
-        return receiptsOf(this.#mail, from, limit);
+        return receiptsOf({ ...this.#mail, messages: this.all() }, from, limit);
     }
 
     /**
@@ -448,8 +518,10 @@ export class InboxStore {
         return cursorOf(this.#mail, participant);
     }
 
-    #after(participant: Participant, cursor: number, limit?: number): InboxMessage[] {
-        return mailAfter(this.#mail, participant, cursor, limit);
+    #after(participant: Participant, cursor: number, limit?: number, unreadOnly = false): InboxMessage[] {
+        if (!this.#visible) return mailAfter(this.#mail, participant, cursor, limit);
+        const messages = this.#mail.messages.filter((m) => m.to === participant && m.seq > cursor && (!unreadOnly || m.readAt === null) && this.#visible!(m));
+        return limit === undefined ? messages : messages.slice(0, Math.max(limit, 1));
     }
 
     /** Until mail for `participant`, the timeout, or `signal` aborting — whichever is first. Only this waiter ends. */
@@ -472,6 +544,7 @@ export class InboxStore {
 
     #attachmentFor(participant: Participant, attachmentId: string): { message: InboxMessage; attachment: StoredAttachment } {
         for (const message of this.#mail.messages) {
+            if (this.#visible?.(message) === false) continue;
             const attachment = message.attachments.find((a) => a.id === attachmentId);
             if (!attachment) continue;
             if (message.from !== participant && message.to !== participant) {
@@ -544,12 +617,16 @@ export class InboxStore {
         await rename(tmp, target);
     }
 
-    async #flush(): Promise<void> {
+    async #flush(changed: readonly InboxMessage[] = []): Promise<void> {
         await writeJsonAtomic(this.mailFile, this.#mail);
         for (const l of this.#changeListeners) l();
+        if (changed.length > 0) for (const listener of [...this.#messageListeners]) {
+            try { listener(changed); } catch { /* A view failing cannot interrupt mail delivery. */ }
+        }
     }
 
     readonly #changeListeners = new Set<() => void>();
+    readonly #messageListeners = new Set<(messages: readonly InboxMessage[]) => void>();
 
     /**
      * Every change that reached the disk (the host split, P3.1): what genie-host sends the window's replica, before the
@@ -560,9 +637,15 @@ export class InboxStore {
         return () => { this.#changeListeners.delete(listener); };
     }
 
+    /** Changed or removed mail, after its durable write: local views refresh only the affected participants. */
+    onMessagesChanged(listener: (messages: readonly InboxMessage[]) => void): () => void {
+        this.#messageListeners.add(listener);
+        return () => { this.#messageListeners.delete(listener); };
+    }
+
     /** The mail as it is: oldest first, and each participant's committed cursor. Read-only: never written through. */
-    snapshot(): { readonly messages: readonly InboxMessage[]; readonly cursors: Readonly<Record<string, number>> } {
-        return { messages: this.#mail.messages, cursors: this.#mail.cursors };
+    snapshot(): { readonly messages: readonly InboxMessage[]; readonly cursors: Readonly<Record<string, number>>; readonly filtered?: true } {
+        return { messages: this.#viewMessages(), cursors: this.#mail.cursors, ...(this.#visible ? { filtered: true as const } : {}) };
     }
 }
 

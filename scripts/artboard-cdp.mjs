@@ -58,7 +58,7 @@ class Cdp {
     next = 0; pending = new Map();
     static async connect(url) {
         const c = new Cdp(); c.socket = new WebSocket(url); let timer;
-        c.socket.addEventListener('message', event => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; if (frame.method === 'Debugger.resumed') c.paused = null; c.pending.get(frame.id)?.(frame); c.pending.delete(frame.id); });
+        c.socket.addEventListener('message', event => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; if (frame.method === 'Debugger.resumed') c.paused = null; { const done = c.pending.get(frame.id); if (typeof done === 'function') done(frame); } c.pending.delete(frame.id); });
         c.socket.addEventListener('close', () => { c.dead ??= 'CDP closed'; for (const done of c.pending.values()) done({ error: { message: c.dead } }); c.pending.clear(); });
         try { await Promise.race([new Promise((resolve, reject) => { c.socket.addEventListener('open', resolve, { once: true }); c.socket.addEventListener('error', reject, { once: true }); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('CDP connect timed out')), 10000); })]); }
         finally { clearTimeout(timer); }

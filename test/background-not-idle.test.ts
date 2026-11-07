@@ -77,9 +77,9 @@ describe('the board groups, counts and orders it as Working', () => {
         }
     });
 
-    it('CONTROL: a fresh agent reads idle, with or without a session', () => {
-        const fresh = [agentRowFor(record, null, () => 2), agentRowFor(record, live({ background: 0 }), () => 2)];
-        for (const r of fresh) expect(grouped([r])).toEqual([['Idle', ['a1']]]);
+    it('CONTROL: an unstarted agent is Stopped; a running idle session is Idle', () => {
+        expect(grouped([agentRowFor(record, null, () => 2)])).toEqual([['Stopped', ['a1']]]);
+        expect(grouped([agentRowFor(record, live({ background: 0 }), () => 2)])).toEqual([['Idle', ['a1']]]);
     });
 
     it('CONTROL: what already outranks it keeps its place: waiting, broken, and Cooling (with Working, as ever)', () => {
@@ -105,8 +105,8 @@ describe('the board groups, counts and orders it as Working', () => {
     it('a stopped process runs nothing: its last count is not work (the header and the chat already ask `running`)', () => {
         const r = agentRowFor(record, live({ running: false, background: 3 }), () => 2);
         expect(r.background).toBeNull();
-        expect(statusOf(r).word).toBe('Idle');
-        expect(grouped([r])).toEqual([['Idle', ['a1']]]);
+        expect(statusOf(r).word).toBe('Stopped');
+        expect(grouped([r])).toEqual([['Stopped', ['a1']]]);
     });
 
     it('its STATE stays idle: what reads the state for behaviour sees what it saw', () => {

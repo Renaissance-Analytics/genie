@@ -19,7 +19,7 @@ function deps(asked: string[]): AllToolsDeps {
     const manifest = { id: 'acme.lint', name: 'Acme Lint', version: '1.0.0', publisher: { name: 'Acme', keyId: 'k' }, mcpTools: [], capabilities: { network: { hosts: [] }, genieApi: [] }, panels: [] };
     const tool = { name: 'lint', description: 'Lint', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess' as const, gated: false };
     return {
-        genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller, workspaceSetting: never as never, userActive: () => true, glow: () => false, thumbsUp: () => {} },
+        genie: { inbox: never as never, attention: never as never, roster: () => [], resolveCaller, userActive: () => true, glow: () => false, thumbsUp: () => {} },
         more: { knowledge: never as never, terminals: never as never, approve: async () => 'denied', resolveCaller },
         attention: { resolveCaller, openFile: async () => ({ ok: false, reason: 'x' }) },
         hosting: { resolveCaller, approve: async () => 'denied', services: null },

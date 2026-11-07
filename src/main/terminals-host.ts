@@ -30,7 +30,7 @@ export type TerminalsEvent =
     | ({ readonly kind: 'data'; readonly id: string; readonly data: string; readonly owner?: string } & Partial<TerminalDataPosition>)
     | ({ readonly kind: 'exit'; readonly id: string; readonly code: number; readonly owner?: string } & Partial<TerminalPosition>);
 
-const WINDOW_CALLS = new Set(['open', 'openReady', 'write', 'resize', 'close']);
+const WINDOW_CALLS = new Set(['open', 'openReady', 'write', 'resize', 'close', 'snapshot']);
 /** How much of a terminal's output a window keeps for a pane that joins it. */
 const TAIL_MAX = 262_144;
 
@@ -82,6 +82,14 @@ export class TerminalsService {
         if (!WINDOW_CALLS.has(method)) throw new Error(`a window cannot call terminals.${method}`);
         const t = this.#terminals;
         switch (method) {
+            case 'snapshot': {
+                const id = args[0]; if (typeof id !== 'string') return null;
+                const heldBy = this.#owners.get(id);
+                if (heldBy !== undefined && heldBy !== owner) return null;
+                const joined = t.attach(id); if (!joined) return null;
+                const position = terminalPosition(t.streamSnapshot(id));
+                return { ...joined, scrollback: joined.scrollback.slice(-TAIL_MAX), ...(position ?? { epoch: null, endOffset: null }) };
+            }
             case 'open':
             case 'openReady': {
                 const options = args[0] as TerminalOptions;
@@ -118,7 +126,7 @@ export class TerminalsService {
 }
 
 /** The terminals as a window and its features use them: genie-host's through the replica, or a TerminalHost of its own on the emergency path. */
-export type TerminalsApi = Pick<TerminalsReplica, 'open' | 'openReady' | 'write' | 'resize' | 'close' | 'list' | 'scrollback' | 'attach' | 'lastCwd' | 'refusal' | 'onData' | 'onExit' | 'count' | 'closeAll'> & { finished(id: string): { workspaceId: string; exitCode: number } | null };
+export type TerminalsApi = Pick<TerminalsReplica, 'open' | 'openReady' | 'write' | 'resize' | 'close' | 'list' | 'scrollback' | 'attach' | 'lastCwd' | 'refusal' | 'onData' | 'onExit' | 'count' | 'closeAll'> & Partial<Pick<TerminalsReplica, 'freshSnapshot' | 'streamSnapshot' | 'writeReady' | 'resizeReady' | 'closeReady'>> & { finished(id: string): { workspaceId: string; exitCode: number } | null };
 
 /** genie-host's terminals, as a window drives them (P3.3e). */
 export class TerminalsReplica {
@@ -230,6 +238,13 @@ export class TerminalsReplica {
     #known(id: string): boolean {
         return this.#pending.has(id) || this.#list.some((t) => t.id === id);
     }
+    /** Native-local callers wait for the authenticated engine's response, including quiet/disposable ids. */
+    async freshSnapshot(id: string): Promise<import('./local-terminal-native.js').NativeTerminalSnapshot | null> {
+        return await this.#call('snapshot', [id]) as import('./local-terminal-native.js').NativeTerminalSnapshot | null;
+    }
+    async writeReady(id: string, data: string): Promise<boolean> { return await this.#call('write', [id, data]) === true; }
+    async resizeReady(id: string, cols: number, rows: number): Promise<boolean> { return await this.#call('resize', [id, cols, rows]) === true; }
+    async closeReady(id: string): Promise<boolean> { return await this.#call('close', [id]) === true; }
 
     write(id: string, data: string): boolean {
         if (!this.#known(id)) return false;

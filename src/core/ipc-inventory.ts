@@ -55,14 +55,8 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // The safe-mode banner's crash report (Tynn #386 part 4): built and sent from this window, with the host's proof.
     ['genie:crash-report-draft', 'window-port'],
     ['genie:crash-report-send', 'window-port'],
-    ['genie:terminal-open', 'protocol:terminals.open'],
     // Opens a window on this machine (Tynn story #378): the window's own, like Take Over's window.
     ['genie:scratch-terminal-open', 'window-port'],
-    ['genie:terminal-write', 'protocol:terminals.write'],
-    ['genie:terminal-resize', 'protocol:terminals.resize'],
-    ['genie:terminal-close', 'protocol:terminals.close'],
-    ['genie:terminal-list', 'protocol:terminals.list'],
-    ['genie:terminal-attach', 'protocol:terminals.attach'],
     ['genie:files-open-external', 'window-port'],
     ['genie:files-reveal', 'window-port'],
     // The picker stays a window port; its copy step moves to the host in P5.
@@ -85,6 +79,12 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:workspace-tynn-board-watch', 'protocol:workspaces.tynnBoardWatch'],
     ['genie:workspace-tynn-board-unwatch', 'protocol:workspaces.tynnBoardUnwatch'],
     ['genie:workspace-tynn-board-action', 'protocol:workspaces.tynnBoardAction'],
+    ['genie:workspace-tynn-page', 'protocol:workspaces.tynnPage'],
+    ['genie:workspace-tynn-issues', 'protocol:workspaces.tynnIssues'],
+    ['genie:workspace-tynn-issue-action', 'protocol:workspaces.tynnIssueAction'],
+    ['genie:workspace-tynn-issues-changes', 'protocol:workspaces.tynnIssueChanges'],
+    ['genie:workspace-tynn-issues-watch', 'protocol:workspaces.tynnIssuesWatch'],
+    ['genie:workspace-tynn-issues-unwatch', 'protocol:workspaces.tynnIssuesUnwatch'],
     ['genie:workspace-hibernate', 'protocol:workspaces.hibernate'],
     ['genie:workspace-wake', 'protocol:workspaces.wake'],
     ['genie:workspace-remove', 'protocol:workspaces.remove'],

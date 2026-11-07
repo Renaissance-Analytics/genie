@@ -66,6 +66,21 @@ beforeEach(async () => {
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 describe('send', () => {
+    it('story394: a named hibernated recipient is refused before mail is stored and is reachable again after redock', async () => {
+        let asleep = true;
+        const scoped = new AppInboxService({ keys, inbox, roster: () => asleep ? roster.filter((record) => record.id !== scribe.id) : roster,
+            slugs: () => new Map([['fancy', 'fancy']]), enabled: () => true, defaultAgentOf: () => clerk.id, siteHosts: () => ['flabs.gen'], now: () => now,
+            refusalForRecipient: (name: string) => asleep && name === 'scribe' ? "scribe's workspace is hibernated; redock it first" : null,
+        } as never);
+        const request = req({ body: { to: 'scribe', subject: 's', body: 'Do work' } });
+        const refused = await scoped.handle(request);
+        expect(refused.status).toBe(409);
+        expect(refused.body).toMatchObject({ ok: false, error: "scribe's workspace is hibernated; redock it first" });
+        expect(inbox.all()).toEqual([]);
+        asleep = false;
+        expect((await scoped.handle(request)).status).toBe(201);
+        expect(inbox.unread(scribe.id)).toHaveLength(1);
+    });
     it('stores ONE message to the default agent, from the credential’s source, and answers its id (positive control)', async () => {
         const r = await service.handle(req({ body: { subject: '3 petitions queued', body: 'Change #42 approved' } }));
         expect(r.status).toBe(201);

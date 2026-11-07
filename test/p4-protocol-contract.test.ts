@@ -23,6 +23,11 @@ const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
 const hostOnlyMethods = REMOTE_METHODS.filter((method) => capabilityOf(method) === 'host-only');
 /** Explicit rows: adding a protocol method without its contract must fail, rather than silently testing nothing. */
 const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
+    // Positive native and connection-control contracts live in the 8B suites. This fixture checks missing-service refusals.
+    'terminals.localOpen': ['work', { cols: 80, rows: 24 }], 'terminals.localWrite': ['quiet', 'x'],
+    'terminals.localResize': ['quiet', 80, 24], 'terminals.localClose': ['quiet'], 'terminals.localList': ['work'], 'terminals.localAttach': [null, 'quiet'],
+    'terminals.localBegin': [{ kind: 'write', id: 'quiet' }], 'terminals.localChunk': ['ticket', 'x'], 'terminals.localFinish': ['ticket'],
+    'terminals.localWatch': ['view', null, 'quiet'], 'terminals.localReady': ['view'], 'terminals.localAck': ['view', 1], 'terminals.localUnwatch': ['view'],
     snapshot: [], agentDetail: ['missing'], openAgent: ['agent_a'], stopAgent: ['agent_a'],
     cancelTurn: ['agent_a'], resumeLimit: ['agent_a'], providerLogin: ['agent_a'],
     prompt: ['agent_a', 'hello'], resolvePrompt: ['agent_a', 'draft_1', 'send'],
@@ -46,6 +51,9 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.confirmAddFromTynn': [ROOT, 'project_1'], 'workspaces.hibernate': ['work'],
     'workspaces.wake': ['work'], 'workspaces.remove': ['work'], 'workspaces.listRepos': ['work'],
     'workspaces.tynnBoard': ['work', 'all'], 'workspaces.tynnBoardAction': ['work', { kind: 'refresh' }],
+    'workspaces.tynnPage': ['work', 'wip', { view: 'attention' }],
+    'workspaces.tynnIssues': ['work', { status: 'open' }],
+    'workspaces.tynnIssueAction': ['work', { action: 'issue.resolve', issueId: 'i1', body: { reason: 'Done' } }],
     'workspaces.addRepo': ['work', { name: 'repo', path: 'repos/repo' }], 'workspaces.removeRepo': ['work', 'repo'],
     'workspaces.removeRepoLock': ['work', 'repo'], 'workspaces.locateRepo': ['work', 'repo', ROOT],
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],

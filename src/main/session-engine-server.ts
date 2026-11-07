@@ -23,6 +23,7 @@ import {
     type WireAttachment,
 } from '../core/engine-protocol.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
+import { cancelIntent } from '../core/session.js';
 import type { ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
@@ -85,7 +86,7 @@ function agentKeyName(name: string): `tynn/agent/${string}` {
 
 /** What the session host is built with, from this server: its owner's half of the options. */
 export type { HostAgentKeys };
-export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
+export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
     /** This machine as a workstation (P3.4): the host holds its key. */
@@ -183,6 +184,14 @@ export interface EngineServerOptions {
         unwatch(owner: string, viewId: string): void;
         dropOwner(owner: string): void;
     };
+    /** Issues follows its own feed, with views owned and released by the same local connection. */
+    readonly tynnIssues?: {
+        watch(owner: string, viewId: string, workspaceId: string): boolean;
+        unwatch(owner: string, viewId: string): void;
+        dropOwner(owner: string): void;
+    };
+    /** Other Tynn pages, resolved and read on the host's account. Absent = refused; local windows only. */
+    readonly tynnPages?: { read(workspaceId: string, page: unknown, query: unknown): Promise<unknown> };
     readonly files?: {
         subscribe(owner: string, viewId: string, workspace: { id: string; path: string }, want: FilesWant): void;
         unsubscribe(owner: string, viewId: string): void;
@@ -310,6 +319,7 @@ export class SessionEngineServer {
             },
             onThreadId: (agentId, threadId) => this.callback({ name: 'threadId', agentId, threadId }),
             onCarryOverSent: (agentId) => this.callback({ name: 'carryOverSent', agentId }),
+            onRedockSent: (agentId, at) => this.callback({ name: 'redockSent', agentId, at }),
             markGenieWords: (agentId) => this.callback({ name: 'genieWords', agentId }),
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
@@ -391,6 +401,7 @@ export class SessionEngineServer {
             if (was) this.#options.terminals?.dropped(String(conn.id));
             if (was) this.#options.files?.dropOwner(conn.id);
             if (was) this.#options.tynnBoard?.dropOwner(conn.id);
+            if (was) this.#options.tynnIssues?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
@@ -532,7 +543,8 @@ export class SessionEngineServer {
                 return host.promptWith(id(), str(1), attachments, by(3));
             }
             case 'engine.cancel':
-                return host.cancel(id(), by(1));
+                // Only `interrupt` is an interrupt; anything else, or nothing, is a Stop (Tynn #672 part 3).
+                return host.cancel(id(), by(1), cancelIntent(args[2]));
             case 'engine.deliver':
                 return host.deliver(id(), str(1), by(2));
             case 'engine.answerApproval':
@@ -700,6 +712,18 @@ export class SessionEngineServer {
                 if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
                 this.#options.tynnBoard?.unwatch(conn.id, str(0));
                 return true;
+            case 'engine.tynnIssuesWatch':
+                if (!conn.local) throw new Error('The Tynn Issues queue is followed from a local window only.');
+                if (!this.#options.tynnIssues) throw new Error('This host follows no Tynn Issues queue.');
+                return this.#options.tynnIssues.watch(conn.id, str(0), str(1));
+            case 'engine.tynnIssuesUnwatch':
+                if (!conn.local) throw new Error('The Tynn Issues queue is followed from a local window only.');
+                this.#options.tynnIssues?.unwatch(conn.id, str(0));
+                return true;
+            case 'engine.tynnPage':
+                if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
+                if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');
+                return this.#options.tynnPages.read(str(0), args[1], args[2]);
             case 'engine.configSync':
                 if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
                 return this.#options.configSync((args[0] ?? {}) as WorkspaceConfigRequest);
@@ -773,6 +797,11 @@ export class SessionEngineServer {
     /** A board's ring or state, to the connection whose views watch that workspace, and no other (P5c). */
     tynnBoardEvent(owner: string, event: TynnBoardHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnBoard.event', event);
+    }
+
+    /** Issues rings go only to the local connection whose views follow the queue. */
+    tynnIssuesEvent(owner: string, event: TynnBoardHubEvent): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnIssues.event', event);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {

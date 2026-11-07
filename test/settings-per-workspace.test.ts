@@ -53,8 +53,8 @@ describe('SettingsStore per workspace', () => {
         const s = await SettingsStore.open(dir);
         const seen: string[] = [];
         s.onChange((key, value, workspaceId) => { seen.push(`${workspaceId ?? '*'}:${key}=${String(value)}`); });
-        await s.setFor('tynn', 'inbox_access', 'all');
-        await s.set('inbox_access', 'none');
-        expect(seen).toEqual(['tynn:inbox_access=all', '*:inbox_access=none']);
+        await s.setFor('tynn', 'approval_gates', 'all');
+        await s.set('approval_gates', 'none');
+        expect(seen).toEqual(['tynn:approval_gates=all', '*:approval_gates=none']);
     });
 });

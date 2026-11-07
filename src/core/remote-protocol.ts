@@ -1,4 +1,5 @@
 import { BLOB_METHODS } from './local-blobs.js';
+import { LOCAL_TERMINAL_METHODS, type LocalTerminalMethod } from './local-terminals.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
 import { FILES_WATCH_METHODS } from './local-files-watch.js';
 import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
@@ -79,6 +80,9 @@ export const REMOTE_METHODS = [
     'workspaces.listRepos',
     'workspaces.tynnBoard',
     'workspaces.tynnBoardAction',
+    'workspaces.tynnPage',
+    'workspaces.tynnIssues',
+    'workspaces.tynnIssueAction',
     'workspaces.addRepo',
     'workspaces.removeRepo',
     'workspaces.removeRepoLock',
@@ -133,6 +137,7 @@ export const REMOTE_METHODS = [
     ...LOCAL_FILES_METHODS,
     ...LOCAL_DRAFT_METHODS,
     ...LOCAL_ARTBOARD_METHODS,
+    ...LOCAL_TERMINAL_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -227,6 +232,10 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // The Tynn tab (genie#1295): reading the workspace's Tynn board is a read; a step, drag or delete writes on Tynn.
     'workspaces.tynnBoard': 'read',
     'workspaces.tynnBoardAction': 'write',
+    'workspaces.tynnPage': 'read',
+    // The Tynn tab's Issues (genie#1295 I1): reading the queue is a read; filing, editing, converting or closing writes.
+    'workspaces.tynnIssues': 'read',
+    'workspaces.tynnIssueAction': 'write',
     'workspaces.addRepo': 'write',
     'workspaces.removeRepo': 'write',
     'workspaces.removeRepoLock': 'write',
@@ -272,6 +281,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
     ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
+    ...Object.fromEntries(LOCAL_TERMINAL_METHODS.map(method => [method, 'local'])) as Record<LocalTerminalMethod, 'local'>,
     addWorkspace: 'host-only',
     takeOver: 'host-only',
     // A provider's login opens a window on the host, for the person at it: like Take Over.
@@ -286,7 +296,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
 export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.toolOutput', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
@@ -402,11 +412,12 @@ export function remoteBadge(host: string): string {
 }
 
 /** What a guest with a share link to one workspace sees of the estate. */
-export function filterSnapshotForWorkspace<T extends { agents?: readonly { workspaceId: string }[]; workspaces?: readonly { id: string }[] | null; deckItems?: readonly { workspaceId: string | null }[] | null }>(snapshot: T, workspaceId: string): T {
+export function filterSnapshotForWorkspace<T extends { agents?: readonly { workspaceId: string }[]; workspaces?: readonly { id: string }[] | null; hibernatedWorkspaces?: readonly { id: string }[]; deckItems?: readonly { workspaceId: string | null }[] | null }>(snapshot: T, workspaceId: string): T {
     return {
         ...snapshot,
         ...(snapshot.agents ? { agents: snapshot.agents.filter((a) => a.workspaceId === workspaceId) } : {}),
         ...(snapshot.workspaces ? { workspaces: snapshot.workspaces.filter((w) => w.id === workspaceId) } : {}),
+        ...(snapshot.hibernatedWorkspaces ? { hibernatedWorkspaces: snapshot.hibernatedWorkspaces.filter((w) => w.id === workspaceId) } : {}),
         ...(snapshot.deckItems ? { deckItems: snapshot.deckItems.filter((d) => d.workspaceId === workspaceId) } : {}),
     };
 }

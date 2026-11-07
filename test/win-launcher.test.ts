@@ -51,9 +51,10 @@ describe.skipIf(process.platform !== 'win32')('genie-launch.exe, the real one (W
         if (launcher === null) return;
         dir = mkdtempSync(join(tmpdir(), 'win-launcher-'));
         const mark = join(dir, 'grandchild.pid');
-        // The child starts a DETACHED grandchild (out of its own process group) and waits for ever.
-        const script = `const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', ${JSON.stringify(mark)}], { detached: true, stdio: 'ignore' }); g.unref(); setInterval(() => {}, 1000);`;
-        const parent = (await import('node:child_process')).spawn(launcher, ['job', process.execPath, '-e', script], { stdio: 'ignore', windowsHide: true });
+        // The child starts a DETACHED grandchild (out of its own process group) and waits for ever. The mark's path is an
+        // argument to each (process.argv[1]), so the code itself is a constant.
+        const script = `const { spawn } = require('child_process'); const g = spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)', process.argv[1]], { detached: true, stdio: 'ignore' }); g.unref(); setInterval(() => {}, 1000);`;
+        const parent = (await import('node:child_process')).spawn(launcher, ['job', process.execPath, '-e', script, mark], { stdio: 'ignore', windowsHide: true });
         const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; } };
         let grandchild = 0;
         for (let i = 0; i < 100 && grandchild === 0; i++) { await new Promise((r) => setTimeout(r, 100)); try { grandchild = Number(readFileSync(mark, 'utf8')); } catch { /* not yet */ } }

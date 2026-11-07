@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { PROGRAM_LOOKUP_VARIABLE, findBatchFile, findProgram, notFoundWords, unsafeBatchArgument, type LookupPorts } from '../core/program-lookup.js';
 import { ptyShellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
+import { TerminalOutputCounter, type TerminalDataPosition, type TerminalPosition } from '../core/terminal-stream.js';
 import {
     configureInProcessBackend,
     inProcessBackend,
@@ -74,17 +75,20 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
      * per listener would leak one engine listener per closed window — the previous build's
      * exact leak. Subscribe once, keep our own set, hand back real unsubscribes.
      */
-    const dataListeners = new Set<(id: string, data: string) => void>();
-    const exitListeners = new Set<(id: string, exitCode: number) => void>();
+    const counters = new Map<string, TerminalOutputCounter>();
+    const dataListeners = new Set<(id: string, data: string, position?: TerminalDataPosition) => void>();
+    const exitListeners = new Set<(id: string, exitCode: number, position?: TerminalPosition) => void>();
     // Each listener on its own (core/fan-out.ts): one that throws never reaches the engine, whose final flush during a
     // pty's exit is where a throw costs the exit.
     backend.on('data', (id, data) => {
-        fanOut(dataListeners, [id, data], 'terminal data');
+        const position = counters.get(id)?.append(data);
+        fanOut(dataListeners, position ? [id, data, position] : [id, data], 'terminal data');
     });
     backend.on('exit', (id, payload) => {
         // The engine reports `{ exitCode, signal? }`; the host wants the code. Flattening here
         // keeps `TerminalHost` ignorant of the engine's payload shape.
-        fanOut(exitListeners, [id, payload.exitCode], 'terminal exit');
+        const position = counters.get(id)?.snapshot(); counters.delete(id);
+        fanOut(exitListeners, position ? [id, payload.exitCode, position] : [id, payload.exitCode], 'terminal exit');
     });
 
     return {
@@ -106,28 +110,33 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
             const unsafe = unsafeBatchArgument(program, args);
             if (unsafe !== null) throw new Error(`${command} is a batch file, and Windows would read part of its argument "${unsafe}" as a command. Nothing was started.`);
 
-            const created = backend.create({
-                id,
-                cwd: spawn.cwd,
-                shell: program,
-                args,
-                ...(spawn.cols === undefined ? {} : { cols: spawn.cols }),
-                ...(spawn.rows === undefined ? {} : { rows: spawn.rows }),
-                // Only when given — a plain shell gets the user's environment untouched.
-                // GENIE_TERMINAL_ID in EVERY terminal (§6.9): the id is minted above, so the shell is born knowing which terminal it is.
-                // A caller's own GENIE_TERMINAL_ID wins (the Take Over host mints an attribution id of its own); the engine merges this over process.env.
-                env: { GENIE_TERMINAL_ID: id, ...(spawn.env ?? {}), ...launchEnv, ...(spawn.personal ? { [PROGRAM_LOOKUP_VARIABLE]: undefined as unknown as string } : {}) },
-            });
-            // An engine that could not start the process answers a non-positive pid rather than
-            // throwing (fancy-term-host 0.10.0-rc.1 on the installed app: the helper could not be
-            // executed from inside app.asar). That is NOT an open terminal, and handing it back
-            // as one puts a pane on screen with nothing behind it and no error anywhere (§5).
-            if (!(created.pid > 0)) {
-                backend.kill(created.id);
-                throw new Error(`the terminal engine could not spawn ${created.shell || command} (pid ${created.pid}) in ${spawn.cwd}`);
-            }
-            return { id: created.id, pid: created.pid, shell: created.shell, scrollback: created.scrollback };
+            // A quiet pty already has an epoch. Count at the one producer subscription, before fan-out or reentrant create output.
+            counters.set(id, new TerminalOutputCounter(randomUUID()));
+            try {
+                const created = backend.create({
+                    id,
+                    cwd: spawn.cwd,
+                    shell: program,
+                    args,
+                    ...(spawn.cols === undefined ? {} : { cols: spawn.cols }),
+                    ...(spawn.rows === undefined ? {} : { rows: spawn.rows }),
+                    // Only when given — a plain shell gets the user's environment untouched.
+                    // GENIE_TERMINAL_ID in EVERY terminal (§6.9): the id is minted above, so the shell is born knowing which terminal it is.
+                    // A caller's own GENIE_TERMINAL_ID wins (the Take Over host mints an attribution id of its own); the engine merges this over process.env.
+                    env: { GENIE_TERMINAL_ID: id, ...(spawn.env ?? {}), ...launchEnv, ...(spawn.personal ? { [PROGRAM_LOOKUP_VARIABLE]: undefined as unknown as string } : {}) },
+                });
+                // An engine that could not start the process answers a non-positive pid rather than
+                // throwing (fancy-term-host 0.10.0-rc.1 on the installed app: the helper could not be
+                // executed from inside app.asar). That is NOT an open terminal, and handing it back
+                // as one puts a pane on screen with nothing behind it and no error anywhere (§5).
+                if (!(created.pid > 0)) {
+                    backend.kill(created.id);
+                    throw new Error(`the terminal engine could not spawn ${created.shell || command} (pid ${created.pid}) in ${spawn.cwd}`);
+                }
+                return { id: created.id, pid: created.pid, shell: created.shell, scrollback: created.scrollback };
+                } catch (error) { counters.delete(id); throw error; }
         },
+        position: id => counters.get(id)?.snapshot() ?? null,
         write: (id, data) => backend.write(id, data),
         resize: (id, cols, rows) => backend.resize(id, cols, rows),
         kill: (id) => backend.kill(id),

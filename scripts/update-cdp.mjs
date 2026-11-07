@@ -47,7 +47,7 @@ class Cdp {
         c.#ws.addEventListener('message', (ev) => {
             const f = JSON.parse(ev.data);
             const r = c.#pending.get(f.id);
-            if (r) { c.#pending.delete(f.id); r(f); }
+            if (typeof r === 'function') { c.#pending.delete(f.id); r(f); }
         });
         await new Promise((res, rej) => {
             c.#ws.addEventListener('open', res, { once: true });
@@ -161,7 +161,7 @@ try {
     // asserts 0 helpers after the relaunch.
     const wsId = await cdp.evaluate('window.genie.snapshot().then((s) => s.workspaces?.[0]?.id ?? null)');
     if (typeof wsId === 'string') {
-        const term = await cdp.evaluate(`window.genie.terminals.open(${JSON.stringify(wsId)}, { cols: 80, rows: 24 })`);
+        const term = await cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(wsId)}, { cols: 80, rows: 24 })`);
         check(term && term.pid > 0, '11d. a Workspace terminal is open when install is asked', `pid ${term?.pid}`);
         await new Promise((r) => setTimeout(r, 1500));
         const { execFileSync } = await import('node:child_process');
@@ -182,7 +182,7 @@ try {
                 "Get-CimInstance Win32_Process | Where-Object { ($_.Name -like '*fancy*') -or ($_.CommandLine -like '*fancy-pty*') -or ($_.ExecutablePath -like \"$env:LOCALAPPDATA\\Programs\\Genie\\*\" -and $_.Name -ne 'Genie.exe') } | ForEach-Object { \"$($_.ProcessId) ppid=$($_.ParentProcessId) $($_.Name) path=$($_.ExecutablePath) cmd=$(if ($_.CommandLine) { $_.CommandLine.Substring(0, [Math]::Min(160, $_.CommandLine.Length)) })\" }"],
                 { encoding: 'utf8', timeout: 30_000 }).trim();
             console.log(`  --- processes naming fancy-pty, or under the install dir (not Genie.exe) ---\n${dump ? dump.split(/\r?\n/).map((l) => `  ${l}`).join('\n') : '  (none)'}`);
-            const term = await cdp.evaluate(`window.genie.terminals.list(${JSON.stringify(wsId)})`).catch(() => null);
+            const term = await cdp.evaluate(`window.genieTest.terminals.list(${JSON.stringify(wsId)})`).catch(() => null);
             console.log(`  --- terminals the host lists for the workspace ---\n  ${JSON.stringify(term)}`);
         }
     }

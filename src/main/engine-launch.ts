@@ -117,6 +117,21 @@ export async function spawnHostProcess(
 }
 
 /**
+ * genie-launch.exe's `pipe-owner-only` on genie-host's own pipe (Tynn #398; host-pipe-acl.ts): a protected DACL, its
+ * user and SYSTEM. ASYNCHRONOUS, like every launcher call. Resolves to the descriptor read back (SDDL); rejects with the
+ * launcher's reason. `null` launcher = not built here (a dev machine with no MSVC), said by the caller.
+ */
+export function restrictPipeWithLauncher(endpoint: string, launcher: string | null = winLauncherPath()): Promise<string> | null {
+    if (launcher === null) return null;
+    return new Promise<string>((resolve, reject) => {
+        execFile(launcher, ['pipe-owner-only', endpoint], { windowsHide: true, encoding: 'utf8', timeout: 15_000 }, (error, stdout, stderr) => {
+            if (error) reject(new Error(String(stderr).trim() || error.message));
+            else resolve(String(stdout).trim());
+        });
+    });
+}
+
+/**
  * Link to the host that is running, or to nothing: never start one, never replace one. For a client that isn't the window
  * (the Genie browser's process): another build's host is the window's to replace, whichever client asks.
  */
