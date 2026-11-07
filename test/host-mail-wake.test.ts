@@ -78,6 +78,7 @@ describe('mail wakes an agent in genie-host', () => {
             expect(r.host.deliverable(r.atlas.id)).not.toBeNull();
             expect(fake.prompts).toEqual(['warm up']);
             await r.host.settled();
+            handOff.mockClear(); // host.prompt uses handOff too; measure only attempts for the arriving mail.
 
             // Refuse exactly ONE handoff, before it reaches the provider; subsequent calls use the real SessionHost.
             handOff.mockImplementationOnce(() => { throw new Error('injected transient handoff refusal'); });
