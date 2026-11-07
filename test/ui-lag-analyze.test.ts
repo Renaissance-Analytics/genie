@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -112,5 +112,19 @@ describe('what a profile says a thread was doing', () => {
         const mapped = indexProfile(profile, (f) => (f.functionName === 'state' ? 'FilesHost.state src/main/files-host.ts:412' : null));
         expect(windowProfile(mapped, 1013, 1013.5).stacks).toEqual([]); // native time names no JS stack
         expect(windowProfile(mapped, 1009, 1009.5).stacks[0]!.stack).toBe('FilesHost.state src/main/files-host.ts:412 < main main.js:10');
+    });
+});
+
+describe('the Files state paging budget (Tynn #522)', () => {
+    it('passes a bounded cost that does not grow, and names each way it fails', () => {
+        expect(pagingVerdict([{ pass: 'a', states: 40, pageNext: 200 }, { pass: 'b', states: 40, pageNext: 240 }]).ok).toBe(true);
+        // The measured cost before the cursor: 66 per call, doubling with the session.
+        const before = pagingVerdict([{ pass: 'a', states: 46, pageNext: 3042 }, { pass: 'b', states: 46, pageNext: 6084 }]);
+        expect(before.ok).toBe(false);
+        expect(before.reasons).toEqual(['a: 66.1 pages per files.state (bound 16)', 'b: 132.3 pages per files.state (bound 16)', 'b: 132.3 pages per files.state grew from 66.1']);
+        // Growth alone, under the bound.
+        expect(pagingVerdict([{ pass: 'a', states: 10, pageNext: 20 }, { pass: 'b', states: 10, pageNext: 150 }]).reasons).toEqual(['b: 15 pages per files.state grew from 2']);
+        // Nothing read: nothing measured, never a pass.
+        expect(pagingVerdict([{ pass: 'a', states: 0, pageNext: 0 }]).reasons).toEqual(['a: no files.state call during the build']);
     });
 });

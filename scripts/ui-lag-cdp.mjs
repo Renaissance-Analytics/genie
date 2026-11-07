@@ -28,7 +28,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { installMeasurementHostLaunch } from './artboard-gap-probe.mjs';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, summarize, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, summarize, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, started = Date.now(), sessions = [];
 const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, IDLE_MS = 6000, TERMINAL_MS = 10000, BUILD_MS = 22000, CONTROL_MS = 120;
@@ -368,9 +368,13 @@ try {
 
     // Every gap of the unprofiled pass's build phases, not only each phase's worst few: `over` is the true count.
     const build = passes[0].phases.filter((ph) => ph.name.startsWith('build'));
-    result.budget = budgetVerdict(passes[0].mainState.gauge.gaps.filter((g) => build.some((ph) => g.endedMs >= ph.mainMs && g.startedMs <= ph.end.mainMs)), BUDGET_MS);
+    const mainBudget = budgetVerdict(passes[0].mainState.gauge.gaps.filter((g) => build.some((ph) => g.endedMs >= ph.mainMs && g.startedMs <= ph.end.mainMs)), BUDGET_MS);
+    // THE FILES STATE BUDGET (Tynn #522): pages per files.state with the Files panel open, bounded and not growing with the
+    // session: the second pass's build runs after the first's, with twice the paths changed before it.
+    const paging = pagingVerdict(passes.map((p) => { const r = p.rows.find((x) => x.phase === 'build-files'); return { pass: p.label, states: r?.calls['files.state'] ?? 0, pageNext: r?.calls['page.next'] ?? 0 }; }));
+    result.budget = { ok: mainBudget.ok && paging.ok, main: mainBudget, paging };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: window main was late ${result.budget.worstMs} ms during the build (${result.budget.over} gaps over ${BUDGET_MS} ms)`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...paging.reasons].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await main?.evaluate('globalThis.__uiLag?.stop(); globalThis.__uiLagHostLaunch?.stop(); true'); } catch {}

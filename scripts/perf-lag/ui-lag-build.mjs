@@ -19,7 +19,8 @@ while (Date.now() - started < ms) {
     const tickStart = Date.now();
     for (let k = 0; k < PER_TICK; k += 1) {
         const i = (at + k) % GEN_FILES, j = (at + k) % DIST_FILES;
-        writeFileSync(join('gen', `m${i % DIRS}`, `f${i}.js`), body(i, ticks));
+        // Each run its own names: a later run is a longer session, more paths changed before it (Tynn #522).
+        writeFileSync(join('gen', `m${i % DIRS}`, `${run}-f${i}.js`), body(i, ticks));
         writeFileSync(join('dist', `m${j % DIRS}`, `f${j}.js`), body(j, ticks));
         writes += 2;
     }

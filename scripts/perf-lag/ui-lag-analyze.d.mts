@@ -29,3 +29,7 @@ export function indexProfile(profile: CpuProfile, resolve?: (frame: CallFrame) =
 export function firstSampleWith(index: ProfileIndex, fn: string): number | null;
 export function windowProfile(index: ProfileIndex, fromMs: number, toMs: number, options?: { top?: number; depth?: number; isOwn?: (frame: string) => boolean }): WindowProfile;
 export function budgetVerdict(gaps: Gap[], budgetMs: number): { ok: boolean; budgetMs: number; over: number; worstMs: number };
+export interface PagingPass { pass: string; states: number; pageNext: number }
+export function pagingVerdict(passes: PagingPass[], options?: { maxPerState?: number; growth?: number; slack?: number }): {
+    ok: boolean; maxPerState: number; rows: Array<PagingPass & { perState: number | null }>; reasons: string[];
+};
