@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * THE KEYCHAIN RIGHT AFTER A LOGON (run by scripts/perf-lag/keychain-sessions-windows.ps1, as a task at logon). A host started as a person logs on could reach Credential Manager before
+ * THE KEYCHAIN RIGHT AFTER A LOGON (run by scripts/perf-lag/keychain-sessions-windows.ps1, from the user's Run key at sign-in). A host started as a person logs on could reach Credential Manager before
  * it is ready. This keeps trying a set, read and delete, and writes down what it saw: the first error's own words, how long until the first success, and how many tries. It writes a
  * test word to one entry and removes it. The result goes to the file named by its one argument.
  */
