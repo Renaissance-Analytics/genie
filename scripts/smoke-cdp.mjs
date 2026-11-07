@@ -1014,6 +1014,28 @@ if (!approvalEnabled) {
         'an xterm to mount for the panel’s terminal',
     );
     check(paneUp, '36. the panel’s terminal is a real terminal pane with xterm mounted');
+    // WHAT THE TERMINAL DREW, AND WHEN (said only if 37 or 38 fails; it changes no timing): from the moment xterm mounts,
+    // when anything first appears in it and what, so a failure says whether the shell ever drew a prompt before the typing.
+    await cdp.evaluate(`(() => {
+        const rows = document.querySelector('[data-terminal-pane] .xterm-rows');
+        const watch = window.__smokeTerminal = { mountedAt: performance.now(), firstOutputMs: null, firstText: '' };
+        if (!rows) return true;
+        const seen = () => {
+            const text = (rows.innerText ?? '').trim();
+            if (watch.firstOutputMs === null && text !== '') { watch.firstOutputMs = Math.round(performance.now() - watch.mountedAt); watch.firstText = text.slice(0, 200); }
+        };
+        seen();
+        new MutationObserver(seen).observe(rows, { childList: true, subtree: true, characterData: true });
+        return true;
+    })()`);
+    /** On a failure of 37 or 38: the rows (numbered, the drawn ones), the cursor's row, and whether a prompt was ever drawn. */
+    const terminalDump = async () => cdp.evaluate(`(() => {
+        const rows = [...(document.querySelector('[data-terminal-pane] .xterm-rows')?.children ?? [])];
+        const drawn = rows.map((r, i) => [i, (r.innerText ?? '').replace(/\\s+$/, '')]).filter(([, s]) => s !== '').map(([i, s]) => i + ': ' + s.slice(0, 160));
+        const cursorRow = rows.findIndex((r) => r.querySelector('.xterm-cursor'));
+        const w = window.__smokeTerminal ?? null;
+        return JSON.stringify({ drawn: drawn.slice(-12), cursorRow, firstOutputMs: w?.firstOutputMs ?? null, firstText: w?.firstText ?? '', sinceMountMs: w ? Math.round(performance.now() - w.mountedAt) : null });
+    })()`).catch((e) => `(unread: ${e?.message ?? e})`);
 
     // Let the shell print its prompt, then focus xterm's textarea and type.
     await new Promise((r) => setTimeout(r, 1200));
@@ -1025,12 +1047,14 @@ if (!approvalEnabled) {
     const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
     const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
     check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
+    if (!typed) console.log(`  TERMINAL_AT_37 ${await terminalDump()}`);
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
     const ran = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 >= 2`, 'the shell to print the token back');
     const count = await cdp.evaluate(`${rowsText}.split('${token}').length - 1`);
     check(ran, '38. the SHELL ran it — the token comes back as output, not just as typed', `${count} occurrence(s)`);
+    if (!ran) console.log(`  TERMINAL_AT_38 ${await terminalDump()}`);
 
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     if (shot.result?.data) {

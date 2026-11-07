@@ -123,6 +123,14 @@ export class InboxReplica {
         return (await this.#call('inbox', 'receive', [{ ...rest, wait: false }])) as ReceivePage;
     }
 
+    async markDelivered(participant: Participant, ids: readonly string[]): Promise<void> {
+        await this.#call('inbox', 'markDelivered', [participant, ids]);
+    }
+
+    async recordDeliveryRefusal(participant: Participant, ids: readonly string[], refusal: { readonly attempts: number; readonly reason: string }): Promise<void> {
+        await this.#call('inbox', 'recordDeliveryRefusal', [participant, ids, refusal]);
+    }
+
     async deleteThread(a: Participant, b: Participant): Promise<number> {
         return (await this.#call('inbox', 'deleteThread', [a, b])) as number;
     }
@@ -246,6 +254,7 @@ export class KnowledgeRemote {
     async link(from: string, to: string): Promise<LinkResult> { return (await this.#call('knowledge', 'link', [from, to])) as LinkResult; }
     async search(input: SearchInput): Promise<{ hits: Hit[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'search', [input])) as { hits: Hit[]; nextCursor: string | null }; }
     async list(input: ListInput): Promise<{ nodes: KnowledgeNode[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'list', [input])) as { nodes: KnowledgeNode[]; nextCursor: string | null }; }
+    async summaries(input: ListInput): Promise<{ hits: Hit[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'summaries', [input])) as { hits: Hit[]; nextCursor: string | null }; }
 }
 
 /**

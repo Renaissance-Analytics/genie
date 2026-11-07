@@ -77,7 +77,7 @@ export class HangWatchdog {
     #lastTick: number;
     #lastCpu: number | null = null;
     #lastRssAt: number;
-    #newestRss: { at: number; rss: number } | null = null;
+    #newestRss: { at: number; rss: number; pageRss?: number } | null = null;
     #shuttingDown = false;
     /** When each recent hang was: the relaunch cap's window. */
     #hangTimes: number[] = [];
@@ -120,7 +120,7 @@ export class HangWatchdog {
         } else {
             this.#windows.set(connId, { pid: beat.pid, lastBeatAt: now, rss: beat.rss, bye: beat.bye === true, ended: false, droppedAt: null });
         }
-        this.#newestRss = { at: now, rss: beat.rss };
+        this.#newestRss = { at: now, rss: beat.rss, ...(beat.rendererRss !== undefined ? { pageRss: beat.rendererRss } : {}) };
     }
 
     /** A window's connection closed. Without a goodbye it is checked for a LOST window after the grace. */
@@ -185,7 +185,9 @@ export class HangWatchdog {
         const hostMb = toMb(this.#safe(() => this.#o.hostRss(), 0));
         this.#samples.push({ at: new Date(now).toISOString(), windowMb, hostMb });
         if (this.#samples.length > SAMPLES_KEPT) this.#samples.splice(0, this.#samples.length - SAMPLES_KEPT);
-        this.#o.log(`rss window=${windowMb === null ? '-' : windowMb} host=${hostMb}`);
+        // The window's page beside it when the window sampled one (what grew before the owner's oom, 2026-11-06).
+        const pageMb = windowMb !== null && this.#newestRss?.pageRss !== undefined ? toMb(this.#newestRss.pageRss) : null;
+        this.#o.log(`rss window=${windowMb === null ? '-' : windowMb}${pageMb !== null ? ` page=${pageMb}` : ''} host=${hostMb}`);
     }
 
     #hang(w: Watched, now: number): void {

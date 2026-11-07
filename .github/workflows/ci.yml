@@ -468,6 +468,10 @@ jobs:
       - name: a hung window is ended and opened again
         if: ${{ !cancelled() }}
         run: timeout 540 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/hang-cdp.mjs
+      # A WINDOW'S PAGE THAT ENDS IS BROUGHT BACK (Tynn #386; the owner's black window of 2026-11-06, an oom).
+      - name: a window's page that ends is brought back
+        if: ${{ !cancelled() }}
+        run: timeout 420 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/renderer-crash-cdp.mjs
 
       - name: electron's own output
         # `always()`, not `failure()`: a timeout-cancelled job is neither success nor failure
@@ -521,7 +525,12 @@ jobs:
         run: npx tsx scripts/fetch-caddy.ts
 
       - name: build the installers
-        run: npx electron-builder --publish never
+        # Ordinary CI has no signing identity. Keep icon/resource editing; protected jobs sign.
+        run: npx electron-builder --publish never ${{ runner.os == 'Windows' && '--config.win.signExecutable=false' || '' }}
+
+      - name: prove the packaged Windows updater metadata and asset names
+        if: runner.os == 'Windows'
+        run: node scripts/verify-windows-update.cjs release test/fixtures/windows-update-beta59.json
 
       # The fuse as the built binary has it, not as the config asks.
       - name: the cookie fuse is on in what was packaged
@@ -530,6 +539,29 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then app=$(ls release/win-unpacked/*.exe | head -1); else app=$(ls -d release/linux-unpacked/[gG]enie* | head -1); fi
           npx --yes @electron/fuses read --app "$app" | tee fuses.txt
           grep -q "EnableCookieEncryption is Enabled" fuses.txt
+      # genie-launch.exe IN WHAT WAS PACKAGED, AND USED (#1628). A silent fall back to Node's spawn in the shipped app would
+      # bring both of its bugs back quietly (the window's handles in genie-host; a git read's children outliving it). So the
+      # packaged app is started on a home of its own, and its own log must say the host was started through the launcher.
+      - name: the packaged app starts genie-host through genie-launch.exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $launcher = "release\win-unpacked\resources\bin\genie-launch.exe"
+          if (-not (Test-Path $launcher)) { throw "genie-launch.exe is not in the packaged app ($launcher)" }
+          Write-Output "packaged: $launcher ($((Get-Item $launcher).Length) bytes)"
+          $h = Join-Path $env:RUNNER_TEMP "packaged-home"
+          foreach ($d in @("$h\AppData\Roaming", "$h\AppData\Local")) { New-Item -ItemType Directory -Force $d | Out-Null }
+          $env:USERPROFILE = $h; $env:HOME = $h; $env:APPDATA = "$h\AppData\Roaming"; $env:LOCALAPPDATA = "$h\AppData\Local"
+          $app = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
+          $log = "$h\.genie\runtime\lifecycle.log"
+          $line = $null
+          for ($i = 0; $i -lt 90 -and -not $line; $i++) { Start-Sleep -Seconds 1; if (Test-Path $log) { $line = Select-String -Path $log -Pattern "host spawn via=" | Select-Object -Last 1 } }
+          $hostJson = "$h\.genie\runtime\host.json"
+          if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
+          if (-not $app.HasExited) { taskkill /PID $app.Id /T /F *> $null }
+          if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
+          Write-Output "the packaged app: $($line.Line)"
+          if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
 
       # The artifacts, so somebody can actually install one and find out. A build that produced
       # a file nobody can reach proves only that the command exited zero.
@@ -541,6 +573,7 @@ jobs:
             release/*.exe
             release/*.AppImage
             release/*.yml
+            release/signature-evidence/
           if-no-files-found: error
           retention-days: 7
 
@@ -740,15 +773,21 @@ jobs:
         run: |
           node scripts/safe-mode-cdp.mjs
           if ($LASTEXITCODE -ne 0) { throw "safe-mode-cdp failed (exit $LASTEXITCODE)" }
-      # KNOWN RED on Windows until genie#1628: genie-host inherits the first window's handles, so the hung window's debugger
-      # port stays held and the relaunched window cannot serve it (the relaunch itself happens). Linux runs it in full.
-      - name: a hung window is ended and opened again (known red, genie#1628)
+      # genie-host is started through genie-launch.exe (#1628), inheriting nothing of the window's: a hung window's debugger
+      # port is free for the window the host opens again. A gate on Windows as on Linux.
+      - name: a hung window is ended and opened again
         if: ${{ !cancelled() }}
-        continue-on-error: true
         shell: pwsh
         run: |
           node scripts/hang-cdp.mjs
           if ($LASTEXITCODE -ne 0) { throw "hang-cdp failed (exit $LASTEXITCODE)" }
+      # A WINDOW'S PAGE THAT ENDS IS BROUGHT BACK, as on Linux above.
+      - name: a window's page that ends is brought back
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          node scripts/renderer-crash-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "renderer-crash-cdp failed (exit $LASTEXITCODE)" }
 
       - name: the app's own output, on failure
         if: failure()

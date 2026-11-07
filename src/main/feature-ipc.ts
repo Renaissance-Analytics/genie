@@ -65,6 +65,8 @@ export interface FeaturePorts {
     /** genie-host's safe mode (Tynn #386): "Leave safe mode". Absent = no host to leave it in (refused, said). */
     readonly safeMode?: { leave(): Promise<{ ok: true } | { ok: false; reason: string }> };
     /** The reopened-window notice (Tynn #386): Dismiss, and Stop all agents. Absent = no host to ask (refused, said). */
+    /** The brought-back page's notice: forget it. */
+    readonly rendererNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }> };
     readonly hangNotice?: { dismiss(): Promise<{ ok: true } | { ok: false; reason: string }>; stopAll(): Promise<{ ok: true } | { ok: false; reason: string }> };
     /** A part of a snapshot that took at least `ms` (genie-test-windows, job Q0: an action took 20 s with main mostly free). */
     readonly slowPart?: { readonly ms: number; log(part: string, ms: number): void };
@@ -538,7 +540,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     // 108 memories and drew skeletons until a search). A query searches.
     const hits = await timed('knowledge', async () => state.knowledgeQuery
         ? (await services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' })).hits
-        : (await services.knowledge.list({ scopes: 'all', limit: 200 })).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class })));
+        : (await services.knowledge.summaries({ scopes: 'all', limit: 200 })).hits);
     const roster = services.agentAddresses();
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
@@ -685,6 +687,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
+        case 'rendererNotice.dismiss': {
+            if (!ports.rendererNotice) throw new Error('This window keeps no such notice.');
+            const done = await ports.rendererNotice.dismiss();
+            if (!done.ok) throw new Error(done.reason);
+            break;
+        }
         case 'hangNotice.dismiss':
         case 'hangNotice.stopAll': {
             if (!ports.hangNotice) throw new Error('Genie’s host is not connected.');

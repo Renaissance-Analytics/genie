@@ -11,7 +11,7 @@ import type { SettingsStore } from './settings-store.js';
  * genie-host's stores (agent-stores-replica.ts); on the emergency path they are the stores themselves. Compose, the Deck,
  * the snapshots and the person's actions are written against these, never against a store class, so either fits.
  */
-export type InboxApi = Pick<InboxStore, 'onSend' | 'onRead' | 'involving' | 'all' | 'hasWritten' | 'unread' | 'unreadCount' | 'receipts' | 'send' | 'receive' | 'deleteThread' | 'attachmentForPerson'>;
+export type InboxApi = Pick<InboxStore, 'onSend' | 'onRead' | 'involving' | 'all' | 'hasWritten' | 'unread' | 'unreadCount' | 'receipts' | 'send' | 'receive' | 'markDelivered' | 'recordDeliveryRefusal' | 'deleteThread' | 'attachmentForPerson'>;
 
 export type AttentionApi = Pick<AttentionStore, 'pending' | 'finished' | 'allUserItems' | 'lastHandoff' | 'asked' | 'leftOutcome' | 'answer' | 'dismiss' | 'dismissMany' | 'dismissOlderThan' | 'markSeen' | 'onChange' | 'onLeave' | 'lists' | 'withdraw'>;
 
@@ -34,6 +34,7 @@ export interface KnowledgeApi {
     get(...a: Parameters<KnowledgeStore['get']>): MaybePromise<ReturnType<KnowledgeStore['get']>>;
     search(...a: Parameters<KnowledgeStore['search']>): MaybePromise<ReturnType<KnowledgeStore['search']>>;
     list(...a: Parameters<KnowledgeStore['list']>): MaybePromise<ReturnType<KnowledgeStore['list']>>;
+    summaries(...a: Parameters<KnowledgeStore['summaries']>): MaybePromise<ReturnType<KnowledgeStore['summaries']>>;
 }
 
 /** The stores themselves: what a window that opened them (the emergency path) holds, and what genie-host holds. */

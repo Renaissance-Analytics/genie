@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { appDelivery, appSenderId, type AppMessageMeta } from '../src/core/app-inbox.js';
 import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
 import { isAppSender } from '../src/core/app-inbox.js';
-import { reminderText } from '../src/core/inbox-reminders.js';
+import { deliveryHeader as reminderText, summarizeInboxPrompt } from './helpers/inbox-delivery.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
@@ -142,7 +142,7 @@ const startIdle = (record: AgentRecord): void => {
 };
 const appMail = async (to: AgentId, text = 'petition #42 queued'): Promise<void> => { await services.inbox.send({ from: APP_FROM, to, text, app: site }); };
 const agentMail = async (from: AgentId, to: AgentId, text = 'hello'): Promise<void> => { await services.inbox.send({ from, to, text }); };
-const notices = (id: AgentId): string[] => (fakes.get(id)?.prompts ?? []).filter((p) => p.includes('unread AgentInbox'));
+const notices = (id: AgentId): string[] => (fakes.get(id)?.prompts ?? []).filter((p) => p.startsWith('AgentInbox delivery:')).map(summarizeInboxPrompt);
 const uncollected = (): number => services.signals({ osAgentWorking: false, githubBlocked: false }).uncollectedMail;
 
 describe('paused-agent replies beside the normal inbox push', () => {

@@ -26,7 +26,7 @@ import { BLOB_READ_BYTES, type BlobSource } from '../core/local-blobs.js';
  * ## Cleanup
  *
  * - **A send** releases exactly the files it sent (`release`), once the message holds their bytes.
- * - **A deleted agent** takes its draft and its files with it (`prune`, on every registry change).
+ * - **A deleted agent** takes its draft and its files with it (`prune`, when the roster changes: core/chat-drafts.ts rosterPruner).
  * - **At open**, files no draft points at — a chip removed, a quit before the ref was saved — are swept.
  */
 /** Larger than this is not kept with a draft: its chip restores, without its bytes. */
