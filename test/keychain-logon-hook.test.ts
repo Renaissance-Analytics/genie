@@ -17,7 +17,7 @@ const SPAWN_LIMIT_MS = 20_000;
  * Windows; every other row took at most 0.99 s (Linux) and 0.53 s (Windows). Vitest's default 5 s cut the first row off on
  * Linux's typecheck + unit (jobs 128441347018 and 128444743188).
  */
-const ROW_TIMEOUT_MS = 1; // BREAK PROBE: every row must time out at 1 ms, proving the describe-level timeout reaches each row
+const ROW_TIMEOUT_MS = SPAWN_LIMIT_MS + 5_000;
 afterEach(() => { for (const root of fixtures.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 // These tests execute PowerShell, not assertions about its source. The harness replaces
