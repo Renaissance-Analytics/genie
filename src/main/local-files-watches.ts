@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { FILES_EVENT_BYTES, type FilesWatchPush, type FilesWatchState } from '../core/local-files-watch.js';
+import { FILES_EVENT_BYTES, treeChangesOf, type FilesWatchPush, type FilesWatchState, type FilesWireEvent } from '../core/local-files-watch.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 
 export interface FilesWatchPort {
@@ -72,7 +72,19 @@ export class LocalFilesWatches {
             ? { ...state, pathsRevision: revision, event: { ...state.event, paths: event.changes.map(c => c.path) } }
             : { ...state, gitRevision: revision, event: { ...state.event, git: { ...(event.tree ? { tree: event.tree } : {}), ...(event.repos ? { repos: event.repos } : {}) } } };
         this.#states.set(event.workspaceId, next);
-        const push = { workspaceId: event.workspaceId, revision, state: next };
+        /*
+         * WHAT CROSSES IS ONLY WHAT CHANGED (Tynn #523). The kept state above is whole (a refetch reads it); the push is not:
+         * a batch carries its paths alone, and a git run carries the tree as its changes against the last tree this
+         * connection was sent. The window holds that tree; one it does not hold makes it refetch the whole state.
+         */
+        const prevTree = old?.event.git?.tree;
+        const wire: FilesWireEvent = event.kind === 'changed'
+            ? { paths: next.event.paths! }
+            : { git: {
+                ...(event.tree ? (prevTree && old!.gitRevision > 0 ? { treeChanges: { base: old!.gitRevision, ...treeChangesOf(prevTree, event.tree) } } : { tree: event.tree }) : {}),
+                ...(event.repos ? { repos: event.repos } : {}),
+            } };
+        const push = { workspaceId: event.workspaceId, revision, state: { ...next, event: wire } };
         return Buffer.byteLength(JSON.stringify(push)) <= FILES_EVENT_BYTES ? push : { workspaceId: event.workspaceId, revision, changed: 'refetch' };
     }
     dispose(): void {
