@@ -248,6 +248,42 @@ describe('mail wakes an agent in genie-host', () => {
         } finally { handOff.mockRestore(); vi.useRealTimers(); await later; }
     });
 
+    it('records the refusal reason after five failures on pending mail, persists it, and clears it on delivery', async () => {
+        const r = await rig({ sessionEvents: false });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        const handOff = vi.spyOn(r.host, 'handOff');
+        try {
+            expect(r.host.start(r.atlas, process.cwd())).toEqual({ ok: true });
+            const reason = 'provider refuses the pending mail handoff';
+            handOff.mockImplementation(() => { throw new Error(reason); });
+            const message = await r.inbox.send({ from: r.other.id, to: r.atlas.id, text: 'still waiting for delivery' });
+            await vi.advanceTimersByTimeAsync(1_500);
+            for (const delay of [1_000, 2_000, 4_000]) await vi.advanceTimersByTimeAsync(delay);
+            expect(r.inbox.receipts(r.other.id)[0]!.message).not.toHaveProperty('deliveryRefusal');
+            const persisted = new Promise<void>((resolve) => {
+                const off = r.inbox.onChanged(() => {
+                    if ('deliveryRefusal' in r.inbox.receipts(r.other.id)[0]!.message) { off(); resolve(); }
+                });
+            });
+            await vi.advanceTimersByTimeAsync(8_000);
+            expect(r.inbox.receipts(r.other.id)[0]!.message).toMatchObject({
+                id: message.id, readAt: null, deliveryRefusal: { attempts: 5, reason, at: expect.any(String) },
+            });
+            expect(handOff).toHaveBeenCalledTimes(5);
+            await persisted;
+            const reopened = await InboxStore.open(r.dir);
+            expect(reopened.unread(r.atlas.id)[0]).toMatchObject({ id: message.id, deliveryRefusal: { attempts: 5, reason } });
+            handOff.mockRestore();
+            const read = new Promise<void>((resolve) => {
+                const off = r.inbox.onRead(() => { off(); resolve(); });
+            });
+            await vi.advanceTimersByTimeAsync(16_000);
+            expect(r.inbox.receipts(r.other.id)[0]!.readAt).not.toBeNull();
+            expect(r.inbox.receipts(r.other.id)[0]!.message).not.toHaveProperty('deliveryRefusal');
+            await read;
+        } finally { handOff.mockRestore(); vi.useRealTimers(); }
+    });
+
     it('a STOPPED agent is started for its mail and told — with no window and nobody typing', async () => {
         const r = await rig();
         expect(r.host.probe(r.atlas.id as AgentId)).toBeNull(); // CONTROL: not running before the mail
