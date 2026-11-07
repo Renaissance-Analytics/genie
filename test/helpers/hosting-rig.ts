@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect } from 'vitest';
 import type { ProcessTree } from '../../src/core/process-tree.js';
+import { BROWSER_LINK_LABEL } from '../../src/core/engine-protocol.js';
 import { memoryPair } from '../../src/core/line-transport.js';
 import type { PrivilegedStep } from '../../src/main/elevate.js';
 import { composeHosting, type HostingOptions, type HostingStack } from '../../src/main/hosting-compose.js';
@@ -45,7 +46,7 @@ export interface HostingRig {
     /** Every process the host's supervisor opened, with its env. */
     readonly opened: PtySpawnOptions[];
     /** A window: a LOCAL one by default (the host's own endpoint), or `local: false` for any other transport. */
-    window(options?: { local?: boolean; client?: ConstructorParameters<typeof SessionEngineClient>[0] }): Promise<{ client: SessionEngineClient; replica: ReturnType<SessionEngineClient['hosting']>; close: () => void; /** Every frame this window received. */ frames: string[] }>;
+    window(options?: { local?: boolean; client?: ConstructorParameters<typeof SessionEngineClient>[0]; /** The Genie browser's process: it says so, and answers no elevation. */ browser?: boolean }): Promise<{ client: SessionEngineClient; replica: ReturnType<SessionEngineClient['hosting']>; close: () => void; /** Every frame this window received. */ frames: string[] }>;
     close(): Promise<void>;
 }
 
@@ -88,7 +89,7 @@ export async function hostingRig(options: { appEnv?: (source: { readonly kind: '
             theServer.accept(h, { local: w.local ?? true });
             const frames: string[] = [];
             const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage((m) => { frames.push(m); l(m); }), onClose: (l) => raw.onClose(l), close: () => raw.close() };
-            const client = new SessionEngineClient({ elevate: async (steps) => { elevationsAsked.push(steps); return { ok: true }; }, ...w.client });
+            const client = new SessionEngineClient(w.browser ? { label: BROWSER_LINK_LABEL, ...w.client } : { elevate: async (steps) => { elevationsAsked.push(steps); return { ok: true }; }, ...w.client });
             expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
             return { client, replica: client.hosting(), close: () => t.close(), frames };
         },

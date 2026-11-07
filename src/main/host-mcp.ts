@@ -56,6 +56,11 @@ export interface HostMcpPorts {
     readonly flows?: import('./mcp-tools-flows.js').FlowsPort;
     /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
     readonly flowCallers?: { callerFor(key: string): Caller | null };
+    /**
+     * The sites and service engines `sites` and `services` act on (Tynn #444): the host's own hosting (P5a) and its
+     * supervisor. Absent = the host's hosting did not start, and the tools say so. `sites open` / `services exec` are the window's.
+     */
+    readonly hosting?: import('./hosting-actions.js').HostingServices;
     /** The terminals `manageTerminals` acts on (P3.3e): the host's own. Absent = the tool is the window's. */
     readonly terminals?: import('./mcp-tools-more.js').TerminalsPort;
     /** A shell an agent opens: the workspace's service variables and Genie's endpoint. */
@@ -119,7 +124,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
 
     const build = () => {
         const s = ports.stores;
-        const all = allGenieTools(genieToolDeps({
+        const tools0 = allGenieTools(genieToolDeps({
             inbox: s.inbox,
             attention: s.attention,
             knowledge: s.knowledge,
@@ -143,18 +148,20 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             plugins: { tools: () => view?.pluginTools ?? [], guard: () => null, run: unavailable('a plugin tool') },
             ...(ports.processes ? { processes: ports.processes } : {}),
             ...(ports.flows ? { flows: ports.flows } : {}),
+            ...(ports.hosting ? { hosting: ports.hosting } : {}),
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
         }));
+        // The action signal (the Dashboard row's "what it just did") for what runs HERE only: a forwarded call runs in the
+        // window, which signals it there — signalled here too, it would show twice. hostRegistrations replaces a window
+        // tool's handler and calls a host tool's own only for what runs here (a `sites open` is forwarded, unsignalled).
+        const all = withActionSignal(tools0, resolveCaller, (agentId, kind, tool) => ports.signal({ kind: 'action', agentId, action: kind, tool }));
         const served = hostRegistrations(all, { resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
         tools = served.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
-        // The action signal (the Dashboard row's "what it just did") for the HOST's own tools only: a forwarded tool runs in
-        // the window, which signals it there — signalled here too, it would show twice.
-        native = new Map(withActionSignal(served.filter((r) => HOST_NATIVE_TOOLS.has(r.definition.name)), resolveCaller, (agentId, kind, tool) => ports.signal({ kind: 'action', agentId, action: kind, tool })).map((r) => [r.definition.name, r]));
-        const finalRegs = served.map((r) => native.get(r.definition.name) ?? r);
-        servedNow = finalRegs;
-        return finalRegs;
+        native = new Map(served.filter((r) => HOST_NATIVE_TOOLS.has(r.definition.name)).map((r) => [r.definition.name, r]));
+        servedNow = served;
+        return served;
     };
 
     const start = async (): Promise<void> => {

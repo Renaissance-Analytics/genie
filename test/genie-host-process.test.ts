@@ -172,7 +172,7 @@ describe('genie-host as its own process', () => {
         w.transport.close();
     }, 60_000);
 
-    it('GENIE\'S TOOLS OUTLIVE THE WINDOW (P3.1): with the window gone, agentinbox, ForceTheQuestion and knowledge answer over real HTTP; a window tool refuses at once; the next window sees the question; the endpoint is the same', async () => {
+    it('GENIE\'S TOOLS OUTLIVE THE WINDOW (P3.1): with the window gone, agentinbox, ForceTheQuestion, knowledge, sites and services answer over real HTTP; a window tool refuses at once; the next window sees the question; the endpoint is the same', async () => {
         const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'teller' });
         const caller = { agentId: agent.id, agentName: agent.name, workspaceId: 'ws', workspacePath: workspace };
@@ -200,15 +200,27 @@ describe('genie-host as its own process', () => {
         expect(asked.isError).toBe(false);
         const questionId = (JSON.parse(asked.text) as { questionId: string }).questionId;
         expect((await call('knowledge', { action: 'add', title: 'After', body: 'no window at all', scope: 'workspace' })).isError).toBe(false);
+        // SITES AND SERVICES ARE THE HOST'S (Tynn #444): on beta.60 every agent's `sites` and `services` failed ("Genie's
+        // window closed before it answered") while `processes` answered. With no window at all they answer here.
+        const sitesListed = await call('sites', { action: 'list' });
+        expect(sitesListed).toMatchObject({ isError: false });
+        expect(JSON.parse(sitesListed.text)).toMatchObject({ ok: true, sites: [] });
+        const servicesListed = await call('services', { action: 'list' });
+        expect(servicesListed).toMatchObject({ isError: false });
+        expect(JSON.parse(servicesListed.text)).toMatchObject({ ok: true, services: [] });
+        // `status` of a site this workspace does not have: the sites tool's own answer, from the host's sites.
+        const siteStatus = await call('sites', { action: 'status', site: 'teller' });
+        expect(siteStatus.isError).toBe(true);
+        expect(JSON.parse(siteStatus.text)).toEqual({ ok: false, error: 'no site "teller" in this workspace; `sites list` shows them' });
         // A window tool: refused AT ONCE, in words (timed: a hang would be the failure).
         const t0 = Date.now();
-        // `services`: still the window's (manageTerminals is the host's own since P3.3e).
-        const refused = await call('services', { action: 'list' });
+        // `sites open`: Genie's browser, in front of the person — still the window's.
+        const refused = await call('sites', { action: 'open', site: 'teller' });
         expect(refused.isError).toBe(true);
         // This host runs on plain Node under the test (tsx, no Electron), so hostCapabilities() gives it no window: the window
         // tool says it is not available on this host (P10.1d). An Electron host's "window, which is closed" wording is pinned
         // in mcp-host-tools.test.ts.
-        expect(refused.text).toBe(notAvailableHere('services', 'a Genie window'));
+        expect(refused.text).toBe(notAvailableHere('sites', 'a Genie window'));
         expect(Date.now() - t0).toBeLessThan(5_000);
 
         // The next window: the question waits, the mail is there, the endpoint is the one agents were configured with.
