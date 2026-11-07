@@ -163,6 +163,20 @@ function decodeCursor(cursor: string | undefined): number {
     return Number.isInteger(n) && n >= 0 ? n : 0;
 }
 
+/** A page's size and where it starts, behind the opaque cursor. An offset past any real one is just past the end. */
+function pageOf(limit: number | undefined, cursor: string | undefined): { size: number; offset: number } {
+    return { size: Math.max(1, Math.min(limit ?? DEFAULT_LIMIT, 200)), offset: Math.min(decodeCursor(cursor), Number.MAX_SAFE_INTEGER) };
+}
+
+/** A summary's snippet: the body's first 160 characters, whitespace collapsed. */
+const SUMMARY_SNIPPET = 160;
+/** How much of a body a summary reads to cut its snippet from. */
+const SNIPPET_HEAD = 1024;
+
+function summarySnippet(body: string): string {
+    return body.replace(/\s+/g, ' ').trim().slice(0, SUMMARY_SNIPPET);
+}
+
 export class KnowledgeStore {
     readonly #db: DatabaseSync;
     readonly #now: () => string;
@@ -361,28 +375,31 @@ export class KnowledgeStore {
         return { ok: true, to: target.id };
     }
 
+    /*
+     * PAGED IN SQL (beta.60 host stall diagnosis). The reads used to take EVERY matching row and body out of SQLite, filter
+     * tags and page in JavaScript, on the host's event loop, for every Dashboard snapshot. Now the filter, the order and the
+     * page are the query's: a page reads its own rows and one more (to know whether a next page exists). The order and the
+     * cursors are the ones the old code produced (test/knowledge-paged-reads.test.ts compares them page by page).
+     */
     search(input: SearchInput): { hits: Hit[]; nextCursor: string | null } {
         const match = ftsQuery(input.query);
         if (match === null) return { hits: [], nextCursor: null };
-        const { where, params } = this.#filters(input.scopes, input.class);
-        // Title matches outrank body matches outrank tag matches; bm25 is lower-is-better.
+        const { where, params } = this.#filters(input.scopes, input.class, input.tags ?? []);
+        const { size, offset } = pageOf(input.limit, input.cursor);
+        // Title matches outrank body matches outrank tag matches; bm25 is lower-is-better. The rowid last, so a tie of rank
+        // and time is in the same place on every page (a page is its own query now).
         const rows = this.#db
             .prepare(
                 `SELECT n.*, bm25(nodes_fts, 0.0, 10.0, 1.0, 2.0) AS rank
                  FROM nodes_fts f JOIN nodes n ON n.id = f.id
                  WHERE nodes_fts MATCH ? ${where}
-                 ORDER BY rank ASC, n.created_at DESC`,
+                 ORDER BY rank ASC, n.created_at DESC, n.rowid DESC
+                 LIMIT ? OFFSET ?`,
             )
-            .all(match, ...params) as unknown as Array<Row & { rank: number }>;
-        const wanted = input.tags ?? [];
-        const filtered = rows.filter((r) => {
-            const tags = JSON.parse(r.tags) as string[];
-            return wanted.every((t) => tags.includes(t));
-        });
+            .all(match, ...params, size + 1, offset) as unknown as Array<Row & { rank: number }>;
         const tokens = (input.query.match(/[\p{L}\p{N}_]+/gu) ?? []).map((t) => t.toLowerCase());
-        const page = this.#page(filtered, input.limit, input.cursor);
         return {
-            hits: page.items.map((r) => ({
+            hits: rows.slice(0, size).map((r) => ({
                 id: r.id,
                 title: r.title,
                 snippet: snippetFor(r, tokens),
@@ -390,42 +407,56 @@ export class KnowledgeStore {
                 tags: JSON.parse(r.tags) as string[],
                 class: r.class,
             })),
-            nextCursor: page.nextCursor,
+            nextCursor: rows.length > size ? encodeCursor(offset + size) : null,
         };
     }
 
+    /** Whole nodes, with their links, backlinks and unresolved references: for a caller that reads them (the MCP tool). */
     list(input: ListInput): { nodes: KnowledgeNode[]; nextCursor: string | null } {
-        const { where, params } = this.#filters(input.scopes, input.class);
-        const rows = (this.#db
-            .prepare(`SELECT n.* FROM nodes n WHERE 1 = 1 ${where} ORDER BY n.created_at DESC, n.rowid DESC`)
-            .all(...params) as unknown as Row[]).filter((r) => input.tag === undefined || (JSON.parse(r.tags) as string[]).includes(input.tag));
-        const page = this.#page(rows, input.limit, input.cursor);
+        const { where, params } = this.#filters(input.scopes, input.class, input.tag === undefined ? [] : [input.tag]);
+        const { size, offset } = pageOf(input.limit, input.cursor);
+        const rows = this.#db
+            .prepare(`SELECT n.* FROM nodes n WHERE 1 = 1 ${where} ORDER BY n.created_at DESC, n.rowid DESC LIMIT ? OFFSET ?`)
+            .all(...params, size + 1, offset) as unknown as Row[];
         return {
-            nodes: page.items.map((r) => {
+            nodes: rows.slice(0, size).map((r) => {
                 const { links, unresolved } = this.#resolveEdges(r.id);
                 return { ...this.#node(r), links, backlinks: this.#backlinks(r), unresolved };
             }),
-            nextCursor: page.nextCursor,
+            nextCursor: rows.length > size ? encodeCursor(offset + size) : null,
         };
     }
 
-    /** RED STUB: what the feature snapshot made of the full list. */
+    /**
+     * The list as the Dashboard shows it: a row per node (title, class, tags, a snippet), in the list's order and pages,
+     * WITHOUT the bodies or the edges it never shows. The snippet is the body's first 160 characters with its whitespace
+     * collapsed, exactly as the snapshot cut it from a whole node; it is cut from the body's first SNIPPET_HEAD characters,
+     * and only a body whose head is nearly all whitespace is read whole, so the snippet stays the same.
+     */
     summaries(input: ListInput): { hits: Hit[]; nextCursor: string | null } {
-        const r = this.list(input);
-        return { hits: r.nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class })), nextCursor: r.nextCursor };
-    }
-
-    /** Offset paging behind an opaque cursor; `null` means that was the last page. */
-    #page<R>(rows: readonly R[], limit: number | undefined, cursor: string | undefined): { items: R[]; nextCursor: string | null } {
-        const size = Math.max(1, Math.min(limit ?? DEFAULT_LIMIT, 200));
-        const offset = decodeCursor(cursor);
+        const { where, params } = this.#filters(input.scopes, input.class, input.tag === undefined ? [] : [input.tag]);
+        const { size, offset } = pageOf(input.limit, input.cursor);
+        const rows = this.#db
+            .prepare(
+                `SELECT n.id, n.title, n.class, n.tags, substr(n.body, 1, ${SNIPPET_HEAD}) AS head, length(n.body) AS body_length
+                 FROM nodes n WHERE 1 = 1 ${where} ORDER BY n.created_at DESC, n.rowid DESC LIMIT ? OFFSET ?`,
+            )
+            .all(...params, size + 1, offset) as unknown as Array<Pick<Row, 'id' | 'title' | 'class' | 'tags'> & { head: string; body_length: number }>;
+        const whole = this.#db.prepare('SELECT body FROM nodes WHERE id = ?');
         return {
-            items: rows.slice(offset, offset + size),
-            nextCursor: offset + size < rows.length ? encodeCursor(offset + size) : null,
+            hits: rows.slice(0, size).map((r) => {
+                let snippet = summarySnippet(r.head);
+                if (snippet.length < SUMMARY_SNIPPET && r.body_length > SNIPPET_HEAD) {
+                    snippet = summarySnippet((whole.get(r.id) as { body: string } | undefined)?.body ?? r.head);
+                }
+                return { id: r.id, title: r.title, snippet, score: 0, tags: JSON.parse(r.tags) as string[], class: r.class };
+            }),
+            nextCursor: rows.length > size ? encodeCursor(offset + size) : null,
         };
     }
 
-    #filters(scopes: ScopeFilter, cls: MemoryClass | undefined): { where: string; params: (string | null)[] } {
+    /** Every tag in `tags` is on the node: in SQL, so a page is a page of the matches. */
+    #filters(scopes: ScopeFilter, cls: MemoryClass | undefined, tags: readonly string[] = []): { where: string; params: (string | null)[] } {
         const clauses: string[] = [];
         const params: (string | null)[] = [];
         if (scopes !== 'all') {
@@ -439,6 +470,10 @@ export class KnowledgeStore {
         if (cls) {
             clauses.push('n.class = ?');
             params.push(cls);
+        }
+        for (const tag of tags) {
+            clauses.push('EXISTS (SELECT 1 FROM json_each(n.tags) t WHERE t.value = ?)');
+            params.push(tag);
         }
         const where = clauses.length > 0 ? `AND ${clauses.join(' AND ')}` : '';
         return { where, params };

@@ -266,8 +266,9 @@ describe('knowledge summaries: what the Dashboard shows, without full bodies or 
         const r = store.summaries({ scopes: 'all', limit: 200 });
         expect(r.hits).toHaveLength(200);
         expect(m.edgeQueries).toBe(0);
-        expect(m.bodyRows).toBeLessThanOrEqual(201);
-        // Every seventh body starts with 1,400 whitespace characters: those are read whole, once, to keep the snippet exact.
+        // Every seventh body starts with 1,800 whitespace characters: those (29 of the 200) are read whole, once more, so
+        // their snippet stays exact. Every other row is read as a 1,024-character head.
+        expect(m.bodyRows).toBeLessThanOrEqual(201 + 30);
         expect(m.bodyChars).toBeLessThan(201 * 1024 + 30 * 22_000);
     });
 

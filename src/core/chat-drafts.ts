@@ -133,10 +133,26 @@ export interface RosterPruner {
     changed(): void;
 }
 
-/** Prunes the drafts on the registry's snapshots. RED STUB: today's behaviour, a prune on every snapshot. */
+/**
+ * Prunes the drafts when the ROSTER changes (an agent added or removed), not on every registry snapshot: a streaming agent
+ * touches the registry about 20 times a second, and each prune is a call to the host (beta.60 host stall diagnosis). A
+ * snapshot whose agents are the ones last sent (in any order) sends nothing; a prune that failed is sent again on the next
+ * snapshot, so a host that was away still gets it.
+ */
 export function rosterPruner(deps: { ids: () => readonly string[]; prune: (ids: readonly string[]) => Promise<void>; failed: (error: unknown) => void }): RosterPruner {
+    let sent: string | null = null;
+    const send = (): Promise<void> => {
+        const ids = deps.ids();
+        const key = [...new Set(ids)].sort().join('\u0000');
+        if (key === sent) return Promise.resolve();
+        sent = key;
+        return deps.prune(ids).catch((error: unknown) => {
+            if (sent === key) sent = null;
+            deps.failed(error);
+        });
+    };
     return {
-        start: () => deps.prune(deps.ids()).catch(deps.failed),
-        changed: () => { void deps.prune(deps.ids()).catch(deps.failed); },
+        start: send,
+        changed: () => { void send(); },
     };
 }

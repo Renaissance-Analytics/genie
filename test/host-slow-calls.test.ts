@@ -109,7 +109,7 @@ describe('the features snapshot names its slow part', () => {
         dir = await mkdtemp(join(tmpdir(), 'slow-snapshot-'));
         services = await composeServices({ userData: dir, pty: fakePty(), v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
         const real = services.knowledge;
-        const slow = { ...services, knowledge: Object.assign(Object.create(Object.getPrototypeOf(real)), real, { list: async (...a: Parameters<typeof real.list>) => { await new Promise((r) => setTimeout(r, 60)); return real.list(...a); } }) } as ComposedServices;
+        const slow = { ...services, knowledge: Object.assign(Object.create(Object.getPrototypeOf(real)), real, { summaries: async (...a: Parameters<typeof real.summaries>) => { await new Promise((r) => setTimeout(r, 60)); return real.summaries(...a); } }) } as ComposedServices;
         const said: string[] = [];
         await featureSnapshot(slow, { toolStatuses: null, knowledgeQuery: '' }, { slowPart: { ms: 40, log: (part, ms) => said.push(`${part} ${ms >= 40 ? 'over' : 'under'}`) } });
         expect(said).toContain('knowledge over');
