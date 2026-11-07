@@ -20,9 +20,10 @@
  *
  * Exit: 0 every check passed; 1 a check failed; 2 cannot run here.
  */
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import {
     alive, attach, check, cleanQuit, failures, finish, gone, hostPid, killHard, launch, makeHome,
     refuseOffTestMachines, running, sleep, step, tickerOn, ticksOf, twoStreamingAgents, until,
@@ -69,6 +70,34 @@ function portHolders(port) {
         return execFileSync('ss', ['-ltnp'], { encoding: 'utf8', timeout: 15_000 }).split('\n').filter((l) => l.includes(`:${port} `));
     } catch (error) { return [`(unread: ${error?.message ?? error})`]; }
 }
+/*
+ * WHO HOLDS A PORT, AND SINCE WHEN (Tynn #400). After the second hang the relaunched window sometimes has no inspector on
+ * INSPECT, while its debugger port PORT answers. Read for both ports, while the script waits and when it gives up: every
+ * socket on the port (netstat), and for each pid its image, its parent, when it started and its command line. A holder
+ * that started before the relaunched window is a leftover; a pid the process table no longer has is a handle kept by
+ * something that ended. Asynchronous, so a reading never holds the script's own clock.
+ */
+const execFileAsync = promisify(execFile);
+async function portReport(port) {
+    if (process.platform !== 'win32') {
+        try { return (await execFileAsync('ss', ['-tanp'], { encoding: 'utf8', timeout: 15_000 })).stdout.split('\n').filter((l) => l.includes(`:${port} `)); } catch (error) { return [`(unread: ${error?.message ?? error})`]; }
+    }
+    try {
+        const net = (await execFileAsync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', timeout: 30_000, windowsHide: true })).stdout
+            .split(/\r?\n/).map((l) => l.trim()).filter((l) => new RegExp(`^TCP\\s+\\S+:${port}\\s`).test(l));
+        if (net.length === 0) return ['(no socket has it as its local port)'];
+        const pids = [...new Set(net.map((l) => Number(l.split(/\s+/).pop())).filter((p) => p > 0))];
+        const who = pids.length === 0 ? '' : (await execFileAsync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+            `$ids = @(${pids.join(',')}); foreach ($id in $ids) { $p = Get-CimInstance Win32_Process -Filter "ProcessId=$id"; if ($p) { "$id image=$($p.Name) parent=$($p.ParentProcessId) started=$($p.CreationDate.ToString('HH:mm:ss.fff')) cmd=$(([string]$p.CommandLine).Substring(0, [Math]::Min(160, ([string]$p.CommandLine).Length)))" } else { "$id (no such process now)" } }`],
+            { encoding: 'utf8', timeout: 60_000, windowsHide: true })).stdout;
+        return [...net, ...who.split(/\r?\n/).filter(Boolean).map((l) => `  pid ${l}`)];
+    } catch (error) { return [`(unread: ${error?.message ?? error})`]; }
+}
+async function reportPorts(label) {
+    const [inspect, debug] = await Promise.all([portReport(INSPECT), portReport(PORT)]);
+    console.log(`  [${label} ${new Date().toISOString().slice(11, 23)}] inspector port ${INSPECT}:\n    ${inspect.join('\n    ')}\n  debugger port ${PORT}:\n    ${debug.join('\n    ')}`);
+}
+
 /** The crash records genie-host wrote, by kind. */
 function records() {
     let names = [];
@@ -83,6 +112,7 @@ async function hang(n, agents) {
     const windowBefore = session.windowPid;
     // What this window was started with: the launch it publishes, and so the relaunch, copies its own switches from it.
     console.log(`  window argv: ${JSON.stringify(await session.inspector.evaluate('process.argv', 10_000).catch((e) => String(e?.message ?? e))).slice(0, 400)}`);
+    await reportPorts(`H${n} before, window ${windowBefore}`);
     const kept = new Map();
     for (const a of agents) kept.set(a.id, await ticksOf(session.cdp, a.id));
     const recordsBefore = records().filter((r) => r.kind === 'hang').length;
@@ -93,12 +123,20 @@ async function hang(n, agents) {
     check(await gone(windowBefore, 30_000), `H${n}b. the hung window process was ended`, String(windowBefore));
     session = null;
     step(`H${n}c`, 'waiting for the window genie-host opens again');
-    session = await attach({ port: PORT, inspect: INSPECT, label: `after-hang-${n}` }).catch((error) => {
+    await reportPorts(`H${n}c start`);
+    // While it waits: the two ports every 5 s (Tynn #400), one reading at a time.
+    let watching = true;
+    const watch = (async () => { while (watching) { await sleep(5_000); if (watching) await reportPorts(`H${n}c waiting`); } })();
+    session = await attach({ port: PORT, inspect: INSPECT, label: `after-hang-${n}` }).catch(async (error) => {
+        watching = false;
         // The window genie-host started, as the OS sees it: its command line says what it was given.
         console.log(`  Genie processes now:\n    ${genieCommandLines().join('\n    ')}`);
         console.log(`  the debugger port ${PORT}:\n    ${portHolders(PORT).join('\n    ')}`);
+        await reportPorts(`H${n}c gave up`);
         throw error;
-    });
+    }).finally(() => { watching = false; });
+    await watch;
+    await reportPorts(`H${n}c attached, window ${session.windowPid}`);
     check(session.windowPid !== windowBefore, `H${n}c. a new window opened`, `${windowBefore} -> ${session.windowPid}`);
     check(hostPid(h) === hostBefore && alive(hostBefore), `H${n}d. the same genie-host ran on`, `${hostBefore} -> ${hostPid(h)}`);
     for (const a of agents) {

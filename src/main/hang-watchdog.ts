@@ -51,6 +51,11 @@ export interface HangWatchdogOptions {
     readonly header: () => CrashHeader;
     /** Starts a new window after a hung one was ended (genie-host: the installed Genie from the window's launch spec). Absent = none. */
     readonly relaunch?: () => void;
+    /**
+     * Resolves once an ended window's process and the sockets it held are gone, or `false` at its bound (genie-host:
+     * window-release.ts). The new window is started after it either way. Absent = straight after the kill.
+     */
+    readonly released?: (pid: number) => Promise<boolean>;
     /** Each hang: when, how many within the window of {@link RELAUNCH_WINDOW_MS}, and whether a new window was started. */
     readonly onHang?: (hang: { at: number; hangs: number; relaunched: boolean }) => void;
     readonly hangMs?: number;
@@ -215,10 +220,15 @@ export class HangWatchdog {
         this.#safe(() => this.#o.onHang?.({ at: now, hangs, relaunched: relaunch }), undefined);
         // The new window only after the frozen one is ended: its single-instance lock is free by then. Ended or not, the
         // person is never left with Genie silently gone (the tray lives in the window's process).
+        // And only once it has LET GO (Tynn #400; window-release.ts): its process and the sockets it held are gone, bounded.
         const reopen = (): void => { if (relaunch) this.#safe(() => this.#o.relaunch?.(), undefined); };
+        const letGo = (): Promise<unknown> => {
+            if (!relaunch || this.#o.released === undefined) return Promise.resolve(true);
+            try { return Promise.resolve(this.#o.released(w.pid)); } catch { return Promise.resolve(false); }
+        };
         let ending: Promise<unknown>;
         try { ending = Promise.resolve(this.#o.kill(w.pid)); } catch { ending = Promise.resolve(false); }
-        void ending.then(reopen, reopen);
+        void ending.then(letGo, letGo).then(reopen, reopen);
     }
 
     #lost(w: Watched, now: number): void {

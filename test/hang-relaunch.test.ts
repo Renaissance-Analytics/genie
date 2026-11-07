@@ -12,7 +12,7 @@ import { HangWatchdog } from '../src/main/hang-watchdog.js';
 const MB = 1024 * 1024;
 const HEADER: CrashHeader = { schema: 1, version: '2.0.0-beta.60', build: '2.0.0-beta.60+abc', os: 'linux', osRelease: '6.1.0', arch: 'x64', uptimeS: 42 };
 
-function rig() {
+function rig(options: { released?: (pid: number) => Promise<boolean> } = {}) {
     let t = 1_700_000_000_000;
     let tick: (() => void) | null = null;
     const records: CrashRecord[] = [];
@@ -33,6 +33,7 @@ function rig() {
         header: () => HEADER,
         relaunch: () => { relaunched.push(t); order.push('relaunch'); },
         onHang: (hang) => { hangs.push(hang); },
+        ...(options.released ? { released: options.released } : {}),
     });
     dog.start();
     const second = (n = 1) => { for (let i = 0; i < n; i++) { t += 1000; tick?.(); } };
@@ -68,6 +69,33 @@ describe('after a hang, genie-host reopens the window', () => {
         expect(r.relaunched).toHaveLength(3);
         expect(r.records.map((x) => (x.kind === 'hang' ? [x.relaunched, x.hangsRecent] : x.kind))).toEqual([[true, 1], [true, 2], [true, 3], [false, 4]]);
         expect(r.hangs.at(-1)).toMatchObject({ hangs: 4, relaunched: false });
+    });
+
+    /*
+     * THE NEW WINDOW WAITS FOR THE OLD ONE TO LET GO (Tynn #400). On Windows a killed process leaves the process table
+     * before its sockets close: CI (measure job 128497635554) read the ended window's pid gone at 19:01:43.465 while its
+     * ports were still listening, and the window the host had started at 19:01:42.921 found its port taken and came up
+     * without it. So the new window starts only once the old one's process AND the sockets it held are gone, bounded so
+     * a person is never left with Genie gone.
+     */
+    it('the new window starts only once the ended one has let go of its process and sockets', async () => {
+        let letGo: (v: boolean) => void = () => {};
+        const asked: number[] = [];
+        const r = rig({ released: (pid) => { asked.push(pid); return new Promise<boolean>((done) => { letGo = done; }); } });
+        r.freeze('conn-1', 4242);
+        await vi.waitFor(() => expect(asked).toEqual([4242]));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(r.relaunched).toHaveLength(0);
+        letGo(true);
+        await vi.waitFor(() => expect(r.relaunched).toHaveLength(1));
+        expect(r.order).toEqual(['kill 4242', 'relaunch']);
+    });
+
+    it('CONTROL: a release that never comes (its bound passed) still reopens the window', async () => {
+        const r = rig({ released: () => Promise.resolve(false) });
+        r.freeze('conn-1', 4242);
+        await vi.waitFor(() => expect(r.relaunched).toHaveLength(1));
     });
 
     it('CONTROL: hangs further apart than 10 minutes are each reopened', async () => {
