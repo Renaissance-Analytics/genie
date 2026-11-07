@@ -39,7 +39,7 @@ export function installMeasurementHostHeartbeat(injected) {
 export function installMeasurementHostLaunch(options, injected) {
     const ports = injected ?? { env: process.env, child: process.getBuiltinModule('node:child_process'), path: process.getBuiltinModule('node:path'), syncBuiltinESMExports: process.getBuiltinModule('node:module').syncBuiltinESMExports };
     const enabled = ports.env.GENIE_ARTBOARD_MEASURE_ALLOW === '1' && ports.env.GENIE_PAGE_PROBE === '1';
-    const original = ports.child.spawn, injectedPids = []; let stopped = false, dropped = 0;
+    const original = ports.child.spawn, originalSync = ports.child.execFileSync, injectedPids = []; let stopped = false, dropped = 0;
     const same = (a, b) => typeof a === 'string' && typeof b === 'string' && ports.path.relative(ports.path.resolve(a), ports.path.resolve(b)) === '';
     function wrapped(...args) {
         const [file, argv, spawnOptions] = args, env = spawnOptions?.env;
@@ -50,9 +50,25 @@ export function installMeasurementHostLaunch(options, injected) {
         if (Number.isSafeInteger(child?.pid) && child.pid > 0 && !injectedPids.includes(child.pid)) { if (injectedPids.length < 16) injectedPids.push(child.pid); else dropped++; }
         return child;
     }
-    if (enabled) { ports.child.spawn = wrapped; ports.syncBuiltinESMExports(); }
+    /*
+     * On Windows the product starts the host through genie-launch.exe (#1628): `execFileSync(launcher, ['detach', log,
+     * execPath, entry])`, which prints the host's pid. The same exact launch gets the same preload, before the entry.
+     */
+    function wrappedSync(...args) {
+        const [file, argv, spawnOptions] = args, env = spawnOptions?.env;
+        if (args.length !== 3 || typeof file !== 'string' || ports.path.basename(file).toLowerCase() !== 'genie-launch.exe' || !Array.isArray(argv) || argv.length !== 4 || argv[0] !== 'detach'
+            || !same(argv[2], options.execPath) || !same(argv[3], options.entry)
+            || env?.ELECTRON_RUN_AS_NODE !== '1' || env.GENIE_ARTBOARD_MEASURE_ALLOW !== '1' || env.GENIE_PAGE_PROBE !== '1' || !same(env.GENIE_HOME, options.home) || typeof env.GENIE_HOST_BUILD !== 'string') return Reflect.apply(originalSync, this, args);
+        const forwarded = [...args]; forwarded[1] = ['detach', argv[1], argv[2], '--import', options.preloadUrl, argv[3]];
+        const said = Reflect.apply(originalSync, this, forwarded);
+        const pid = Number(String(said).trim());
+        if (Number.isSafeInteger(pid) && pid > 0 && !injectedPids.includes(pid)) { if (injectedPids.length < 16) injectedPids.push(pid); else dropped++; }
+        return said;
+    }
+    if (enabled) { ports.child.spawn = wrapped; ports.child.execFileSync = wrappedSync; ports.syncBuiltinESMExports(); }
+    const installed = () => ports.child.spawn === wrapped && ports.child.execFileSync === wrappedSync;
     return {
-        snapshot: () => ({ enabled, installed: enabled && !stopped && ports.child.spawn === wrapped, injectedPids: [...injectedPids], dropped }),
-        stop() { if (stopped) return; stopped = true; if (enabled && ports.child.spawn === wrapped) { ports.child.spawn = original; ports.syncBuiltinESMExports(); } },
+        snapshot: () => ({ enabled, installed: enabled && !stopped && installed(), injectedPids: [...injectedPids], dropped }),
+        stop() { if (stopped) return; stopped = true; if (enabled && installed()) { ports.child.spawn = original; ports.child.execFileSync = originalSync; ports.syncBuiltinESMExports(); } },
     };
 }

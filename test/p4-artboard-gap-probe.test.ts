@@ -97,3 +97,20 @@ it('the real page helper returns all timestamped gaps and the drop count from it
     expect(create).toHaveBeenCalledOnce(); expect(gauge.beat).toHaveBeenCalled();
     expect(result.heartbeat).toMatchObject({ dropped: 0, gaps: gauge.snapshot().gaps });
 });
+
+it('on Windows the same exact host launch through genie-launch.exe (#1628) gets the preload before the entry, and its printed pid', async () => {
+    const f = launchPorts();
+    const execFileSync = vi.fn((_file: string, _args: string[], _options: unknown) => '4242\r\n');
+    (f.ports.child as Record<string, unknown>).execFileSync = execFileSync;
+    const { installMeasurementHostLaunch } = await load(), probe = installMeasurementHostLaunch(f.options, f.ports);
+    const launcher = path.resolve('build/win-launcher/genie-launch.exe');
+    const options = { env: f.spawnOptions.env, windowsHide: true, encoding: 'utf8' };
+    expect((f.ports.child as unknown as { execFileSync: typeof execFileSync }).execFileSync(launcher, ['detach', 'host.log', process.execPath, f.options.entry], options)).toBe('4242\r\n');
+    expect(execFileSync).toHaveBeenCalledWith(launcher, ['detach', 'host.log', process.execPath, '--import', f.options.preloadUrl, f.options.entry], options);
+    // CONTROL: any other launch through it is left as it was.
+    (f.ports.child as unknown as { execFileSync: typeof execFileSync }).execFileSync(launcher, ['job', 'git', 'status'], options);
+    expect(execFileSync.mock.calls.at(-1)?.[1]).toEqual(['job', 'git', 'status']);
+    expect(probe.snapshot()).toMatchObject({ installed: true, injectedPids: [4242], dropped: 0 });
+    probe.stop();
+    expect((f.ports.child as unknown as { execFileSync: typeof execFileSync }).execFileSync).toBe(execFileSync);
+});
