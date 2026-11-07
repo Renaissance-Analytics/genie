@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path, { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { confinePath, confinePathSync, insideOrRoot, OutsideWorkspaceError } from '../src/main/workspace-confine.js';
+import { itWithFileSymlinks } from './helpers/file-symlinks.js';
 
 /**
  * THE SHARED CHECK FOR A PATH AN AGENT NAMES (genie#1354) — the one `openFileForUser`, a question's files, a site's or a
@@ -13,18 +14,7 @@ import { confinePath, confinePathSync, insideOrRoot, OutsideWorkspaceError } fro
  */
 
 const dirLink = (target: string, link: string) => symlink(target, link, 'junction');
-const canFileSymlink = (() => {
-    const probe = mkdtempSync(path.join(tmpdir(), 'genie2-symprobe-'));
-    try {
-        writeFileSync(path.join(probe, 't'), 'x');
-        symlinkSync(path.join(probe, 't'), path.join(probe, 'l'), 'file');
-        return true;
-    } catch {
-        return false;
-    } finally {
-        rmSync(probe, { recursive: true, force: true });
-    }
-})();
+// Where this machine cannot make a file symlink, the rows that need one are skipped with the reason (test/helpers/file-symlinks.ts).
 
 describe('insideOrRoot — lexical, the root itself allowed', () => {
     it('POSIX: inside, the root, and a name starting with two dots resolve; a step out does not', () => {
@@ -87,7 +77,7 @@ describe('confinePath — after links', () => {
         expect(message).not.toContain(outside);
     });
 
-    it.runIf(canFileSymlink)('a file symlink that leads out, and a DANGLING one, are refused', async () => {
+    itWithFileSymlinks('a file symlink that leads out, and a DANGLING one, are refused', async () => {
         await symlink(join(outside, 'secret.txt'), join(ws, 'innocent.md'), 'file');
         await symlink(join(outside, 'not-yet.md'), join(ws, 'dangling.md'), 'file');
         await expect(confinePath(ws, 'innocent.md', 'nothing was opened')).rejects.toBeInstanceOf(OutsideWorkspaceError);

@@ -9,6 +9,7 @@ import { AttentionStore } from '../src/main/attention-store.js';
 import { InboxStore } from '../src/main/inbox-store.js';
 import { genieTools, type Caller, type GenieToolsDeps, type Registration } from '../src/main/mcp-tools.js';
 import { insideRoot } from '../src/main/workspace-confine.js';
+import { itWithFileSymlinks } from './helpers/file-symlinks.js';
 
 /**
  * AGENTINBOX ATTACHMENTS STAY INSIDE THE CALLER'S WORKSPACE (genie#1347).
@@ -27,18 +28,7 @@ import { insideRoot } from '../src/main/workspace-confine.js';
 const dirLink = (target: string, link: string) => symlink(target, link, 'junction');
 
 /** Whether this machine lets an unprivileged process make a FILE symlink (Windows needs Developer Mode or admin). */
-const canFileSymlink = (() => {
-    const probe = mkdtempSync(path.join(tmpdir(), 'genie2-symprobe-'));
-    try {
-        writeFileSync(path.join(probe, 't'), 'x');
-        symlinkSync(path.join(probe, 't'), path.join(probe, 'l'), 'file');
-        return true;
-    } catch {
-        return false;
-    } finally {
-        rmSync(probe, { recursive: true, force: true });
-    }
-})();
+// Where this machine cannot make a file symlink, the rows that need one are skipped with the reason (test/helpers/file-symlinks.ts).
 
 describe('insideRoot — the lexical half, on both platforms’ path rules', () => {
     it('POSIX: inside resolves; `..`, absolute elsewhere and a sibling sharing the prefix are refused', () => {
@@ -161,7 +151,7 @@ describe('send — an agent attaches only files inside its own workspace', () =>
         expect(sent.attachments[0]).toMatchObject({ name: 'notes.md', size: 6 });
     });
 
-    it.runIf(canFileSymlink)('a FILE symlink inside the workspace that points out is refused', async () => {
+    itWithFileSymlinks('a FILE symlink inside the workspace that points out is refused', async () => {
         await symlink(resolve(outside, 'secret.txt'), resolve(ws, 'innocent.md'), 'file');
         await expect(store.send({ from: a, to: b, text: 'x', attachments: ['innocent.md'], workspaceRoot: ws })).rejects.toThrow(/outside .*workspace/);
     });
@@ -245,13 +235,13 @@ describe('saveAttachment — an agent writes a received file only inside its own
         await expect(stat(resolve(outside, 'new'))).rejects.toThrow();
     });
 
-    it.runIf(canFileSymlink)('refuses to write THROUGH a file symlink that points out, even with overwrite', async () => {
+    itWithFileSymlinks('refuses to write THROUGH a file symlink that points out, even with overwrite', async () => {
         await symlink(resolve(outside, 'secret.txt'), resolve(ws, 'innocent.md'), 'file');
         await expect(store.saveAttachment(b, attId, 'innocent.md', { workspaceRoot: ws, overwrite: true })).rejects.toThrow(/outside .*workspace/);
         expect((await readFile(resolve(outside, 'secret.txt'))).toString()).toBe('outside secret');
     });
 
-    it.runIf(canFileSymlink)('refuses a DANGLING file symlink whose target would be created outside', async () => {
+    itWithFileSymlinks('refuses a DANGLING file symlink whose target would be created outside', async () => {
         await symlink(resolve(outside, 'not-yet.txt'), resolve(ws, 'dangling.md'), 'file');
         await expect(store.saveAttachment(b, attId, 'dangling.md', { workspaceRoot: ws, overwrite: true })).rejects.toThrow(/outside .*workspace/);
         await expect(stat(resolve(outside, 'not-yet.txt'))).rejects.toThrow();
