@@ -50,6 +50,7 @@ import type { ReleaseLike } from '../core/update-notes.js';
 import { hostIdleMs, hostIdleStep } from '../core/host-idle.js';
 import { NO_BROWSER_HERE, NO_UPDATES_HERE, hostCapabilities } from '../core/host-runtime.js';
 import { fts5Refusal } from './fts5-check.js';
+import { restrictHostPipe } from './host-pipe-acl.js';
 import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
@@ -193,6 +194,10 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
+    // THE PIPE ANSWERS ITS OWN USER ONLY (Tynn #398; host-pipe-acl.ts): on Windows, before host.json names it to anyone.
+    const pipeAcl = await restrictHostPipe(server, endpoint);
+    if (pipeAcl?.ok === true) lifecycleLog(`host pipe: its user and SYSTEM only (${pipeAcl.sddl})`);
+    else if (pipeAcl) { say(`the host pipe keeps Windows' default access: ${pipeAcl.reason}`); lifecycleLog(`host pipe: NOT restricted: ${pipeAcl.reason}`); }
     /*
      * SAFE MODE (Tynn #386; safe-mode-host.ts), opened here: only the host that holds the endpoint reads and removes the
      * clean-exit marker (a second host exited above, touching nothing). With no marker the last run did not end cleanly,
