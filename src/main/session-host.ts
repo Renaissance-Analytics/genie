@@ -32,6 +32,18 @@ export function promptAcceptsFor(provider: string): PromptAccepts {
 }
 
 /**
+ * Whether an agent's provider REPORTS its slash commands (ACP `available_commands_update`, read by
+ * core/provider-commands.ts). Claude's does, at the `system/init` of a turn — so before its first turn it has reported
+ * nothing yet and a command still goes. prism-acp 0.38.0's Codex driver reports none and declares no capability for
+ * it, so a command typed to a Codex agent is refused rather than sent as chat (Tynn #440). Should a later prism report
+ * Codex's commands, the report itself is what is read (`unsupportedSlashCommand`), and this answers only for an agent
+ * that has not reported yet. Unknown providers: `true`, so nothing is refused on a guess.
+ */
+export function reportsCommandsFor(provider: string): boolean {
+    return provider !== 'codex';
+}
+
+/**
  * Whether an agent's driver can END A TURN and keep the session, from its driver's DECLARED `cancel` (prism-acp
  * `DriverCapabilities.cancel`, 0.14.0: `true` for Claude and Codex). `null` when the driver declares nothing (an older
  * prism-acp) or Genie has no driver for the provider: unknown is not "yes", and no turn Stop is offered on it.
@@ -105,6 +117,7 @@ import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
+import { unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
@@ -1168,6 +1181,9 @@ export class SessionHost {
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): { ok: true } | { ok: false; reason: string | null } {
         const entry = this.#running.get(agentId);
         if (!entry || !entry.session.running) return { ok: false, reason: null };
+        // A slash command the agent cannot run is said to the composer, never sent as a chat message (Tynn #440).
+        const unsupported = by === 'you' ? unsupportedSlashCommand(text, entry.session.extensions, reportsCommandsFor(entry.provider)) : null;
+        if (unsupported !== null) return { ok: false, reason: unsupported };
         const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
         if (!built.ok) return { ok: false, reason: built.reason };
         try {

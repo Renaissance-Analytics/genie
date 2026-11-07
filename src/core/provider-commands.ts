@@ -78,10 +78,20 @@ export function toPromptCmds(commands: readonly ProviderCommand[] | null | undef
     return (commands ?? []).map((c) => ({ name: `/${c.name}`, hint: c.description }));
 }
 
+/** `/name` and its arguments: a name with no further slash (so a path such as `/src/app.ts` is not a command). */
+const SLASH_COMMAND = /^\/([A-Za-z0-9][\w:.-]*)(?:\s|$)/;
+
 /**
- * A slash command typed to an agent that offers none: the reason it is not sent, or `null` to send it (Tynn #440).
- * Red-first placeholder: nothing is refused yet.
+ * A SLASH COMMAND TYPED TO AN AGENT THAT OFFERS NONE (Tynn #440): the reason it is not sent, or `null` to send it.
+ *
+ * Sent, a `/compact` to an agent whose CLI runs no commands reaches the model as a chat message. So it is refused when
+ * the agent REPORTED no commands (`[]`), or has reported nothing and its provider never reports any
+ * (`reportsCommands: false`: prism-acp 0.38.0's Codex driver). An agent with commands reported, or one that reports
+ * them later (Claude, at the `system/init` of its first turn), sends it: its CLI decides what it runs.
  */
-export function unsupportedSlashCommand(_text: string, _extensions: ProviderExtensions | null, _reportsCommands: boolean): string | null {
-    return null;
+export function unsupportedSlashCommand(text: string, extensions: ProviderExtensions | null, reportsCommands: boolean): string | null {
+    const match = SLASH_COMMAND.exec(text.trimStart());
+    if (!match) return null;
+    const offersNone = extensions === null ? !reportsCommands : extensions.commands.length === 0;
+    return offersNone ? `/${match[1]} was not sent: this agent offers no slash commands.` : null;
 }
