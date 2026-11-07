@@ -110,7 +110,7 @@ import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
 import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js';
-import { RECOVER_REPORT, RECOVER_RESTART, recoverRenderer, rendererErrorPage, type RendererNotice } from './renderer-recovery.js';
+import { RECOVER_REPORT, RECOVER_RESTART, pageMemorySampler, recoverRenderer, rendererErrorPage, type RendererNotice } from './renderer-recovery.js';
 import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-records.js';
 import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
@@ -336,15 +336,27 @@ const crashRecorder = new WindowCrashRecorder({
     // The host's build as this window last heard it (its welcome); this Genie's version until it has linked.
     header: () => crashHeader(app.getVersion(), agentEngineLink?.client.welcome?.build ?? app.getVersion()),
     // The main window's page, as last sampled: what it had grown to when it ended (an oom, the owner's 2026-11-06).
-    rendererMb: () => (mainPageRss === null ? null : Math.round(mainPageRss / (1024 * 1024))),
+    rendererMb: () => pageMemory.mb(),
 });
 if (launch.kind === 'boot') crashRecorder.install(process, app);
 /** Window main's heartbeat to genie-host's hang watchdog (hang-watchdog.ts): started once the engine link is up. */
 let heartbeatNow: { stop(): void; bye(): void } | null = null;
 
 let window: BrowserWindow | null = null;
-/** The main window's page working set, in bytes, sampled every 5 s (app.getAppMetrics); `null` until it is. */
-let mainPageRss: number | null = null;
+/**
+ * The main window's page working set, as last REALLY read (app.getAppMetrics: a missing renderer or a 0 never overwrites a
+ * real reading, and a page's load reads again until it gets one; renderer-recovery.ts `pageMemorySampler`).
+ */
+const pageMemory = pageMemorySampler({
+    read: () => {
+        const win = window;
+        if (!win || win.isDestroyed()) return null;
+        const pid = win.webContents.getOSProcessId();
+        const metric = app.getAppMetrics().find((m) => m.pid === pid);
+        return metric ? metric.memory.workingSetSize * 1024 : null;
+    },
+    later: (fn) => { setTimeout(fn, 250).unref?.(); },
+});
 /** The main window's page ended and was brought back (renderer-recovery.ts): the notice every snapshot carries. */
 let rendererNotice: RendererNotice | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
@@ -1559,7 +1571,7 @@ async function boot(): Promise<void> {
             pid: process.pid,
             rss: () => process.memoryUsage.rss(),
             // The main window's page beside it: genie-host's rss line says what grew (bringBackItsPage samples it).
-            rendererRss: () => mainPageRss,
+            rendererRss: () => pageMemory.bytes(),
         });
     }
     /*
@@ -4142,17 +4154,10 @@ function mountMainWindow(show: boolean, reason = 'launch'): void {
  * Restart Genie, Send a crash report — build the window again here, the same host, the notice kept for its report.
  */
 function bringBackItsPage(win: BrowserWindow): void {
-    const sample = (): void => {
-        try {
-            const pid = win.webContents.getOSProcessId();
-            const metric = app.getAppMetrics().find((m) => m.pid === pid);
-            if (metric) mainPageRss = metric.memory.workingSetSize * 1024;
-        } catch { /* a window going away: the last sample stands */ }
-    };
-    sample();
-    // As soon as the page has loaded too (its renderer exists from then), not only on the 5 s tick.
-    win.webContents.on('did-finish-load', sample);
-    const sampler = setInterval(sample, 5_000);
+    // As soon as the page has loaded (retried until its renderer reads a real value), and on the 5 s tick.
+    pageMemory.sample();
+    win.webContents.on('did-finish-load', () => { pageMemory.loaded(); });
+    const sampler = setInterval(() => { pageMemory.sample(); }, 5_000);
     sampler.unref?.();
     win.on('closed', () => { clearInterval(sampler); });
     const rebuild = (why: string): void => {
@@ -4163,7 +4168,7 @@ function bringBackItsPage(win: BrowserWindow): void {
     };
     recoverRenderer({
         contents: win.webContents,
-        rendererMb: () => (mainPageRss === null ? null : Math.round(mainPageRss / (1024 * 1024))),
+        rendererMb: () => pageMemory.mb(),
         onReloaded: (notice) => { rendererNotice = notice; registry?.touch(); },
         onGaveUp: (notice) => { rendererNotice = notice; },
         errorPage: rendererErrorPage,
