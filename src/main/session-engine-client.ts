@@ -81,6 +81,7 @@ export type Awaitable<T> = T | Promise<T>;
 export interface EngineClientOptions {
     readonly onThreadId?: (agentId: AgentId, threadId: string) => void;
     readonly onCarryOverSent?: (agentId: AgentId) => void;
+    readonly onRedockSent?: (agentId: AgentId, at: string) => void;
     /** Genie's own words are in this agent's thread now (genie#1519). */
     readonly markGenieWords?: (agentId: AgentId) => void;
     readonly onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
@@ -445,6 +446,7 @@ export class SessionEngineClient {
         switch (c.name) {
             case 'threadId': o.onThreadId?.(c.agentId as AgentId, c.threadId); return;
             case 'carryOverSent': o.onCarryOverSent?.(c.agentId as AgentId); return;
+            case 'redockSent': o.onRedockSent?.(c.agentId as AgentId, c.at); return;
             case 'genieWords': o.markGenieWords?.(c.agentId as AgentId); return;
             case 'plan': o.onPlan?.(c.agentId as AgentId, c.steps); return;
             case 'turnNumbered': o.onTurnNumbered?.(c.agentId as AgentId, c.n); return;

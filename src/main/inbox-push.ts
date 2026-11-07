@@ -1,7 +1,7 @@
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { PromptContext } from '../core/session.js';
-import type { NoticeMail } from '../core/stream-event.js';
+import type { NoticeMail, StreamEvent } from '../core/stream-event.js';
 import { inboxAgentPaused } from '../core/inbox.js';
 import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery } from '../core/app-inbox.js';
 
@@ -20,7 +20,8 @@ import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery } from '../co
  *
  * Nothing here asks a provider for anything but a prompt: no hook, no MCP notification, no provider interrupt. Both
  * events are Genie's own — a message landing (`inbox.onSend`) and the session changing (`host.subscribe`: a turn
- * ending, ready, started, stopped) — so nothing polls.
+ * ending, ready, started, stopped). A refused handoff also schedules its own retry: a quiet idle session need not emit
+ * another event before its mail can arrive.
  *
  * TOLD MEANS DELIVERED: a notice is settled as told only when the turn that took it ends cleanly — the running turn it
  * was folded into, the new turn it opened, or, when it was held (Codex), its OWN turn after it left the queue. A prompt
@@ -61,6 +62,8 @@ export interface InboxPushPorts {
         inTurn(agentId: AgentId): boolean;
         /** The prompt held under `id` is still waiting in the agent's current run (SessionHost.hasQueuedPrompt). */
         hasQueuedPrompt(agentId: AgentId, id: string): boolean;
+        /** Actual delivery outcomes, when the host keeps a ledger: leaving a queue alone does not prove acceptance. */
+        rowsFor?(agentId: AgentId): readonly { readonly event: StreamEvent }[];
         probe(agentId: AgentId): LiveSession | null;
         /** How the agent's last turn ended (SessionHost.lastTurnEnd): a notice whose turn was STOPPED was not told. */
         lastTurnEnd?(agentId: AgentId): 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null;
@@ -78,6 +81,10 @@ export interface InboxPushPorts {
     readonly reminders: (input: { run: (agentId: string) => number | null }) => Array<{ agentId: string; text: string; mail?: readonly NoticeMail[] }>;
     /** A notice settled (compose's `inboxNoticeSettled`): delivered, or its batch untold. */
     readonly settled: (agentId: string, delivered: boolean) => void;
+    /** The provider accepted this captured mail batch, not merely a queued handoff. */
+    readonly delivered?: (agentId: AgentId, mail: readonly NoticeMail[]) => void;
+    /** Five or more consecutive refusals: retain the reason on the captured pending mail, without acknowledging it. */
+    readonly refused?: (agentId: AgentId, mail: readonly NoticeMail[], refusal: { readonly attempts: number; readonly reason: string }) => void;
     /**
      * MAIL WAKES THE AGENT (the owner, 2026-10-17: "agents don't wake up from inbox pushes unless I go to their screen").
      * Start the session of an agent that has none — main's `wakeAgent` (opening an agent no longer starts it, q_04ce323c), refusing by name for an asleep workspace or
@@ -97,7 +104,7 @@ export interface InboxPushPorts {
      * (genie#1411). A notice with any person's or agent's mail in it is never held. Absent = no cap.
      */
     readonly appBudget?: { waitMs(agentId: AgentId): number; spend(agentId: AgentId): void } | undefined;
-    /** Genie's timer (main: setTimeout), answering a cancel. Absent = no coalescing and no deferred app turns. */
+    /** Genie's timer (host: setTimeout), answering a cancel. Also retries refused handoffs without another event. */
     readonly schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
     /**
      * THE COALESCING WINDOW: mail arriving for an agent with a session is told this long after the FIRST arrival, so a
@@ -105,7 +112,7 @@ export interface InboxPushPorts {
      */
     readonly coalesceMs?: number | undefined;
     /**
-     * EACH NOTICE COUNTS EVERYTHING STILL UNREAD (the mail push: "You have N unread"), so a newer notice covers the one
+     * EACH NOTICE COVERS EVERYTHING STILL UNREAD (the mail push), so a newer notice covers the one
      * before it. Then new mail arriving while a notice the provider already has is in flight is told at once, and the one
      * before is settled told. Absent (IssueWatch, whose notice names only what is new) = new mail waits for that turn's end.
      */
@@ -118,13 +125,40 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
      * The notice out per agent: the run it went to, how many of that run's turns had ended when the provider got it, and,
      * while it is HELD for the turn's end (Codex), the id it is held under.
      */
-    const out = new Map<string, { run: number; endedBefore: number; queued: string | null }>();
+    type Outgoing = { run: number; endedBefore: number; queued: string | null; handingOff: boolean; acknowledged: boolean; mail: readonly NoticeMail[] };
+    const out = new Map<string, Outgoing>();
     /** An arrival's coalescing window, per agent: while one is open the agent is told when it closes, not before. */
     const coalescing = new Map<string, () => void>();
     /** An app-only notice held by the app wake cap, per agent: told when the window allows. */
     const deferred = new Map<string, () => void>();
+    /** A refused handoff owes its own retry, even if no further mail or session event arrives. */
+    const retrying = new Map<string, () => void>();
+    const retryStates = new Map<string, { run: number | null; ready: number | null; failures: number }>();
+    let disposed = false;
     const { schedule } = ports;
     const coalesceMs = ports.coalesceMs ?? 0;
+    const cancelRetry = (id: string): void => {
+        retrying.get(id)?.();
+        retrying.delete(id);
+    };
+    const retryState = (id: string) => {
+        const run = host.runOf(id as AgentId);
+        const ready = host.deliverable(id as AgentId);
+        let state = retryStates.get(id);
+        // A new run or actual ready/held transition can rescue mail immediately. Ordinary ledger rows cannot.
+        if (!state || state.run !== run || state.ready !== ready) {
+            cancelRetry(id);
+            state = { run, ready, failures: 0 };
+            if (run === null) retryStates.delete(id);
+            else retryStates.set(id, state);
+        }
+        return state;
+    };
+    const acknowledge = (id: AgentId, sent: Outgoing): void => {
+        if (sent.acknowledged) return;
+        sent.acknowledged = true;
+        if (sent.mail.length > 0) ports.delivered?.(id, sent.mail);
+    };
 
     /** Settle the agent's notice if its fate is known now. Answers whether one is still out. */
     const settle = (id: AgentId): boolean => {
@@ -136,18 +170,23 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             settled(id, false);
             return false;
         }
+        if (sent.handingOff) return true;
         if (sent.queued !== null) {
             // HELD for the turn's end (Codex refuses a prompt mid-turn): still waiting, nothing to settle yet.
             if (host.hasQueuedPrompt(id, sent.queued)) return true;
-            // Gone from the queue. Sent, it opened its own turn, in flight now — the turn it is told by. Not in a turn: it
-            // was dropped with a turn that broke, or refused when it went, and was never delivered.
-            if (!host.inTurn(id)) {
+            // The delivery row distinguishes acceptance from a discarded queue item, even during stop's reentrant
+            // events before inTurn clears. Across a host link the row may arrive after the queue snapshot: wait for it.
+            const delivery = host.rowsFor?.(id).map((r) => r.event)
+                .findLast((e) => e.kind === 'prompt_delivery' && e.id === sent.queued);
+            if (host.rowsFor && !delivery) return true;
+            if (host.rowsFor ? delivery?.kind !== 'prompt_delivery' || delivery.status !== 'sent' : !host.inTurn(id)) {
                 out.delete(id);
                 settled(id, false);
                 return false;
             }
             sent.queued = null;
             sent.endedBefore = host.turnsEndedThisRun(id);
+            acknowledge(id, sent);
             return true;
         }
         // The provider has it: the next turn to end in that run took it — the running turn it was folded into, or the one
@@ -163,6 +202,9 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     // Only the agent the event is about is considered: another agent's batch is told on ITS events, not on this one's.
     // `arrival`: new mail, not a session event — a notice the provider already has may be overtaken (below).
     const push = (only: string, arrival = false): void => {
+        if (disposed) return;
+        retryState(only);
+        if (retrying.has(only)) return;
         // Held mail remains due. The host's resume/start event retries it; no notice bypasses a provider pause.
         if (inboxAgentPaused(host.probe(only as AgentId))) return;
         const prior = out.get(only);
@@ -171,7 +213,7 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             // input would be, not at that turn's end. The newer notice counts everything still unread, so the one before
             // it is settled told — if the newer one is not delivered, its batch is untold and covers both. A notice still
             // HELD (Codex) is not overtaken: a second held notice would be a second turn.
-            if (!ports.cumulative || !arrival || prior === undefined || prior.queued !== null || host.deliverable(only as AgentId) === null) return;
+            if (!ports.cumulative || !arrival || prior === undefined || prior.handingOff || prior.queued !== null || host.deliverable(only as AgentId) === null) return;
             out.delete(only);
             settled(only, true);
         }
@@ -195,29 +237,53 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             }
             const midTurn = host.inTurn(id);
             // Out BEFORE the prompt: the prompt itself announces a change, and that re-entry must see it in flight.
-            const sent = { run, endedBefore: host.turnsEndedThisRun(id), queued: null as string | null };
+            const sent: Outgoing = { run, endedBefore: host.turnsEndedThisRun(id), queued: null,
+                handingOff: true, acknowledged: false, mail: r.mail ?? [] };
             out.set(id, sent);
             // What the hand-off answered: nothing took it = settled untold; taken = the turn it opens is spent.
-            const handedOff = (handed: { queued: string | null } | null): void => {
+            const handedOff = (handed: { queued: string | null } | null, refusalError?: unknown): void => {
+                // A stopped wire or a replaced batch cannot settle newer mail or arm a stale retry.
+                if (disposed || out.get(id) !== sent) return;
+                sent.handingOff = false;
                 if (handed === null) {
-                    if (out.get(id) === sent) out.delete(id);
+                    out.delete(id);
                     settled(id, false);
+                    if (host.runOf(id) !== run) return;
+                    const state = retryState(id);
+                    state.failures = Math.min(state.failures + 1, Number.MAX_SAFE_INTEGER);
+                    const detail = refusalError instanceof Error ? refusalError.message : typeof refusalError === 'string' ? refusalError : '';
+                    const reason = (detail.trim() || 'The session did not accept this mail handoff.').slice(0, 2_000);
+                    if (state.failures >= 5 && sent.mail.length > 0) ports.refused?.(id, sent.mail, { attempts: state.failures, reason });
+                    if (schedule && !retrying.has(id)) {
+                        retrying.set(id, schedule(() => {
+                            retrying.delete(id);
+                            // A retry never starts or follows a different run. push rechecks pause/Stop/budget gates.
+                            if (host.runOf(id) === run) push(id);
+                        }, Math.min(1_000 * 2 ** (state.failures - 1), 60_000)));
+                    }
                     return;
                 }
+                cancelRetry(id);
+                retryStates.delete(id);
                 sent.queued = handed.queued;
+                if (handed.queued === null) acknowledge(id, sent);
                 // It opens a turn when the agent was idle, or when it is held for a turn of its own.
                 if (appCaused && (!midTurn || handed.queued !== null)) ports.appBudget!.spend(id);
+                // Across a host link the queued prompt may already have left the queue before the answer arrived.
+                if (handed.queued !== null) settle(id);
             };
             let handed: { queued: string | null } | null | Promise<{ queued: string | null } | null>;
+            let refusalError: unknown;
             try {
                 // `retold`: held and then dropped, it is not kept as a draft a Restart owes — this book tells it again.
                 handed = host.handOff(id, r.text, 'genie', { ...(r.mail ? { mail: r.mail } : {}), retold: true });
-            } catch {
+            } catch (error) {
                 handed = null;
+                refusalError = error;
             }
             // In-process the answer is here now; the agent host's (the host split) arrives as a promise of the same.
-            if (handed instanceof Promise) void handed.then(handedOff, () => handedOff(null));
-            else handedOff(handed);
+            if (handed instanceof Promise) void handed.then(handedOff, (error: unknown) => handedOff(null, error));
+            else handedOff(handed, refusalError);
         }
     };
     /** Mail arrived for an agent with a session: told when the coalescing window closes (at once without one). */
@@ -243,11 +309,14 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     });
     const offHost = host.subscribe((agentId) => push(agentId));
     return () => {
+        disposed = true;
         offSend();
         offHost();
-        for (const cancel of [...coalescing.values(), ...deferred.values()]) cancel();
+        for (const cancel of [...coalescing.values(), ...deferred.values(), ...retrying.values()]) cancel();
+        retryStates.clear();
         coalescing.clear();
         deferred.clear();
+        retrying.clear();
     };
 }
 

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,6 +71,31 @@ describe.skipIf(process.platform === 'win32')("the wizard's read of a folder has
     }, 15_000);
 });
 
+/**
+ * WHO STILL HOLDS A FOLDER, said only when it cannot be removed (unit (windows) failed here twice on 2026-11-06 with EBUSY
+ * after the hook's child was gone). Linux: every process whose working directory is in it. Windows: git, sh, bash and
+ * conhost with their parents and start times, any process whose command line names it, and handle64's answer when the
+ * machine has it. A diagnostic: the assertion it sits beside is unchanged.
+ */
+function holders(dir: string): string[] {
+    try {
+        if (process.platform !== 'win32') {
+            return readdirSync('/proc').filter((p) => /^\d+$/.test(p)).flatMap((pid) => {
+                try { const cwd = readlinkSync(`/proc/${pid}/cwd`); return cwd.startsWith(dir) ? [`${pid} cwd=${cwd} ${readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').slice(0, 200)}`] : []; } catch { return []; }
+            });
+        }
+        const like = dir.replace(/'/g, "''");
+        const table = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+            `Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('git.exe','sh.exe','bash.exe','conhost.exe','git-remote-https.exe') -or ($_.CommandLine -and $_.CommandLine -like '*${like}*') } | ForEach-Object { "$($_.ProcessId) parent=$($_.ParentProcessId) $($_.Name) started=$($_.CreationDate.ToString('HH:mm:ss.fff')) $($_.CommandLine)" }`],
+            { encoding: 'utf8', timeout: 60_000, windowsHide: true }).split(/\r?\n/).filter(Boolean).map((l) => l.slice(0, 300));
+        let handles: string[] = [];
+        try { handles = execFileSync('handle64', ['-accepteula', '-nobanner', dir], { encoding: 'utf8', timeout: 60_000, windowsHide: true }).split(/\r?\n/).filter(Boolean).map((l) => `handle64: ${l.slice(0, 200)}`); } catch { handles = ['handle64: not on this machine']; }
+        return [...table, ...handles];
+    } catch (error) {
+        return [`(the table could not be read: ${error instanceof Error ? error.message : String(error)})`];
+    }
+}
+
 describe('past it, what the read started is ended', () => {
     const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
     let mark: string;
@@ -101,8 +126,104 @@ describe('past it, what the read started is ended', () => {
         expect(alive(child)).toBe(true);
         expect(await reading).toMatch(/did not answer/);
         await vi.waitFor(() => { expect(alive(child)).toBe(false); }, { timeout: 40_000, interval: 200 });
-        await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 5000, interval: 200 });
+        try {
+            await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 5000, interval: 200 });
+        } catch (error) {
+            console.log(`GIT_LIMIT_HOLDERS of ${repo} (the hook's child ${child} is gone):\n  ${holders(root).join('\n  ')}`);
+            throw error;
+        }
     }, 70_000);
+});
+
+/*
+ * NOTHING THE READ STARTED ESCAPES THE LIMIT, EVEN WHAT IT STARTS WHILE IT IS BEING ENDED (the line's run after #1637, job
+ * 128179635631: git gone, and its hook's sh chain — "starts-a-child.sh 1", git's second call of the hook — still running in
+ * the repository). One reading of the table, then the kill, left a window: whatever git or a hook started between the two
+ * was in no reading, and outlived the read. Here the hook starts a new child every 300 ms for as long as it runs, so that
+ * window is always there; each child writes its own pid. After the limit, every child ends, and no new one comes.
+ */
+describe('past it, a hook that keeps starting children is ended with all of them', () => {
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
+    let marks: string;
+    const started = (): number[] => (existsSync(marks) ? readdirSync(marks).map(Number).filter((n) => Number.isInteger(n) && n > 0) : []);
+
+    beforeEach(() => {
+        marks = join(root, 'marks');
+        mkdirSync(marks);
+        const slashes = (p: string) => p.replace(/\\/g, '/');
+        // Each child: its own real pid as a file name, its folder the repository's; it ends itself in time, so a red run
+        // leaves nothing behind for long.
+        const script = join(root, 'child.cjs');
+        writeFileSync(script, 'require("fs").writeFileSync(require("path").join(process.argv[2], String(process.pid)), ""); setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 45000);\n');
+        const hook = join(root, 'keeps-starting.sh');
+        writeFileSync(hook, `#!/bin/sh\nwhile true; do "${slashes(process.execPath)}" "${slashes(script)}" "${slashes(marks)}" & sleep 0.3; done\n`);
+        chmodSync(hook, 0o755);
+        git('config', 'core.fsmonitor', slashes(hook));
+        GIT_READ_LIMIT.ms = 4000;
+    });
+    afterEach(() => { for (const pid of started()) if (alive(pid)) { try { process.kill(pid); } catch { /* gone */ } } });
+
+    it('gitTreeStatus: at the limit every child the hook started is ended, and none is started after', async () => {
+        const reading = gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message);
+        await vi.waitFor(() => { expect(started().length).toBeGreaterThan(2); }, { timeout: 10_000, interval: 50 });
+        expect(await reading).toMatch(/did not answer/);
+        // Every child ended (the limit's kill runs after the answer)...
+        await vi.waitFor(() => { expect(started().filter(alive)).toEqual([]); }, { timeout: 40_000, interval: 250 });
+        // ...and the loop that started them is gone too: no child is started from here on.
+        const count = started().length;
+        await new Promise((r) => setTimeout(r, 2_000));
+        expect(started().length, 'a child started after the limit ended the read').toBe(count);
+        await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 10_000, interval: 250 });
+    }, 90_000);
+});
+
+/*
+ * A BIG TREE IS STILL OURS (#1638's review): every process the walk finds is a descendant of our git by pid, start time and
+ * name, so however many a hook forks, all of them end. A cap on how many are ended would be an escape hatch: a hook that
+ * forks past it keeps running in the repository. Here the hook forks 230 sleeps at once; each carries a mark of this run in
+ * its command line, so the machine's table says which are ours.
+ */
+describe('past it, a hook that forks hundreds of children is ended with all of them', () => {
+    // 300 s: longer than every wait below, so only the limit can end them (a 45 s one ended by itself inside the wait).
+    const MARK = `300.${String(process.pid).padStart(6, '0').slice(-6)}`;
+    const ours = (): number => {
+        try {
+            if (process.platform === 'win32') {
+                const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'sleep*' -and $_.CommandLine -and $_.CommandLine -like '* ${MARK}*' }).Count`], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+                return Number(out.trim() || 0);
+            }
+            return execFileSync('pgrep', ['-fc', `sleep ${MARK}`], { encoding: 'utf8' }).trim().split(/\s+/).map(Number)[0] ?? 0;
+        } catch { return 0; }
+    };
+
+    beforeEach(() => {
+        const hook = join(root, 'forks-hundreds.sh');
+        writeFileSync(hook, `#!/bin/sh\ni=0\nwhile [ "$i" -lt 230 ]; do sleep ${MARK} & i=$((i+1)); done\nwait\n`);
+        chmodSync(hook, 0o755);
+        git('config', 'core.fsmonitor', hook.replace(/\\/g, '/'));
+        GIT_READ_LIMIT.ms = 25_000;
+    });
+    afterEach(() => {
+        // This run's own sleeps only, by the mark in their command lines: whatever the limit did not end (on Windows, until
+        // genie#1639) is not left holding the folder or loading the machine for the files after this one.
+        try {
+            if (process.platform === 'win32') {
+                execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'sleep*' -and $_.CommandLine -and $_.CommandLine -like '* ${MARK}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { timeout: 120_000, windowsHide: true, stdio: 'ignore' });
+            } else execFileSync('pkill', ['-f', `sleep ${MARK}`]);
+        } catch { /* none left */ }
+    });
+
+    // On Windows, Git's MSYS sh starts each background child from a fork process that exits at once, so no walk by parent
+    // can tie it to our git (run 42308792264: the walk found 31 of 230). The read's git runs inside a job object there
+    // (genie-launch.exe, #1628/#1639): ending the read closes the job, and the job ends everything in it.
+    it('gitTreeStatus: more than 200 of them, and at the limit none survives', async () => {
+        const reading = gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message);
+        // CONTROL: the table sees them, past the old cap of 200, before the limit comes.
+        await vi.waitFor(() => { expect(ours()).toBeGreaterThan(200); }, { timeout: 24_000, interval: 1_000 });
+        expect(await reading).toMatch(/did not answer/);
+        await vi.waitFor(() => { expect(ours()).toBe(0); }, { timeout: 40_000, interval: 1_000 });
+        await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 10_000, interval: 250 });
+    }, 150_000);
 });
 
 describe('past it', () => {

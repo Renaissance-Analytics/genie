@@ -147,7 +147,7 @@ setInterval(async () => {
                     const text = String(content);
                     const folded = inTurn;
                     inTurn = true;
-                    if (!text.includes('unread AgentInbox')) {
+                    if (!text.startsWith('AgentInbox delivery:')) {
                         mark(`${record.name}: the person's prompt — working ${workMs} ms`);
                         setTimeout(() => { mark(`${record.name}: turn ended (idle)`); end(); }, workMs);
                         return;
@@ -155,10 +155,11 @@ setInterval(async () => {
                     notices.set(record.id, [...(notices.get(record.id) ?? []), text]);
                     mark(folded ? `${record.name}: Genie's notice reached it MID-TURN (folded) — "${text}"` : `${record.name}: Genie gave it a turn — "${text}"`);
                     void (async () => {
-                        const got = await agentinbox(record.name, { action: 'receive' });
-                        const messages = (got.messages as Array<Record<string, unknown>> | undefined) ?? [];
-                        const subjects = messages.map((m) => String(m.subject ?? m.text));
-                        mark(`${record.name}: agentinbox receive → ${messages.length}: ${messages.map((m) => `${m.fromKind === 'app' ? (m.source as { label: string }).label : nameOf(String(m.from))}: ${String(m.subject ?? m.text)}`).join(' | ')}`);
+                        const messages = JSON.parse(text.slice(text.indexOf('\n') + 1)) as Array<{
+                            from: string; fromName: string; text: string; app?: { label?: string; subject?: string };
+                        }>;
+                        const subjects = messages.map((m) => m.app?.subject ?? m.text);
+                        mark(`${record.name}: provider delivery → ${messages.length}: ${messages.map((m) => `${m.fromName}: ${m.app?.subject ?? m.text}`).join(' | ')}`);
                         const sent = await agentinbox(record.name, { action: 'send', to: 'human', text: `Handled: ${subjects.join(', ')}` });
                         mark(`${record.name}: ACTED — reported to the person (${sent.ok === true ? 'sent' : `refused: ${String(sent.error)}`})`);
                         acted.push({ agent: record.name, subjects });
@@ -181,6 +182,7 @@ setInterval(async () => {
     const unwire = wireInboxPush({
         inbox: composed.inbox, host,
         reminders: (input) => composed.inboxReminders(input), settled: (id, ok) => composed.inboxNoticeSettled(id, ok),
+        delivered: (id, mail) => { void composed.inbox.markDelivered(id, mail.map((m) => m.id)).catch((error) => mark(`receipt error: ${String(error)}`)); },
         cumulative: true,
         // main's wake is the open-agent path; the harness starts it the same way.
         wake: (id) => { const r = roster.find((x) => x.id === id); if (!r) return false; started.push(r.name); return host.start(r, fancyDir).ok; },

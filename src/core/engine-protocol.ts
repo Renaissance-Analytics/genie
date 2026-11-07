@@ -223,6 +223,7 @@ export interface EngineGlobalView {
 export type EngineCallback =
     | { readonly name: 'threadId'; readonly agentId: string; readonly threadId: string }
     | { readonly name: 'carryOverSent'; readonly agentId: string }
+    | { readonly name: 'redockSent'; readonly agentId: string; readonly at: string }
     // Genie's own words are in the agent's thread now (genie#1519): its record says so, as the window's registry writes it.
     | { readonly name: 'genieWords'; readonly agentId: string }
     | { readonly name: 'plan'; readonly agentId: string; readonly steps: readonly { content: string; status: string }[] }
@@ -237,7 +238,7 @@ export type EngineCallback =
     | { readonly name: 'toolSignal'; readonly signal: unknown };
 
 /** Callbacks that change the window's stores: queued while no window is connected. The rest are moment-only. */
-export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'carryOverSent', 'genieWords', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
+export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'carryOverSent', 'redockSent', 'genieWords', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
 
 /** An attachment on the wire: its bytes as base64 (JSON has no bytes). */
 export interface WireAttachment {

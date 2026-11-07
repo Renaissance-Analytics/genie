@@ -46,7 +46,8 @@ describe('the release workflow', () => {
         expect(wf).toMatch(/gh release edit[^\n]*--repo "?\$\{\{\s*github\.repository\s*\}\}"?/);
         expect(wf).not.toMatch(/--repo Renaissance-Analytics\//);
         expect(wf).toMatch(/--publish always/);
-        expect(wf).not.toMatch(/--publish never/);
+        // Windows builds with --publish never, verifies, then uploads those exact files with gh.
+        expect(wf).toMatch(/gh release upload/);
     });
 
     it('refuses to run when the tag does not match package.json — a tag is a claim about a version', () => {

@@ -31,6 +31,7 @@ export type StoresCall = (store: StoreName, method: string, args: readonly unkno
 export class InboxReplica {
     #messages: InboxMessage[] = [];
     #cursors: Record<string, number> = {};
+    #filtered = false;
     readonly #involving = new InvolvingCache<InboxMessage>();
     readonly #sendListeners = new Set<(to: Participant, message: InboxMessage) => void>();
     readonly #readListeners = new Set<(reader: Participant, ids?: readonly string[]) => void>();
@@ -43,6 +44,7 @@ export class InboxReplica {
     rebase(mail: StoresDump['inbox']): void {
         this.#messages = [...mail.messages];
         this.#cursors = { ...mail.cursors };
+        this.#filtered = mail.filtered === true;
     }
 
     apply(event: Extract<StoresEvent, { store: 'inbox' }>): void {
@@ -53,8 +55,12 @@ export class InboxReplica {
                 const removed = new Set(event.removed);
                 this.#messages = this.#messages.filter((m) => !removed.has(m.id)).map((m) => updated.get(m.id) ?? m);
             }
-            for (const m of event.appended) this.#messages.push(m);
+            // The involving cache's append fast path assumes old entries stayed put. Restored older mail replaces the array.
+            const last = this.#messages.at(-1)?.seq ?? -Infinity;
+            if (event.appended.some((m) => m.seq < last)) this.#messages = [...this.#messages, ...event.appended].sort((a, b) => a.seq - b.seq);
+            else for (const m of event.appended) this.#messages.push(m);
             this.#cursors = { ...event.cursors };
+            this.#filtered = event.filtered === true;
             return;
         }
         if (event.kind === 'sent') {
@@ -92,7 +98,8 @@ export class InboxReplica {
     }
 
     unread(participant: Participant): InboxMessage[] {
-        return unreadOf(this.#view(), participant);
+        const messages = unreadOf(this.#view(), participant);
+        return this.#filtered ? messages.filter((m) => m.readAt === null) : messages;
     }
 
     unreadCount(participant: Participant): number {
@@ -114,6 +121,14 @@ export class InboxReplica {
         const { signal: _signal, ...rest } = input;
         void _signal;
         return (await this.#call('inbox', 'receive', [{ ...rest, wait: false }])) as ReceivePage;
+    }
+
+    async markDelivered(participant: Participant, ids: readonly string[]): Promise<void> {
+        await this.#call('inbox', 'markDelivered', [participant, ids]);
+    }
+
+    async recordDeliveryRefusal(participant: Participant, ids: readonly string[], refusal: { readonly attempts: number; readonly reason: string }): Promise<void> {
+        await this.#call('inbox', 'recordDeliveryRefusal', [participant, ids, refusal]);
     }
 
     async deleteThread(a: Participant, b: Participant): Promise<number> {
@@ -239,6 +254,7 @@ export class KnowledgeRemote {
     async link(from: string, to: string): Promise<LinkResult> { return (await this.#call('knowledge', 'link', [from, to])) as LinkResult; }
     async search(input: SearchInput): Promise<{ hits: Hit[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'search', [input])) as { hits: Hit[]; nextCursor: string | null }; }
     async list(input: ListInput): Promise<{ nodes: KnowledgeNode[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'list', [input])) as { nodes: KnowledgeNode[]; nextCursor: string | null }; }
+    async summaries(input: ListInput): Promise<{ hits: Hit[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'summaries', [input])) as { hits: Hit[]; nextCursor: string | null }; }
 }
 
 /**

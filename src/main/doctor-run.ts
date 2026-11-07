@@ -200,8 +200,9 @@ export class DoctorRun {
                 let workspaceId = OS_WORKSPACE;
                 if (typeof args.workspace === 'string' && args.workspace.trim() !== '') {
                     const key = args.workspace.trim();
-                    const w = opened.registry.listWorkspaces().find((x) => x.id === key || x.path === key || nameOf(x.path) === key);
+                    const w = opened.registry.workspaceStates().find((x) => x.id === key || x.path === key || (x.asleep ? x.hibernatedName === key : nameOf(x.path) === key));
                     if (!w) return err(`no workspace "${key}"; use loadWorkspace / workspaces to find its name`);
+                    if (w.asleep) return err(`workspace "${key}" is hibernated; redock it first`);
                     workspaceId = w.id;
                 }
                 const record = opened.registry.listAgents().find((a) => a.workspaceId === workspaceId && a.name === name);

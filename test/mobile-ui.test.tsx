@@ -28,15 +28,16 @@ const item = (over: Partial<DeckItem> = {}): DeckItem => ({
 });
 
 describe('1. the workspace selector', () => {
-    it('All, then each workspace by NAME with how many agents and how many wait on you; the selected one is marked; asleep is said', () => {
+    it('names active workspaces and their counts, hides asleep rows, and restores them on redock', () => {
         const html = renderToStaticMarkup(<MobileWorkspaces workspaces={ws} agents={agents} items={[item()]} selected="tynn" onSelect={() => {}} />);
         expect(html).toContain('data-mobile-ws="all"');
         expect(control(html, 'data-mobile-ws="tynn"')).toMatchObject({ tag: 'button', tab: true });
         expect(control(html, 'data-mobile-ws="tynn"')!.open).toContain('aria-selected="true"');
-        expect(control(html, 'data-mobile-ws="fancy"')!.open).toContain('aria-selected="false"');
+        expect(html).not.toContain('data-mobile-ws="fancy"');
         expect(html).toContain('Tynn');
         expect(html).toMatch(/data-mobile-ws-waiting="tynn"[^>]*>1</);
-        expect(html).toMatch(/data-mobile-ws-asleep="fancy"/);
+        const redocked = renderToStaticMarkup(<MobileWorkspaces workspaces={ws.map((w) => ({ ...w, asleep: false }))} agents={agents} items={[item()]} selected="tynn" onSelect={() => {}} />);
+        expect(control(redocked, 'data-mobile-ws="fancy"')!.open).toContain('aria-selected="false"');
         expect(html).not.toContain('/w/tynn');
     });
 });
@@ -46,11 +47,12 @@ describe('2. the workstation dashboard', () => {
         renderToStaticMarkup(<MobileShell host="alphar" locked={false} refusal={null} items={[item()]} answering={null} onAnswer={() => {}} onDisconnect={() => {}} workspaces={ws} agents={{ rows: agents, onOpen: () => {} }} selectedWorkspace={null} onSelectWorkspace={() => {}} onOpenFiles={() => {}} {...over} />);
 
     it('shows every agent with its state word; picking a workspace narrows agents AND what needs you to it', () => {
-        const all = shell();
+        const active = ws.map((w) => ({ ...w, asleep: false }));
+        const all = shell({ workspaces: active });
         expect(all).toContain('data-mobile-agent="agent_a"');
         expect(all).toContain('data-mobile-agent="agent_b"');
         expect(all).toMatch(/data-mobile-agent="agent_w"[^>]*data-state="waiting"/);
-        const tynn = shell({ selectedWorkspace: 'fancy' });
+        const tynn = shell({ workspaces: active, selectedWorkspace: 'fancy' });
         expect(tynn).toContain('data-mobile-agent="agent_b"');
         expect(tynn).not.toContain('data-mobile-agent="agent_a"');
         expect(tynn).not.toContain('data-mobile-item="i1"');

@@ -342,8 +342,11 @@ export class ProcessBook {
     }
 
     kept(): readonly KeptProcess[] {
-        return this.#data.processes;
+        return this.#data.processes.filter((p) => !this.#deps.asleep(p.workspaceId));
     }
+
+    /** Refresh connected views after hibernation metadata changes, without touching kept specs. */
+    visibilityChanged(): void { for (const listener of this.#listeners) listener(); }
 
     /**
      * Every supervised process, with the kept ones marked; a kept process the supervisor is not
@@ -376,7 +379,7 @@ export class ProcessBook {
                 ...withSchedule(p),
             });
         }
-        return rows;
+        return rows.filter((p) => !this.#deps.asleep(p.workspaceId));
     }
 
     /** At launch: start every process the person wants, except in a hibernated workspace — or in safe mode. */

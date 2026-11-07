@@ -39,6 +39,8 @@ export interface WindowCrashRecorderOptions {
     readonly remove: (file: string) => void;
     /** The common header (crash-records.ts `crashHeader`): this Genie's version, the host's build, OS and uptime. */
     readonly header: () => CrashHeader;
+    /** The page's last known working set, in MB (sampled with the beat): what a page that ended had grown to. */
+    readonly rendererMb?: () => number | null;
 }
 
 export class WindowCrashRecorder {
@@ -85,16 +87,19 @@ export class WindowCrashRecorder {
     #gone(event: string, type: string, details: { reason?: unknown; exitCode?: unknown } | undefined): void {
         const reason = typeof details?.reason === 'string' ? details.reason : 'unknown';
         if (reason === 'clean-exit') return;
-        this.#recordOnce(`${event}:${type}:${reason}`, typeof details?.exitCode === 'number' ? details.exitCode : null);
+        // A page that ended: what it had grown to, so the record says what grew (the owner's black window, an oom).
+        let rendererMb: number | null | undefined;
+        if (type === 'renderer') { try { rendererMb = this.#o.rendererMb?.() ?? null; } catch { rendererMb = null; } }
+        this.#recordOnce(`${event}:${type}:${reason}`, typeof details?.exitCode === 'number' ? details.exitCode : null, undefined, rendererMb);
     }
 
-    #recordOnce(reason: string, code: number | null, error?: string): void {
+    #recordOnce(reason: string, code: number | null, error?: string, rendererMb?: number | null): void {
         if (this.#once.has(reason)) return;
         this.#once.add(reason);
-        this.#record(reason, code, error);
+        this.#record(reason, code, error, rendererMb);
     }
 
-    #record(reason: string, code: number | null, error?: string): string | null {
+    #record(reason: string, code: number | null, error?: string, rendererMb?: number | null): string | null {
         try {
             let rssMb: number | null = null;
             try { rssMb = toMb(this.#o.rss()); } catch { /* unread */ }
@@ -113,6 +118,7 @@ export class WindowCrashRecorder {
                 rssMb,
                 agents,
                 ...(error !== undefined ? { error } : {}),
+                ...(rendererMb !== undefined ? { rendererMb } : {}),
             };
             return this.#o.write(record);
         } catch {
@@ -135,11 +141,14 @@ function typeOf(value: unknown): string {
  * Window main's beat: one at once (the host watches a window from its first beat), then every {@link BEAT_MS}. A send
  * that throws (no link) never escapes the timer. `bye` sends the goodbye and stops.
  */
-export function startHeartbeat(options: { send(beat: WindowBeat): void; pid: number; rss: () => number; every?: (fn: () => void, ms: number) => () => void }): { stop(): void; bye(): void } {
+export function startHeartbeat(options: { send(beat: WindowBeat): void; pid: number; rss: () => number; rendererRss?: () => number | null; every?: (fn: () => void, ms: number) => () => void }): { stop(): void; bye(): void } {
     const beat = (bye: boolean): void => {
         try {
             const rss = options.rss();
-            options.send(bye ? { pid: options.pid, rss, bye: true } : { pid: options.pid, rss });
+            let page: number | null = null;
+            try { page = options.rendererRss?.() ?? null; } catch { page = null; }
+            const rendererRss = page !== null ? { rendererRss: page } : {};
+            options.send(bye ? { pid: options.pid, rss, ...rendererRss, bye: true } : { pid: options.pid, rss, ...rendererRss });
         } catch { /* not linked: the next beat tries again */ }
     };
     const every = options.every ?? ((fn: () => void, ms: number) => {

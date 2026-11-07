@@ -28,7 +28,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
-import type { AgentStoresService } from './agent-stores-host.js';
+import { WINDOW_CALLS, type AgentStoresService } from './agent-stores-host.js';
 import type { SupervisorService } from './supervisor-host.js';
 import type { HostingService } from './hosting-host.js';
 import type { AppInboxHost } from './app-inbox-host.js';
@@ -61,6 +61,14 @@ import type { CrashStateView } from '../core/crash-record.js';
 
 type HostOptions = ConstructorParameters<typeof SessionHost>[0];
 
+/** Only declared operation names belong in timing logs, never a call's arguments or an unknown name. */
+function timingLabel(method: EngineMethod, args: readonly unknown[]): string {
+    if (method !== 'engine.stores') return method;
+    const store = typeof args[0] === 'string' && Object.hasOwn(WINDOW_CALLS, args[0]) ? args[0] as keyof typeof WINDOW_CALLS : null;
+    const operation = store !== null && typeof args[1] === 'string' && WINDOW_CALLS[store].includes(args[1]) ? args[1] : null;
+    return `engine.stores store=${store ?? '?'} method=${operation ?? '?'}`;
+}
+
 /**
  * What a window may ask the keychain for: an agent's key. The accounts' tokens only go the other way, in the one-time move: a
  * window can hand one over and have it compared, and it cannot read it back.
@@ -77,7 +85,7 @@ function agentKeyName(name: string): `tynn/agent/${string}` {
 
 /** What the session host is built with, from this server: its owner's half of the options. */
 export type { HostAgentKeys };
-export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
+export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onCarryOverSent' | 'onRedockSent' | 'markGenieWords' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
     /** This machine as a workstation (P3.4): the host holds its key. */
@@ -302,6 +310,7 @@ export class SessionEngineServer {
             },
             onThreadId: (agentId, threadId) => this.callback({ name: 'threadId', agentId, threadId }),
             onCarryOverSent: (agentId) => this.callback({ name: 'carryOverSent', agentId }),
+            onRedockSent: (agentId, at) => this.callback({ name: 'redockSent', agentId, at }),
             markGenieWords: (agentId) => this.callback({ name: 'genieWords', agentId }),
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
@@ -469,7 +478,7 @@ export class SessionEngineServer {
     async #call(conn: Connection, id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: { ok: true; value: unknown } | { ok: false; reason: string };
         // A notification (id 0: a spawn frame, a keystroke) is not a call anyone waits on: not timed.
-        const timed = id === 0 ? undefined : this.#options.timeCall?.(method);
+        const timed = id === 0 ? undefined : this.#options.timeCall?.(timingLabel(method, args));
         try {
             reply = { ok: true, value: await this.#dispatch(conn, method, args) };
         } catch (error) {

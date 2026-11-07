@@ -34,6 +34,7 @@ import { composeHosting, type HostingStack } from './hosting-compose.js';
 import { HostingService, WindowElevation } from './hosting-host.js';
 import { AppInboxHost } from './app-inbox-host.js';
 import { shutDownHosted } from './host-shutdown.js';
+import { startBeat } from './safe-mode-beat.js';
 import { SafeMode } from './safe-mode-host.js';
 import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
@@ -41,7 +42,7 @@ import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
-import { clearUpdateFailed, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { channelFrom } from '../core/update-channel.js';
 import type { ReleaseLike } from '../core/update-notes.js';
@@ -256,6 +257,9 @@ async function main(): Promise<void> {
     if (safeMode.active()) void Promise.all([registryStore.readRunningAtQuit(), registryStore.readInterruptedAtQuit()]).then(([running, interrupted]) => safeMode.wasRunning([...running, ...interrupted]), () => {});
     const hostRegistry = new HostRegistry(registryStore);
     await hostRegistry.refresh();
+    const hiddenWorkspaces = () => hostRegistry.workspaceStates().filter((w) => w.asleep === true).map((w) => w.id);
+    own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
+    own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to), () => hostRegistry.mailVisibilityVersion());
     let engineRef: SessionEngineServer | null = null;
     const approvals = new ApprovalQueue({
         autoApproved: (caller) => hostRegistry.listAgents().some((a) => a.id === caller.agentId && a.autoApprove === true),
@@ -311,6 +315,7 @@ async function main(): Promise<void> {
         roster: () => hostRegistry.listAgents(),
         slugs: () => hostRegistry.workspaceSlugs(),
         defaultAgentOf: (workspaceId) => hostRegistry.defaultAgentOf(workspaceId),
+        refusalForRecipient: (text, workspaceId) => hostRegistry.mailRefusal(text, workspaceId),
         enabled: (workspaceId) => settings.snapshotFor(workspaceId).app_inbox !== false,
         siteHosts: (workspaceId) => hostingNow?.sites.list(workspaceId).map((s) => s.host) ?? [],
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
@@ -339,7 +344,7 @@ async function main(): Promise<void> {
             settings,
             appEnv: (source) => appInboxDoor.envFor(source),
             elevate: (steps) => hostingElevation.run(steps),
-            workspaces: () => hostRegistry.listWorkspaces(),
+            workspaces: () => hostRegistry.workspaceStates(),
             // Safe mode: no site and no stopped engine starts by itself; the held sites go on the banner.
             safeMode: safeNow,
             heldSite: (siteId, name) => safeMode.hold('site', { id: siteId, name }),
@@ -360,9 +365,10 @@ async function main(): Promise<void> {
     /** A registered workspace's folder takes Genie's files only once trusted; with no hosting, none is. */
     const hostMayWriteInto = (folder: string): Promise<boolean> => (hostingStack
         ? hostingStack.trust.mayWriteInto(folder)
-        : Promise.resolve(!hostRegistry.listWorkspaces().some((w) => w.path === folder)));
+        : Promise.resolve(!hostRegistry.workspaceStates().some((w) => w.path === folder)));
     const hostingService = hostingStack ? new HostingService(hostingStack, {
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
+        registeredFolders: () => hostRegistry.workspaceStates().map((w) => w.path),
         elevation: hostingElevation,
         // An engine's dependents name the running processes; the workspaces are the registry's.
         onChange: (listener) => {
@@ -546,8 +552,8 @@ async function main(): Promise<void> {
             // P5a.3's order: the browser told to end, then sites, the front door and kept processes stopped; containers stay up.
             stopHosted: async () => { browserService.quit(); await stopHostedOnce(); },
         },
-        startHelper: (launch) => { spawnUpdaterProcess(launch, { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); },
-        defaultLaunch: { file: process.execPath, args: ['--updater'] },
+        startHelper: (launch) => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); },
+        defaultLaunch: updaterDefaultLaunch(process.env, process.execPath),
         windowConnected: () => engineRef?.windowConnected() ?? false,
         exit: () => { void shutdown('an update is installing'); },
         log: (line) => { say(line); lifecycleLog(line); },
@@ -580,6 +586,7 @@ async function main(): Promise<void> {
         kill: (pid) => killProcessAsync(pid),
         alive: pidAlive,
         hostRss: () => process.memoryUsage.rss(),
+        cpuMs: () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; },
         agents: () => {
             const running = hostForNotes;
             if (running === null) return [];
@@ -693,7 +700,8 @@ async function main(): Promise<void> {
         },
     });
     engineRef = engine;
-    files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), gitTree: gitTreeStatus, repoStatus, log: say });
+    files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
+    stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
     const host = new SessionHost({
         userData: home,
@@ -797,6 +805,7 @@ async function main(): Promise<void> {
     const openFlows = (databasePath: string): Promise<void> => {
         flowsOpening ??= (async () => {
             const store = await FlowStore.open(home);
+            store.setHiddenWorkspaces(hiddenWorkspaces);
             // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
             await runV1FlowImport(store, { database: databasePath, workspaces: hostRegistry.listWorkspaces() }).catch((error: unknown) => say(`v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
             // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
@@ -846,7 +855,14 @@ async function main(): Promise<void> {
             clocks.push(engineFlows);
             planners.push(engineFlows.scheduler);
             // A hibernate or a wake changes what may fire: plan again on every registry write.
-            stores.onEvent((event) => { if (event.store === 'registry') engineFlows.scheduler.plan(); });
+            let flowVisibility = JSON.stringify(hiddenWorkspaces().sort());
+            stores.onEvent((event) => {
+                if (event.store !== 'registry') return;
+                engineFlows.scheduler.plan();
+                const key = JSON.stringify(hiddenWorkspaces().sort());
+                if (key === flowVisibility) return;
+                flowVisibility = key; store.visibilityChanged();
+            });
             lifecycleLog(`flows open: ${store.list().length} flow(s)`);
         })();
         return flowsOpening;
@@ -885,7 +901,14 @@ async function main(): Promise<void> {
             clocks.push(scheduler);
             planners.push(scheduler);
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
-            stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
+            let processVisibility = JSON.stringify(hiddenWorkspaces().sort());
+            stores.onEvent((event) => {
+                if (event.store !== 'registry') return;
+                scheduler.plan();
+                const key = JSON.stringify(hiddenWorkspaces().sort());
+                if (key === processVisibility) return;
+                processVisibility = key; processBook.visibilityChanged();
+            });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             processBookNow = processBook;
             const restored = processBook.restore();
@@ -926,8 +949,7 @@ async function main(): Promise<void> {
     host.subscribe(() => { lastBusy = Date.now(); });
     // THE HOST'S SIGN OF LIFE (safe mode): when, and which agents have a session — what the next start reads if this run
     // dies. Small and atomic; unref'd, so it never holds a host that is otherwise done.
-    safeMode.beat(host.startedIds());
-    setInterval(() => { safeMode.beat(host.startedIds()); }, 15_000).unref?.();
+    startBeat({ started: () => host.startedIds(), onChange: (l) => host.subscribe(() => l()), beat: (ids) => { safeMode.beat(ids); } });
     /*
      * EVERY PROCESS THE WINDOW STARTS, STARTED HERE (the host split, P2.1; plan §11a): #1405's spawn host as THIS
      * process's children — `processes` (exec, streams, supervised ptys) and `terminals` (interactive shells) — so a site,

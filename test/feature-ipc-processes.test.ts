@@ -171,6 +171,8 @@ describe('across a restart', () => {
         opened.length = 0;
         await relaunch();
         expect(opened).toHaveLength(0);
+        expect(await mine()).toEqual([]);
+        asleep.delete('tynn');
         const rows = await mine();
         expect(rows).toHaveLength(1);
         expect(rows[0]!.state).toBe('stopped');

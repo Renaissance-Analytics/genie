@@ -122,11 +122,13 @@ describe('a flow run through the composed services', () => {
         expect(calls).toEqual(['knowledge']);
     });
 
-    it('a hibernated workspace holds every run back and starts nothing', async () => {
+    it('a hibernated flow is hidden and cannot start from a stale id; redock restores its document', async () => {
         const f = await services.flows.create({ workspaceId: 'ws-example', name: 'report', document: doc({ kind: 'genie/terminal_run', config: { workspace: 'ws-example', command: 'npm run report' } }), by: { kind: 'user' } });
         asleep = true;
-        expect(await services.flowScheduler.runNow(f.id)).toMatchObject({ outcome: 'held', reason: 'its workspace ws-example is hibernated; nothing runs there until it is woken' });
+        await expect(services.flowScheduler.runNow(f.id)).rejects.toThrow(`no flow ${f.id}`);
+        expect(services.flows.list()).toEqual([]);
         expect(pty.opened).toEqual([]);
+        asleep = false; expect(services.flows.get(f.id)).toEqual(f);
     });
 });
 

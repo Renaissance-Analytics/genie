@@ -177,11 +177,11 @@ describe('the Dashboard\'s workspace rows', () => {
         ask: null, reason: null, fixes: [], step: null, target: null, activity: null, delivery: null,
         collaborators: null, commsAgeSeconds: null, contextUsed: null, contextSize: null,
     });
-    it('each workspace\'s header is edged in its colour, beside its name', () => {
+    it('each Workspace cell shows its workspace colour beside its name', () => {
         const html = renderToStaticMarkup(<Dashboard rows={[row('kai', 'tynn'), row('wren', 'fancy')]} genie={null} onOpenAgent={noop} onAddAgent={noop}
             workspaces={[{ id: 'tynn', name: 'Tynn', path: '/w/tynn', color: TEAL }, { id: 'fancy', name: 'Fancy', path: '/w/fancy', color: PINK }]} />);
-        expect(html).toMatch(/data-workspace-head="tynn"[^>]*data-workspace-color="#0891b2"[\s\S]*Tynn/);
-        expect(html).toMatch(/data-workspace-head="fancy"[^>]*data-workspace-color="#db2777"[\s\S]*Fancy/);
+        expect(html).toMatch(/data-column="workspace" data-workspace="tynn"[\s\S]*?data-workspace-color="#0891b2"[\s\S]*?Tynn/);
+        expect(html).toMatch(/data-column="workspace" data-workspace="fancy"[\s\S]*?data-workspace-color="#db2777"[\s\S]*?Fancy/);
     });
 });
 

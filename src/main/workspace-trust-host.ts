@@ -19,16 +19,21 @@ export interface TrustListPorts {
 export interface TrustView { readonly trusted: boolean; readonly changed: boolean; readonly list: TrustList }
 
 export interface WorkspaceTrustPorts extends TrustListPorts {
-    workspaces(): readonly { readonly id: string; readonly path: string }[];
+    workspaces(): readonly { readonly id: string; readonly path: string; readonly asleep?: boolean }[];
     record(): { readonly carried: readonly string[]; readonly workspaces: Readonly<Record<string, string>> };
     recordWorkspace(workspaceId: string, hash: string): Promise<void>;
     approveSites(workspaceId: string): Promise<void>;
     /** The verdict differs from the last one read, or this is the first. */
     verdictMoved?(workspaceId: string): void;
+    /** A pause between two reads of a carried workspace's list (default setTimeout). */
+    wait?(ms: number): Promise<void>;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const NOTHING: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [], approvals: [] };
+/** A carried workspace's list is re-read up to this many times for two reads in a row that agree, this far apart. */
+const SETTLE_READS = 5;
+const SETTLE_WAIT_MS = 50;
 const OUR_SERVERS: ReadonlySet<string> = new Set(['genie', 'tynn', 'genie-agentinbox-channel']);
 /** Settings that change how Claude Code looks and nothing else, checked against its published schema. An allow-list, as with git config: anything else goes on the list, a key nobody has heard of included. */
 const SETTINGS_FOR_LOOKS_ONLY: ReadonlySet<string> = new Set(['$schema', 'theme', 'spinnerTipsEnabled', 'terminalProgressBarEnabled', 'showTurnDuration', 'prefersReducedMotion', 'viewMode', 'editorMode', 'syntaxHighlightingDisabled', 'verbose']);
@@ -161,31 +166,86 @@ const inside = (root: string, path: string): boolean => {
 export class WorkspaceTrust {
     readonly #ports: WorkspaceTrustPorts;
     readonly #views = new Map<string, { path: string; view: TrustView }>();
+    readonly #redockEpoch = new Map<string, symbol>();
+    readonly #redocking = new Set<string>();
 
     constructor(ports: WorkspaceTrustPorts) {
         this.#ports = ports;
     }
 
-    /** Read the workspace's files again and answer. Carried over at the upgrade with no list recorded yet: this list is recorded now, once, so a later change asks. */
-    async refresh(workspaceId: string): Promise<TrustView | null> {
+    /**
+     * Read the workspace's files again and answer. Carried over at the upgrade with no list recorded yet: this list is
+     * recorded now, once, so a later change asks — and only a SETTLED list (two reads in a row the same): a read taken while
+     * the files were being written would record half a list, and the whole one would then read "changed". One that never
+     * settles records nothing and is not trusted: the person is asked (genie#1519; the line's flake, run 42277250815).
+     */
+    async refresh(workspaceId: string, purpose?: 'redock'): Promise<TrustView | null> {
         const workspace = this.#ports.workspaces().find((w) => w.id === workspaceId);
-        if (!workspace) { this.#views.delete(workspaceId); return null; }
-        const list = await readTrustList(workspace.path, this.#ports);
-        const hash = trustHash(list);
-        const record = this.#ports.record();
-        if (record.carried.includes(workspaceId) && record.workspaces[workspaceId] === undefined && hash !== trustHash(NOTHING)) await this.#ports.recordWorkspace(workspaceId, hash);
-        const view = { ...trustVerdict(this.#ports.record(), workspaceId, hash), list };
-        this.#keep(workspaceId, workspace.path, view);
-        return view;
+        if (!workspace || (workspace.asleep && purpose !== 'redock')) { this.#forget(workspaceId); return null; }
+        if (purpose !== 'redock' && this.#redocking.has(workspaceId)) return null;
+        if (purpose === 'redock') {
+            this.#redockEpoch.set(workspaceId, Symbol());
+            this.#redocking.add(workspaceId);
+            // Revoke the old yes before the first await, including when this read fails.
+            this.#forget(workspaceId);
+        }
+        const epoch = this.#redockEpoch.get(workspaceId);
+        const ensure = this.#guard(workspaceId, workspace.path, epoch, purpose);
+        const ports = this.#guardedPorts(ensure);
+        try {
+            let list = await readTrustList(workspace.path, ports);
+            ensure();
+            let hash = trustHash(list);
+            const record = this.#ports.record();
+            if (record.carried.includes(workspaceId) && record.workspaces[workspaceId] === undefined && hash !== trustHash(NOTHING)) {
+                const settled = await this.#settled(workspace.path, hash, ports, ensure);
+                ensure();
+                if (settled === null) {
+                    const unsettled: TrustView = { trusted: false, changed: false, list };
+                    this.#keep(workspaceId, workspace.path, unsettled);
+                    return unsettled;
+                }
+                ({ list, hash } = settled);
+                if (hash !== trustHash(NOTHING)) await this.#ports.recordWorkspace(workspaceId, hash);
+            }
+            ensure();
+            const view = { ...trustVerdict(this.#ports.record(), workspaceId, hash), list };
+            this.#keep(workspaceId, workspace.path, view);
+            return view;
+        } finally {
+            if (purpose === 'redock' && this.#redockEpoch.get(workspaceId) === epoch) this.#redocking.delete(workspaceId);
+        }
+    }
+
+    /** The list read again until two reads in a row agree: at once, then up to four more, {@link SETTLE_WAIT_MS} apart. `null` = it never settled. */
+    async #settled(path: string, firstHash: string, ports: TrustListPorts, ensure: () => void): Promise<{ list: TrustList; hash: string } | null> {
+        const wait = this.#ports.wait ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
+        let before = firstHash;
+        for (let i = 0; i < SETTLE_READS; i += 1) {
+            ensure();
+            if (i > 0) await wait(SETTLE_WAIT_MS);
+            ensure();
+            const list = await readTrustList(path, ports);
+            ensure();
+            const hash = trustHash(list);
+            if (hash === before) return { list, hash };
+            before = hash;
+        }
+        return null;
     }
 
     /** The person says yes to what the workspace says now. Recorded first: a save that fails leaves it untrusted, and says why. */
     async trust(workspaceId: string): Promise<TrustView | null> {
         const workspace = this.#ports.workspaces().find((w) => w.id === workspaceId);
-        if (!workspace) return null;
-        const list = await readTrustList(workspace.path, this.#ports);
+        if (!workspace || workspace.asleep) { this.#forget(workspaceId); return null; }
+        if (this.#redocking.has(workspaceId)) return null;
+        const ensure = this.#guard(workspaceId, workspace.path, this.#redockEpoch.get(workspaceId));
+        const list = await readTrustList(workspace.path, this.#guardedPorts(ensure));
+        ensure();
         await this.#ports.recordWorkspace(workspaceId, trustHash(list));
+        ensure();
         await this.#ports.approveSites(workspaceId);
+        ensure();
         const view: TrustView = { trusted: true, changed: false, list };
         this.#keep(workspaceId, workspace.path, view);
         return view;
@@ -197,15 +257,39 @@ export class WorkspaceTrust {
         if (before !== view.trusted) this.#ports.verdictMoved?.(workspaceId);
     }
 
+    #forget(workspaceId: string): void {
+        if (this.#views.delete(workspaceId)) this.#ports.verdictMoved?.(workspaceId);
+    }
+
+    #guard(workspaceId: string, path: string, epoch: symbol | undefined, purpose?: 'redock'): () => void {
+        return () => {
+            const current = this.#ports.workspaces().find((w) => w.id === workspaceId);
+            if (!current || current.path !== path || this.#redockEpoch.get(workspaceId) !== epoch || (purpose !== 'redock' && (current.asleep || this.#redocking.has(workspaceId)))) {
+                if (this.#redockEpoch.get(workspaceId) === epoch) this.#forget(workspaceId);
+                throw new Error('workspace trust read interrupted; redock it first');
+            }
+        };
+    }
+
+    #guardedPorts(ensure: () => void): TrustListPorts {
+        return {
+            readText: (path) => { ensure(); return this.#ports.readText(path); },
+            gitConfig: (path) => { ensure(); return this.#ports.gitConfig(path); },
+            ...(this.#ports.isTracked ? { isTracked: (root: string, path: string) => { ensure(); return this.#ports.isTracked!(root, path); } } : {}),
+        };
+    }
+
     /** As last read. A workspace not read yet is not trusted; nor is a folder in none. */
     isTrustedPath(path: string): boolean {
-        for (const { path: root, view } of this.#views.values()) {
-            if (inside(root, path)) return view.trusted;
+        for (const workspace of this.#ports.workspaces()) {
+            if (inside(workspace.path, path)) return this.view(workspace.id)?.trusted === true;
         }
         return false;
     }
 
     view(workspaceId: string): TrustView | null {
-        return this.#views.get(workspaceId)?.view ?? null;
+        const workspace = this.#ports.workspaces().find((w) => w.id === workspaceId);
+        const cached = this.#views.get(workspaceId);
+        return workspace && !workspace.asleep && !this.#redocking.has(workspaceId) && cached?.path === workspace.path ? cached.view : null;
     }
 }

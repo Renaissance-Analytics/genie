@@ -82,10 +82,10 @@ describe('hibernated workspaces', () => {
         expect(html).not.toContain('Show hibernated');
     });
 
-    it('the one you are looking at stays visible even while the rest are hidden', () => {
+    it('an old route does not force a ghost into the sidebar while ghosts are hidden', () => {
         const html = rail({ workspaces: items, route: 'genie://workspace/sleepy' });
-        expect(html.match(/data-workspace="/g) ?? []).toHaveLength(2);
-        expect(html).toContain('data-workspace="sleepy"');
+        expect(html.match(/data-workspace="/g) ?? []).toHaveLength(1);
+        expect(html).not.toContain('data-workspace="sleepy"');
     });
 
     it('no button when nothing is asleep', () => {

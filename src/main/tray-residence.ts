@@ -1,3 +1,4 @@
+import { logonEntry } from '../core/logon.js';
 import { closeAction, loginItemPlan, trayNoticeDue, TRAY_NOTICE, v1LoginItemQuery, type LoginItemPlan, type LoginItemSettings } from '../core/tray-resident.js';
 
 /**
@@ -71,8 +72,8 @@ export function applyLoginItem(port: LoginItemPort, plan: LoginItemPlan): void {
     port.writeFile(plan.file, plan.content);
 }
 
-function planFor(env: LoginItemEnv, values: Record<string, Value>): LoginItemPlan {
-    return loginItemPlan({ ...env, launchAtLogin: values.launch_at_login === true, startMinimized: values.start_minimized === true });
+function planFor(env: LoginItemEnv, values: Record<string, Value>, leftRunning: boolean): LoginItemPlan {
+    return loginItemPlan({ ...env, ...logonEntry({ leftRunning, setting: values.launch_at_login === true, startMinimized: values.start_minimized === true }) });
 }
 
 /** Whether Genie 1 left a sign-in entry this Genie should honour. */
@@ -90,16 +91,19 @@ export function v1LoginItemPresent(port: LoginItemPort, env: LoginItemEnv): bool
  * At boot: adopt Genie 1's sign-in entry if the setting is off and the entry is there (otherwise the
  * boot's apply would delete what the person turned on in Genie 1), apply the setting once — the
  * install may have moved, and the arguments follow start minimised — then follow every change of
- * either setting. A failure is reported, never a failed boot.
+ * either setting, and of the mark that the host was left running (P6). A failure is reported, never a failed boot.
  */
-export async function wireLoginItem(settings: ResidenceSettings, port: LoginItemPort, env: LoginItemEnv): Promise<void> {
+export async function wireLoginItem(settings: ResidenceSettings, port: LoginItemPort, env: LoginItemEnv, leftRunning?: { now(): boolean; onChange(listener: (value: boolean) => void): void }): Promise<void> {
     const safely = (what: string, fn: () => void) => { try { fn(); } catch (error) { console.error(`[genie] launch at sign-in: ${what} failed:`, error); } };
-    if (settings.snapshot().launch_at_login !== true && v1LoginItemPresent(port, env)) {
+    // On Linux the mark's own entry is the file Genie 1 used: it is not Genie 1's, and must not turn the setting on.
+    if (settings.snapshot().launch_at_login !== true && leftRunning?.now() !== true && v1LoginItemPresent(port, env)) {
         await settings.set('launch_at_login', true).catch((error: unknown) => console.error('[genie] launch at sign-in: adopting Genie 1\'s entry failed:', error));
     }
-    safely('applying at boot', () => applyLoginItem(port, planFor(env, settings.snapshot())));
+    const left = () => leftRunning?.now() === true;
+    safely('applying at boot', () => applyLoginItem(port, planFor(env, settings.snapshot(), left())));
     settings.onChange((key, _value, workspaceId) => {
         if (workspaceId !== undefined || (key !== 'launch_at_login' && key !== 'start_minimized')) return;
-        safely('applying the change', () => applyLoginItem(port, planFor(env, settings.snapshot())));
+        safely('applying the change', () => applyLoginItem(port, planFor(env, settings.snapshot(), left())));
     });
+    leftRunning?.onChange(() => safely('applying the mark', () => applyLoginItem(port, planFor(env, settings.snapshot(), left()))));
 }

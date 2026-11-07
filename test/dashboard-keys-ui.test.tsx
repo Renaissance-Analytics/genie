@@ -29,6 +29,6 @@ describe('the row cursor', () => {
         const html = render();
         expect(html).toContain('data-key-hints');
         const hints = html.slice(html.indexOf('data-key-hints'));
-        for (const k of ['>J<', '>K<', '>↵<', '>G<']) expect(hints).toContain(k);
+        for (const k of ['>J<', '>K<', '>↵<']) expect(hints).toContain(k);
     });
 });

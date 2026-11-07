@@ -33,7 +33,7 @@ import {
  */
 
 export interface FilesHostPorts {
-    readonly workspace: (id: string) => { id: string; path: string } | null;
+    readonly workspace: (id: string) => { id: string; path: string; asleep?: boolean } | null;
     readonly agentsOf: (workspaceId: string) => ReadonlyArray<{ id: string; name: string }>;
     readonly eventsOf: (agentId: string) => readonly FileEvent[];
     readonly sizeCap?: number;
@@ -111,8 +111,13 @@ export class FilesHost {
         this.#cap = ports.sizeCap ?? FILE_SIZE_CAP;
     }
 
+    #workspace(id: string): ReturnType<FilesHostPorts['workspace']> {
+        const workspace = this.#ports.workspace(id);
+        return workspace?.asleep === true ? null : workspace;
+    }
+
     async tree(workspaceId: string): Promise<TreeNode[] | null> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return null;
         /*
          * BREADTH-FIRST, within a budget and a depth (genie#921; Genie 1's walkBreadthFirst). Every direct child of a
@@ -124,6 +129,7 @@ export class FilesHost {
         let budget = this.#ports.treeBudget ?? TREE_BUDGET;
         const queue: Array<{ rel: string; depth: number }> = [{ rel: '', depth: 0 }];
         while (queue.length > 0) {
+            if (!this.#workspace(workspaceId)) return null;
             const { rel, depth } = queue.shift()!;
             if (depth > TREE_MAX_DEPTH || (budget <= 0 && rel !== '')) continue;
             let dirents;
@@ -146,7 +152,7 @@ export class FilesHost {
      * leaves. `null` for an unknown workspace or a folder outside it; an unreadable folder lists as empty.
      */
     async children(workspaceId: string, dir: string): Promise<TreeNode[] | null> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return null;
         const rel = dir === '' ? '' : confine(ws.path, dir);
         if (rel === null) return null;
@@ -167,7 +173,7 @@ export class FilesHost {
 
     /** The host path of a file or folder in the workspace, confined to it (Tynn #841's menu acts on it); `null` outside. */
     absolute(workspaceId: string, path: string): string | null {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return null;
         const rel = confine(ws.path, path);
         if (rel === null) return null;
@@ -175,7 +181,7 @@ export class FilesHost {
     }
 
     async open(workspaceId: string, path: string): Promise<OpenResult> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return { ok: false, path, error: 'no such workspace' };
         const rel = confine(ws.path, path);
         if (rel === null || rel === '') return { ok: false, path, error: OUTSIDE };
@@ -184,7 +190,9 @@ export class FilesHost {
             const info = await stat(full);
             const refusal = openRefusal(info.size, this.#cap);
             if (refusal) return { ok: false, path: rel, error: refusal };
+            if (!this.#workspace(workspaceId)) return { ok: false, path: rel, error: 'workspace is hibernated' };
             const text = await readFile(full, 'utf8');
+            if (!this.#workspace(workspaceId)) return { ok: false, path: rel, error: 'workspace is hibernated' };
             if (!this.#ports.gitStatus) return { ok: true, path: rel, text, sha: shaOf(text) };
             // The file opens whatever git does: its state is only a decoration here, and the tree says if git is not answering.
             return { ok: true, path: rel, text, sha: shaOf(text), git: await this.#ports.gitStatus(ws.path, rel).catch(() => null) };
@@ -195,14 +203,14 @@ export class FilesHost {
 
     /** Git's state of every changed file, for the tree's colours (beta.33 item 15). `{}` with no git port or no repository. */
     async gitStatus(workspaceId: string): Promise<Record<string, GitTreeState>> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws || !this.#ports.gitTree) return {};
         return this.#ports.gitTree(ws.path);
     }
 
     /** The file as of the last commit — the baseline for a change nobody reported. `null` outside the workspace or uncommitted. */
     async lastCommitted(workspaceId: string, path: string): Promise<string | null> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws || !this.#ports.gitShowHead) return null;
         const rel = confine(ws.path, path);
         if (rel === null || rel === '') return null;
@@ -211,7 +219,7 @@ export class FilesHost {
 
     /** Write only against what was read (§4.3): a changed file is a CONFLICT answered with the disk's text, never an overwrite. */
     async write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return { ok: false, reason: 'no such workspace' };
         const rel = confine(ws.path, path);
         if (rel === null || rel === '') return { ok: false, reason: 'that path is outside the workspace; Genie writes nothing there' };
@@ -239,7 +247,7 @@ export class FilesHost {
      * .pptx or .docx. Same rules as the text path: confined, under the cap, refusals in words.
      */
     async readBytes(workspaceId: string, path: string): Promise<BytesResult> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return { ok: false, path, error: 'no such workspace' };
         const rel = confine(ws.path, path);
         if (rel === null || rel === '') return { ok: false, path, error: OUTSIDE };
@@ -248,7 +256,9 @@ export class FilesHost {
             const info = await stat(full);
             const refusal = openRefusal(info.size, this.#cap);
             if (refusal) return { ok: false, path: rel, error: refusal };
+            if (!this.#workspace(workspaceId)) return { ok: false, path: rel, error: 'workspace is hibernated' };
             const bytes = await readFile(full);
+            if (!this.#workspace(workspaceId)) return { ok: false, path: rel, error: 'workspace is hibernated' };
             return { ok: true, path: rel, base64: bytes.toString('base64'), sha: shaOf(bytes) };
         } catch (error) {
             return { ok: false, path: rel, error: messageOf(error) };
@@ -257,7 +267,7 @@ export class FilesHost {
 
     /** Save a plugin editor's bytes against the sha that was read — the same no-overwrite rule as `write`. */
     async writeBytes(workspaceId: string, path: string, base64: string, expectedSha: string | null): Promise<BytesWriteResult> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return { ok: false, reason: 'no such workspace' };
         const rel = confine(ws.path, path);
         if (rel === null || rel === '') return { ok: false, reason: 'that path is outside the workspace; Genie writes nothing there' };
@@ -283,7 +293,7 @@ export class FilesHost {
      * in words; Delete hands the host path to the trash port and never erases.
      */
     #target(workspaceId: string, path: string): { ok: true; root: string; rel: string; full: string } | { ok: false; reason: string } {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return { ok: false, reason: 'no such workspace' };
         const rel = confine(ws.path, path);
         if (rel === null || rel === '') return { ok: false, reason: CHANGES_OUTSIDE };
@@ -298,7 +308,7 @@ export class FilesHost {
      * truncated either.
      */
     async upload(workspaceId: string, dir: string, rawName: string, bytes: Uint8Array): Promise<FileOpResult> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return { ok: false, reason: 'no such workspace' };
         const named = uploadName(rawName);
         if (!named.ok) return named;
@@ -399,7 +409,7 @@ export class FilesHost {
     }
 
     async state(workspaceId: string): Promise<FilesState | null> {
-        const ws = this.#ports.workspace(workspaceId);
+        const ws = this.#workspace(workspaceId);
         if (!ws) return null;
         const events = this.#ports.agentsOf(workspaceId).flatMap((a) => this.#ports.eventsOf(a.id));
         const attribution = attributionFrom(events, ws.path);

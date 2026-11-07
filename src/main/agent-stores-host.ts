@@ -38,7 +38,7 @@ export interface ApprovalsView {
 }
 
 export interface StoresDump {
-    readonly inbox: { readonly messages: readonly InboxMessage[]; readonly cursors: Readonly<Record<string, number>> };
+    readonly inbox: { readonly messages: readonly InboxMessage[]; readonly cursors: Readonly<Record<string, number>>; readonly filtered?: true };
     readonly attention: AttentionData;
     readonly approvals: ApprovalsView;
     readonly settings: SettingsData | null;
@@ -54,6 +54,7 @@ export type StoresEvent =
         readonly updated: readonly InboxMessage[];
         readonly removed: readonly string[];
         readonly cursors: Readonly<Record<string, number>>;
+        readonly filtered?: true;
     }
     | { readonly store: 'inbox'; readonly kind: 'sent'; readonly to: string; readonly messageId: string }
     | { readonly store: 'inbox'; readonly kind: 'read'; readonly reader: string; readonly ids: readonly string[] | null }
@@ -67,9 +68,9 @@ export type StoreName = 'inbox' | 'attention' | 'knowledge' | 'approvals' | 'set
 
 /** What a window may call, per store. Everything else is the host's own (an agent's tools run here). */
 export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
-    inbox: ['send', 'receive', 'deleteThread', 'attachmentForPerson'],
+    inbox: ['send', 'receive', 'markDelivered', 'recordDeliveryRefusal', 'deleteThread', 'attachmentForPerson'],
     attention: ['answer', 'dismiss', 'dismissMany', 'dismissOlderThan', 'markSeen', 'withdraw', 'lists.add', 'lists.done', 'lists.clear'],
-    knowledge: ['add', 'get', 'update', 'remove', 'link', 'search', 'list'],
+    knowledge: ['add', 'get', 'update', 'remove', 'link', 'search', 'list', 'summaries'],
     approvals: ['resolve', 'gate'],
     settings: ['set', 'setFor', 'resetFor', 'reset'],
     drafts: ['all', 'save', 'putFile', 'readFile', 'release', 'prune'],
@@ -127,7 +128,7 @@ export class AgentStoresService {
     /** Everything a window that just connected needs to read before anything else. */
     dump(): StoresDump {
         const mail = this.#stores.inbox.snapshot();
-        return { inbox: { messages: mail.messages, cursors: mail.cursors }, attention: this.#stores.attention.snapshot(), approvals: this.#approvalsView(), settings: this.#stores.settings?.data() ?? null, registryDropped: [...(this.#stores.registry?.store.dropped ?? [])] };
+        return { inbox: mail, attention: this.#stores.attention.snapshot(), approvals: this.#approvalsView(), settings: this.#stores.settings?.data() ?? null, registryDropped: [...(this.#stores.registry?.store.dropped ?? [])] };
     }
 
     onEvent(listener: (event: StoresEvent) => void): () => void {
@@ -189,6 +190,7 @@ export class AgentStoresService {
                         // The host's own model follows the files (its tools and approvals read it with no window), then every
                         // window re-reads: two windows, one registry.
                         await reg.model.refresh();
+                        this.#mailChanged();
                         this.#emit({ store: 'registry', kind: 'written' });
                     }
                     return result;
@@ -236,7 +238,7 @@ export class AgentStoresService {
         this.#known = new Map(mail.messages.map((m) => [m.id, m]));
         if (appended.length === 0 && updated.length === 0 && removed.length === 0 && cursors === this.#knownCursors) return;
         this.#knownCursors = cursors;
-        this.#emit({ store: 'inbox', kind: 'delta', appended, updated, removed, cursors: { ...mail.cursors } });
+        this.#emit({ store: 'inbox', kind: 'delta', appended, updated, removed, cursors: { ...mail.cursors }, ...(mail.filtered ? { filtered: true } : {}) });
     }
 
     #emit(event: StoresEvent): void {

@@ -405,11 +405,12 @@ export function remoteBadge(host: string): string {
 }
 
 /** What a guest with a share link to one workspace sees of the estate. */
-export function filterSnapshotForWorkspace<T extends { agents?: readonly { workspaceId: string }[]; workspaces?: readonly { id: string }[] | null; deckItems?: readonly { workspaceId: string | null }[] | null }>(snapshot: T, workspaceId: string): T {
+export function filterSnapshotForWorkspace<T extends { agents?: readonly { workspaceId: string }[]; workspaces?: readonly { id: string }[] | null; hibernatedWorkspaces?: readonly { id: string }[]; deckItems?: readonly { workspaceId: string | null }[] | null }>(snapshot: T, workspaceId: string): T {
     return {
         ...snapshot,
         ...(snapshot.agents ? { agents: snapshot.agents.filter((a) => a.workspaceId === workspaceId) } : {}),
         ...(snapshot.workspaces ? { workspaces: snapshot.workspaces.filter((w) => w.id === workspaceId) } : {}),
+        ...(snapshot.hibernatedWorkspaces ? { hibernatedWorkspaces: snapshot.hibernatedWorkspaces.filter((w) => w.id === workspaceId) } : {}),
         ...(snapshot.deckItems ? { deckItems: snapshot.deckItems.filter((d) => d.workspaceId === workspaceId) } : {}),
     };
 }

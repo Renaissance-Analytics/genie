@@ -75,6 +75,12 @@ function recordServers(params, method = 'thread/start') {
     appendFileSync(RECORD_SERVERS, `${JSON.stringify({ pid: process.pid, servers, method, threadId: params?.threadId ?? null })}\n`, { mode: 0o600 });
 }
 const THREAD_ID = TICKER ? `stub_thread_${process.pid}` : 'stub_thread_0001';
+/**
+ * The thread this process speaks for: its own, or the one a `thread/resume` asked for. A real Codex resumes the thread it
+ * is asked for, and prism-acp refuses a resume that answers another id ("thread/resume did not return the requested Codex
+ * thread id"): a ticker's per-process id made every start after a relaunch fail (scripts/safe-mode-cdp.mjs, B2 and E1).
+ */
+let threadId = THREAD_ID;
 const TURN_ID = 'stub_turn_0001';
 
 let nextId = 1000;
@@ -124,7 +130,7 @@ const STREAM_HOLD_MS = 45_000;
 const MESSAGE_ID = 'stub_msg_0001';
 
 function delta(text) {
-    send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { threadId: THREAD_ID, turnId: TURN_ID, itemId: MESSAGE_ID, delta: text } });
+    send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { threadId, turnId: TURN_ID, itemId: MESSAGE_ID, delta: text } });
 }
 
 function streamReply() {
@@ -146,7 +152,7 @@ function streamReply() {
         send({
             jsonrpc: '2.0',
             method: 'item/completed',
-            params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: 'agentMessage', id: MESSAGE_ID, text: STUB_REPLY } },
+            params: { threadId, turnId: TURN_ID, item: { type: 'agentMessage', id: MESSAGE_ID, text: STUB_REPLY } },
         });
     }, 100);
 }
@@ -164,7 +170,7 @@ function askForApproval() {
         // whose `toolCall.title` is the command — which is what the human reads.
         method: 'item/commandExecution/requestApproval',
         params: {
-            threadId: THREAD_ID,
+            threadId,
             itemId: 'stub_call_0001',
             command: 'php artisan migrate --force',
             cwd: process.cwd(),
@@ -250,12 +256,13 @@ function handle(frame) {
 
         case 'thread/start':
             recordServers(frame?.params);
-            respond(id, { thread: { id: THREAD_ID } });
+            respond(id, { thread: { id: threadId } });
             return;
 
         case 'thread/resume':
             recordServers(frame?.params, 'thread/resume');
-            respond(id, { thread: { id: THREAD_ID } });
+            if (typeof frame?.params?.threadId === 'string' && frame.params.threadId.length > 0) threadId = frame.params.threadId;
+            respond(id, { thread: { id: threadId } });
             return;
 
         case 'thread/turns/list':
@@ -284,7 +291,7 @@ function handle(frame) {
             respond(id, { turn: { id: TURN_ID } });
 
             if (existsSync(RECORD_SERVERS)) {
-                send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', items: [], error: null } } });
+                send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn: { id: TURN_ID, status: 'completed', items: [], error: null } } });
                 return;
             }
 

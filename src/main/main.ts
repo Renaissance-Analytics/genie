@@ -1,5 +1,6 @@
 import { limitOf } from '../core/shell-limits.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
+import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
@@ -60,6 +61,8 @@ import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
+import { windowLaunchFlags } from '../core/launch-flags.js';
+import { startBeat } from './safe-mode-beat.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
@@ -109,6 +112,7 @@ import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
 import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js';
+import { RECOVER_REPORT, RECOVER_RESTART, pageMemorySampler, recoverRenderer, rendererErrorPage, type RendererNotice } from './renderer-recovery.js';
 import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-records.js';
 import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
@@ -124,6 +128,7 @@ import { raisesApprovals, realListModels, SessionHost, providerBinary } from './
 import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
+import { materializeHostRuntime } from './host-runtime.js';
 import { LoginHost } from './login-host.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
@@ -156,6 +161,7 @@ import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
 import { onTheClock, trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
 import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { panelRestart } from '../core/panel-restart.js';
+import { LeftRunningMark } from './left-running.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
@@ -333,12 +339,30 @@ const crashRecorder = new WindowCrashRecorder({
     remove: removeCrashRecord,
     // The host's build as this window last heard it (its welcome); this Genie's version until it has linked.
     header: () => crashHeader(app.getVersion(), agentEngineLink?.client.welcome?.build ?? app.getVersion()),
+    // The main window's page, as last sampled: what it had grown to when it ended (an oom, the owner's 2026-11-06).
+    rendererMb: () => pageMemory.mb(),
 });
 if (launch.kind === 'boot') crashRecorder.install(process, app);
 /** Window main's heartbeat to genie-host's hang watchdog (hang-watchdog.ts): started once the engine link is up. */
 let heartbeatNow: { stop(): void; bye(): void } | null = null;
 
 let window: BrowserWindow | null = null;
+/**
+ * The main window's page working set, as last REALLY read (app.getAppMetrics: a missing renderer or a 0 never overwrites a
+ * real reading, and a page's load reads again until it gets one; renderer-recovery.ts `pageMemorySampler`).
+ */
+const pageMemory = pageMemorySampler({
+    read: () => {
+        const win = window;
+        if (!win || win.isDestroyed()) return null;
+        const pid = win.webContents.getOSProcessId();
+        const metric = app.getAppMetrics().find((m) => m.pid === pid);
+        return metric ? metric.memory.workingSetSize * 1024 : null;
+    },
+    later: (fn) => { setTimeout(fn, 250).unref?.(); },
+});
+/** The main window's page ended and was brought back (renderer-recovery.ts): the notice every snapshot carries. */
+let rendererNotice: RendererNotice | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
 const localDoor = localProtocolDoor(ipcMain);
 /**
@@ -449,6 +473,7 @@ function onTheClockNow(): { armedFlows: number; scheduledTasks: number } {
  * launch) builds the window again (revealMainWindow → mountMainWindow); with nothing left running, watchTrayOnly ends it.
  */
 function closeUi(reason: string): void {
+    leftRunning.set(true);
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.destroy();
     window = null;
     browserPane = null;
@@ -514,6 +539,7 @@ function watchTrayOnly(): void {
     trayQuietSince = step.quietSince;
     if (step.exit) {
         rendererErrorLog?.('tray only: nothing left running for a minute; shutting everything down');
+        leftRunning.set(false);
         requestQuit('shut-down');
     }
 }
@@ -750,6 +776,8 @@ let updates: Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refr
  * run exactly once. Its `quitting` is what turns the main window's close from a hide into a real close.
  */
 const quit = quitSequence();
+/** That the person left the host running (P6): what brings it back at logon with the setting off. */
+const leftRunning = new LeftRunningMark(runtimeDir(genieRoot()));
 
 /**
  * THE QUIT a person asks for — the tray's Quit, and `Genie --quit` from outside (core/quit-flag.ts), one entry for both.
@@ -1067,6 +1095,7 @@ const activationLedger = new ActivationLedger();
  * `attractMainWindow`. `reason` names the gesture in the focus log.
  */
 function revealMainWindow(reason: string): void {
+    leftRunning.set(false);
     // Tray-only (P1b, "Just close the UI"): the person asked for Genie — the window is built again, the same host.
     if (!window || window.isDestroyed()) { mountMainWindow(true, reason); return; }
     bringUp(window, { activation: 'user-gesture', reason, ledger: activationLedger, label: 'main' });
@@ -1365,7 +1394,7 @@ async function boot(): Promise<void> {
     // WORKSPACE COLOURS (genie#1300): every workspace has one — its project.json's `appearance.color`, or a palette colour
     // Genie writes there (main/workspace-color-host.ts). A pass runs when the estate changes: at once for a workspace
     // without a colour (one just added), and at most every 5 s otherwise, so an agent's edit of the colour is picked up.
-    const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
+    const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => theRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
     workspaceColors = colors;
     theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
     let colorPassAt = 0;
@@ -1379,7 +1408,8 @@ async function boot(): Promise<void> {
             colorPassQueued = false;
             colorPassAt = Date.now();
             // The rail's order — governed workspaces under their governor — so the colours beside each other differ.
-            const order = nestGoverned(ws, (id) => ws.find((w) => w.id === id)?.governedBy ?? null);
+            const current = theRegistry.snapshot().workspaces ?? [];
+            const order = nestGoverned(current, (id) => current.find((w) => w.id === id)?.governedBy ?? null);
             void colors.ensure(order.map((w) => ({ id: w.id, path: w.path }))).catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`));
         }, 0);
     });
@@ -1491,6 +1521,7 @@ async function boot(): Promise<void> {
         },
         // A provider switch's carry-over went (Tynn story #380): the next prompt does not carry it again.
         onCarryOverSent: (agentId: AgentId) => { void theRegistry.clearCarryOver(agentId); },
+        onRedockSent: (agentId: AgentId, at: string) => { void theRegistry.clearRedock(agentId, at).catch(() => lifecycleLog(`redock reorientation acknowledgement could not be saved for ${agentId}; it remains pending on disk`)); },
         // Genie's own words went into the agent's thread (genie#1519): its record says so, for the next launch.
         markGenieWords: (agentId: AgentId) => { void theRegistry.markGenieWords(agentId); },
     };
@@ -1504,6 +1535,11 @@ async function boot(): Promise<void> {
      * in-process engine below, said on the Deck (plan §4.1).
      */
     {
+        // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
+        // Electron copies the runtime; every failure answers the install, with the reason.
+        const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
+        const hostRuntime = await materializeHostRuntime({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog });
+        if (hostRuntime.error !== null) mainErrors.record('agent-host', new Error(hostRuntime.error));
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
@@ -1512,7 +1548,7 @@ async function boot(): Promise<void> {
                 publishBrowserFacts();
                 // How the host starts its updater helper (P5b): this executable, in a dev run this app's path, and the switches this
                 // window was started with that an Electron needs to start at all here (the sandbox, the display, the password store).
-                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=)/.test(a))] }).catch(() => {});
+                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...windowLaunchFlags(process.argv)] }).catch(() => {});
                 void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
                 cookieBridge?.relinked();
                 client.onBrowserEvent((event) => {
@@ -1529,13 +1565,13 @@ async function boot(): Promise<void> {
                 runtimeDir: runtimeDir(genieRoot()),
                 logsDir: join(genieRoot(), 'logs'),
                 // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
-                build: hostBuild(app.getVersion(), join(here, 'host.js')),
-                hostScript: join(here, 'host.js'),
-                execPath: process.execPath,
+                build: hostBuildNow,
+                hostScript: hostRuntime.hostScript,
+                execPath: hostRuntime.execPath,
                 genieHome: genieRoot(),
                 // What only Electron knows, for the host's hosting (hosting-inputs.ts): Genie 1's folder (its database, CA and
                 // toolchain), the app data folder, and the resources folder with the bundled Caddy.
-                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath },
+                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath, GENIE_INSTALL_EXEC: process.execPath },
                 log: lifecycleLog,
             },
             records: () => registry?.listAgents() ?? [],
@@ -1550,6 +1586,8 @@ async function boot(): Promise<void> {
             send: (beat) => agentEngineLink?.client.heartbeat(beat),
             pid: process.pid,
             rss: () => process.memoryUsage.rss(),
+            // The main window's page beside it: genie-host's rss line says what grew (bringBackItsPage samples it).
+            rendererRss: () => pageMemory.bytes(),
         });
     }
     /*
@@ -1675,8 +1713,10 @@ async function boot(): Promise<void> {
     const drafts = agentEngineLink ? agentEngineLink.client.stores().drafts : await ChatDraftStore.open(genieRoot());
     const draftAgents = (): string[] => theRegistry.listAgents().map((a) => a.id);
     const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
-    await drafts.prune(draftAgents()).catch(pruneFailed);
-    registry.subscribe(() => { void drafts.prune(draftAgents()).catch(pruneFailed); });
+    // Sent when the roster changes, not on every snapshot: a streaming agent touches the registry ~20 times a second.
+    const draftPruner = rosterPruner({ ids: draftAgents, prune: (ids) => drafts.prune(ids), failed: pruneFailed });
+    await draftPruner.start();
+    registry.subscribe(() => draftPruner.changed());
     // The first roster snapshot is in, and the session host was built above it: a question's agent can be judged now.
     askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
@@ -1724,7 +1764,7 @@ async function boot(): Promise<void> {
         gitTree: gitTreeStatus,
         // Delete goes to the OS trash (Tynn #844), never an erase.
         trash: (absolutePath) => shell.trashItem(absolutePath),
-        workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
+        workspace: (id) => registry?.workspace(id) ?? null,
         agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => ({ id: a.id, name: a.name })),
         eventsOf: (agentId) => {
             const record = registry?.find(agentId as AgentId);
@@ -1753,7 +1793,8 @@ async function boot(): Promise<void> {
         };
     } else {
         // The emergency path only (no host could start, §4.1): the same hub, in this window.
-        const local = new FilesWatchHub({ send: (_owner, event) => onFilesEvent(event), gitTree: gitTreeStatus, repoStatus, log: lifecycleLog });
+        const local = new FilesWatchHub({ send: (_owner, event) => onFilesEvent(event), workspaceVisible: (id) => { const w = registry?.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: lifecycleLog });
+        registry?.subscribe(() => local.visibilityChanged());
         filesWatch = {
             watch: (viewId, workspace, want) => { local.subscribe('window', viewId, workspace, want); return true; },
             unwatch: (viewId) => local.unsubscribe('window', viewId),
@@ -2328,6 +2369,10 @@ async function boot(): Promise<void> {
      * write nothing; `confirmAdd` does the writes the plan showed.
      */
     const workspaceOps: WorkspaceOpsPorts = {
+        reverifyTrustBeforeRedock: async (id) => {
+            const view = await services?.workspaceTrust.refresh(id, 'redock');
+            if (!view) throw new Error('workspace trust is not available yet');
+        },
         fs: {
             // The same functions the first-commit test drives against a real folder and git (workspace-fs.ts).
             ...nodeWorkspaceFs(),
@@ -2593,6 +2638,7 @@ async function boot(): Promise<void> {
         roster: () => registry?.listAgents() ?? [],
         slugs: () => registry?.workspaceSlugs() ?? new Map(),
         defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
+        refusalForRecipient: (text, workspaceId) => registry?.mailRefusal(text, workspaceId) ?? null,
         enabled: (workspaceId) => services?.settings.snapshotFor(workspaceId).app_inbox !== false,
         siteHosts: (workspaceId) => services?.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host) ?? [],
         log: (line) => console.log(line),
@@ -2720,11 +2766,14 @@ async function boot(): Promise<void> {
         // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
         roster: () => registry?.listAgents() ?? [],
         workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
+        refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
+        inboxParticipantVisible: (id) => registry?.mailParticipantVisible(id) ?? true,
+        inboxVisibilityVersion: () => registry?.mailVisibilityVersion(),
         // Each site's own app credential (genie#1345), under its workspace's switch — compose never puts it in the service env.
         appInboxEnv: (source) => appInboxEnv(source),
         // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain
         // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
-        workspaces: () => registry?.listWorkspaces() ?? [],
+        workspaces: () => registry?.workspaceStates() ?? [],
         onWorkspacesChange: (listener) => registry?.subscribe(() => listener()) ?? (() => {}),
         // The rail's namer, so a question in the Deck and its window names the workspace the way the rail does.
         workspaceName: workspaceNameFor,
@@ -2757,8 +2806,8 @@ async function boot(): Promise<void> {
                 openError: (path, error) => console.error(`[terminal] open failed in ${path}: ${error instanceof Error ? error.message : String(error)}`),
             }),
             filesWatch: {
-                exists: id => !!registry?.workspace(id),
-                watch: (viewId, id, want) => { const workspace = registry?.workspace(id); return filesWatch && workspace ? filesWatch.watch(viewId, { id: workspace.id, path: workspace.path }, want) : false; },
+                exists: id => { const w = registry?.workspace(id); return !!w && w.asleep !== true; },
+                watch: (viewId, id, want) => { const workspace = registry?.workspace(id); return filesWatch && workspace && workspace.asleep !== true ? filesWatch.watch(viewId, { id: workspace.id, path: workspace.path }, want) : false; },
                 unwatch: viewId => { filesWatch?.unwatch(viewId); },
                 subscribe: listener => { filesEventListeners.add(listener); return () => { filesEventListeners.delete(listener); }; },
             },
@@ -3206,7 +3255,13 @@ async function boot(): Promise<void> {
         });
         ownScheduler.plan();
         // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
-        registry.subscribe(() => ownScheduler.plan());
+        let processVisibility = JSON.stringify(registry.workspaceStates().filter((w) => w.asleep).map((w) => w.id).sort());
+        registry.subscribe(() => {
+            ownScheduler.plan();
+            const key = JSON.stringify(registry!.workspaceStates().filter((w) => w.asleep).map((w) => w.id).sort());
+            if (key === processVisibility) return;
+            processVisibility = key; ownBook.visibilityChanged();
+        });
         const restoredProcesses = ownBook.restore();
         if (windowSafeNow()) for (const p of ownBook.kept()) if (restoredProcesses.heldBack.includes(p.id)) windowSafe?.own()?.hold('process', { id: p.id, name: p.name });
         // Leaving safe mode arms the scheduled tasks again; it starts nothing by itself.
@@ -3244,6 +3299,7 @@ async function boot(): Promise<void> {
             approve: (caller, action, detail, call) => (own ? own.approvals.gate(caller, action, detail, call) : composed.approvals.gate(caller, action, detail, call)),
             roster,
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
+            refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
             resolveCaller,
             // createAgent: the workspace's default agent asks, the person approves in the Deck, the registry registers.
             agents: {
@@ -3442,9 +3498,10 @@ async function boot(): Promise<void> {
     windowSafe?.onChange(() => registry?.touch());
     // No host: what a quit recorded is listed on the banner, and this window beats (it is the run).
     windowSafe?.own()?.wasRunning([...registry.runningAtQuit(), ...registry.interruptedAtQuit()]);
-    if (windowSafe?.own()) setInterval(() => { windowSafe?.beat((registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id)); }, 15_000).unref?.();
+    if (windowSafe?.own()) startBeat({ started: () => (registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id), onChange: (l) => (host instanceof SessionHost ? host.subscribe(() => l()) : () => {}), beat: (ids) => { windowSafe?.beat(ids); } });
     // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
     registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
+    registry.setRendererNotice(() => rendererNotice);
     agentEngineLink?.client.onCrashState(() => registry?.touch());
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
@@ -3490,8 +3547,16 @@ async function boot(): Promise<void> {
     // with no window. This window's own runs only on the emergency path.
     if (!agentEngineLink) wireInboxPush({
         inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
+        delivered: (agentId, mail) => {
+            void composed.inbox.markDelivered(agentId, mail.map((m) => m.id))
+                .catch((error: unknown) => console.warn('A delivered mail receipt could not be saved:', error instanceof Error ? error.message : String(error)));
+        },
+        refused: (agentId, mail, refusal) => {
+            void composed.inbox.recordDeliveryRefusal(agentId, mail.map((m) => m.id), refusal)
+                .catch((error: unknown) => console.warn('A mail refusal receipt could not be saved:', error instanceof Error ? error.message : String(error)));
+        },
         wake: wakeAgent,
-        // "You have N unread": a newer notice covers the one before, so new mail mid-turn is told at once (genie#1411).
+        // Each batch covers pending mail, so a new arrival mid-turn can be delivered at once (genie#1411).
         cumulative: true,
         ...appMailPushPorts({
             modeOf: (agentId) => registry?.find(agentId)?.mode,
@@ -3716,6 +3781,8 @@ async function boot(): Promise<void> {
         openInBrowser: openInBrowserFor('user-gesture'),
         // "Leave safe mode" (Tynn #386): the host's; this window only asks.
         safeMode: { leave: () => (windowSafe ? windowSafe.leave() : Promise.resolve({ ok: false as const, reason: 'Genie is still starting' })) },
+        // The brought-back page's notice: forget it.
+        rendererNotice: { dismiss: async () => { rendererNotice = null; registry?.touch(); return { ok: true as const }; } },
         // The reopened-window notice's two actions: forget it; or stop every agent — one click, the person's, never automatic.
         hangNotice: {
             dismiss: () => (agentEngineLink ? agentEngineLink.client.dismissHangNotice() : Promise.resolve({ ok: false as const, reason: 'Genie’s host is not connected' })),
@@ -3895,6 +3962,8 @@ async function boot(): Promise<void> {
         const waiting = needsYouCount(snapshot.deckItems ?? []);
         if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
     });
+    // Rare workspace visibility changes refresh all popped-out views; agent activity above stays main-window only.
+    registry.subscribeWorkspaceVisibility((snapshot) => broadcast('genie:changed', snapshot));
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
@@ -3948,7 +4017,7 @@ async function boot(): Promise<void> {
         execPath: process.execPath,
         appImage: process.env.APPIMAGE ?? null,
         configHome: process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0 ? process.env.XDG_CONFIG_HOME : join(homedir(), '.config'),
-    });
+    }, leftRunning);
     trayHandlers = {
         onUpdate: () => { revealMainWindow('tray: update'); },
         onTaskManager: () => { revealMainWindow('tray: Task Manager'); showToPerson({ activation: 'user-gesture', route: 'genie://hosting?tab=processes', reason: 'tray: Task Manager' }); },
@@ -3974,7 +4043,7 @@ async function boot(): Promise<void> {
         onQuit: () => { requestQuit(); },
         // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
         // ALWAYS ASK (the owner, 2026-11-02): Restart and Shut down everything confirm first, every time.
-        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
+        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) { leftRunning.set(false); requestQuit('shut-down'); } }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
@@ -4075,8 +4144,44 @@ function mountMainWindow(show: boolean, reason = 'launch'): void {
         deps.pushFeatures();
     });
     livePanels?.attach(window);
+    bringBackItsPage(window);
     if (reason !== 'launch') rendererErrorLog?.(`window built again (${reason}): the same host`);
     refreshTray();
+}
+
+/**
+ * THE MAIN WINDOW'S PAGE, BROUGHT BACK WHEN IT ENDS (renderer-recovery.ts; the owner's black window of 2026-11-06, an oom
+ * with main alive and nothing reloading the page for 3.5 hours). Its memory is sampled for the beat and the crash record;
+ * an end reloads it (capped), a reload that throws builds the window again, and past the cap the plain page's two links —
+ * Restart Genie, Send a crash report — build the window again here, the same host, the notice kept for its report.
+ */
+function bringBackItsPage(win: BrowserWindow): void {
+    // As soon as the page has loaded (retried until its renderer reads a real value), and on the 5 s tick.
+    pageMemory.sample();
+    win.webContents.on('did-finish-load', () => { pageMemory.loaded(); });
+    const sampler = setInterval(() => { pageMemory.sample(); }, 5_000);
+    sampler.unref?.();
+    win.on('closed', () => { clearInterval(sampler); });
+    const rebuild = (why: string): void => {
+        if (window !== win) return;
+        window = null;
+        try { win.destroy(); } catch { /* gone already */ }
+        mountMainWindow(true, why);
+    };
+    recoverRenderer({
+        contents: win.webContents,
+        rendererMb: () => pageMemory.mb(),
+        onReloaded: (notice) => { rendererNotice = notice; registry?.touch(); },
+        onGaveUp: (notice) => { rendererNotice = notice; },
+        errorPage: rendererErrorPage,
+        recreate: () => { rebuild('renderer recovery: the reload failed'); },
+        log: (line) => { rendererErrorLog?.(line); },
+    });
+    win.webContents.on('will-navigate', (event, url) => {
+        if (url !== RECOVER_RESTART && url !== RECOVER_REPORT) return;
+        event.preventDefault();
+        rebuild(url === RECOVER_REPORT ? 'renderer recovery: Send a crash report' : 'renderer recovery: Restart Genie');
+    });
 }
 
 // A second launch shows the first one's window — hidden in the tray included. `Genie --quit` is the tray's Quit instead,

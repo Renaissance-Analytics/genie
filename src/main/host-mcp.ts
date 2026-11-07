@@ -45,7 +45,7 @@ export interface HostMcpPorts {
     readonly settings: Pick<import('./settings-store.js').SettingsStore, 'snapshot' | 'snapshotFor'>;
     readonly records: () => readonly AgentRecord[];
     /** The host's own registry (P3.2): a workspace's path, its default agent, the address slugs. */
-    readonly registry: Pick<import('./host-registry.js').HostRegistry, 'workspace' | 'workspaceSlugs' | 'defaultAgentOf' | 'setNames'>;
+    readonly registry: Pick<import('./host-registry.js').HostRegistry, 'workspace' | 'workspaceSlugs' | 'defaultAgentOf' | 'setNames'> & Partial<Pick<import('./host-registry.js').HostRegistry, 'mailRefusal'>>;
     readonly probe: (agentId: AgentId) => Parameters<typeof livenessOf>[0];
     readonly lastRowAt: (agentId: AgentId) => number | null;
     readonly reportPlan: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => boolean | Promise<boolean>;
@@ -127,6 +127,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             approve: (caller, action, detail, call) => s.approvals.gate(caller, action, detail, call),
             roster: ports.records,
             workspaceSlugs: () => ports.registry.workspaceSlugs(),
+            refusalForRecipient: (text) => ports.registry.mailRefusal?.(text) ?? null,
             liveness: (id) => livenessOf(ports.probe(id as AgentId), ports.lastRowAt(id as AgentId)),
             resolveCaller,
             userActive: () => ports.window.connected() && view?.userActive === true,

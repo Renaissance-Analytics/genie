@@ -329,22 +329,26 @@ check(
  * was green, because each one rendered the feature directly rather than asking whether the
  * screen would. **The only check that would have caught it is a click.**
  */
+// Seeded manual agents are Stopped: hidden by default, reachable through the persistent count button.
+check(await cdp.evaluate(`document.querySelector('[data-dashboard-filter="stopped"]')?.getAttribute('aria-pressed') === 'false' && document.querySelectorAll('[data-surface="dashboard"] [data-agent][data-state="stopped"]').length === 0`), '16a. Stopped agents are hidden by default');
+await cdp.evaluate(`document.querySelector('[data-dashboard-filter="stopped"]').click(); true`);
+await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])'))`, 'the seeded stopped agents after revealing them');
 const agentRow = await cdp.evaluate(`
     (() => {
-        // A WORKSPACE agent's row: genie's own group comes first on the Dashboard (the design mockup, 2026-10-19).
-        const row = document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]');
+        const row = document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])');
         return row ? JSON.stringify({ id: row.getAttribute('data-agent'), text: row.textContent }) : null;
     })()
 `);
 check(typeof agentRow === 'string', '16. the seeded agent appears on the Dashboard', String(agentRow));
-// 60. GENIE'S OWN GROUP, FIRST (the design mockup): `genie · default agent · not in a workspace`, above every workspace.
-check(await cdp.evaluate(`(() => { const g = document.querySelector('[data-genie-group]'); const w = document.querySelector('[data-surface="dashboard"] div[data-workspace]'); return Boolean(g && w && (g.compareDocumentPosition(w) & Node.DOCUMENT_POSITION_FOLLOWING) && /default agent · not in a workspace/.test(g.textContent ?? '')); })()`), '60. the Dashboard opens with genie’s own group, above the workspaces', await cdp.evaluate(`document.querySelector('[data-genie-group]')?.textContent?.slice(0, 80) ?? null`));
+const flatRows = await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-surface="dashboard"] [data-dashboard-list] [data-agent]')].map((r) => ({ name: r.querySelector('span.font-medium')?.textContent?.trim() ?? '', workspace: Boolean(r.querySelector('[data-column="workspace"]')) })))`);
+const flat = JSON.parse(flatRows || '[]');
+check(flat.length === 3 && flat.every((r) => r.workspace) && flat.map((r) => r.name).join('|') === ['atlas', 'genie', 'wren'].join('|') && await cdp.evaluate(`!document.querySelector('[data-genie-group], [data-group-toggle]')`), '60. one alphabetical table includes genie and every agent with a Workspace cell', flatRows);
 
 if (typeof agentRow === 'string') {
     // 17. A ROW CLICK OPENS THAT AGENT'S CHAT BESIDE THE DASHBOARD, WHICH STAYS (genie#1209; the owner, 2026-10-26: "on the
     // dashboard page I should be able to click on agent to bring up their chat and stay on the dashboard").
     const rowId = JSON.parse(agentRow).id;
-    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]').click(); true`);
+    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])').click(); true`);
     const chatted = await waitFor(
         cdp,
         `Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${rowId}"]')) && Boolean(document.querySelector('[data-surface="dashboard"]'))`,
@@ -484,18 +488,15 @@ if (typeof agentRow === 'string') {
     check(backHome, '23. Back leaves the agent for the Dashboard (opening the chat is no history entry), the chat still docked');
     check(backHome, '24. Back returns to the Dashboard');
 
-    // 52. THE BOARD'S DOORS ARE REAL (board audit, 2026-10-12: "Open workspace →" was a span, no By status, no Chat ⌘J,
-    // the group header named the workspace by its id). The header names the seeded workspace by its NAME (never a
-    // 26-char id), offers the segmented control and Chat ⌘J, and `Open workspace →` is a button that lands on the
-    // workspace; Back returns to the Dashboard.
+    // 52. The Workspace cell opens the workspace, both persistent state filters and Chat are real buttons.
     const doors = await cdp.evaluate(`JSON.stringify({
         open: document.querySelectorAll('button[data-open-workspace]').length,
-        toggle: Boolean(document.querySelector('[data-group-toggle] [role="radio"]')),
+        filters: ['sleeping', 'stopped'].every((s) => document.querySelector('button[data-dashboard-filter="' + s + '"]')),
         chat: Boolean(document.querySelector('button[data-action="chat-genie"]')),
-        header: (document.querySelector('[data-workspace] .font-semibold')?.textContent ?? ''),
+        workspace: (document.querySelector('button[data-open-workspace="tynn"]')?.textContent ?? '').trim(),
     })`);
     const d = JSON.parse(doors || '{}');
-    check(d.open >= 1 && d.toggle && d.chat && d.header.length > 0 && !/^[0-9a-z]{26}$/i.test(d.header), '52. the Dashboard\'s doors are real: Open workspace, By status, Chat ⌘J, and the group header names the workspace', doors);
+    check(d.open >= 1 && d.filters && d.chat && d.workspace.length > 0 && !/^[0-9a-z]{26}$/i.test(d.workspace), '52. the Dashboard has named Workspace buttons, both state filters and Chat', doors);
     await cdp.evaluate(`document.querySelector('button[data-open-workspace]').click(); true`);
     const landed = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"]'))`, 'the workspace after Open workspace →');
     check(landed, '53. Open workspace → lands on the workspace');
@@ -1013,6 +1014,28 @@ if (!approvalEnabled) {
         'an xterm to mount for the panel’s terminal',
     );
     check(paneUp, '36. the panel’s terminal is a real terminal pane with xterm mounted');
+    // WHAT THE TERMINAL DREW, AND WHEN (said only if 37 or 38 fails; it changes no timing): from the moment xterm mounts,
+    // when anything first appears in it and what, so a failure says whether the shell ever drew a prompt before the typing.
+    await cdp.evaluate(`(() => {
+        const rows = document.querySelector('[data-terminal-pane] .xterm-rows');
+        const watch = window.__smokeTerminal = { mountedAt: performance.now(), firstOutputMs: null, firstText: '' };
+        if (!rows) return true;
+        const seen = () => {
+            const text = (rows.innerText ?? '').trim();
+            if (watch.firstOutputMs === null && text !== '') { watch.firstOutputMs = Math.round(performance.now() - watch.mountedAt); watch.firstText = text.slice(0, 200); }
+        };
+        seen();
+        new MutationObserver(seen).observe(rows, { childList: true, subtree: true, characterData: true });
+        return true;
+    })()`);
+    /** On a failure of 37 or 38: the rows (numbered, the drawn ones), the cursor's row, and whether a prompt was ever drawn. */
+    const terminalDump = async () => cdp.evaluate(`(() => {
+        const rows = [...(document.querySelector('[data-terminal-pane] .xterm-rows')?.children ?? [])];
+        const drawn = rows.map((r, i) => [i, (r.innerText ?? '').replace(/\\s+$/, '')]).filter(([, s]) => s !== '').map(([i, s]) => i + ': ' + s.slice(0, 160));
+        const cursorRow = rows.findIndex((r) => r.querySelector('.xterm-cursor'));
+        const w = window.__smokeTerminal ?? null;
+        return JSON.stringify({ drawn: drawn.slice(-12), cursorRow, firstOutputMs: w?.firstOutputMs ?? null, firstText: w?.firstText ?? '', sinceMountMs: w ? Math.round(performance.now() - w.mountedAt) : null });
+    })()`).catch((e) => `(unread: ${e?.message ?? e})`);
 
     // Let the shell print its prompt, then focus xterm's textarea and type.
     await new Promise((r) => setTimeout(r, 1200));
@@ -1024,12 +1047,14 @@ if (!approvalEnabled) {
     const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
     const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
     check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
+    if (!typed) console.log(`  TERMINAL_AT_37 ${await terminalDump()}`);
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
     const ran = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 >= 2`, 'the shell to print the token back');
     const count = await cdp.evaluate(`${rowsText}.split('${token}').length - 1`);
     check(ran, '38. the SHELL ran it — the token comes back as output, not just as typed', `${count} occurrence(s)`);
+    if (!ran) console.log(`  TERMINAL_AT_38 ${await terminalDump()}`);
 
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     if (shot.result?.data) {
@@ -1063,7 +1088,7 @@ if (!approvalEnabled) {
     await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]').click(); true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard');
     // The agent's PAGE, by its route (a row click opens its chat beside the board, genie#1209).
-    await cdp.evaluate(`(() => { const id = document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]')?.getAttribute('data-agent'); if (id) window.location.hash = '#genie://agent/' + id + '?tab=stream'; return true; })()`);
+    await cdp.evaluate(`(() => { const id = document.querySelector('[data-surface="dashboard"] [data-agent]:has([data-workspace="tynn"])')?.getAttribute('data-agent'); if (id) window.location.hash = '#genie://agent/' + id + '?tab=stream'; return true; })()`);
     const onAgent = await waitFor(cdp, `Boolean(document.querySelector('[data-action="take-over"]'))`, 'the Agent view with its Take over control');
     if (onAgent) {
         await cdp.evaluate(`document.querySelector('[data-action="take-over"]').click(); true`);

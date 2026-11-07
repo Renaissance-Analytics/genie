@@ -23,6 +23,8 @@ import { publishEnvelope, type AgiRemotePorts } from './agi-remote-host.js';
  */
 
 export interface WorkspaceOpsPorts {
+    /** Host-owned fresh verdict before publishing awake metadata to any workspace consumer. */
+    reverifyTrustBeforeRedock?(workspaceId: string): Promise<void>;
     fs: {
         exists(path: string): Promise<boolean>;
         entries(path: string): Promise<string[]>;
@@ -288,6 +290,12 @@ export async function hibernateWorkspace(ports: WorkspaceOpsPorts, workspaceId: 
  * reported; the wake stands.
  */
 export async function wakeWorkspace(ports: WorkspaceOpsPorts, workspaceId: string): Promise<{ ok: true; services?: EnginesTouched & { started: string[] } } | Refusal> {
+    const workspace = ports.registry.workspace(workspaceId);
+    if (!workspace) return { ok: false, reason: `no workspace ${workspaceId}` };
+    if (workspace.asleep && ports.reverifyTrustBeforeRedock) {
+        try { await ports.reverifyTrustBeforeRedock(workspaceId); }
+        catch (error) { return { ok: false, reason: `workspace trust could not be verified: ${reasonOf(error)}` }; }
+    }
     if (!(await ports.registry.setAsleep(workspaceId, false))) return { ok: false, reason: `no workspace ${workspaceId}` };
     if (!ports.engines) return { ok: true };
     const started: string[] = [];
