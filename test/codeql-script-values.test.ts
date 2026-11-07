@@ -12,14 +12,14 @@ import { secretNote } from '../scripts/secret-note.mjs';
 const read = (f: string) => readFileSync(f, 'utf8').replace(/\r\n/g, '\n');
 
 describe('codeLiteral: a value written into JavaScript stays one string literal', () => {
-    const awkward = ['plain', 'it\'s "quoted"', '</script><script>x()</script>', 'line sep para', 'back\\slash', '<!-- -->', ''];
+    const awkward = ['plain', 'it\'s "quoted"', '</script><script>x()</script>', 'line\u2028sep\u2029para', 'back\\slash', '<!-- -->', ''];
 
     it('reads back as exactly the value it was given', () => {
         for (const v of awkward) expect(new Function(`return ${codeLiteral(v)};`)(), JSON.stringify(v)).toBe(v);
     });
 
     it('holds no raw angle bracket or line separator, which a page or a parser could take for something else', () => {
-        for (const v of awkward) expect(codeLiteral(v), JSON.stringify(v)).not.toMatch(/[<>  ]/);
+        for (const v of awkward) expect(codeLiteral(v), JSON.stringify(v)).not.toMatch(/[<>\u2028\u2029]/);
     });
 });
 
