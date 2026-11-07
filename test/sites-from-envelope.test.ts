@@ -167,8 +167,10 @@ describe('on launch', () => {
         const s = await launch();
         workspaces = [{ id: 'acme', path: acme }, { id: 'sleepy', path: sleepy, asleep: false }];
         for (const l of listeners) l();
-        await settle();
-        expect((await sitesOf(s)).find((x) => x.host === 'blog.gen')).toMatchObject({ state: 'running' });
+        // Workspace listeners enqueue asynchronous sync; wait for the same running-state assertion to hold.
+        await vi.waitFor(async () => {
+            expect((await sitesOf(s)).find((x) => x.host === 'blog.gen')).toMatchObject({ state: 'running' });
+        });
         expect(opened.some((o) => o.cwd === join(sleepy, 'repos', 'blog'))).toBe(true);
     });
 });
