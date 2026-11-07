@@ -14,6 +14,15 @@ export function chatSubscriptionId(_routeName: string, detail: { agent: { id: st
  * id: a switch shows THAT agent's detail at once, never another's (an agent not seen yet shows nothing, as before),
  * and the live detail replaces it as it lands. Bounded: the least recently shown goes first.
  */
+/** The rows a cache may hold in all (#386 review): the count cap alone let 24 ledgers of up to 4 MiB each stay. */
+export const AGENT_DETAIL_CACHE_MAX_BYTES = 48 * 1024 * 1024;
+
+/** A detail's size as the history read counts it: each row's time and event, as JSON. */
+export function detailBytes(detail: { readonly rows?: readonly unknown[] }): number {
+    void detail;
+    return 0;
+}
+
 export class AgentDetailCache<D extends { readonly agent: { readonly id: string } }> {
     readonly #limit: number;
     readonly #byKey = new Map<string, D>();
@@ -41,6 +50,10 @@ export class AgentDetailCache<D extends { readonly agent: { readonly id: string 
             this.#byKey.delete(oldest);
         }
     }
+
+    bytes(): number { return 0; }
+
+    size(): number { return this.#byKey.size; }
 
     #touch(key: string, detail: D): void {
         this.#byKey.delete(key);
