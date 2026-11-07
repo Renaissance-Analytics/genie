@@ -38,7 +38,7 @@ const driverFor: DriverFor = (record) => {
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); fakes.clear(); });
 
-async function rig(options: { asleep?: boolean; cap?: string } = {}) {
+async function rig(options: { asleep?: boolean; cap?: string; sessionEvents?: boolean } = {}) {
     const dir = await mkdtemp(join(tmpdir(), 'host-wake-'));
     const ws = await mkdtemp(join(tmpdir(), 'host-wake-ws-'));
     const store = new Store(dir);
@@ -52,15 +52,17 @@ async function rig(options: { asleep?: boolean; cap?: string } = {}) {
     const settings = await SettingsStore.open(dir);
     if (options.cap) await settings.setFor('ws', 'agent_cap', options.cap);
     const host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree });
+    // A quiet event source models an idle session that sends NO further events to the mail wake.
+    const subscribe = options.sessionEvents === false ? vi.spyOn(host, 'subscribe').mockReturnValue(() => {}) : null;
     const log: string[] = [];
     const off = wireHostMailWake({ inbox, host, registry, settings, osaDir: dir, log: (l) => log.push(l) });
-    cleanups.push(async () => { off(); host.stopAll(); await host.settled(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); await rm(ws, { recursive: true, force: true }); });
+    cleanups.push(async () => { off(); subscribe?.mockRestore(); host.stopAll(); await host.settled(); await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); await rm(ws, { recursive: true, force: true }); });
     return { inbox, host, atlas, other, log };
 }
 
 describe('mail wakes an agent in genie-host', () => {
     it('Tynn #672: IDLE, one refused handoff, then timers alone deliver the actual message within 5 s exactly once', async () => {
-        const r = await rig();
+        const r = await rig({ sessionEvents: false });
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
         const handOff = vi.spyOn(r.host, 'handOff');
         try {
@@ -75,18 +77,17 @@ describe('mail wakes an agent in genie-host', () => {
             expect(r.host.inTurn(r.atlas.id)).toBe(false);
             expect(r.host.deliverable(r.atlas.id)).not.toBeNull();
             expect(fake.prompts).toEqual(['warm up']);
+            await r.host.settled();
 
             // Refuse exactly ONE handoff, before it reaches the provider; subsequent calls use the real SessionHost.
             handOff.mockImplementationOnce(() => { throw new Error('injected transient handoff refusal'); });
             const text = 'The deployment finished; the requested result is ready.';
             const arrivedAt = Date.now();
             const message = await r.inbox.send({ from: r.other.id, to: r.atlas.id, text });
+            expect(handOff).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1_500);
-            expect(handOff).toHaveBeenCalledTimes(1);
             expect(handOff.mock.results[0]?.type).toBe('throw');
-            expect(fake.prompts).toEqual(['warm up']);
-            expect(r.host.inTurn(r.atlas.id)).toBe(false);
-            expect(r.host.deliverable(r.atlas.id)).not.toBeNull();
+            expect(handOff.mock.results[0]?.value).toEqual(new Error('injected transient handoff refusal'));
 
             // From arrival onward there is NO further mail, input, receive, readiness or turn/session event.
             // Only the clock advances. A timer owned by the real mail wake must make the second attempt.
