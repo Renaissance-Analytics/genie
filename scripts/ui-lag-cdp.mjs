@@ -256,7 +256,8 @@ try {
         const c0 = await mark('control');
         const mainCtl = await main.evaluate(`(${uiLagControlBusyMain.toString()})(${CONTROL_MS})`);
         await sleep(200);
-        const pageCtl = await page.evaluate(`(${uiLagControlBusyPage.toString()})(${CONTROL_MS})`);
+        // In a task of its own (a timer): a block inside CDP's own evaluate is not a long task the page's observer reports.
+        const pageCtl = await page.evaluate(`new Promise((done) => setTimeout(() => done((${uiLagControlBusyPage.toString()})(${CONTROL_MS})), 0))`);
         await sleep(400);
         phases.push({ ...c0, end: await mark('control-end'), mainCtl, pageCtl, input: { mouse: [], keys: [] } });
 
