@@ -55,7 +55,7 @@ describe('a slow features action names its slow half', () => {
         dir = await mkdtemp(join(tmpdir(), 'act-timing-'));
         services = await composeServices({ userData: dir, pty: fakePty(), v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
         const real = services.knowledge;
-        const slow = { ...services, knowledge: Object.assign(Object.create(Object.getPrototypeOf(real)), real, { list: async (...a: Parameters<typeof real.list>) => { await new Promise((r) => setTimeout(r, 60)); return real.list(...a); } }) } as ComposedServices;
+        const slow = { ...services, knowledge: Object.assign(Object.create(Object.getPrototypeOf(real)), real, { summaries: async (...a: Parameters<typeof real.summaries>) => { await new Promise((r) => setTimeout(r, 60)); return real.summaries(...a); } }) } as ComposedServices;
         const said: string[] = [];
         await handleFeatureAction(slow, { kind: 'whatsNew.show' }, undefined, { slowPart: { ms: 40, log: (part) => said.push(part) } });
         expect(said).toContain('knowledge');

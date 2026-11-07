@@ -1,4 +1,5 @@
 import { limitOf } from '../core/shell-limits.js';
+import { rosterPruner } from '../core/chat-drafts.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
@@ -1697,8 +1698,10 @@ async function boot(): Promise<void> {
     const drafts = agentEngineLink ? agentEngineLink.client.stores().drafts : await ChatDraftStore.open(genieRoot());
     const draftAgents = (): string[] => theRegistry.listAgents().map((a) => a.id);
     const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
-    await drafts.prune(draftAgents()).catch(pruneFailed);
-    registry.subscribe(() => { void drafts.prune(draftAgents()).catch(pruneFailed); });
+    // Sent when the roster changes, not on every snapshot: a streaming agent touches the registry ~20 times a second.
+    const draftPruner = rosterPruner({ ids: draftAgents, prune: (ids) => drafts.prune(ids), failed: pruneFailed });
+    await draftPruner.start();
+    registry.subscribe(() => draftPruner.changed());
     // The first roster snapshot is in, and the session host was built above it: a question's agent can be judged now.
     askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.

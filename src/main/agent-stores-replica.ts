@@ -239,6 +239,7 @@ export class KnowledgeRemote {
     async link(from: string, to: string): Promise<LinkResult> { return (await this.#call('knowledge', 'link', [from, to])) as LinkResult; }
     async search(input: SearchInput): Promise<{ hits: Hit[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'search', [input])) as { hits: Hit[]; nextCursor: string | null }; }
     async list(input: ListInput): Promise<{ nodes: KnowledgeNode[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'list', [input])) as { nodes: KnowledgeNode[]; nextCursor: string | null }; }
+    async summaries(input: ListInput): Promise<{ hits: Hit[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'summaries', [input])) as { hits: Hit[]; nextCursor: string | null }; }
 }
 
 /**
