@@ -49,12 +49,12 @@ describe('observedMail: the thread and the unread count', () => {
         { id: 'm4', from: 'human', to: 'agent_x', text: 'someone else', sentAt: '2026-10-12T14:10:00.000Z', readAt: null },
     ];
 
-    it('your mail with whether it was read, its mail by name, oldest first; unread = its mail you have not read', () => {
+    it('mail uses the shared two-state card, oldest first; unread still counts its mail the human has not received', () => {
         expect(observedMail(recent, 'agent_k', 'kora')).toEqual({
             messages: [
-                { id: 'm1', who: 'you', from: 'you', text: 'look at the tests', delivered: true, at: Date.parse('2026-10-12T14:05:00.000Z'), read: Date.parse('2026-10-12T14:07:00.000Z') },
-                { id: 'm2', who: 'agent', from: 'kora', text: 'on it', delivered: true, at: Date.parse('2026-10-12T14:08:00.000Z') },
-                { id: 'm3', who: 'you', from: 'you', text: 'and the docs', delivered: true, at: Date.parse('2026-10-12T14:09:00.000Z'), read: null },
+                { id: 'm1', who: 'mail', from: 'you → kora', text: 'look at the tests', delivered: true, at: Date.parse('2026-10-12T14:05:00.000Z'), mailId: 'm1' },
+                { id: 'm2', who: 'mail', from: 'kora → you', text: 'on it', delivered: false, at: Date.parse('2026-10-12T14:08:00.000Z'), mailId: 'm2' },
+                { id: 'm3', who: 'mail', from: 'you → kora', text: 'and the docs', delivered: false, at: Date.parse('2026-10-12T14:09:00.000Z'), mailId: 'm3' },
             ],
             unread: 1,
         });
@@ -79,15 +79,15 @@ describe('the flyout: your mail, read or not', () => {
     const sent = new Date(2026, 9, 12, 14, 5).getTime();
     const read = new Date(2026, 9, 12, 14, 7).getTime();
 
-    it('says when it read your mail, or that it has not; its own mail carries no marker', () => {
+    it('shows waiting/delivered card receipts, with no separate read state', () => {
         const html = render({ agentId: 'agent_k', name: 'kora', fidelity: 'observed', unread: 1, messages: [
-            { id: 'm1', who: 'you', from: 'you', text: 'look at the tests', delivered: true, at: sent, read },
-            { id: 'm2', who: 'agent', from: 'kora', text: 'on it', delivered: true, at: sent },
-            { id: 'm3', who: 'you', from: 'you', text: 'and the docs', delivered: true, at: sent, read: null },
+            { id: 'm1', who: 'mail', from: 'you → kora', text: 'look at the tests', delivered: true, at: sent, mailId: 'm1' },
+            { id: 'm2', who: 'mail', from: 'kora → you', text: 'on it', delivered: false, at: sent, mailId: 'm2' },
+            { id: 'm3', who: 'mail', from: 'you → kora', text: 'and the docs', delivered: false, at: sent, mailId: 'm3' },
         ] });
-        expect(html).toMatch(/data-chat-read="m1"[^>]*>read 14:07</);
-        expect(html).toMatch(/data-chat-read="m3"[^>]*>not read yet</);
-        expect(html.match(/data-chat-read=/g)).toHaveLength(2);
+        expect(html).not.toContain('data-chat-read=');
+        expect(html.match(/data-mail-receipt="delivered"/g)).toHaveLength(1);
+        expect(html.match(/data-mail-receipt="waiting"/g)).toHaveLength(2);
         expect(html).toContain('data-chat-unread="1"');
     });
 
