@@ -361,7 +361,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
              * never its text again in a monospace box.
              */}
             {item.answer.kind === 'inline' && item.source === 'agent-question' ? (
-                <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answeringHere} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
+                <ApprovalCard approval={{ question: item.title, options: item.answer.options, why: item.why ?? null }} answering={answeringHere} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
             ) : null}
             {item.answer.kind === 'inline' && item.source !== 'agent-question' ? (
                 <InlineOptions options={item.answer.options} answering={answeringHere} onAnswer={(optionId) => onAnswer(item, optionId)} />

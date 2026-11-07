@@ -53,7 +53,7 @@ describe('hovering inline code', () => {
     it('copies exactly the code, nothing around it', async () => {
         render();
         hover(inlineCode());
-        await act(async () => { button()!.click(); await Promise.resolve(); });
+        await act(async () => { button()!.click(); await new Promise((r) => setTimeout(r, 0)); });
         expect(written).toEqual([['git@github.com:acme/app.git']]);
         expect(button()?.getAttribute('data-copy-state')).toBe('copied');
     });
@@ -62,7 +62,7 @@ describe('hovering inline code', () => {
         g.genieClipboard = { write: async () => false };
         render();
         hover(inlineCode());
-        await act(async () => { button()!.click(); await Promise.resolve(); });
+        await act(async () => { button()!.click(); await new Promise((r) => setTimeout(r, 0)); });
         expect(button()?.getAttribute('data-copy-state')).toBe('failed');
     });
 });
@@ -73,7 +73,7 @@ describe('hovering a link', () => {
         const link = host.querySelector('a[href^="https://"]')!;
         hover(link);
         expect(button()?.getAttribute('data-copy')).toBe('link');
-        await act(async () => { button()!.click(); await Promise.resolve(); });
+        await act(async () => { button()!.click(); await new Promise((r) => setTimeout(r, 0)); });
         expect(written).toEqual([['https://example.com/docs?a=1']]);
     });
 });

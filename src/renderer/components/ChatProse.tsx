@@ -1,7 +1,7 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type FocusEvent as ReactFocusEvent, type ReactNode } from 'react';
 import { Button, ContentRenderer, Icon, type RenderExtension, type RenderExtensionProps } from '@particle-academy/react-fancy';
 import { NO_REFS, liftChatBlocks, prepareChatMarkdown, type ChatRefs } from '../../core/chat-markup.js';
-import { COPIED_MS, resultCopyPayload } from '../../core/chat-copy.js';
+import { COPIED_MS, inlineCopyText, resultCopyPayload } from '../../core/chat-copy.js';
 import { copyToClipboard, genieClipboardWriter } from '../clipboard.js';
 
 /**
@@ -19,6 +19,9 @@ import { copyToClipboard, genieClipboardWriter } from '../clipboard.js';
  *   its copy buttons) and Genie draws the card around it. Only a `<result>` has a button of Genie's: "Copy result",
  *   rich, which fancy has no notion of.
  *
+ * - inline code and web links get ONE hover copy button of Genie's, over the reply (genie#1556, `InlineCopyButton`):
+ *   fancy draws no button on them.
+ *
  * A Genie link (`#file:` / `#agent:` / `#workspace:`) is an ordinary anchor: whoever draws this delegates the click
  * (ChatFlyout's log, StreamRow), and only a person's click on a LINK navigates (genie#1265). A click on a copy button is a
  * copy and nothing else: it stops here (`stopCopyClick`).
@@ -27,7 +30,7 @@ import { copyToClipboard, genieClipboardWriter } from '../clipboard.js';
 export type CopyState = 'idle' | 'copied' | 'failed';
 
 /** The "Copy result" control as markup, its state passed in: copy, then a check or an x, and a live region that says so. */
-export function CopyButtonView({ kind, label, state, onCopy }: { kind: 'result'; label: string; state: CopyState; onCopy: () => void }) {
+export function CopyButtonView({ kind, label, state, onCopy }: { kind: 'result' | 'inline' | 'link'; label: string; state: CopyState; onCopy: () => void }) {
     return (
         <span className="inline-flex items-center">
             <Button size="xs" labelClassName="contents"
@@ -51,18 +54,57 @@ export function CopyButtonView({ kind, label, state, onCopy }: { kind: 'result';
     );
 }
 
-function CopyResultButton({ body }: { body: string }) {
+/** A copy and its check or x for COPIED_MS: one state per button. */
+function useCopy(): [CopyState, (payload: Parameters<typeof copyToClipboard>[0]) => void] {
     const [state, setState] = useState<CopyState>('idle');
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-    const onCopy = () => {
-        void copyToClipboard(resultCopyPayload(body)).then((ok) => {
+    const copy = (payload: Parameters<typeof copyToClipboard>[0]) => {
+        void copyToClipboard(payload).then((ok) => {
             setState(ok ? 'copied' : 'failed');
             if (timer.current) clearTimeout(timer.current);
             timer.current = setTimeout(() => setState('idle'), COPIED_MS);
         });
     };
-    return <CopyButtonView kind="result" label="Copy result" state={state} onCopy={onCopy} />;
+    return [state, copy];
+}
+
+function CopyResultButton({ body }: { body: string }) {
+    const [state, copy] = useCopy();
+    return <CopyButtonView kind="result" label="Copy result" state={state} onCopy={() => copy(resultCopyPayload(body))} />;
+}
+
+/** How long the inline copy button stays after the pointer leaves its code or link: long enough to reach it. */
+const HIDE_MS = 300;
+
+/** What the pointer (or focus) is on: the text to copy, and where its right edge is inside the reply. */
+interface InlineHover { kind: 'inline' | 'link'; text: string; top: number; left: number }
+
+/**
+ * THE INLINE COPY BUTTON (genie#1556): one react-fancy Button per reply, laid over it at the hovered code span's or link's
+ * end — absolute, so the line never moves and the text stays selectable. Keyed by what it copies, so a new target starts
+ * with the copy icon.
+ */
+function InlineCopyButton({ hover }: { hover: InlineHover }) {
+    const [state, copy] = useCopy();
+    return (
+        <span data-inline-copy="" className="absolute z-10 rounded-md bg-[var(--bg-1)] shadow-sm" style={{ top: hover.top, left: hover.left }}>
+            <CopyButtonView kind={hover.kind} label={hover.kind === 'link' ? 'Copy link' : 'Copy'} state={state} onCopy={() => copy({ plain: hover.text })} />
+        </span>
+    );
+}
+
+/** The inline code span or web link at `target` in this reply, read for `inlineCopyText`; `null` = no button. */
+function inlineHoverAt(target: EventTarget | null, container: HTMLElement): InlineHover | null {
+    const el = target as Element | null;
+    if (!el || typeof el.closest !== 'function') return null;
+    const hit = el.closest('code, a');
+    if (!hit || !container.contains(hit)) return null;
+    const copied = inlineCopyText({ tag: hit.tagName, text: hit.textContent ?? '', href: hit.getAttribute('href'), inBlock: hit.closest('pre') !== null });
+    if (!copied) return null;
+    const box = container.getBoundingClientRect();
+    const at = hit.getBoundingClientRect();
+    return { ...copied, top: at.top - box.top + at.height / 2 - 12, left: at.right - box.left + 2 };
 }
 
 /** A click on a copy button — react-fancy's or Genie's — is a copy: it never reaches the row or the log behind it. */
@@ -123,9 +165,27 @@ export interface ChatProseProps {
 /** Memoised on its text and refs: a busy agent's push re-renders only the reply that grew (ChatFlyout's ChatReply). */
 export const ChatProse = memo(function ChatProse({ text, refs = NO_REFS, streaming = false, className = '' }: ChatProseProps) {
     const value = useMemo(() => liftChatBlocks(prepareChatMarkdown(text, refs, streaming), streaming), [text, refs, streaming]);
+    const [hover, setHover] = useState<InlineHover | null>(null);
+    const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const keep = () => { if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; } };
+    useEffect(() => keep, []);
+    const hide = () => { keep(); setHover(null); };
+    const onOver = (e: ReactMouseEvent<HTMLDivElement> | ReactFocusEvent<HTMLDivElement>) => {
+        // Over the button itself the hover holds: the pointer went there to press it.
+        if ((e.target as Element | null)?.closest?.('[data-inline-copy]')) { keep(); return; }
+        const next = inlineHoverAt(e.target, e.currentTarget);
+        if (next === null) {
+            // Off the code or link: gone after a moment, so the pointer can cross the gap to the button.
+            if (hover !== null && hideTimer.current === null) hideTimer.current = setTimeout(hide, HIDE_MS);
+            return;
+        }
+        keep();
+        setHover((was) => (was && was.text === next.text && was.top === next.top && was.left === next.left ? was : next));
+    };
     return (
-        <div data-chat-prose="" className="flex min-w-0 flex-col" onClick={stopCopyClick}>
+        <div data-chat-prose="" className="relative flex min-w-0 flex-col" onClick={stopCopyClick} onMouseOver={onOver} onFocus={onOver} onMouseLeave={hide}>
             <ContentRenderer value={value} format="markdown" lineSpacing={1.5} extensions={CHAT_BLOCKS} streaming={streaming ? 'progressive' : false} clipboardWriter={genieClipboardWriter} className={`${className} ${PILLS} ${TABLES}`} />
+            {hover ? <InlineCopyButton key={`${hover.kind}:${hover.text}`} hover={hover} /> : null}
         </div>
     );
 });
