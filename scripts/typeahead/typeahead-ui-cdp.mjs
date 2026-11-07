@@ -39,8 +39,19 @@ async function onePanel() {
     return mounted === true;
 }
 
+/*
+ * After each run: its terminal closed and its tab removed. The first run of this script stopped at 8 panes ("no pane
+ * mounted" from run 9): that is the workspace's terminal limit (limit_terminals, default 8) refusing a ninth, not typing.
+ */
+async function tidy() {
+    await cdp.evaluate(`window.genie.terminals.list(${JSON.stringify(workspaceId)}).then((ts) => { for (const t of ts) window.genie.terminals.close(t.id); return ts.length; })`, 15_000).catch(() => 0);
+    await cdp.evaluate(`(() => { document.querySelector('[data-ta-current]')?.closest('[data-designed-tab]')?.querySelector('[data-action="remove-tab"]')?.click(); return true; })()`, 5_000).catch(() => {});
+    await until(async () => (await cdp.evaluate(`window.genie.terminals.list(${JSON.stringify(workspaceId)}).then((ts) => ts.length)`, 10_000).catch(() => 1)) === 0, 15_000, 100).catch(() => {});
+}
+
 async function oneRun(delay) {
     const token = `tu${Math.random().toString(36).slice(2, 10)}`;
+    await tidy();
     if (!(await onePanel())) return { echo: false, ran: false, note: 'no pane mounted' };
     await sleep(delay);
     await cdp.evaluate(`(() => { document.querySelector('[data-ta-current] textarea')?.focus(); return true; })()`, 5_000);
