@@ -60,6 +60,37 @@ function fill(n: number, bodyChars = 300): string[] {
     return ids;
 }
 
+/*
+ * The same nodes as fill() (titles, bodies, tags, scopes, classes, times, wikilink and explicit edges), written through
+ * the store's own one-transaction path (importFromV1) instead of one add() and one commit each. 600 commits with large
+ * bodies took this file over vitest's 30 s on Windows runners (genie#1648's unit (windows), job 128340139784); the rows
+ * that need 600 nodes read them, they do not test add(), which fill() and the 90-node rows still go through.
+ */
+function fillFast(n: number, bodyChars = 300): string[] {
+    const ids: string[] = [];
+    const nodes = [];
+    for (let i = 0; i < n; i += 1) {
+        const id = `kn_fast${String(i).padStart(5, '0')}`;
+        const pad = i % 7 === 0 ? '  \n\n\t   '.repeat(200) : '';
+        const body = `${pad}Note ${i} about redis and caddy.  ${i > 0 ? `See [[Note ${i - 1}]].` : ''} ${i % 6 === 0 ? '[[nowhere]]' : ''}\n${'word '.repeat(Math.ceil(bodyChars / 5))}`;
+        const edges = [
+            ...(i > 0 ? [{ toRef: `Note ${i - 1}`, kind: 'wiki' as const }] : []),
+            ...(i % 6 === 0 ? [{ toRef: 'nowhere', kind: 'wiki' as const }] : []),
+            ...(i % 9 === 0 && i > 0 ? [{ toRef: ids[0]!, kind: 'explicit' as const }] : []),
+        ];
+        const at = now();
+        nodes.push({
+            id, title: `Note ${i}`, body, class: classes[i % 4]!, tags: [`t${i % 4}`, ...(i % 5 === 0 ? ['shared'] : [])],
+            scope: i % 3 === 0 ? system : i % 3 === 1 ? tynn : fancy, source: (i % 2 ? 'agent' : 'user') as 'agent' | 'user',
+            createdAt: at, updatedAt: at, edges,
+        });
+        ids.push(id);
+    }
+    const r = store.importFromV1({ nodes, notes: [] });
+    if (r.imported !== n) throw new Error(`fillFast imported ${r.imported} of ${n}`);
+    return ids;
+}
+
 /** A read-only second handle on the same file, for the reference (old) algorithm. */
 function reference(): DatabaseSync {
     return new DatabaseSync(join(runtimeDir(dir), 'knowledge.db'), { readOnly: true });
@@ -205,7 +236,7 @@ describe('knowledge list: the same pages as before, paged in SQL', () => {
     });
 
     it('a page of 20 out of 600 reads at most 21 rows with a body, not 600', () => {
-        fill(600);
+        fillFast(600);
         const m = meter();
         const r = store.list({ scopes: 'all', limit: 20 });
         expect(r.nodes).toHaveLength(20);
@@ -230,7 +261,7 @@ describe('knowledge search: the same hits as before, paged in SQL', () => {
 
     it('a page of 20 hits out of 600 matches reads at most 21 rows with a body', () => {
         ties = false;
-        fill(600);
+        fillFast(600);
         const m = meter();
         const r = store.search({ query: 'redis', scopes: 'all', limit: 20 });
         expect(r.hits).toHaveLength(20);
@@ -260,8 +291,9 @@ describe('knowledge summaries: what the Dashboard shows, without full bodies or 
         } finally { db.close(); }
     });
 
-    it('200 summaries out of 600 nodes with 20 KB bodies: no edge query, at most 201 rows, and a bounded prefix of each body', () => {
-        fill(600, 20_000);
+    it('200 summaries out of 600 nodes with 4 KB bodies: no edge query, at most 201 rows, and a bounded prefix of each body', () => {
+        fillFast(600, 4_000);
+        // Each body is about 4,065 characters; every seventh is 1,800 more of leading whitespace (about 5,865).
         const m = meter();
         const r = store.summaries({ scopes: 'all', limit: 200 });
         expect(r.hits).toHaveLength(200);
@@ -269,7 +301,10 @@ describe('knowledge summaries: what the Dashboard shows, without full bodies or 
         // Every seventh body starts with 1,800 whitespace characters: those (29 of the 200) are read whole, once more, so
         // their snippet stays exact. Every other row is read as a 1,024-character head.
         expect(m.bodyRows).toBeLessThanOrEqual(201 + 30);
-        expect(m.bodyChars).toBeLessThan(201 * 1024 + 30 * 22_000);
+        // What separates new from old: the old read took every matching body whole (600 x about 4,300 = about 2.6 M
+        // characters, before paging); this page reads 201 heads of 1,024 and the 29 whitespace-headed bodies whole (about
+        // 375 K). The bound sits between them.
+        expect(m.bodyChars).toBeLessThan(201 * 1024 + 30 * 6_000);
     });
 
     it('a window can ask the host for summaries', () => {
