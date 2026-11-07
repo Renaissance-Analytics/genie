@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { HostingReplica, HostingService } from '../src/main/hosting-host.js';
+import { HostingReplica, HostingService, type HostingDump } from '../src/main/hosting-host.js';
 import { wakeWorkspace, type WorkspaceOpsPorts } from '../src/main/workspace-ops-host.js';
 
 function fixture(verify: () => Promise<void>) {
@@ -37,4 +37,19 @@ it('story394: the redock refresh purpose survives the existing window-to-host ho
     type Refresh = (id: string, purpose?: 'redock') => Promise<unknown>;
     await (replica.trust.refresh as Refresh)('workspace', 'redock');
     expect(refreshed).toHaveBeenCalledWith('workspace', 'redock');
+});
+
+it('story394: a hidden registered folder is refused by the hosting replica rather than mistaken for a new folder', async () => {
+    const replica = new HostingReplica(async () => null);
+    const dump: HostingDump & { registeredFolders: readonly string[] } = {
+        frontDoorPort: 0, browserTrust: { caPem: null, reason: 'fixture' }, externalFrontDoor: { running: false, reason: 'fixture' },
+        routes: [], configuredHosts: [], deckItems: [], sites: [], specs: {}, declared: {}, engines: [], dependents: {}, reconcile: null, problems: [],
+        workspaces: { awake: { env: {}, choices: [], toRelease: [], toResume: [], path: '/fixture/awake' } },
+        registeredFolders: ['/fixture/awake', '/fixture/ghost'],
+        trust: [{ workspaceId: 'awake', path: '/fixture/awake', trusted: true, changed: false, list: { sites: [], hooks: [], servers: [], gitKeys: [], approvals: [] } }],
+    };
+    replica.rebase(dump);
+    expect(await replica.trust.mayWriteInto('/fixture/ghost')).toBe(false);
+    expect(await replica.trust.mayWriteInto('/fixture/awake')).toBe(true);
+    expect(await replica.trust.mayWriteInto('/fixture/new')).toBe(true);
 });
