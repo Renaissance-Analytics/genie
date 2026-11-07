@@ -1,0 +1,33 @@
+name: measure hang-cdp on Windows (Tynn #400)
+
+# MEASURE ONLY, on its own branch, never merged: the hang row ten times over, with the inspector and debugger ports'
+# holders printed while it waits (scripts/hang-cdp.mjs), until "after-hang-2: no inspector" shows again.
+on:
+  push:
+    branches: ['measure/hang-inspector']
+
+permissions:
+  contents: read
+
+jobs:
+  hang:
+    name: hang-cdp run ${{ matrix.run }}
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: a hung window is ended and opened again
+        shell: pwsh
+        run: |
+          node scripts/hang-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "hang-cdp failed (exit $LASTEXITCODE)" }
