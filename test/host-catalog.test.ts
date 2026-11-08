@@ -2,7 +2,7 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startHostMcp, type HostMcp, type HostMcpPorts } from '../src/main/host-mcp.js';
 import { hostPluginTools, PluginsService } from '../src/main/plugins-host.js';
 import { PluginsReplica } from '../src/main/plugins-replica.js';
@@ -21,6 +21,15 @@ const SHEET = 'ai.genie.spreadsheet.createWorkbook';
 let dir: string;
 let mcp: HostMcp | null = null;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-host-catalog-')); });
+/**
+ * The MCP server remembers its endpoint in a PRIVATE file it writes without waiting (host-mcp.ts `remember.write`), and on
+ * Windows that write ends by restricting the file's ACL. A test that removes its folder at once races that ACL step, which
+ * then fails on a file that is gone (test/helpers/acl-guard.ts counts it). The endpoint files live in a folder kept for
+ * the whole file, removed once every write has long finished.
+ */
+let endpoints: string;
+beforeAll(async () => { endpoints = await mkdtemp(join(tmpdir(), 'genie-host-catalog-endpoints-')); });
+afterAll(async () => { await rm(endpoints, { recursive: true, force: true }); });
 afterEach(async () => { await mcp?.stop(); mcp = null; await rm(dir, { recursive: true, force: true }); });
 
 const never = () => { throw new Error('not exercised'); };
@@ -36,7 +45,7 @@ function ports(plugins: NonNullable<HostMcpPorts['plugins']>, windowConnected: (
         window: { connected: windowConnected, call: async () => ({ text: 'forwarded to a window', isError: true }) },
         openFileLater: () => {},
         signal: () => {},
-        endpointFile: join(dir, 'mcp-endpoint.json'),
+        endpointFile: join(endpoints, `mcp-endpoint-${Math.random().toString(36).slice(2)}.json`),
         osaDir: join(dir, 'osa'),
         log: () => {},
         plugins,
