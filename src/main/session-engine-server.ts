@@ -550,6 +550,12 @@ export class SessionEngineServer {
             if (args[0] !== 'dismiss') throw new Error('engine.crash takes dismiss');
             return this.#options.crash.dismiss();
         }
+        // Remote access is the host's own too (Tynn #409), up before any agent engine: a phone may already be connected.
+        if (method === 'engine.remoteAccess') {
+            if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
+            if (!conn.local) throw new Error('Remote access is driven from a local window only.');
+            return this.#options.remoteAccess.call(conn.id, typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
+        }
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
         const id = (i = 0): AgentId => {
@@ -778,10 +784,6 @@ export class SessionEngineServer {
             case 'engine.configSync':
                 if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
                 return this.#options.configSync((args[0] ?? {}) as WorkspaceConfigRequest);
-            case 'engine.remoteAccess':
-                if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
-                if (!conn.local) throw new Error('Remote access is driven from a local window only.');
-                return this.#options.remoteAccess.call(conn.id, str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.deviceLink':
                 if (!this.#options.deviceLink) throw new Error('This host dials no other machines.');
                 return this.#options.deviceLink.call(conn.id, str(0), Array.isArray(args[1]) ? args[1] : []);
