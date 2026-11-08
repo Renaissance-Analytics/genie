@@ -210,6 +210,18 @@ export function sliceVerdict({ on, off }, { p95SlackMs = 10, maxFrameGapMs = 100
  * re-attaches it with a short snapshot, under the cap again. The median input acknowledged past the cap at least
  * `minRatio` of below it, and the median worst frame gap past it within `maxFrameGapMs`.
  */
+/**
+ * WHAT A TERMINAL VIEW HOLDS (Tynn #544): the page's heap after a flood, against before it, each after a forced
+ * collection. A view that keeps its terminal's newest `capChars` holds that and `slackBytes` besides (xterm's own
+ * scrollback, the page's churn); one that keeps everything holds the flood.
+ */
+export function heldVerdict({ floodBytes, growthBytes }, { capChars = 2_000_000, slackBytes = 4_000_000 } = {}) {
+    const mb = (v) => Math.round(v / 100_000) / 10, bound = capChars + slackBytes, reasons = [];
+    if (!Number.isFinite(growthBytes)) reasons.push('the heap was not read before and after the flood');
+    else if (growthBytes > bound) reasons.push(`the view held ${mb(growthBytes)} MB more after a ${mb(floodBytes)} MB flood (bound ${mb(bound)} MB: the ${mb(capChars)} MB cap and ${mb(slackBytes)} MB besides)`);
+    return { ok: reasons.length === 0, floodBytes, growthBytes, boundBytes: bound, reasons };
+}
+
 export function capVerdict({ below, past }, { minRatio = 0.9, maxFrameGapMs = 100, maxScriptOverMsPerS = 50, minSlices = 3 } = {}) {
     const reasons = [], r2 = (v) => (v === null ? null : Math.round(v * 100) / 100);
     const belowCount = median(below.map((x) => x.count)), pastCount = median(past.map((x) => x.count)), pastGap = median(past.map((x) => x.worstGapMs));

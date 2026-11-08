@@ -165,6 +165,8 @@ export interface EngineServerOptions {
     readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
     readonly flows?: FlowsService;
+    /** The host's plugins (ADF A3: plugins-host.ts). Absent = `engine.plugins` is refused and no window is told of any. */
+    readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -288,6 +290,9 @@ export class SessionEngineServer {
         });
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
+        });
+        options.plugins?.onEvent((dump) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'plugins.event', dump);
         });
         options.browser?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'browser.event', event);
@@ -489,6 +494,8 @@ export class SessionEngineServer {
         }
         if (this.#options.issueWatch && conn.local) this.#event(conn, 'issueWatch.dump', this.#options.issueWatch.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
+        // The plugins BEFORE ready (ADF A3): a window lists them and routes files to their editors as soon as it connects.
+        if (this.#options.plugins) this.#event(conn, 'plugins.event', this.#options.plugins.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
         // Safe mode BEFORE ready: the window's own boot restore holds on it (relaunch-restore.ts).
@@ -676,6 +683,10 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.plugins':
+                if (!this.#options.plugins) throw new Error('This host keeps no plugins.');
+                if (!conn.local) throw new Error('Genie’s plugins are changed from a local window only.');
+                return this.#options.plugins.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.appInbox':
                 if (!this.#options.appInbox) throw new Error('This host runs no app door.');
                 if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');

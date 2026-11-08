@@ -8,6 +8,8 @@ genie-host validates every definition against the schemas these pages are genera
 
 Catalog schema version: 1.
 
+A package is signed over every file in it: [the package format](packages.md) (`genie-package/1`).
+
 ## Contribution families
 
 | Family | Status | Side | What it is |

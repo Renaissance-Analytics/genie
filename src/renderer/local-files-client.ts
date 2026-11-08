@@ -5,6 +5,7 @@ import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesProjection, ty
 import type { GenieBridge } from './bridge.js';
 import { applyFilesState, isFilesStateSince, projectFilesState, type FilesStateKept } from '../core/files-state-cursor.js';
 import type { FilesState } from '../main/files-host.js';
+import { readCoalescer, unlimited, type HeldLimit } from './local-content-client.js';
 
 type FilesContentKey = 'tree' | 'children' | 'open' | 'readMedia' | 'lastCommitted' | 'state' | 'gitStatus' | 'create' | 'rename' | 'duplicate' | 'trash' | 'readBytes' | 'write' | 'writeBytes';
 export type FilesProtocolKey = FilesContentKey | 'subscribe' | 'onChange';
@@ -67,8 +68,8 @@ export function filesContentReader(port: { release(ref: string): Promise<unknown
     };
 }
 
-export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient }): { files: Pick<GenieBridge['files'], FilesContentKey>; repo: NonNullable<GenieBridge['repo']> } {
-    const decodeResult = filesContentReader(port);
+export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient; limit?: HeldLimit }): { files: Pick<GenieBridge['files'], FilesContentKey>; repo: NonNullable<GenieBridge['repo']> } {
+    const decodeResult = filesContentReader(port), limit = port.limit ?? unlimited, coalesce = readCoalescer();
     /*
      * FILES STATE BY CURSOR (Tynn #522): this window keeps each workspace's state and asks only for what changed since its
      * last read; every view is answered with the whole state, as a full read would say it.
@@ -99,18 +100,20 @@ export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...ar
                 }
             }
             if (new TextEncoder().encode(JSON.stringify(sent)).length > FILES_INLINE_BYTES) throw new Error('these Files arguments are too large for one bounded call');
-            const result = await port.read<unknown>(method, ...sent);
-            return await decodeResult<T>(result);
+            // From the call until its response is released: that is how long the host can hold it (Tynn #547).
+            return await limit(async () => decodeResult<T>(await port.read<unknown>(method, ...sent)));
         } finally { if (staged !== null) { try { await port.uploads.abort(staged); } catch { console.warn('[genie] a Files stage could not be released'); } } }
     };
+    /** A READ joins the same read already queued (Tynn #547); writes always run. */
+    const read = <T>(method: LocalFilesMethod, rawArgs: unknown[]): Promise<T> => coalesce(method + JSON.stringify(fileArguments(method, rawArgs)), () => request<T>(method, rawArgs));
     return {
         files: {
-            tree: id => request('files.tree', [id]), children: (id, dir) => request('files.localChildren', [id, dir]),
-            open: (id, path) => request('files.localOpen', [id, path]), readMedia: (id, path) => request('files.localReadMedia', [id, path]),
-            lastCommitted: (id, path) => request('files.lastCommitted', [id, path]), state, gitStatus: id => request('files.gitStatus', [id]),
+            tree: id => read('files.tree', [id]), children: (id, dir) => read('files.localChildren', [id, dir]),
+            open: (id, path) => read('files.localOpen', [id, path]), readMedia: (id, path) => read('files.localReadMedia', [id, path]),
+            lastCommitted: (id, path) => read('files.lastCommitted', [id, path]), state: id => coalesce('files.state' + JSON.stringify([typeof id === 'string' ? id : null]), () => state(id)), gitStatus: id => read('files.gitStatus', [id]),
             create: (id, path, kind) => request('files.create', [id, path, kind]), rename: (id, from, to) => request('files.rename', [id, from, to]),
             duplicate: (id, path) => request('files.duplicate', [id, path]), trash: (id, path) => request('files.trash', [id, path]),
-            readBytes: (id, plugin, path) => request('files.readBytes', [id, plugin, path]), write: (id, path, text, expected) => request('files.write', [id, path, text, expected]),
+            readBytes: (id, plugin, path) => read('files.readBytes', [id, plugin, path]), write: (id, path, text, expected) => request('files.write', [id, path, text, expected]),
             writeBytes: (id, plugin, path, base64, expected) => request('files.writeBytes', [id, plugin, path, base64, expected]),
         },
         repo: { call: (op, id, rel, a, b) => request('repo.call', [op, id, rel, a, b]) },

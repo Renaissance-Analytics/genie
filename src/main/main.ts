@@ -243,12 +243,11 @@ import type { InboxStore } from './inbox-store.js';
 import type { AttentionStore } from './attention-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
+import { localPluginTools } from './plugins-host.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
-import { launchSubprocessIn, runPluginTool } from './plugin-runner.js';
-import { runOfficialTool } from './official-tools.js';
 import { artboardReadFiles, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
@@ -2822,6 +2821,8 @@ async function boot(): Promise<void> {
         // FLOWS ARE GENIE-HOST'S (P3.3d): an armed flow fires on its clock with no window; this window edits, arms and runs
         // them through the replica.
         ...(agentEngineLink ? { flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() } } : {}),
+        // The plugins are genie-host's (ADF A3, Tynn #447): this window reads them through the replica.
+        ...(agentEngineLink ? { plugins: agentEngineLink.client.plugins() } : {}),
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
@@ -3487,28 +3488,16 @@ async function boot(): Promise<void> {
             flows: { store: composed.flows, runNow: (id: string) => composed.flowScheduler.runNow(id) },
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
             serviceExec: runServiceExec,
-            plugins: {
-                tools: () => composed.plugins.tools(),
-                guard: (id) => composed.plugins.guard(id),
-                // An official plugin's tool is Genie's own code (main/official-tools.ts), run in-process under the same guard.
-                run: (input) => input.official ? runOfficialTool({ pluginId: input.manifest.id, tool: input.tool.name, args: input.args, caller: input.caller, manifest: input.manifest }) : runPluginTool({
-                    pluginDir: input.dir,
-                    tool: input.tool,
-                    args: input.args,
-                    caller: { agentName: input.caller.agentName, workspaceId: input.caller.workspaceId, workspacePath: input.caller.workspacePath },
-                    guard: input.guard,
-                    // The genie API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
-                    api: async (method, params) => {
-                        if (method === 'knowledge.search') return composed.knowledge.search({ ...(typeof params === 'object' && params !== null ? params : {}) } as never);
-                        throw new Error(`${method} is not offered to plugins`);
-                    },
-                    // genie#871: sandboxed — its folder, the workspace only if declared, the declared hosts only.
-                    launch: launchSubprocessIn(join(genieRoot(), 'plugin-sandbox')),
-                    capabilities: input.manifest.capabilities,
-                    timeoutMs: 30_000,
-                    label: `${input.manifest.id}.${input.tool.name}`,
-                }),
-            },
+            // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window, so
+            // this window serves none — unless there is NO host (the emergency path): then its own, as it always did.
+            plugins: composed.ownPlugins ? localPluginTools(composed.ownPlugins, {
+                sandboxDir: join(genieRoot(), 'plugin-sandbox'),
+                // The genie API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
+                api: async (method, params) => {
+                    if (method === 'knowledge.search') return composed.knowledge.search({ ...(typeof params === 'object' && params !== null ? params : {}) } as never);
+                    throw new Error(`${method} is not offered to plugins`);
+                },
+            }) : { tools: () => [], guard: () => null, run: async () => ({ ok: false, reason: "a plugin's tool runs in Genie's host, not this window" }) },
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;
@@ -3532,7 +3521,6 @@ async function boot(): Promise<void> {
                     workspaceNames: Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? w.id])),
                     userActive: powerMonitor.getSystemIdleTime() < 120,
                     callers: takeOvers?.callers() ?? {},
-                    pluginTools: composed.plugins.tools(),
                 };
             };
             let pushTimer: ReturnType<typeof setTimeout> | null = null;

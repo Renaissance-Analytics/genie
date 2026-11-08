@@ -1,5 +1,6 @@
 import { applyTreeChanges, type FilesWatchMethod, type FilesWatchPush, type FilesWatchState } from '../core/local-files-watch.js';
 import type { FilesViewEvent, FilesViewWant, GenieBridge } from './bridge.js';
+import { unlimited, type HeldLimit } from './local-content-client.js';
 
 interface View { id: string; listener: (event: FilesViewEvent) => void }
 /** `tree`: the git tree of revision `git` as this window holds it (Tynn #523: pushes carry only its changes). */
@@ -10,7 +11,9 @@ export function localFilesWatchClient(port: {
     decode<T>(result: unknown): Promise<T>;
     on(listener: (push: unknown) => void): () => void;
     refusal(reason: string): void;
+    limit?: HeldLimit;
 }) {
+    const limit = port.limit ?? unlimited;
     const groups = new Map<string, Group>(), changes = new Set<(id: string, paths?: readonly string[]) => void>();
     let sequence = 0, closed = false;
     const active = (id: string, group: Group) => !closed && groups.get(id) === group && group.views.size > 0;
@@ -37,7 +40,7 @@ export function localFilesWatchClient(port: {
             while (active(id, group) && group.wanted > group.revision) {
                 const requested = group.wanted;
                 const view = group.views.values().next().value!;
-                const state = await port.decode<FilesWatchState | null>(await port.read('files.watchState', view.id));
+                const state = await limit(async () => port.decode<FilesWatchState | null>(await port.read('files.watchState', view.id)));
                 if (!active(id, group)) return;
                 if (state && state.revision <= group.revision) continue;
                 if (!state || state.revision < requested) {
