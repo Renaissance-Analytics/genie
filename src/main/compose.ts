@@ -2,15 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
-import { deckItemsFrom, type AskerState } from '../core/deck-sources.js';
-import { folderName } from '../core/workspace-name.js';
+import type { AskerState } from '../core/deck-sources.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
-import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
+import { agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { OS_WORKSPACE } from '../core/os-agent.js';
@@ -41,6 +40,7 @@ import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
 import type { Verification } from './mcp-server.js';
 import { Baton, PairingPins } from '../core/remote.js';
 import { PairApprovals } from '../core/pair-confirm.js';
+import { assembleDeckItems } from './deck-assembly.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import type { AgentSessionsPort } from './flow-runner.js';
@@ -653,33 +653,18 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         deferTrustCertificate: () => hosting.deferTrustCertificate(),
         routes: () => hosting.routes(),
         configuredHosts: () => hosting.configuredHosts(),
-        deckItems: () => {
-            const awake = (input.workspaces?.() ?? []).filter((workspace) => workspace.asleep !== true);
-            const workspaceNames: Record<string, string> = Object.fromEntries(awake.map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)]));
-            const workspaceColors: Record<string, string> = Object.fromEntries(awake.flatMap((w) => {
-                const color = input.workspaceColor?.(w.path) ?? null;
-                return color ? [[w.id, color]] : [];
-            }));
-            return [
-                // An approval is grouped under its workspace on the Deck like a question is, so it carries the same NAME (and colour).
-                ...approvals.deckItems().map((i) => {
-                    const name = i.workspaceId === null ? undefined : workspaceNames[i.workspaceId];
-                    const color = i.workspaceId === null ? undefined : workspaceColors[i.workspaceId];
-                    return name === undefined && color === undefined ? i : { ...i, ...(name === undefined ? {} : { workspaceName: name }), ...(color === undefined ? {} : { workspaceColor: color }) };
-                }),
-                ...hosting.trustDeckItems(),
-                ...deckItemsFrom({
-                    questions: attention.pending(),
-                    userList: attention.allUserItems(),
-                    unreadDms: inbox.unread(HUMAN),
-                    finished: attention.finished(),
-                    agents: Object.fromEntries(agents()),
-                    workspaceNames,
-                    workspaceColors,
-                    ...(input.askerLive ? { asker: input.askerLive } : {}),
-                }),
-            ];
-        },
+        // One assembly for the window's Deck and genie-host's (deck-assembly.ts, Tynn #551).
+        deckItems: () => assembleDeckItems({
+            workspaces: input.workspaces?.() ?? [],
+            workspaceName: input.workspaceName,
+            workspaceColor: input.workspaceColor,
+            approvals: approvals.deckItems(),
+            trust: hosting.trustDeckItems(),
+            attention,
+            inbox,
+            agents: Object.fromEntries(agents()),
+            ...(input.askerLive ? { asker: input.askerLive } : {}),
+        }),
         inboxReminders: ({ run }) => inboxNotices({ agents: agents(), unread: (id) => inbox.unread(id as never), reminders, run }),
         inboxNoticeSettled: (agentId, delivered) => reminders.settled(agentId, delivered),
         appEnv: (source) => appEnvOf(source),

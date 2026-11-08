@@ -85,6 +85,16 @@ import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
 import { hostRemoteApi, RelayBridgeHost, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
+import type { HostApi } from './remote-host.js';
+import { hostAloneApi } from './host-alone-api.js';
+import { Registry } from './registry.js';
+import { FilesHost } from './files-host.js';
+import { fileEventsOf } from '../core/files-panel.js';
+import { gitFileStatus, gitShowHead } from './git-ports.js';
+import { assembleDeckItems } from './deck-assembly.js';
+import { Coalescer, realSchedule } from '../core/coalesce.js';
+import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
+import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileText } from './toolchain-runner.js';
 import { workstationKeyStore } from './workstation-identity.js';
@@ -725,6 +735,8 @@ async function main(): Promise<void> {
     const relayBridge = new RelayBridgeHost((owner, event) => engineRef?.remoteAccessEvent(owner, { kind: 'bridge', event }));
     const remoteHub = transportHub(remoteListen.transport);
     remoteHub.add(relayBridge);
+    /** genie-host's own answers to a phone (Tynn #551): built once its session host is up, below. */
+    let phoneApi: HostApi | null = null;
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
         hostName: hostname(),
@@ -739,6 +751,8 @@ async function main(): Promise<void> {
                 invoke: (method, args) => (engineRef ? engineRef.remoteInvoke(method, args) : Promise.reject(new Error('no Genie window is connected'))),
             },
             onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
+            // The phone's methods and events with every window closed (host-alone-api.ts).
+            alone: () => phoneApi,
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
         }),
     });
@@ -752,7 +766,6 @@ async function main(): Promise<void> {
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
     });
     settings.onChange((key, _value, workspaceId) => { if (key === 'remote_access' && workspaceId === undefined) void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`)); });
-    void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`));
     const engine = new SessionEngineServer({
         token,
         build,
@@ -945,6 +958,78 @@ async function main(): Promise<void> {
         restart: (id) => trustRestart(id),
     });
     host.subscribe((id) => hostVerdicts?.check(id));
+    /*
+     * THE PHONE, WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2): the same host API a window runs (host-alone-api.ts),
+     * over a registry on this host's own registry store, this session host, its attention, inbox and approval stores, and
+     * the workspaces' files. The remote host uses it for the phone's methods only while no window is connected.
+     */
+    const phoneRegistry = new Registry(registryStore);
+    await phoneRegistry.load({ name: hostname(), healthy: true });
+    phoneRegistry.setWorkspaceNamer(workspaceNameFor);
+    phoneRegistry.setProbe((id) => host.probe(id));
+    phoneRegistry.setHandoffProbe((id) => own.attention.lastHandoff(id));
+    phoneRegistry.setSafeMode(() => safeMode.view());
+    phoneRegistry.setHangNotice(() => crashState.view().notice);
+    const phoneAgents = () => Object.fromEntries(hostRegistry.listAgents().map((a) => [a.id as string, { name: a.name, workspaceId: a.workspaceId }]));
+    phoneRegistry.setDeckSource(() => assembleDeckItems({
+        workspaces: hostRegistry.listWorkspaces(),
+        workspaceName: workspaceNameFor,
+        approvals: approvals.deckItems(),
+        trust: hostingStack?.trustDeckItems() ?? [],
+        attention: own.attention,
+        inbox: own.inbox,
+        agents: phoneAgents(),
+    }));
+    // What this host can measure itself: mail agents have not collected, the OS agent working. Flows in flight and GitHub's
+    // block are the window's to say (Tynn #551 notes it); with no window they read none.
+    phoneRegistry.setSignals(() => ({
+        flowsRunning: 0,
+        uncollectedMail: hostRegistry.listAgents().reduce((n, a) => n + own.inbox.unread(a.id).length, 0),
+        githubBlocked: false,
+        osAgentWorking: (() => { const os = hostRegistry.listAgents().find(isOsAgent); return os ? host.probe(os.id)?.turnState === 'working' : false; })(),
+    }));
+    // Its snapshot follows the stores and the sessions, coalesced as the window's is, and only while no window is
+    // connected: a snapshot is built on every touch, and with a window open the window answers.
+    const phoneEstate = new Coalescer<'estate'>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: () => { if (engine.newestLocalWindow() === null) phoneRegistry.touch(); }, schedule: realSchedule, now: () => Date.now() });
+    const phoneTouch = () => { if (engine.newestLocalWindow() === null) phoneEstate.request('estate'); };
+    stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
+    host.subscribe(() => phoneTouch());
+    approvals.onChange(phoneTouch);
+    const phoneFiles = new FilesHost({
+        gitStatus: gitFileStatus,
+        gitShowHead,
+        gitTree: gitTreeStatus,
+        workspace: (id) => hostRegistry.workspace(id),
+        agentsOf: (workspaceId) => hostRegistry.listAgents().filter((a) => a.workspaceId === workspaceId).map((a) => ({ id: a.id, name: a.name })),
+        eventsOf: (agentId) => {
+            const record = hostRegistry.find(agentId);
+            return record ? fileEventsOf(host.rowsFor(record.id), { id: record.id, name: record.name }) : [];
+        },
+    });
+    const phoneCwd = (record: AgentRecord): string => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome;
+    phoneApi = hostAloneApi({
+        hostName: hostname(),
+        registry: phoneRegistry,
+        engine: () => host,
+        cwdFor: phoneCwd,
+        startRefusal: (r) => startRefusal({ registry: hostRegistry }, r, {
+            running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
+            cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
+        }),
+        attention: own.attention,
+        approvals,
+        inbox: own.inbox,
+        deliverToAgent: (agentId, text) => host.deliver(agentId as AgentId, text, 'you'),
+        files: {
+            children: async (workspaceId, dir) => (await phoneFiles.children(workspaceId, dir)) ?? null,
+            open: (workspaceId, path) => phoneFiles.open(workspaceId, path),
+            readBytes: (workspaceId, path) => phoneFiles.readBytes(workspaceId, path),
+            upload: (workspaceId, dir, name, bytes) => phoneFiles.upload(workspaceId, dir, name, bytes),
+        },
+        updates: { state: () => updatesService.dump(), onChange: (listener) => updatesService.onEvent(listener), check: async () => { throw new Error('check for updates from Genie’s window'); }, download: async () => false, install: () => null },
+    });
+    // The tailnet listener starts only now (remote_access on): a phone that connects finds the host's own answers ready.
+    void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`));
     tynnRecovery = hostTynnRecovery({
         watchWake: wallClockJumps,
         names: (asked) => agentKeys.recovery(asked),

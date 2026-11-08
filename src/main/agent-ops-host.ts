@@ -127,7 +127,15 @@ const UNKNOWN: Refusal = { ok: false, reason: 'unknown agent' };
  * interrupted turn and the person's undelivered drafts, in order, once (the owner's beta.45 agents: the resume prompt was
  * recorded `undelivered` and never sent). `fresh` is the separate, named operation that drops the conversation.
  */
-export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' } | { ok: true; kind: 'fresh'; discarded: string | null } | Refusal> {
+/** What a restart reads and writes (Tynn #551): genie-host restarts a phone's agent with no window, over these alone. */
+export interface AgentRestartPorts {
+    readonly registry: Pick<AgentOpsPorts['registry'], 'find' | 'clearThread'>;
+    readonly host: Pick<AgentOpsPorts['host'], 'start' | 'stop' | 'ended' | 'probe' | 'deliverOwed'>;
+    readonly startRefusal: AgentOpsPorts['startRefusal'];
+    readonly cwdFor: AgentOpsPorts['cwdFor'];
+}
+
+export async function restartAgent(ports: AgentRestartPorts, agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' } | { ok: true; kind: 'fresh'; discarded: string | null } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const plan = restartPlan(kind, { threadId: record.threadId });

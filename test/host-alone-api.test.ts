@@ -57,7 +57,7 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
         cwdFor: (r) => (r.workspaceId === 'tynn' ? '/w/tynn' : '/home'),
         startRefusal: () => null,
         attention: {
-            finished: () => [{ id: 'fin_1', agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', text: 'shipped the fix', at: 1 }] as never,
+            finished: () => [{ id: 'fin_1', agentId: atlas.id, agentName: 'atlas', handoff: 'shipped the fix; next, the docs', at: '2026-11-08T20:00:00Z', seen: false }],
             markSeen: (id) => { calls.push(`markSeen ${id}`); },
             answer: async (id, answer) => { calls.push(`answer ${id} ${JSON.stringify(answer.selections)}`); return true as never; },
             lists: { done: async () => true },
@@ -113,12 +113,12 @@ describe('genie-host answers the phone itself', () => {
         const api = hostAloneApi(ports(engine(true)));
         expect(await api.invoke('restartWithHandoff', [atlas.id, 'fin_1'])).toMatchObject({ ok: true });
         expect(calls.slice(0, 4)).toEqual(['stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
-        expect(calls.some((c) => c.startsWith('prompt '))).toBe(true);
+        expect(calls.slice(4)).toEqual(['prompt You are restarting from your own handoff note. Pick up where it leaves off:\n\nshipped the fix; next, the docs by undefined', 'markSeen fin_1']);
     });
 
     it('the Deck answer for a question is answered in the host\'s attention store; any other feature action needs a window', async () => {
         const api = hostAloneApi(ports(engine(true)));
-        const item = { id: 'q_1', source: 'agent-question', agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', title: 'Ship it?', blocking: true, priority: 'high', at: 1, answer: { kind: 'options', options: [{ id: 'yes', label: 'Yes' }] }, forwardedFrom: null };
+        const item = { id: 'q_1', source: 'agent-question', agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', title: 'Ship it?', blocking: true, priority: 'high', at: 1, answer: { kind: 'inline', options: [{ id: 'yes', label: 'Yes' }] }, forwardedFrom: null };
         await api.invoke('features.act', [{ kind: 'deck.answer', item, optionId: 'yes' }]);
         expect(calls).toContain('answer q_1 [["yes"]]');
         await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('open Genie on alphar');
