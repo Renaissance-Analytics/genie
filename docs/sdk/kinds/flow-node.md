@@ -4,7 +4,7 @@
 
 Status: **active**.
 
-Side: set by each definition's `reach.side` (host or client).
+Side: set by each definition's `reach.side` (host, client or both).
 
 A node in the Flows palette. The executor the payload names runs it.
 

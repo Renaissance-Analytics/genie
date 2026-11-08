@@ -4,7 +4,7 @@
 
 Status: **active**.
 
-Side: **host**: genie-host runs it. A definition on the other side is refused.
+Side: **host**: genie-host runs it. A definition on any other side is refused.
 
 An MCP tool agents call. The host runs it with the handler the payload names; it appears in every agent's tool list under its id.
 

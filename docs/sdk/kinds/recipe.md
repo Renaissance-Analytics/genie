@@ -4,7 +4,7 @@
 
 Status: **active**.
 
-Side: set by each definition's `reach.side` (host or client).
+Side: set by each definition's `reach.side` (host, client or both).
 
 A guided sequence of steps the person walks through.
 
