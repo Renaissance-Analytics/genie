@@ -108,7 +108,8 @@ it('the actual spawn producer announces its counter-bearing protocol version', (
     const f = producer(); expect(f.payloads('host.ready')[0]).toMatchObject({ protocol: 2 }); f.close();
 });
 it('versions the counter-bearing engine protocol', async () => {
-    const engineFile: string = '../src/core/engine-protocol.js'; expect((await import(engineFile)).ENGINE_PROTOCOL).toBe(2);
+    // 3 since ADF A4 (Tynn #448): the catalog over the engine connection.
+    const engineFile: string = '../src/core/engine-protocol.js'; expect((await import(engineFile)).ENGINE_PROTOCOL).toBe(3);
 });
 it('classifies TakeOver as the existing window capability it opens', () => {
     expect(IPC_INVENTORY.find(([channel]) => channel === 'genie:take-over')?.[1]).toBe('window-port');

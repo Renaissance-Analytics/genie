@@ -19,7 +19,7 @@ import { parseFrame, type Frame } from './remote-protocol.js';
  */
 
 /** Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced. */
-export const ENGINE_PROTOCOL = 2;
+export const ENGINE_PROTOCOL = 3;
 
 /**
  * What a link says in its `hello`. A WINDOW answers the host's calls to it (a forwarded tool, an elevation); the Genie
@@ -129,6 +129,12 @@ export const ENGINE_METHODS = [
     // The host's plugins (ADF A3, Tynn #447: plugins-host.ts): `[method, args]` — a LOCAL window's setEnabled or refresh.
     // Their state is sent as `plugins.event` before `engine.ready` and again on every change.
     'engine.plugins',
+    // THE CATALOG (ADF A4, Tynn #448: protocol 3). `catalog.snapshot []` answers `{ revision, definitions }`, also sent as
+    // the `catalog.snapshot` event before `engine.ready`; every change is pushed as `catalog.changed` (upserts and
+    // removals from a base revision; a window that missed one asks for the snapshot again). `catalog.docs [kind, id]`
+    // answers one element's definition, or null.
+    'catalog.snapshot',
+    'catalog.docs',
     // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
     'engine.browser',
     'engine.flows',

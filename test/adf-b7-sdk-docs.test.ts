@@ -30,7 +30,10 @@ function onDisk(): Map<string, string> {
 const envelope = (spec: KindSpec) => ({
     id: `com.example.docs.${spec.kind.replace(/-/g, '_')}`, kind: spec.kind, version: '1.0.0', packageId: 'com.example.docs', source: 'plugin',
     docs: { name: spec.kind, description: `An example ${spec.kind}.` },
-    reach: { scopes: ['workspace'], side: (spec.kind === 'panel' || spec.kind === 'editor' ? 'client' : 'host') as string, requiresWindow: false, remote: 'local' },
+    reach: {
+        scopes: ['workspace'], side: (spec.kind === 'panel' ? 'client' : spec.kind === 'editor' ? 'both' : 'host') as string, requiresWindow: false, remote: 'local',
+        ...(spec.kind === 'editor' ? { link: { calls: ['files.readBytes', 'files.writeBytes'], events: [] } } : {}),
+    } as Record<string, unknown>,
     permissions: { capabilities: [] },
     payload: structuredClone(spec.example),
 });
@@ -91,59 +94,61 @@ describe('what the docs say', () => {
     it('the envelope page lists every field of the envelope, with the defaults the validator fills', () => {
         const page = renderSdkDocs().get('envelope.md')!;
         for (const f of ENVELOPE_FIELDS) expect(page, f.name).toContain(`| \`${f.name}\` |`);
-        expect(ENVELOPE_FIELDS.find((f) => f.name === 'aliases')?.default).toEqual([]);
+        // No Genie 1 aliases (the owner's ruling q_d71981d6): the field is gone.
+        expect(ENVELOPE_FIELDS.find((f) => f.name === 'aliases')).toBeUndefined();
         expect(ENVELOPE_FIELDS.find((f) => f.name === 'permissions.network')?.default).toEqual([]);
     });
 });
 
-describe('each element\'s side: the host, a client, or (not yet expressible) both', () => {
-    // The owner's ruling (2026-11-08): the ADF models the client/host relationship. A1's envelope carries one side per
-    // definition (`reach.side`: host or client). A family Genie runs today has a fixed side, enforced; the others leave
-    // it to each definition; "both" cannot be said yet and the docs say it comes with A4.
-    const FIXED: Record<string, 'host' | 'client'> = { tool: 'host', panel: 'client', editor: 'client' };
+describe('each element\'s side: the host, a client, or both (the owner\'s ruling q_d71981d6)', () => {
+    // The ADF models the client/host relationship: every element declares where it runs, and an element on both sides
+    // declares how its halves talk (`reach.link`). A family Genie runs today allows only the sides it can run on.
+    const ALLOWED: Record<string, readonly string[]> = { tool: ['host'], panel: ['client', 'both'], editor: ['both'], 'host-service': ['host', 'both'] };
+    const onSide = (spec: KindSpec, side: string) => {
+        const def = envelope(spec);
+        def.reach = { ...def.reach, side };
+        if (side === 'both') def.reach.link = { calls: ['files.readBytes'], events: [] };
+        else delete def.reach.link;
+        return def;
+    };
 
-    it('the index shows every family\'s side', () => {
+    it('the index shows every family\'s sides', () => {
         const index = renderSdkDocs().get('README.md')!;
         expect(index).toContain('| Family | Status | Side | What it is |');
         for (const spec of KIND_SPECS) {
-            const side = FIXED[spec.kind] ?? 'per definition';
+            const side = ALLOWED[spec.kind]?.join(' or ') ?? 'per definition';
             expect(index, spec.kind).toContain(`| [${spec.kind}](kinds/${spec.kind}.md) | ${spec.status} | ${side} |`);
         }
     });
 
-    it('each family\'s page says its side; the envelope page says "both" is not expressible yet and comes with A4', () => {
+    it('each family\'s page says its sides; the envelope page says how an element on both sides talks (reach.link)', () => {
         const docs = renderSdkDocs();
         for (const spec of KIND_SPECS) {
             const page = docs.get(`kinds/${spec.kind}.md`)!;
-            const side = FIXED[spec.kind];
-            if (side) expect(page, spec.kind).toContain(`Side: **${side}**`);
+            const sides = ALLOWED[spec.kind];
+            if (sides) expect(page, spec.kind).toContain(`Side: ${sides.map((s) => `**${s}**`).join(' or ')}`);
             else expect(page, spec.kind).toContain('Side: set by each definition\'s `reach.side`');
         }
         const envelope = docs.get('envelope.md')!;
-        expect(envelope).toMatch(/both[\s\S]*A4/);
+        expect(envelope).toMatch(/both[\s\S]*reach\.link/);
+        expect(envelope).toContain('| `reach.link` |');
     });
 
-    it('a definition of a fixed-side family on the other side is refused, naming the side it must be', () => {
-        for (const [kind, side] of Object.entries(FIXED)) {
+    it('a definition of a fixed family on a side it does not allow is refused, naming the sides it may be', () => {
+        for (const [kind, sides] of Object.entries(ALLOWED)) {
             const spec = KIND_SPECS.find((k) => k.kind === kind)!;
-            const right = envelope(spec);
-            right.reach.side = side;
-            expect(validateDefinition(right).ok, `${kind} on ${side}`).toBe(true);
-            const wrong = envelope(spec);
-            wrong.reach.side = side === 'host' ? 'client' : 'host';
-            const r = validateDefinition(wrong);
-            expect(r.ok, `${kind} on the wrong side`).toBe(false);
-            if (!r.ok) expect(r.problems.join('\n')).toContain(`reach.side must be "${side}"`);
+            for (const side of sides) expect(validateDefinition(onSide(spec, side)).ok, `${kind} on ${side}`).toBe(true);
+            for (const side of ['host', 'client', 'both'].filter((s) => !sides.includes(s))) {
+                const r = validateDefinition(onSide(spec, side));
+                expect(r.ok, `${kind} on ${side}`).toBe(false);
+                if (!r.ok) expect(r.problems.join('\n')).toContain(`reach.side must be ${sides.map((s) => `"${s}"`).join(' or ')}`);
+            }
         }
     });
 
-    it('CONTROL: a family that leaves the side to its definitions accepts either', () => {
+    it('CONTROL: a family that leaves the side to its definitions accepts any', () => {
         const spec = KIND_SPECS.find((k) => k.kind === 'recipe')!;
-        for (const side of ['host', 'client']) {
-            const def = envelope(spec);
-            def.reach.side = side;
-            expect(validateDefinition(def).ok, side).toBe(true);
-        }
+        for (const side of ['host', 'client', 'both']) expect(validateDefinition(onSide(spec, side)).ok, side).toBe(true);
     });
 });
 
@@ -171,11 +176,11 @@ describe('the docs and the validator read the same schema', () => {
         expect(required).toBeGreaterThanOrEqual(5);
     });
 
-    it('each documented default is the one filled in: a definition without aliases or network gets []', () => {
+    it('each documented default is the one filled in: a definition without network gets []', () => {
         const spec = KIND_SPECS.find((k) => k.kind === 'tool')!;
         const r = validateDefinition(envelope(spec));
         expect(r.ok).toBe(true);
-        if (r.ok) expect(r.definition).toMatchObject({ aliases: [], permissions: { network: [] } });
+        if (r.ok) expect(r.definition).toMatchObject({ permissions: { network: [] } });
     });
 
     it('an envelope key the docs do not name is refused, and every key they name is accepted', () => {
@@ -184,7 +189,7 @@ describe('the docs and the validator read the same schema', () => {
         const r = validateDefinition(extra);
         expect(r.ok).toBe(false);
         if (!r.ok) expect(r.problems.join('\n')).toContain('unknown key "owner"');
-        const full = { ...envelope(spec), aliases: ['com.example.docs.other'], docs: { name: 'x', description: 'y', guide: 'z' }, permissions: { capabilities: [], network: [] } };
+        const full = { ...envelope(spec), docs: { name: 'x', description: 'y', guide: 'z' }, permissions: { capabilities: [], network: [] } };
         const named = new Set(ENVELOPE_FIELDS.map((f) => f.name));
         for (const key of Object.keys(full)) expect(named.has(key), key).toBe(true);
         expect(validateDefinition(full).ok).toBe(true);

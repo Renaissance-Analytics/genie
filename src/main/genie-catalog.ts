@@ -41,8 +41,24 @@ export interface PackageDeclaration {
 
 /** An MCP tool runs on the host, for an agent of this machine. */
 const TOOL_REACH: ElementDefinition['reach'] = { scopes: ['workspace'], side: 'host', requiresWindow: false, remote: 'local' };
-/** An editor or panel is drawn by a window, which may be another machine's. */
-const VIEW_REACH: ElementDefinition['reach'] = { scopes: ['workspace'], side: 'client', requiresWindow: true, remote: 'allowed' };
+/**
+ * An editor or panel is drawn by a window, which may be another machine's. Where its vetted adapter works on the host's
+ * data, it runs on BOTH sides, over these host calls (the owner's ruling q_d71981d6); a panel that only draws its props
+ * is the client's alone.
+ */
+const ADAPTER_LINKS: Readonly<Record<string, readonly string[]>> = {
+    Editor: ['files.readBytes', 'files.writeBytes'],
+    SheetWorkbook: ['files.readBytes', 'files.writeBytes'],
+    DeckEditor: ['files.readBytes', 'files.writeBytes'],
+    RepoChangesPanel: ['repo.call'],
+    ArtBoardPanel: ['artboard.read', 'artboard.review'],
+};
+function viewReach(adapter: string): ElementDefinition['reach'] {
+    const calls = ADAPTER_LINKS[adapter];
+    return calls
+        ? { scopes: ['workspace'], side: 'both', requiresWindow: true, remote: 'allowed', link: { calls, events: [] } }
+        : { scopes: ['workspace'], side: 'client', requiresWindow: true, remote: 'allowed' };
+}
 
 export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclaration {
     return {
@@ -55,7 +71,6 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
             version: BUILTIN_VERSION,
             packageId: BUILTIN_PACKAGE_ID,
             source: 'builtin',
-            aliases: [],
             docs: { name: t.title, description: t.description },
             reach: TOOL_REACH,
             permissions: { capabilities: [], network: [] },
@@ -69,7 +84,7 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
  * with source `builtin` (they are compiled into the signed app); an installed one, with `plugin`.
  */
 export function pluginPackage(manifest: PluginManifest, source: ElementSource): PackageDeclaration {
-    const base = { version: manifest.version, packageId: manifest.id, source, aliases: [] as string[] };
+    const base = { version: manifest.version, packageId: manifest.id, source };
     const permissions = {
         capabilities: [...manifest.capabilities.genieApi, ...(manifest.capabilities.fs ? ['fs:workspace'] : [])],
         network: [...manifest.capabilities.network.hosts],
@@ -83,12 +98,12 @@ export function pluginPackage(manifest: PluginManifest, source: ElementSource): 
         };
     });
     const editors: ElementDefinition[] = (manifest.editors ?? []).map((e) => ({
-        ...base, id: `${manifest.id}.${e.id}`, kind: 'editor', reach: VIEW_REACH, permissions,
+        ...base, id: `${manifest.id}.${e.id}`, kind: 'editor', reach: viewReach(e.fancyEditor.export), permissions,
         docs: { name: e.title, description: `${manifest.name}: opens ${e.extensions.join(', ')} in ${e.title}.` },
         payload: { title: e.title, extensions: [...e.extensions], fancyEditor: e.fancyEditor.export },
     }));
     const panels: ElementDefinition[] = manifest.panels.map((p) => ({
-        ...base, id: `${manifest.id}.${p.id}`, kind: 'panel', reach: VIEW_REACH, permissions,
+        ...base, id: `${manifest.id}.${p.id}`, kind: 'panel', reach: viewReach(p.fancyComponent.export), permissions,
         docs: { name: p.title, description: `${manifest.name}: the ${p.title} panel.` },
         payload: { title: p.title, fancyComponent: p.fancyComponent.export, props: { ...p.props } },
     }));
@@ -111,5 +126,23 @@ export function genieCatalog(opts: { builtins?: readonly BuiltinTool[] } = {}): 
         const r = catalog.register(pkg);
         if (!r.ok) throw new Error(`builtin package ${pkg.id} was refused by the catalog: ${r.problems.join('; ')}`);
     }
+    return catalog;
+}
+
+/**
+ * THE HOST'S CATALOG NOW (ADF A4): Genie's own, then every ENABLED installed plugin as its own package. One that does not
+ * register (it does not validate, or it poses as a package already there) is left out, as allGenieTools leaves it out.
+ */
+export function hostCatalog(plugins: { tools(): readonly { pluginId: string; manifest: PluginManifest; official?: boolean }[]; manifests?(): Readonly<Record<string, PluginManifest>>; list?(): readonly { id: string; state: string }[] }): Catalog {
+    const catalog = genieCatalog();
+    const enabled = new Map<string, PluginManifest>();
+    for (const ref of plugins.tools()) if (ref.official !== true) enabled.set(ref.pluginId, ref.manifest);
+    // A plugin with editors or panels but no tools is in the catalog too.
+    const manifests = plugins.manifests?.() ?? {};
+    for (const entry of plugins.list?.() ?? []) {
+        const m = manifests[entry.id];
+        if (entry.state === 'enabled' && m && !catalog.packages().some((p) => p.id === entry.id)) enabled.set(entry.id, m);
+    }
+    for (const manifest of enabled.values()) catalog.register(pluginPackage(manifest, 'plugin'));
     return catalog;
 }

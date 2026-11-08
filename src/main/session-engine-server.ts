@@ -165,6 +165,8 @@ export interface EngineServerOptions {
     readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
     readonly flows?: FlowsService;
+    /** The host's catalog (ADF A4: catalog-host.ts). Absent = `catalog.*` is refused and no window is sent one. */
+    readonly catalog?: Pick<import('./catalog-host.js').CatalogService, 'snapshot' | 'docs' | 'onEvent'>;
     /** The host's plugins (ADF A3: plugins-host.ts). Absent = `engine.plugins` is refused and no window is told of any. */
     readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
@@ -290,6 +292,9 @@ export class SessionEngineServer {
         });
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
+        });
+        options.catalog?.onEvent((change) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'catalog.changed', change);
         });
         options.plugins?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'plugins.event', dump);
@@ -494,6 +499,8 @@ export class SessionEngineServer {
         }
         if (this.#options.issueWatch && conn.local) this.#event(conn, 'issueWatch.dump', this.#options.issueWatch.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
+        // The catalog BEFORE ready (ADF A4): a window has the snapshot it follows changes from as soon as it connects.
+        if (this.#options.catalog) this.#event(conn, 'catalog.snapshot', this.#options.catalog.snapshot());
         // The plugins BEFORE ready (ADF A3): a window lists them and routes files to their editors as soon as it connects.
         if (this.#options.plugins) this.#event(conn, 'plugins.event', this.#options.plugins.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
@@ -531,6 +538,11 @@ export class SessionEngineServer {
             if (!this.#options.crash || !conn.local) throw new Error('This window is not told about crashes here.');
             if (args[0] !== 'dismiss') throw new Error('engine.crash takes dismiss');
             return this.#options.crash.dismiss();
+        }
+        // The catalog is the host's own, ready before any agent engine is (ADF A4): answered here.
+        if (method === 'catalog.snapshot' || method === 'catalog.docs') {
+            if (!this.#options.catalog) throw new Error('This host keeps no catalog.');
+            return method === 'catalog.snapshot' ? this.#options.catalog.snapshot() : this.#options.catalog.docs(String(args[0] ?? '') as never, String(args[1] ?? ''));
         }
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
