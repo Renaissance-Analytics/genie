@@ -150,6 +150,7 @@ import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
 import { setThreadStoreSlowLog } from '../core/thread-store.js';
+import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 
 /**
@@ -260,6 +261,9 @@ async function main(): Promise<void> {
      */
     // On Windows, one long-lived PowerShell for this host's process readings and its private files (windows-helper.ts). It ends when this process does, however it does.
     if (process.platform === 'win32') setWin32ProcessReader((script) => { const helper = sharedWindowsHelper(); return helper ? helper.run(script).completed.then((r) => r.stdout) : Promise.reject(new Error('no helper')); });
+    // prism-harness 0.10.3's lock identity (a CIM query on Windows), read ASYNCHRONOUSLY and started now; awaited below,
+    // before the session host takes work, so no thread write ever pays for it. A failed read follows the SDK's own retry.
+    const lockIdentity = warmLockIdentity().catch((error: unknown) => { lifecycleLog(`lock identity unread: ${error instanceof Error ? error.message : String(error)}`); });
     const spawnLedger = SpawnLedger.open(join(runtime, 'children.json'), randomUUID());
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
     // prism-acp's supervisor (a Job Object on Windows) before any agent starts: a provider is never run uncontained.
@@ -776,7 +780,7 @@ async function main(): Promise<void> {
             own: { 'updates.state': async () => updatesService.dump() },
             window: {
                 connected: () => (engineRef?.newestLocalWindow() ?? null) !== null,
-                invoke: (method, args) => (engineRef ? engineRef.remoteInvoke(method, args) : Promise.reject(new Error('no Genie window is connected'))),
+                invoke: (method, args, context) => (engineRef ? engineRef.remoteInvoke(method, args, context) : Promise.reject(new Error('no Genie window is connected'))),
             },
             onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
             // The phone's methods and events with every window closed (host-alone-api.ts).
@@ -927,6 +931,7 @@ async function main(): Promise<void> {
     files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
+    await lockIdentity;
     const host = new SessionHost({
         userData: home,
         ...engineHostOptions,

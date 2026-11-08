@@ -10,7 +10,7 @@ import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-o
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { cancelIntent, type CancelIntent, type CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
-import { LOCAL_EVENTS, type RemoteMethod } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { Finished } from './attention-store.js';
@@ -252,7 +252,7 @@ export interface HostApiDeps {
     retryPausedAccount?(provider: string): void;
     features: {
         snapshot(): Promise<FeatureData>;
-        act(action: FeatureAction): Promise<FeatureData>;
+        act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
         /** An alert's own sound as a data URL, by its setting key; `null` when it cannot be read (P4 family 11). */
         soundData?(key: string): Promise<string | null>;
         onChange(listener: (data: FeatureData) => void): () => void;
@@ -280,7 +280,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         return deps.localOwner;
     };
 
-    const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+    const invoke = async (method: RemoteMethod, args: unknown[], context: CallContext = RESTRICTED_CALL_CONTEXT): Promise<unknown> => {
         if (isLocalTerminalMethod(method)) {
             if (!deps.localTerminals) throw new Error('the local terminal service is not available');
             const name = method.slice('terminals.local'.length).toLowerCase();
@@ -642,7 +642,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'features.soundData':
                 return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0]) : null;
             case 'features.act':
-                return deps.features.act(args[0] as FeatureAction);
+                return deps.features.act(args[0] as FeatureAction, context);
             case 'host.listDir':
                 return listHostDir(typeof args[0] === 'string' ? args[0] : '/');
             case 'host.mkdir':

@@ -94,7 +94,7 @@ describe('the workspace lifecycle reaches the API through the local door', () =>
         const preload = { snapshot: async () => ({ workspaces: null }), subscribeAgentWire: () => () => {}, workspaces: { hibernate: oldInvoke, wake: oldInvoke, remove: oldInvoke } } as unknown as PreloadBridge;
         const bridge = pageBridge(preload);
         expect(await bridge.workspaces[row.name]('work')).toEqual(row.result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, ['work']);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, ['work'], expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith('work');
         expect(oldInvoke).not.toHaveBeenCalled();
     });
@@ -119,13 +119,13 @@ describe('the host\'s folders reach the API through the local door', () => {
         await mkdir(join(dir, 'inside'));
         const listing = await bridge.host!.listDir(dir);
         expect(JSON.stringify(listing)).toContain('inside');
-        expect(source.invoke).toHaveBeenCalledWith('host.listDir', [dir]);
+        expect(source.invoke).toHaveBeenCalledWith('host.listDir', [dir], expect.anything());
         const made = await bridge.host!.mkdir!(dir, 'made-here');
         expect(made).toMatchObject({ ok: true });
         expect((await stat(join(dir, 'made-here'))).isDirectory()).toBe(true);
         expect(await bridge.host!.home!()).toBe(homedir());
-        expect(source.invoke).toHaveBeenCalledWith('host.mkdir', [dir, 'made-here']);
-        expect(source.invoke).toHaveBeenCalledWith('host.home', []);
+        expect(source.invoke).toHaveBeenCalledWith('host.mkdir', [dir, 'made-here'], expect.anything());
+        expect(source.invoke).toHaveBeenCalledWith('host.home', [], expect.anything());
         for (const f of Object.values(oldHost)) expect(f).not.toHaveBeenCalled();
     });
 

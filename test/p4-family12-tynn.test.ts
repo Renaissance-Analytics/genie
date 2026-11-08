@@ -115,7 +115,7 @@ describe('the Tynn tab\'s reads and actions reach the API through the local door
         const preload = { snapshot: async () => ({ workspaces: null }), subscribeAgentWire: () => () => {}, workspaces: Object.fromEntries(rows.map((r) => [r.name, old])) } as unknown as PreloadBridge;
         const bridge = pageBridge(preload);
         expect(await row.call(bridge.workspaces)).toEqual(row.result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
         expect(old).not.toHaveBeenCalled();
     });
