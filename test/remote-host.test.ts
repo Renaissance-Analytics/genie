@@ -58,7 +58,7 @@ function client(t: ClientTransport) {
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let id = 0;
     return {
-        hello: async (auth: unknown, label = 'phone') => { t.send(JSON.stringify({ kind: 'hello', auth, label })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
+        hello: async (auth: unknown, label = 'phone', extra: object = {}) => { t.send(JSON.stringify({ kind: 'hello', auth, label, ...extra })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
         call: async (method: string, ...args: unknown[]) => { t.send(JSON.stringify({ kind: 'call', id: ++id, method, args })); return next(); },
         next,
         close: () => t.close(),
@@ -594,7 +594,7 @@ describe('Take over from another machine (Tynn #529 part A)', () => {
     }
     async function companion(token: string, ticket: string) {
         const c = connect();
-        return { c, hello: await c.hello({ kind: 'token', token, companion: ticket }, 'laptop') };
+        return { c, hello: await c.hello({ kind: 'token', token }, 'laptop', { companion: ticket }) };
     }
 
     it('without the baton it is refused, and says so; with it the host starts the TUI and answers its terminal and a ticket', async () => {
@@ -648,7 +648,7 @@ describe('Take over from another machine (Tynn #529 part A)', () => {
         await a.call('baton.take');
         const ticket = await takeOver(a);
         const g = connectRelay({ label: 'wren', isOwner: false, workspaceId: 'tynn', readonly: false });
-        expect(await g.hello({ kind: 'relay', companion: ticket }, 'wren')).toEqual({ kind: 'refused', reason: 'this Take Over ticket belongs to another window' });
+        expect(await g.hello({ kind: 'relay' }, 'wren', { companion: ticket })).toEqual({ kind: 'refused', reason: 'this Take Over ticket belongs to another window' });
         expect((await companion(other, ticket)).hello).toEqual({ kind: 'refused', reason: 'this Take Over ticket belongs to another window' });
         expect((await companion(token, ticket)).hello).toMatchObject({ kind: 'welcome' });
     });

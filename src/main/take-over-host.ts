@@ -95,12 +95,17 @@ export class TakeOverHost {
      * a second TUI on the same persona. AGENT.md names no provider (Tynn story #380): nothing in
      * it refuses a Take Over.
      */
-    start(record: AgentRecord, cwd: string, tui: string): { ok: true; terminalId: string } | { ok: false; reason: string } {
-
+    /**
+     * `window: false` (Tynn #529 part A): the click came from ANOTHER machine, whose own Take Over window attaches to this
+     * terminal over the link — no window here. `started` then says whether this click started the TUI (the remote window
+     * may end it) or found one already open (not its to end).
+     */
+    start(record: AgentRecord, cwd: string, tui: string, options: { window?: boolean } = {}): { ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string } {
+        const window = options.window !== false;
         const existing = this.#live.get(record.id);
         if (existing) {
-            this.#openWindow(`genie://takeover/${existing.terminalId}`);
-            return { ok: true, terminalId: existing.terminalId };
+            if (window) this.#openWindow(`genie://takeover/${existing.terminalId}`);
+            return window ? { ok: true, terminalId: existing.terminalId } : { ok: true, terminalId: existing.terminalId, started: false };
         }
 
         // The attribution id the TUI will pass as `terminalId` on every tool call. Minted HERE, before
@@ -113,6 +118,7 @@ export class TakeOverHost {
         const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, personal: true, limited: false, ...(env === undefined ? {} : { env }) });
         if (env !== undefined) this.#callers.set(callerId, { agentId: record.id, agentName: record.name, workspaceId: record.workspaceId, workspacePath: cwd });
         this.#live.set(record.id, { terminalId: opened.id, startedAt: this.#clock(), lastOutputAt: null, bursts: [] });
+        if (!window) return { ok: true, terminalId: opened.id, started: true };
         this.#openWindow(`genie://takeover/${opened.id}`);
         return { ok: true, terminalId: opened.id };
     }

@@ -812,6 +812,54 @@ function openTakeOverWindow(route: string, activation: Activation): void {
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
 
+/**
+ * TAKE OVER (§1): the agent's TUI in a workspace terminal. `window: true` is this machine's click, with a window here;
+ * `window: false` is another machine's (Tynn #529 part A), whose own Take Over window attaches over the link.
+ */
+function takeOverHere(raw: unknown, options: { window: boolean }): { ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string } {
+    if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
+    const record = registry?.find(raw as AgentId) ?? null;
+    if (!record) return { ok: false, reason: `No agent is registered as ${raw}.` };
+    const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId) ?? null;
+    if (!workspace) return { ok: false, reason: `${record.name}'s workspace is not registered.` };
+    // The TUI is the provider's own CLI, resolved the way a session resolves it.
+    const tui = providerBinary(record.provider) ?? record.provider;
+    const started = takeOvers.start(record, workspace.path, tui, { window: options.window });
+    // Its agent calls Genie's tools by this terminal: genie-host must know whose it is (P3.1).
+    pushHostView();
+    return started;
+}
+
+/**
+ * ANOTHER MACHINE'S TERMINAL IN A TAKE OVER WINDOW HERE (Tynn #529 part A). The window driving that machine was answered
+ * Take over with the terminal and a TICKET; this window connects to the same machine as that window's companion, with the
+ * ticket. The ticket is a credential for one terminal: it is kept in main's own map for this window, never in its URL,
+ * its title or a log, and the window reads it once.
+ */
+const takeOverTickets = new Map<number, string>();
+const remoteTakeOverWindows = new Set<BrowserWindow>();
+function openRemoteTakeOverWindow(url: string, terminalId: string, ticket: string, name: string | null): void {
+    const search = remoteWindowSearch(url, name);
+    if (remoteFromSearch(search) === null) return;
+    const win = new BrowserWindow({
+        width: 1100,
+        height: 700,
+        ...genieWindowIcon(here),
+        backgroundColor: '#0a0a0c',
+        show: false,
+        webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    takeOverTickets.set(win.webContents.id, ticket);
+    const contents = win.webContents;
+    remoteTakeOverWindows.add(win);
+    localDoor.admit(contents);
+    guardWindowLinks(contents, (link) => { void shell.openExternal(link).catch(() => {}); });
+    const request = { activation: 'user-gesture' as const, reason: 'remote take-over window', ledger: activationLedger, label: 'takeover' };
+    onceShowable(win, process.platform, () => showWhenReady(win, request));
+    win.on('closed', () => { takeOverTickets.delete(contents.id); remoteTakeOverWindows.delete(win); });
+    void win.loadFile(join(here, '../renderer/index.html'), { search, hash: `genie://takeover/${encodeURIComponent(terminalId)}` });
+}
+
 /** THE FILE PANEL IN ITS OWN WINDOW (§4.3): one per workspace; the route names it. Closing it docks the panel back. */
 function openFilesWindow(route: string, activation: Activation): void {
     const workspaceId = route.split('/').pop() ?? '';
@@ -1027,7 +1075,7 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
  */
 const remoteWindows = new Map<string, BrowserWindow>();
 /** A window driving ANOTHER host: never the host's own window, whatever it asks (genie#1354). */
-const isRemoteWindow = (sender: Electron.WebContents): boolean => [...remoteWindows.values()].some((w) => !w.isDestroyed() && w.webContents === sender);
+const isRemoteWindow = (sender: Electron.WebContents): boolean => [...remoteWindows.values(), ...remoteTakeOverWindows].some((w) => !w.isDestroyed() && w.webContents === sender);
 /** What the host's own file picker picked: the only host paths the person's AgentInbox may attach (host-picks.ts). */
 const hostPicks = new HostPicks();
 /** The Tynn account each relay window was opened under (accountKeyOf). */
@@ -2187,20 +2235,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:crash-report-draft', () => crashReports.draft());
     ipcMain.handle('genie:crash-report-send', (_event, text: unknown, notes: unknown) =>
         typeof text === 'string' && typeof notes === 'string' ? crashReports.send(text, notes) : { ok: false, reason: 'A crash report needs its text.' });
-    ipcMain.handle('genie:take-over', (_event, raw: unknown) => {
-        if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
-        const record = registry?.find(raw as AgentId) ?? null;
-        if (!record) return { ok: false, reason: `No agent is registered as ${raw}.` };
-        const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId) ?? null;
-        if (!workspace) return { ok: false, reason: `${record.name}'s workspace is not registered.` };
-        // The TUI is the provider's own CLI, resolved the way a session resolves it. No MCP
-        // URL is set: genie2 has no MCP server yet, and a fake one would be worse than none.
-        const tui = providerBinary(record.provider) ?? record.provider;
-        const started = takeOvers.start(record, workspace.path, tui);
-        // Its agent calls Genie's tools by this terminal: genie-host must know whose it is (P3.1).
-        pushHostView();
-        return started;
-    });
+    ipcMain.handle('genie:take-over', (_event, raw: unknown) => takeOverHere(raw, { window: true }));
 
     ipcMain.handle('genie:terminal-open', async (_event, rawWorkspaceId: unknown, rawOptions: unknown) => {
         if (!terminals || typeof rawWorkspaceId !== 'string') return null;
@@ -2310,6 +2345,20 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
     // A drone never connects out (audit M-b): refused HERE, from the role main read from Tynn, not only hidden in the window.
+    // TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): this machine's window on that host's terminal; a drone opens none.
+    ipcMain.handle('genie:remote-takeover-open', (_event, url: unknown, terminalId: unknown, ticket: unknown, name: unknown) => {
+        if (typeof url !== 'string' || typeof terminalId !== 'string' || typeof ticket !== 'string' || ticket === '') return { ok: false, reason: 'not a Take Over window' };
+        const refused = outboundDialRefusal(workstationRoleNow, url);
+        if (refused) return { ok: false, reason: refused };
+        openRemoteTakeOverWindow(url, terminalId, ticket, typeof name === 'string' ? name : null);
+        return { ok: true };
+    });
+    // The Take Over window's ticket, read ONCE: the read deletes it.
+    ipcMain.handle('genie:takeover-ticket', (event) => {
+        const ticket = takeOverTickets.get(event.sender.id) ?? null;
+        takeOverTickets.delete(event.sender.id);
+        return ticket;
+    });
     ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url !== 'string') return; const refused = outboundDialRefusal(workstationRoleNow, url); if (refused) return { ok: false, reason: refused }; openRemoteWindow(url, typeof name === 'string' ? name : null); });
     /*
      * The tailnet socket is dialled by the remote window's renderer, which main otherwise never sees: every WebSocket an
@@ -2823,6 +2872,11 @@ async function boot(): Promise<void> {
          * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
          */
         remoteApi: buildHostApi({
+            // Take over from another machine (Tynn #529 part A): the TUI here, its window there; that window closing ends it.
+            takeOver: {
+                start: (agentId) => takeOverHere(agentId, { window: false }),
+                ended: (terminalId) => { takeOvers?.windowClosed(terminalId); },
+            },
             filesWatch: {
                 exists: id => !!registry?.workspace(id),
                 watch: (viewId, id, want) => { const workspace = registry?.workspace(id); return filesWatch && workspace ? filesWatch.watch(viewId, { id: workspace.id, path: workspace.path }, want) : false; },

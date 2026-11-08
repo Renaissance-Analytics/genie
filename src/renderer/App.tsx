@@ -29,6 +29,7 @@ import { Button, browserPlatformHints, detectPlatform, setThemePreference } from
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
+import { RemoteRefusalBar } from './components/RemoteRefusalBar.js';
 import { FilesWindow } from './components/FilesWindow.js';
 import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popout.js';
 import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel } from '../core/dock.js';
@@ -256,7 +257,7 @@ function ownWindowBridge(): GenieBridge | undefined {
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
  */
-function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress; boundName: string | null; relayConnect: RelayConnect; takeControl: () => Promise<void>; clearRefusal: () => void } {
+function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress; boundName: string | null; relayConnect: RelayConnect; takeControl: () => Promise<void>; clearRefusal: () => void; url: string | null } {
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     // THE HOST DIALS OTHER MACHINES AND HOLDS THEIR TOKENS (P3.4 cut e): this window has a channel, and the addresses that are paired.
@@ -283,6 +284,9 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     const [boundName, setBoundName] = useState<string | null>(() => (typeof window === 'undefined' ? null : remoteNameFromSearch(window.location.search)));
     const [relayConnect, setRelayConnect] = useState<RelayConnect>({ kind: 'working', step: 'tynn' });
     const last = useRef<{ url: string; label: string } | null>(null);
+    // A TAKE OVER WINDOW for another machine (Tynn #529 part A): the ticket main handed it, read once; it connects as the
+    // driving window's companion with it, and never drives.
+    const companionTicket = useRef<string | null>(null);
     // THE TYNN NETWORK (Tynn #837): main holds a Tynn workstation's connection; this window has a channel to it.
     const net = local?.tynnNetwork;
     const [tynnWorkstations, setTynnWorkstations] = useState<TynnWorkstationList | null>(null);
@@ -357,7 +361,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                     const transport = ipcRelayTransport(net, opened.channel);
                     // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
                     const localBrowser = window.genie?.browserWindow;
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { drive: true, ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}) });
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}) });
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
@@ -386,7 +390,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 const opened = await link.open(url.url);
                 if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
                 const transport = ipcRelayTransport(net, opened.channel);
-                const next = connectRemote(transport, auth, label || 'another screen', { drive: true });
+                const ticket = companionTicket.current;
+                const next = connectRemote(transport, auth, label || 'another screen', ticket ? { companion: ticket } : { drive: true });
                 // Dropped after it was up: the host's words, when it has some.
                 transport.onClose(() => { const why = transport.closedBecause(); if (why) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: why })); });
                 setClient(next);
@@ -419,7 +424,18 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         });
     };
     // A remote host's window connects on open, with the token this device holds (no PIN: it was paired before).
-    useEffect(() => { if (bound) void connectTo(bound, ''); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // A Take Over window reads its ticket first (Tynn #529 part A).
+    useEffect(() => {
+        if (!bound) return;
+        const takeOverWindow = typeof window !== 'undefined' && window.location.hash.startsWith('#genie://takeover/');
+        if (!takeOverWindow) { void connectTo(bound, ''); return; }
+        void (async () => {
+            const ticket = await window.genie?.remoteWindows?.takeOverTicket?.().catch(() => null) ?? null;
+            if (ticket === null) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'This Take Over window has no ticket. Press Take over again in the window driving that machine.' })); return; }
+            companionTicket.current = ticket;
+            void connectTo(bound, '');
+        })();
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
     // A Tynn workstation's window opened without its name (an older opener): Tynn's list names it.
     useEffect(() => {
         const id = bound ? relayWorkstationOf(bound) : null;
@@ -454,6 +470,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         relayConnect,
         // Take control (Tynn #529): from nobody, or from whoever drives — the host says no only to a guest asking the owner.
         takeControl: async () => { if (client) await client.takeBaton({ force: true }); },
+        // The machine this window drives, for its Take Over windows (Tynn #529 part A).
+        url: last.current?.url ?? bound,
         clearRefusal: () => client?.clearRefusal(),
     };
 }
@@ -1714,6 +1732,25 @@ function DesktopApp({ bridge }: AppProps) {
     // A TAKE OVER WINDOW renders the terminal and nothing else: no rail, no bar, no Deck. The
     // TUI is the window (§1).
     if (parsed.surface === 'takeover') {
+        // Another machine's terminal (Tynn #529 part A): nothing until this window's companion connection is up, then the
+        // TUI from that machine, with why it can no longer type when its window stops driving.
+        if (remote.bound) {
+            if (!remote.state?.connected) {
+                return (
+                    <div data-remote-takeover-connecting="" className="flex h-full items-center justify-center bg-[var(--bg-0)] p-8 text-sm text-[var(--fg-2)]">
+                        {remote.state?.lastRefusal ?? `Connecting to ${remote.boundName ?? 'the other machine'}…`}
+                    </div>
+                );
+            }
+            return (
+                <div className="flex h-full flex-col">
+                    <RemoteRefusalBar refusal={remote.state.lastRefusal} needsBaton={false} driver={remote.state.driver} onTakeControl={() => {}} onDismiss={remote.clearRefusal} />
+                    <div className="min-h-0 flex-1">
+                        <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />
+                    </div>
+                </div>
+            );
+        }
         return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />;
     }
     // THE FLOW EDITOR IN ITS OWN WINDOW (genie#1204, Genie 1's genie#505): fancy-flow's canvas and nothing else.
@@ -1979,7 +2016,14 @@ function DesktopApp({ bridge }: AppProps) {
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             // A refused Take over is said, never a dead click (Tynn #529): a remote window's bridge keeps it under the title bar.
-            onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => { if (!r.ok && !remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); }, (error: unknown) => showAlert({ title: 'Take over', body: error instanceof Error ? error.message : String(error) })); }}
+            onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => {
+                if (!r.ok) { if (!remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); return; }
+                // Another machine's agent (Tynn #529 part A): its TUI started there; its Take Over window opens HERE.
+                if (!remote.state?.connected || !r.ticket) return;
+                const opened = remote.url ? window.genie?.remoteWindows?.openTakeOver?.(remote.url, r.terminalId, r.ticket, remote.state.host) : undefined;
+                if (!opened) { showAlert({ title: 'Take over', body: 'This window cannot open a Take Over window for another machine.' }); return; }
+                void opened.then((o) => { if (!o.ok) showAlert({ title: 'Take over', body: o.reason }); });
+            }, (error: unknown) => showAlert({ title: 'Take over', body: error instanceof Error ? error.message : String(error) })); }}
             {...(resolvedBridge?.crashReport ? { crashReport: { draft: () => resolvedBridge.crashReport!.draft(), send: (text: string, notes: string) => resolvedBridge.crashReport!.send(text, notes), copy: (text: string) => copyToClipboard({ plain: text }) } } : {})}
             {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
