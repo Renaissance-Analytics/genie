@@ -164,7 +164,7 @@ it('a pending agent watch finishing after close does not restart the API subscri
     invoke.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const pending = p.call('agent.watch', 'agent_a', {});
     await settled();
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('agentDetail', ['agent_a']);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('agentDetail', ['agent_a'], expect.anything());
     p.close();
     await settled();
     expect(listening).toBe(0);
@@ -183,7 +183,7 @@ it.each([false, true])('a completed watch consumes its ledger only while its con
     invoke.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const pending = p.call('agent.watch', 'agent_a', {});
     await settled();
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('agentDetail', ['agent_a']);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('agentDetail', ['agent_a'], expect.anything());
     if (closed) { p.close(); await settled(); }
     let ledgerReads = 0;
     finish({ agentId: 'agent_a', get rows() { ledgerReads++; return []; } });

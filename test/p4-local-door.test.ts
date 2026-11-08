@@ -164,7 +164,7 @@ describe('the P4 door admits only explicitly registered main-preload windows and
         vi.spyOn(protocol, 'capabilityOf').mockReturnValue('local');
         invoke.mockResolvedValue(null);
         expect(await opened.client.bridge.workspaces.settings('work')).toBeNull();
-        expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['work']);
+        expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['work'], expect.anything());
         expect(opened.frames()).toContainEqual({ kind: 'result', id: expect.any(Number), ok: true, value: null });
     });
 
@@ -205,7 +205,7 @@ describe('the door answers while Genie is still starting', () => {
         host = attachHost(transport);
         const ready = await connected(contents);
         expect(await ready.client.bridge.workspaces.settings('work')).toEqual({ seen: true });
-        expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['work']);
+        expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['work'], expect.anything());
         expect(activeConnections.size).toBe(1);
         expect(eventListeners.size).toBe(1);
     });

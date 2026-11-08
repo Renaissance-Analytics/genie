@@ -105,7 +105,7 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const invoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         expect(await call(client.bridge.agents, row)).toEqual(await call(oldAgents(invoke), row));
         expect(invoke).toHaveBeenCalledExactlyOnceWith(row.channel, ...row.args);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
     });
     it.each(rows)('pageBridge routes $name through the real local client without old preload fallback', async (row) => {
@@ -117,7 +117,7 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { tynnBoard: hibernate }, agents: oldAgents(oldInvoke) } as unknown as PreloadBridge;
         const bridge = pageBridge(preload); expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge.agents, row)).toEqual(row.result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args); expect(oldInvoke).not.toHaveBeenCalled();
         expect(await bridge.snapshot()).toEqual({ workspaces: null });
         expect(await bridge.workspaces.tynnBoard!('work', undefined as never)).toEqual({ ok: false, reason: 'agent still working' });
@@ -145,7 +145,7 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const source = serve(deps); vi.stubGlobal('window', { genieLocalProtocol: source.framePort() });
         const bridge = pageBridge({ subscribeAgentWire: () => () => {}, workspaces: {}, agents: oldAgents(vi.fn(async () => ({ ok: true }))) } as unknown as PreloadBridge);
         expect(await call(bridge.agents, row)).toEqual(refusal);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args, expect.anything());
     });
     it('all moved calls explain a missing local connection without falling back, while unmoved calls still work', async () => {
         vi.stubGlobal('window', {});
@@ -171,7 +171,7 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         vi.stubGlobal('window', page);
         const bridge = pageBridge(preload);
         expect(await bridge.agents.setMode('agent_a', 'manual')).toEqual(result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith('agents.setMode', ['agent_a', 'manual']);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith('agents.setMode', ['agent_a', 'manual'], expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith('agent_a', 'manual');
         expect(send.mock.calls.filter(([action]) => action === 'open')).toHaveLength(1);
         expect(await bridge.snapshot()).toEqual({ agents: [] }); expect(snapshot).toHaveBeenCalledTimes(1);
@@ -199,7 +199,7 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         expect(await call(client.bridge.agents, row)).toEqual(await call(oldAgents(invoke), row));
         const forwarded = row.wireArgs ?? row.args;
         expect(invoke).toHaveBeenCalledExactlyOnceWith(row.channel, ...forwarded);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, forwarded);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, forwarded, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...forwarded);
     });
     it.each([
@@ -258,7 +258,7 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         Object.assign(deps.agentOps, { [name]: operation });
         const source = serve(deps), client = await source.connect(true); source.invoke.mockClear();
         expect(await call(client.bridge.agents, { name, args: ['agent_a', null] })).toEqual(result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${name}`, ['agent_a', null]);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${name}`, ['agent_a', null], expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith('agent_a', null);
     });
     // The retired mutations all touched the registry on completion, including refusal/throw.

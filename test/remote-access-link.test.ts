@@ -53,7 +53,7 @@ beforeEach(async () => {
         api: hostRemoteApi({
             hostName: 'alphar',
             own: { 'updates.state': async () => ({ phase: 'idle' }) },
-            window: { connected: () => server.newestLocalWindow() !== null, invoke: ((m: never, a: never, c: never) => (server as unknown as { remoteInvoke(...x: unknown[]): Promise<unknown> }).remoteInvoke(m, a, c)) as never },
+            window: { connected: () => server.newestLocalWindow() !== null, invoke: (m, a, c) => server.remoteInvoke(m, a, c) },
         }),
     });
     const service = new RemoteAccessService(access, bridge, {
@@ -66,11 +66,11 @@ beforeEach(async () => {
 });
 afterEach(async () => { for (const close of links.splice(0)) close(); await rm(home, { recursive: true, force: true }); });
 
-async function windowOn(local: boolean, onRemoteInvoke?: (method: string, args: unknown[], context: never) => Promise<unknown>) {
+async function windowOn(local: boolean, onRemoteInvoke?: (method: string, args: unknown[], context: unknown) => Promise<unknown>) {
     const [h, raw] = memoryPair();
     server.accept(h, { local });
     const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage(l), onClose: (l) => raw.onClose(l), close: () => raw.close() };
-    const client = new SessionEngineClient({ ...(onRemoteInvoke ? { onRemoteInvoke: onRemoteInvoke as never } : {}) });
+    const client = new SessionEngineClient({ ...(onRemoteInvoke ? { onRemoteInvoke } : {}) });
     expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
     links.push(() => t.close());
     return { client, close: () => t.close() };

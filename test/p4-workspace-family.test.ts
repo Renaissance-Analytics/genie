@@ -116,7 +116,7 @@ describe('all twelve workspace bridge calls reach the real API with the old prel
         const legacy = await row.call(oldWorkspacePreload(invoke));
         expect(invoke).toHaveBeenCalledExactlyOnceWith(row.channel, ...row.args);
         expect(await row.call(client.bridge.workspaces)).toEqual(legacy);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
     });
     it.each(rows)('the actual page bridge routes $name over the frame door while unmoved methods keep working', async (row) => {
@@ -136,7 +136,7 @@ describe('all twelve workspace bridge calls reach the real API with the old prel
         expect(snapshot).toHaveBeenCalledTimes(1);
         expect(hibernate).toHaveBeenCalledExactlyOnceWith('work', undefined);
         expect(await row.call(bridge.workspaces)).toEqual(row.result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
         expect(oldInvoke).not.toHaveBeenCalled();
     });
@@ -146,7 +146,7 @@ describe('all twelve workspace bridge calls reach the real API with the old prel
         const source = serve(deps);
         const client = await source.connect();
         expect(await client.bridge.workspaces.settings('unknown')).toBeNull();
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['unknown']);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['unknown'], expect.anything());
         expect(deps.workspaceOps.settings).toHaveBeenCalledExactlyOnceWith('unknown');
     });
 });
