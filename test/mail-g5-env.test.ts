@@ -38,11 +38,13 @@ describe('the env a workspace gets from the shared Mailpit', () => {
         expect(JSON.stringify(env)).not.toMatch(/genie\+|GENIE_MAIL_TAG/);
     });
 
-    it('a Mailpit taken over from Genie 1 has no book: it is never given the shared one\'s inbox credentials', () => {
+    it('a Mailpit taken over from Genie 1 has no book: never the shared one\'s inbox credentials; it keeps the env Genie 1 gave it, as its own source', () => {
         const v1: ServiceInstance = { ...shared, id: 'svc_v1_mailpit', adopted: 'v1', containerName: 'genie-svc-mailpit-1.30' };
         const env = serviceEnvFor([v1], 'ws-a', { namespace: 'ws_example_a', mail: { username: addr('example-a'), password: 'InboxPw-1', from: addr('example-a') } });
         expect(env).not.toHaveProperty('MAIL_PASSWORD');
-        expect(env).not.toHaveProperty('GENIE_MAIL_TAG');
+        expect(env).not.toHaveProperty('MAIL_USERNAME');
+        // Decision 2 (2026-11-07): Genie 1's Mailpit is a separate source, untouched; its apps keep Genie 1's tag.
+        expect(env).toMatchObject({ MAIL_FROM_ADDRESS: 'genie+ws_example_a@mail.gen', GENIE_MAIL_TAG: 'ws_example_a' });
     });
 });
 

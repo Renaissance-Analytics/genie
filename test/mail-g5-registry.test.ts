@@ -73,6 +73,8 @@ describe('the registry and the book', () => {
 
     it('a NEW shared Mailpit is created reading the book', async () => {
         await open([]);
+        // No Mailpit on this machine yet (the fixture's running one is the pre-G5 one the other tests wire).
+        docker.containers.delete('genie-shared-mailpit-1.30');
         await registry.add({ engine: 'mailpit', major: '1.30', scope: { kind: 'shared' }, consent: true, workspaceId: 'ws-a' });
         const args = createArgs();
         expect(flagValues(args, '--mount')).toContain(`type=bind,source=${AUTH},target=/genie-mail,readonly`);
