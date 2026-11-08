@@ -1,48 +1,18 @@
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginHost } from '../src/main/plugin-host.js';
 import { PluginsService } from '../src/main/plugins-host.js';
 import { signPackage } from './plugin-sign-helper.js';
+import { MarketplaceClient, openMarketplacePlugins as startPlugins, type MarketplaceClientOptions } from '../src/main/marketplace-client.js';
 
-// The tests-only RED head must reach Vitest before this module exists. Replace the
-// runtime loader with its static import when implementation lands.
-interface ClientOptions {
-    cacheFile: string;
-    fetch: typeof fetch;
-    origin?: string;
-    now?: () => number;
-    maxCacheAgeMs?: number;
-    timeoutMs?: number;
-}
-interface ClientContract {
-    refresh(): Promise<void>;
-    publisherKeys(bundled?: Readonly<Record<string, string>>): Readonly<Record<string, string>>;
-    keyState(id: string): 'trusted' | 'withdrawn' | 'unknown';
-    close(): void;
-}
-interface StarterOptions extends ClientOptions {
-    pluginsDir: string;
-    keys: Readonly<Record<string, string>>;
-    publisherChecksOff: () => boolean;
-    intervalMs?: number;
-    schedule?: (fn: () => void, ms: number) => () => void;
-    log?: (line: string) => void;
-}
-const implementationPath = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'main', 'marketplace-client.ts')).href;
-const opened = new Set<ClientContract>();
-async function createClient(options: ClientOptions): Promise<ClientContract> {
-    const module = await import(/* @vite-ignore */ implementationPath) as { MarketplaceClient: { open(options: ClientOptions): Promise<ClientContract> } };
-    const client = await module.MarketplaceClient.open(options);
+const opened = new Set<MarketplaceClient>();
+async function createClient(options: MarketplaceClientOptions): Promise<MarketplaceClient> {
+    const client = await MarketplaceClient.open(options);
     opened.add(client);
     return client;
-}
-async function startPlugins(options: StarterOptions): Promise<{ plugins: PluginsService; stop(): void }> {
-    const module = await import(/* @vite-ignore */ implementationPath) as { openMarketplacePlugins(options: StarterOptions): Promise<{ plugins: PluginsService; stop(): void }> };
-    return module.openMarketplacePlugins(options);
 }
 
 const publisherId = '01ARZ3NDEKTSV4RRFFQ69G5FAV';

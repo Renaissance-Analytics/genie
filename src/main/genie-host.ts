@@ -101,7 +101,8 @@ import { AgentStoresService } from './agent-stores-host.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { startHostMcp, type HostMcp } from './host-mcp.js';
-import { hostPluginTools, PluginsService } from './plugins-host.js';
+import { hostPluginTools } from './plugins-host.js';
+import { MARKETPLACE_PAGE_BYTES, openMarketplacePlugins } from './marketplace-client.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -674,7 +675,17 @@ async function main(): Promise<void> {
      * under developer mode (the host's own setting). Its MCP server offers and runs their tools with no window; every
      * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
      */
-    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true });
+    let marketplaceTransport: ReturnType<typeof hostHttpsFetch> | undefined;
+    const marketplacePlugins = await openMarketplacePlugins({
+        pluginsDir: join(home, 'plugins'), cacheFile: join(home, 'marketplace-publisher-keys.json'), origin: TYNN_HOST,
+        keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true,
+        fetch: async (url, init) => {
+            const memory = await proxyMemory;
+            marketplaceTransport ??= hostHttpsFetch({ proxyRoutes: target => memory.routesFor(target), log: say, maxResponseBytes: MARKETPLACE_PAGE_BYTES });
+            return marketplaceTransport(url, init);
+        }, log: say,
+    });
+    const pluginsService = marketplacePlugins.plugins;
     const engine = new SessionEngineServer({
         token,
         build,
@@ -886,7 +897,7 @@ async function main(): Promise<void> {
     let flowsOpening: Promise<void> | null = null;
     let processBookNow: ProcessBook | null = null;
     /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
-    const clocks: Array<{ stop(): void }> = [];
+    const clocks: Array<{ stop(): void }> = [marketplacePlugins];
     /** The clocks to plan again when the person leaves safe mode — arming what may fire later, and starting nothing now. */
     const planners: Array<{ plan(): void }> = [];
     safeMode.onChange((view) => { if (!view.active) for (const p of planners) p.plan(); });
