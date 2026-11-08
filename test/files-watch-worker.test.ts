@@ -52,12 +52,15 @@ describe('workerWatchSource', () => {
     });
 
     it('a worker that ends on its own leaves the watch on this thread in place, said once', async () => {
-        const log = vi.fn(), fallback = vi.fn(() => ({ close: () => {} }));
+        const log = vi.fn(), closedHere = vi.fn(), fallback = vi.fn(() => ({ close: closedHere }));
         const source = workerWatchSource({ log, fallback, startWorker: () => new Worker('process.exit(3)', { eval: true }) });
         const handle = source('/w', () => {});
-        await vi.waitFor(() => expect(fallback).toHaveBeenCalledOnce(), { timeout: 5_000, interval: 20 });
-        expect(log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('ended (exit 3)'));
+        // The watch on this thread started at once; the worker's end is said once, and that watch is kept, not restarted.
+        await vi.waitFor(() => expect(log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('ended (exit 3)')), { timeout: 5_000, interval: 20 });
+        expect(fallback).toHaveBeenCalledOnce();
+        expect(closedHere).not.toHaveBeenCalled();
         handle.close();
+        expect(closedHere).toHaveBeenCalledOnce();
     });
 
     it('a worker that cannot start falls back to the watch on this thread, said once', () => {
