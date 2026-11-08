@@ -1,5 +1,6 @@
 import { headroomLine } from './headroom.js';
 import { computeDiff } from '@particle-academy/fancy-file-commons';
+import { DIFF_TOO_LARGE, editLabel } from './file-edits.js';
 import type { StreamEvent, ToolKind } from './stream-event.js';
 
 /**
@@ -148,6 +149,21 @@ export interface RowContext {
  * the agent sent, not an estimate. `null` when the call carried no before-and-after (a `Write` reports only what it
  * wrote; `rawInput === null` reported nothing). Counted by line with a plain LCS, which is what a diff is.
  */
+/**
+ * AN EDIT'S LINE COUNTS, whichever way it was reported: a native edit (Codex) from its edit list's diffs, counted once
+ * when the row was read (`edits`); anything else from its own old/new strings (`editLineCounts`). `null` = none.
+ */
+export function editCountsFor(event: { readonly rawInput: unknown; readonly edits?: readonly { readonly plus: number; readonly minus: number; readonly kind: string }[] | undefined }): { plus: number; minus: number; newFile: boolean } | null {
+    if (event.edits !== undefined) {
+        if (event.edits.length === 0) return null;
+        let plus = 0;
+        let minus = 0;
+        for (const e of event.edits) { plus += e.plus; minus += e.minus; }
+        return { plus, minus, newFile: event.edits.length === 1 && event.edits[0]!.kind === 'add' };
+    }
+    return editCountsOf(event.rawInput);
+}
+
 export function editLineCounts(rawInput: unknown): { plus: number; minus: number; newFile: boolean } | null {
     if (typeof rawInput !== 'object' || rawInput === null) return null;
     const input = rawInput as Record<string, unknown>;
@@ -225,7 +241,9 @@ function toolRow(
     // Codex names an MCP call `<server>.<tool>` and titles it `<tool>` (prism-acp 0.39.0): the title repeats the name too.
     const titleIsName = event.title === null || event.title === event.name || (event.name !== null && event.name.endsWith(`.${event.title}`));
     const argument = titleIsName ? argumentSummary(event.rawInput) : null;
-    const label = (isEdit ? argument : null) ?? event.title ?? event.name ?? '(tool call)';
+    // A native edit (Codex) names its files in its edit list, not in its input (Tynn #440 part C).
+    const nativeLabel = isEdit && event.edits !== undefined ? editLabel(event.edits) : null;
+    const label = nativeLabel ?? (isEdit ? argument : null) ?? event.title ?? event.name ?? '(tool call)';
     const main = isEdit ? label : [event.name, titleIsName ? argument : event.title].filter(Boolean).join('  ') || label;
 
     // `rawInput === null` means the agent did not send this call's arguments — never `{}`. An
@@ -239,7 +257,8 @@ function toolRow(
 
     const note =
         event.toolKind === null ? '(kind not reported)'
-        : isEdit && !hasArguments ? '(arguments not reported)'
+        : isEdit && (event.editsOmitted === true || (event.edits?.some((e) => e.diff === undefined) ?? false)) ? DIFF_TOO_LARGE
+        : isEdit && !hasArguments && event.edits === undefined ? '(arguments not reported)'
         : null;
 
     return {
@@ -263,7 +282,7 @@ function toolRow(
         plus: context.diff && context.diff.plus > 0 ? context.diff.plus : null,
         minus: context.diff && context.diff.minus > 0 ? context.diff.minus : null,
         tinted: isEdit,
-        inspectable: isEdit && hasArguments,
+        inspectable: isEdit && (hasArguments || event.edits !== undefined || event.editsOmitted === true),
         note,
         lane: isEdit ? 'edits' : 'tools',
     };
@@ -598,7 +617,10 @@ export function joinToolCalls(rows: readonly TimedEvent[]): TimedEvent[] {
         const prev = out[i]!;
         const { output: _o, outputBytes: _b, outputFile: _f, ...p } = prev.event as typeof e;
         const output = e.output !== undefined ? outputOf(e) : outputOf(prev.event as typeof e);
-        out[i] = { ...prev, event: { ...p, name: p.name ?? e.name, title: p.title ?? e.title, toolKind: p.toolKind ?? e.toolKind, rawInput: p.rawInput ?? e.rawInput, status: e.status, ...output } };
+        // A native edit's list: the latest that carried one (the completed call describes what was applied).
+        const edits = e.edits !== undefined || e.editsOmitted === true ? { edits: e.edits, editsOmitted: e.editsOmitted } : { edits: p.edits, editsOmitted: p.editsOmitted };
+        const { edits: _e, editsOmitted: _m, ...q } = p;
+        out[i] = { ...prev, event: { ...q, name: p.name ?? e.name, title: p.title ?? e.title, toolKind: p.toolKind ?? e.toolKind, rawInput: p.rawInput ?? e.rawInput, status: e.status, ...output, ...(edits.edits !== undefined ? { edits: edits.edits } : {}), ...(edits.editsOmitted === true ? { editsOmitted: true as const } : {}) } };
     }
     return out;
 }
@@ -720,7 +742,7 @@ export class LedgerRowCache {
 
     row(row: TimedEvent, context: RowContext = {}): LedgerRow {
         const e = row.event;
-        const diff = context.diff ?? (e.kind === 'tool' && e.toolKind === 'edit' ? editCountsOf(e.rawInput) ?? undefined : undefined);
+        const diff = context.diff ?? (e.kind === 'tool' && e.toolKind === 'edit' ? editCountsFor(e) ?? undefined : undefined);
         const kept = this.#kept.get(row);
         if (kept && kept.durationMs === context.durationMs && kept.agentName === context.agentName && kept.summarisedTurns === context.summarisedTurns && sameDiff(kept.diff, diff)) return kept.out;
         const out = ledgerRow(row, diff === undefined ? context : { ...context, diff });

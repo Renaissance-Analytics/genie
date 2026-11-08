@@ -2,6 +2,7 @@ import { backgroundTasksOf, taskEventOf, type BackgroundTask, type TaskEvent } f
 import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
 import type { ToolStatus } from '@particle-academy/prism-acp';
 import type { PromptBlock } from './prompt-content.js';
+import { editsFromUpdate } from './file-edits.js';
 
 /**
  * THE STREAM LEDGER — one line per event.
@@ -357,6 +358,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 rawInput: update['rawInput'] ?? null,
                 ...outputField(update),
                 ...parentCallField(update),
+                ...editsFromUpdate(update),
             };
 
         case 'usage_update': {

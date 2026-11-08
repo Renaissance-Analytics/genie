@@ -1,5 +1,6 @@
 import { formatRoute, parseRoute } from './route.js';
-import type { ToolKind } from './stream-event.js';
+import type { FileEditFact, ToolKind } from './stream-event.js';
+import { editedPaths } from './file-edits.js';
 import { editLineCounts, joinToolCalls, type TimedEvent } from './stream-view.js';
 
 /**
@@ -34,6 +35,8 @@ export interface FileEvent {
     readonly toolKind: ToolKind | null;
     readonly status: 'pending' | 'in_progress' | 'completed' | 'failed' | null;
     readonly rawInput: unknown;
+    /** A native edit's list (Codex, Tynn #440 part C): its files; absent = read from `rawInput`. */
+    readonly edits?: readonly FileEditFact[] | undefined;
     /** When the row arrived (the ledger's time); absent or null = not timed. */
     readonly at?: number | null | undefined;
 }
@@ -155,13 +158,16 @@ export function buildTree(entries: readonly Entry[]): TreeNode[] {
     return finish(rootMap);
 }
 
-function pathOf(event: FileEvent, root: string): string | null {
-    const input = event.rawInput;
-    if (typeof input !== 'object' || input === null) return null;
-    const raw = (input as { file_path?: unknown }).file_path;
-    if (typeof raw !== 'string' || raw.length === 0) return null;
-    const confined = confine(root, raw);
-    return confined === null || confined === '' ? null : confined;
+function pathsOf(event: FileEvent, root: string): string[] {
+    // A native edit names its files in its list (a move: where the file is now); anything else, its `file_path`.
+    const raws = event.edits !== undefined
+        ? editedPaths(event.edits)
+        : [(typeof event.rawInput === 'object' && event.rawInput !== null ? (event.rawInput as { file_path?: unknown }).file_path : undefined)];
+    return raws.flatMap((raw) => {
+        if (typeof raw !== 'string' || raw.length === 0) return [];
+        const confined = confine(root, raw);
+        return confined === null || confined === '' ? [] : [confined];
+    });
 }
 
 /** The latest status per (agent, file) wins — a tool_call_update completes the call it belongs to. */
@@ -169,9 +175,7 @@ function latest(events: readonly FileEvent[], root: string, kind: ToolKind): Map
     const last = new Map<string, { agentId: string; agentName: string; path: string; status: FileEvent['status'] }>();
     for (const e of events) {
         if (e.toolKind !== kind) continue;
-        const path = pathOf(e, root);
-        if (path === null) continue;
-        last.set(`${e.agentId}\0${path}`, { agentId: e.agentId, agentName: e.agentName, path, status: e.status });
+        for (const path of pathsOf(e, root)) last.set(`${e.agentId}\0${path}`, { agentId: e.agentId, agentName: e.agentName, path, status: e.status });
     }
     return last;
 }
@@ -186,7 +190,7 @@ function latest(events: readonly FileEvent[], root: string, kind: ToolKind): Map
  */
 export function fileEventsOf(rows: readonly TimedEvent[], agent: { id: string; name: string }): FileEvent[] {
     return joinToolCalls(rows).flatMap((row): FileEvent[] =>
-        row.event.kind === 'tool' ? [{ agentId: agent.id, agentName: agent.name, toolKind: row.event.toolKind, status: row.event.status, rawInput: row.event.rawInput, at: row.at }] : []);
+        row.event.kind === 'tool' ? [{ agentId: agent.id, agentName: agent.name, toolKind: row.event.toolKind, status: row.event.status, rawInput: row.event.rawInput, ...(row.event.edits !== undefined ? { edits: row.event.edits } : {}), at: row.at }] : []);
 }
 
 export function attributionFrom(events: readonly FileEvent[], root: string): Map<string, FileAttribution> {
@@ -203,13 +207,17 @@ export function attributionFrom(events: readonly FileEvent[], root: string): Map
     const detail = new Map<string, { changedAt: number | null; plus: number | null; minus: number | null }>();
     for (const e of events) {
         if (e.toolKind !== 'edit' || (e.status !== 'in_progress' && e.status !== 'completed')) continue;
-        const path = pathOf(e, root);
-        if (path === null || !out.has(path)) continue;
-        const d = detail.get(path) ?? { changedAt: null, plus: null, minus: null };
-        if (typeof e.at === 'number' && (d.changedAt === null || e.at > d.changedAt)) d.changedAt = e.at;
-        const counts = e.status === 'completed' ? editLineCounts(e.rawInput) : null;
-        if (counts) { d.plus = (d.plus ?? 0) + counts.plus; d.minus = (d.minus ?? 0) + counts.minus; }
-        detail.set(path, d);
+        const paths = pathsOf(e, root);
+        for (const path of paths) {
+            if (!out.has(path)) continue;
+            const d = detail.get(path) ?? { changedAt: null, plus: null, minus: null };
+            if (typeof e.at === 'number' && (d.changedAt === null || e.at > d.changedAt)) d.changedAt = e.at;
+            // A native edit counts per file; any other edit names one file.
+            const native = e.edits?.find((x) => confine(root, x.movePath ?? x.path) === path);
+            const counts = e.status !== 'completed' ? null : native !== undefined ? { plus: native.plus, minus: native.minus } : editLineCounts(e.rawInput);
+            if (counts) { d.plus = (d.plus ?? 0) + counts.plus; d.minus = (d.minus ?? 0) + counts.minus; }
+            detail.set(path, d);
+        }
     }
     return new Map([...out.entries()].map(([k, v]) => {
         const d = detail.get(k) ?? { changedAt: null, plus: null, minus: null };

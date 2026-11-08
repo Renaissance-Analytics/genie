@@ -5,7 +5,7 @@ import type { Fidelity } from './dashboard-view.js';
 import { observedState, type TakeOverProbe } from './observed.js';
 import type { AgentTab } from './route.js';
 import type { LiveSession } from './roster.js';
-import { editLineCounts, type TimedEvent } from './stream-view.js';
+import { editCountsFor, type TimedEvent } from './stream-view.js';
 
 /**
  * THE AGENT VIEW'S DECISIONS — tabs, the state pill, the right rail.
@@ -359,7 +359,7 @@ export function diffHeader(rows: readonly TimedEvent[], selectedId: string | nul
     const index = edits.findIndex((r) => r.id === selectedId);
     if (index < 0) return null;
     const row = edits[index]!;
-    const counts = row.event.kind === 'tool' ? editLineCounts(row.event.rawInput) : null;
+    const counts = row.event.kind === 'tool' ? editCountsFor(row.event) : null;
     return { plus: counts?.plus ?? null, minus: counts?.minus ?? null, at: row.at, index: index + 1, total: edits.length };
 }
 

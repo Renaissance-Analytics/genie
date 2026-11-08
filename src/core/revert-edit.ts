@@ -1,4 +1,6 @@
 import { confine } from './files-panel.js';
+import { DIFF_TOO_LARGE, editedPaths, revertNativeEdit } from './file-edits.js';
+import type { FileEditFact } from './stream-event.js';
 
 /**
  * REVERT THIS EDIT (the board's footer door in the Inspector): the call's OWN before-text goes back where its after-text
@@ -41,13 +43,25 @@ export function revertEdit(text: string, rawInput: unknown): RevertResult {
     return { ok: true, text: out };
 }
 
-/** Red-first placeholder (Tynn #440 part C): the tool call's own revert, as today. */
-export function revertToolEdit(text: string, event: { rawInput: unknown }): RevertResult {
+type EditEvent = { readonly rawInput: unknown; readonly edits?: readonly FileEditFact[] | undefined; readonly editsOmitted?: true | undefined };
+
+/**
+ * REVERT THIS TOOL CALL'S EDIT, however it was reported (Tynn #440 part C): a native edit (Codex) by its diff applied in
+ * reverse (`revertNativeEdit`), refused with the reason when it does not apply cleanly; any other by its own old/new
+ * strings (`revertEdit`).
+ */
+export function revertToolEdit(text: string, event: EditEvent): RevertResult {
+    if (event.editsOmitted === true) return { ok: false, reason: DIFF_TOO_LARGE };
+    if (event.edits !== undefined) return revertNativeEdit(text, event.edits);
     return revertEdit(text, event.rawInput);
 }
 
-/** Red-first placeholder (Tynn #440 part C): the tool call's file, as today. */
-export function toolEditPathIn(event: { rawInput: unknown }, root: string): string | null {
+/** The file a tool call's edit changed, relative to the workspace root; `null` when none, several, or one outside it. */
+export function toolEditPathIn(event: EditEvent, root: string): string | null {
+    if (event.edits !== undefined) {
+        const paths = editedPaths(event.edits);
+        return paths.length === 1 ? confine(root, paths[0]!) || null : null;
+    }
     return editPathIn(event.rawInput, root);
 }
 

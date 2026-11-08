@@ -1,4 +1,5 @@
 import type { StreamEvent } from './stream-event.js';
+import { DIFF_TOO_LARGE, editLabel, unifiedOf } from './file-edits.js';
 
 /**
  * WHAT THE INSPECTOR SHOWS FOR A TOOL CALL — and what it refuses to show.
@@ -31,6 +32,8 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 
 export type InspectorContent =
     | { kind: 'diff'; path: string | null; before: string; after: string }
+    /** A native edit's own unified diff (Codex, Tynn #440 part C): only the changed hunks, never the whole file. */
+    | { kind: 'unified'; path: string | null; unified: string }
     /** The full new content, because no prior version was reported. `note` says so on screen. */
     | { kind: 'content'; path: string | null; text: string; note: string }
     | { kind: 'json'; value: JsonValue }
@@ -121,6 +124,13 @@ function editPairs(input: Record<string, unknown>): readonly { before: string; a
 }
 
 export function inspectorFor(event: Extract<StreamEvent, { kind: 'tool' }>): InspectorContent {
+    // A native edit says what it changed in its edit list; left out or cut for size, it says so — never "no changes".
+    if (event.toolKind === 'edit' && event.editsOmitted === true) return { kind: 'none', reason: DIFF_TOO_LARGE };
+    if (event.toolKind === 'edit' && event.edits !== undefined && event.edits.length > 0) {
+        const unified = unifiedOf(event.edits);
+        return unified === null ? { kind: 'none', reason: DIFF_TOO_LARGE } : { kind: 'unified', path: editLabel(event.edits), unified };
+    }
+
     const input = event.rawInput;
 
     if (input === null || input === undefined) {
