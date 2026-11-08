@@ -334,6 +334,17 @@ export function newestSnapshot(current: FeatureData, next: FeatureData): Feature
     return next.seq >= current.seq ? next : current;
 }
 
+/**
+ * The window now drives ANOTHER host: what of the previous host's snapshot is kept until the new host's first one lands.
+ * Another host numbers its snapshots from its own start, so this one's number is forgotten and the new host's first is taken.
+ * Its settings are forgotten too (Tynn #527): they are THAT host's — the Primary workspace is a path on its disk, and a
+ * picker opened before the new host's first snapshot started there.
+ */
+export function forgetHost(current: FeatureData): FeatureData {
+    const { seq: _previousHost, ...rest } = current;
+    return { ...rest, settings: { values: null } };
+}
+
 /** What a feature action came to, for a control that shows its progress (renderer/site-actions.ts). */
 export type ActOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
