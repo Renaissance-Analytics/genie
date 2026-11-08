@@ -92,7 +92,11 @@ describe('the relay member, in genie-host', () => {
     it('says where it failed: signed out, Tynn\'s refusal (for the window to word), the relay', async () => {
         expect(await rig({ signedIn: () => false }).service.call('w', 'openRelay', ['ws_alpha'])).toEqual({ ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' });
         const refused = { ok: false as const, reason: 'not your workstation', refusedByTynn: true as const };
-        expect(await rig({ mint: async () => refused }).service.call('w', 'openRelay', ['ws_alpha'])).toEqual({ ok: false, stage: 'tynn', refusal: refused });
+        const noWayIn = rig({ mint: async () => refused });
+        expect(await noWayIn.service.call('w', 'openRelay', ['ws_alpha'])).toEqual({ ok: false, stage: 'tynn', refusal: refused });
+        // The step is said only once Tynn gave the way in, and the relay is not dialled without it.
+        expect(noWayIn.events.filter((e) => e.event.type === 'step')).toEqual([]);
+        expect(noWayIn.opened).toEqual([]);
         expect(await rig({ open: async () => ({ ok: false, reason: 'the relay did not answer' }) }).service.call('w', 'openRelay', ['ws_alpha'])).toEqual({ ok: false, stage: 'relay', reason: 'the relay did not answer' });
         expect(await rig().service.call('w', 'openRelay', [''])).toMatchObject({ ok: false });
     });

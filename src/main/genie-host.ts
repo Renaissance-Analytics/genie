@@ -103,7 +103,6 @@ import { setWin32ProcessReader } from '../core/process-tree.js';
 import { sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
-import type { RelaySocket } from './relay-wire.js';
 import { mintConnectGrant } from './tynn-network.js';
 import { RemoteBrowsers } from './remote-browsers.js';
 import { siteDoor } from './relay-site.js';
@@ -845,7 +844,8 @@ async function main(): Promise<void> {
                 mint: (workstationId, jwk) => (tynnAccountNow
                     ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
                     : Promise.resolve({ ok: false as const, reason: 'sign in to Tynn to connect to a Tynn workstation' })),
-                open: (input) => openRelayMember({ socket: (url) => new WebSocket(url) as unknown as RelaySocket, ...input }),
+                // Through the one socket this host dials with (device-socket.ts): the machine's roots, no redirects.
+                open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
             },
             browsers: new RemoteBrowsers(siteDoor),
         }),

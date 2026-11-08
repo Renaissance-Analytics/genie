@@ -2310,8 +2310,11 @@ async function boot(): Promise<void> {
         const at = typeof address === 'string' ? address : undefined;
         const remoteUrl = [...remoteWindows].find(([, w]) => !w.isDestroyed() && w.webContents === event.sender)?.[0] ?? null;
         const link = deviceLinkNow();
-        const linked = link ? [...linkedRelays].filter(([, c]) => c.sender === event.sender).map(([channel, c]) => ({ workstationId: c.workstationId, transport: channel })) : [];
-        const conn = browserConnectionFor<RelayMemberTransport | string>({ remoteUrl, relays: [...relayChannels.values()].filter((c) => c.sender === event.sender).map((c) => ({ workstationId: c.workstationId, transport: c.transport as RelayMemberTransport | string })).concat(linked) });
+        const relays: Array<{ workstationId: string; transport: RelayMemberTransport | string }> = [
+            ...[...relayChannels.values()].filter((c) => c.sender === event.sender),
+            ...(link ? [...linkedRelays].filter(([, c]) => c.sender === event.sender).map(([channel, c]) => ({ workstationId: c.workstationId, transport: channel })) : []),
+        ];
+        const conn = browserConnectionFor({ remoteUrl, relays });
         if (conn.kind === 'refused') return { ok: false, error: conn.reason };
         if (conn.kind === 'local') return openLocalBrowser(at, 'user-gesture');
         // A channel genie-host holds (Tynn #552): its door to that workstation's sites is the host's too.
