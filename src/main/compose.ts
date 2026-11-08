@@ -56,6 +56,7 @@ import { DeviceStore } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
+import type { WorkTracking } from '../core/genie-protocol.js';
 import { trustSteps, type TrustApi } from './hosting-trust.js';
 import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
@@ -341,6 +342,8 @@ export async function composeWindowServices(input: ComposeInput & { readonly age
 }
 
 async function composeWith(input: ComposeInput): Promise<WindowServices> {
+    // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
+    const workTracking = (): WorkTracking => (input.tynn?.()?.status().signedIn === true ? 'tynn' : 'files');
     const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
@@ -606,7 +609,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
             if (!workspace) return null;
             const view = await workspaceTrust.refresh(workspace.id).catch(() => null);
             if (view !== null && view.trusted) return null;
-            return writeGenieInstructions(join(runtimeDir(input.userData), 'untrusted-agent'), input.mcpTools?.() ?? []);
+            return writeGenieInstructions(join(runtimeDir(input.userData), 'untrusted-agent'), input.mcpTools?.() ?? [], workTracking());
         },
         trustSteps: () => trustSteps(workspaceTrust.entries()),
         untrustedNow(record) {
@@ -712,7 +715,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 // First, whatever the switches: the files that carry Genie's MCP token are kept out of a commit.
                 { step: 'gitignore', run: (t) => writeAgentGitignore({ workspacePath, fs: nodeFs(t) }) },
                 // The protocol files (.agents/_genie/), true for Genie 2, listing the tools Genie's MCP actually serves.
-                { step: 'protocol', run: (t) => writeAgentProtocol({ workspacePath, enabled: on, tools: input.mcpTools?.() ?? [], fs: nodeFs(t) }) },
+                { step: 'protocol', run: (t) => writeAgentProtocol({ workspacePath, enabled: on, tools: input.mcpTools?.() ?? [], tracking: workTracking(), fs: nodeFs(t) }) },
             ];
             if (on) {
                 // The routers and RULES.md after the protocol they import (Genie 1's repaired); then Genie 2's skills.

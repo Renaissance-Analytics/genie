@@ -115,6 +115,15 @@ export interface HostApiDeps {
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
     registerAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
     attention: { finished(): readonly Finished[]; markSeen(id: string): void };
+    /**
+     * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): the TUI started here with NO window here (main/take-over-host.ts
+     * `window: false`); the person's machine opens its own window on it. `ended`: that window closed. Absent = Take over
+     * is refused with where to do it, as before.
+     */
+    takeOver?: {
+        start(agentId: string): { ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string };
+        ended(terminalId: string): void;
+    };
     terminals: {
         open(options: TerminalOptions): PtyOpened;
         /** `open`, answered once the pid and shell are known (a pty made under genie-host). Absent = `open`'s answer is it. */
@@ -575,7 +584,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'addWorkspace':
                 throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':
-                throw new Error('takeOver opens a window on the host; do it there');
+                if (!deps.takeOver) throw new Error('takeOver opens a window on the host; do it there');
+                return deps.takeOver.start(str(args[0]));
             case 'providerLogin':
                 throw new Error('providerLogin opens the provider login in a window on the host; do it there');
             case 'features.setBrowserBounds':
@@ -660,6 +670,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         invoke,
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
         ...(deps.localTerminals ? { localTerminals: deps.localTerminals } : {}),
+        ...(deps.takeOver ? { takeOverEnded: (terminalId: string) => deps.takeOver!.ended(terminalId) } : {}),
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
         // A terminal's workspace, remembered once seen: its exit is pushed after it has left the list.
         workspaceOfTerminal: (terminalId) => {

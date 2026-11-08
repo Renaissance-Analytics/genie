@@ -23,7 +23,8 @@ import { describe, expect, it } from 'vitest';
 
 // `spawn-relay.ts` runs in genie-host, never in Electron main: it forks the spawn host's children there (the host split,
 // P2.1), which is what takes process creation out of the window entirely.
-const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts', 'src/main/engine-launch.ts', 'src/main/spawn-relay.ts']);
+// `spawn-host.ts` is the spawn host itself: since Tynn #532 it creates genie-host's git there.
+const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts', 'src/main/engine-launch.ts', 'src/main/spawn-relay.ts', 'src/main/spawn-host.ts']);
 
 /** Still spawning on main, by name. Remove a line when its module moves; never add one. */
 const KNOWN: Readonly<Record<string, string>> = {
@@ -32,8 +33,8 @@ const KNOWN: Readonly<Record<string, string>> = {
     'src/main/private-credentials.ts': "agents' private credential helper: the agent engine (#1387 P1/P3)",
     'src/main/leftover-sweep.ts': 'boot-time leftover provider sweep (asynchronous listing since #1390)',
     'src/main/process-list.ts': 'the OS process table, read off the loop since #1390',
-    'src/main/git-ports.ts': 'repo panel git calls (files host, #1387 P2)',
-    'src/main/repo-git.ts': 'repo panel git calls (files host, #1387 P2)',
+    // git-ports.ts and repo-git.ts create no process themselves since Tynn #532: git-exec.ts does, where it is routed.
+    'src/main/git-exec.ts': 'repo panel git calls in the window (files host, #1387 P2); genie-host routes them to its spawn host (Tynn #532)',
     'src/main/service-exec.ts': "a person's or an agent's `services exec` command, streamed (#1387 P5)",
     'src/main/plugin-runner.ts': 'plugin processes (#1387 P3)',
     'src/main/tailscale-cli.ts': 'Tailscale install/up, on a person\'s click (#1387 P5)',

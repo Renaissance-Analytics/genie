@@ -1,4 +1,4 @@
-import { providerProtocol, sharedProtocol, type ProtocolTool } from '../core/genie-protocol.js';
+import { providerProtocol, sharedProtocol, type ProtocolTool, type WorkTracking } from '../core/genie-protocol.js';
 import { join } from 'node:path';
 import type { SyncTarget } from '../core/integrations.js';
 
@@ -151,12 +151,12 @@ export function configSyncTargets(input: { workspacePath: string; fs: SyncFs; fl
  * config-sync target (§6.9 keeps those four): shared.md, the claude and codex files, and every other
  * `genie-<provider>.md` Genie 1 left, rewritten for a terminal. Nothing else under `.agents/` is touched.
  */
-export async function writeAgentProtocol(input: { workspacePath: string; fs: SyncFs; enabled: boolean; tools: readonly ProtocolTool[] }): Promise<void> {
+export async function writeAgentProtocol(input: { workspacePath: string; fs: SyncFs; enabled: boolean; tools: readonly ProtocolTool[]; /** Where the work is planned: Tynn when Genie is signed in to it, else the plan-file fallback (the default). */ tracking?: WorkTracking }): Promise<void> {
     if (!input.enabled) return;
     // Written only when it differs, so a sync that changed nothing reports nothing (Settings' agent-files line).
     const put = async (path: string, text: string) => { if ((await input.fs.read(path)) !== text) await input.fs.write(path, text); };
     const dir = join(input.workspacePath, '.agents', '_genie').replace(/\\/g, '/');
-    await put(`${dir}/shared.md`, sharedProtocol(input.tools));
+    await put(`${dir}/shared.md`, sharedProtocol(input.tools, input.tracking ?? 'files'));
     const providers = new Set(['claude', 'codex']);
     for (const name of (await input.fs.list?.(dir)) ?? []) {
         const m = /^genie-([a-z0-9-]+)\.md$/.exec(name);

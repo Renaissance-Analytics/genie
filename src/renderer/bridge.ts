@@ -160,7 +160,17 @@ export interface GenieBridge {
     /** This window's local connection status; absent when connected to another host. */
     localProtocol?: LocalProtocolControl;
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
-    remoteWindows?: { open(url: string, name?: string | null): Promise<void>; onReconnectAsked?(listener: () => void): () => void };
+    remoteWindows?: {
+        open(url: string, name?: string | null): Promise<void>;
+        onReconnectAsked?(listener: () => void): () => void;
+        /**
+         * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): a Take Over window HERE on that host's terminal. Main keeps the
+         * ticket for the window it opens, never in its URL or title; that window reads it once (`takeOverTicket`).
+         */
+        openTakeOver?(url: string, terminalId: string, ticket: string, name?: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** This Take Over window's ticket, read once; `null` when there is none (or it was read already). */
+        takeOverTicket?(): Promise<string | null>;
+    };
     /**
      * Every chat's unsent draft, kept by THIS machine's main so it survives a restart and a reload (genie#1261,
      * main/chat-draft-store.ts). Host-only: absent on a remote bridge — a remote host's agents are not this machine's.
@@ -294,7 +304,8 @@ export interface GenieBridge {
      * opens the terminal in the agent's workspace and the window on it; Genie then only
      * watches. The answer says whether it opened and which terminal, or why not.
      */
-    takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+    /** From another machine (Tynn #529 part A) the answer also carries the ticket for this machine's Take Over window. */
+    takeOver(agentId: string): Promise<{ ok: true; terminalId: string; ticket?: string; started?: boolean } | { ok: false; reason: string }>;
 
     /** The safe-mode banner's crash report (Tynn #386 part 4): never sent until the person presses Send. Absent = remote. */
     crashReport?: {

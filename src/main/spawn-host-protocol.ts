@@ -18,7 +18,9 @@
 
 /** v1 was implicit. v2 carries authoritative UTF-16 positions and producer epochs. */
 export const SPAWN_PROTOCOL = 2;
-export const SPAWN_METHODS = ['host.env', 'spawn.exec', 'spawn.stream', 'spawn.unstream', 'pty.open', 'pty.write', 'pty.resize', 'pty.kill', 'pty.list', 'spawn.unstreamAll', 'host.shutdown'] as const;
+// `git.exec [id, file, args, options]` → `{pid}`, then one `git.exit {id, error, stdout, stderr, exitCode, signalCode}`; `git.kill [id]`
+// and `git.stdin [id, input]` act on it (Tynn #532: genie-host's git, created here, its limit and kill-tree still genie-host's).
+export const SPAWN_METHODS = ['host.env', 'spawn.exec', 'spawn.stream', 'spawn.unstream', 'pty.open', 'pty.write', 'pty.resize', 'pty.kill', 'pty.list', 'spawn.unstreamAll', 'host.shutdown', 'git.exec', 'git.kill', 'git.stdin'] as const;
 export type SpawnMethod = (typeof SPAWN_METHODS)[number];
 
 /**
@@ -45,7 +47,7 @@ export interface ListedPty {
 }
 
 // `pty.cwd {id, cwd}`: an interactive terminal's working directory as its shell reports it (OSC-7), for the cwd resume.
-export const SPAWN_EVENTS = ['host.ready', 'pty.opened', 'pty.data', 'pty.exit', 'pty.cwd', 'stream.line', 'stream.end'] as const;
+export const SPAWN_EVENTS = ['host.ready', 'pty.opened', 'pty.data', 'pty.exit', 'pty.cwd', 'stream.line', 'stream.end', 'git.exit'] as const;
 export type SpawnEvent = (typeof SPAWN_EVENTS)[number];
 
 export type SpawnFrame =

@@ -39,7 +39,8 @@ describe('the capability table', () => {
         expect(capabilityOf('updates.download')).toBe('upgrade');
         expect(capabilityOf('updates.install')).toBe('upgrade');
         expect(capabilityOf('addWorkspace')).toBe('host-only');
-        expect(capabilityOf('takeOver')).toBe('host-only');
+        // Tynn #529 part A: Take over from another machine is a write — it needs the baton — and its window opens THERE.
+        expect(capabilityOf('takeOver')).toBe('write');
         expect(capabilityOf('providerLogin')).toBe('host-only');
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
