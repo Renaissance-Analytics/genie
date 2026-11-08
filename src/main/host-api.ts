@@ -208,6 +208,8 @@ export interface HostApiDeps {
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
+        /** Chosen agents who may message it (Tynn #526); `null` turns the choice off. */
+        setAccessAgents(agentId: string, ids: readonly string[] | null): Promise<unknown>;
         setAutoApprove(agentId: string, on: boolean): Promise<unknown>;
         setManageTabs(agentId: string, on: boolean): Promise<unknown>;
         setDrivePages(agentId: string, on: boolean): Promise<unknown>;
@@ -426,6 +428,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setAccessScope':
                 if (typeof args[0] !== 'string' || (args[1] !== 'none' && args[1] !== 'self' && args[1] !== 'all')) return { ok: false, reason: 'scope is none, self or all' };
                 return deps.agentOps.setAccessScope(args[0], args[1]);
+            case 'agents.setAccessAgents':
+                if (typeof args[0] !== 'string' || !(args[1] === null || (Array.isArray(args[1]) && args[1].length <= 500 && args[1].every((id) => typeof id === 'string')))) return { ok: false, reason: 'chosen agents are a list of agent ids, or null to turn the choice off' };
+                return deps.agentOps.setAccessAgents(args[0], args[1] as readonly string[] | null);
             case 'agents.setPermissions':
                 if (typeof args[0] !== 'string' || (args[1] !== 'all' && args[1] !== 'edits' && args[1] !== 'ask')) return { ok: false, reason: 'permissions are all, ask or edits' };
                 return deps.agentOps.setPermissions(args[0], args[1]);

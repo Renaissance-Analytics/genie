@@ -57,7 +57,7 @@ import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
 import { TrustVerdicts } from './trust-verdict.js';
-import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessAgents, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
@@ -1243,6 +1243,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             dailyBudgetUsd: record.dailyBudgetUsd ?? null,
             mode: record.mode,
             accessScope: record.accessScope,
+            // Chosen agents (Tynn #526): only when the choice is on.
+            ...(Array.isArray(record.accessAgents) ? { accessAgents: record.accessAgents } : {}),
             autoApprove: record.autoApprove === true,
             manageTabs: record.manageTabs === true,
             drivePages: record.drivePages === true,
@@ -2073,6 +2075,7 @@ async function boot(): Promise<void> {
             setBudget: (id, usd) => registry!.setBudget(id, usd),
             setMode: (id, mode) => registry!.setMode(id, mode),
             setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
+            setAccessAgents: (id, ids) => registry!.setAccessAgents(id, ids),
             setAutoApprove: (id, on) => registry!.setAutoApprove(id, on),
             setManageTabs: (id, on) => registry!.setManageTabs(id, on),
             setDrivePages: (id, on) => registry!.setDrivePages(id, on),
@@ -2996,6 +2999,7 @@ async function boot(): Promise<void> {
                 setBudget: (id, usd) => setBudget(agentOps, id, usd).finally(() => registry?.touch()),
                 setMode: (id, mode) => setMode(agentOps, id, mode).finally(() => registry?.touch()),
                 setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope).finally(() => registry?.touch()),
+                setAccessAgents: (id, ids) => setAccessAgents(agentOps, id, ids).finally(() => registry?.touch()),
                 setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on).finally(() => registry?.touch()),
                 setManageTabs: (id, on) => setManageTabs(agentOps, id, on).finally(() => registry?.touch()),
                 setDrivePages: (id, on) => setDrivePages(agentOps, id, on).finally(() => registry?.touch()),

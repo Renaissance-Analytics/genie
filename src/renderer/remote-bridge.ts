@@ -398,6 +398,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             },
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),
             setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
+            setAccessAgents: (agentId, ids) => answer('agents.setAccessAgents', agentId, ids),
             setAutoApprove: (agentId, on) => answer('agents.setAutoApprove', agentId, on),
             setManageTabs: (agentId, on) => answer('agents.setManageTabs', agentId, on),
             setDrivePages: (agentId, on) => answer('agents.setDrivePages', agentId, on),

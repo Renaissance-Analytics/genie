@@ -564,7 +564,8 @@ export class Registry {
         const agentsForgotten = this.#agents.filter((a) => a.workspaceId === workspaceId).length;
         // A removed workspace leaves every governor's list.
         this.#workspaces = this.#workspaces.filter((w) => w.id !== workspaceId).map((w) => (w.governs?.includes(workspaceId) ? { ...w, governs: w.governs.filter((id) => id !== workspaceId) } : w));
-        this.#agents = this.#agents.filter((a) => a.workspaceId !== workspaceId);
+        const gone = new Set<string>(this.#agents.filter((a) => a.workspaceId === workspaceId).map((a) => a.id));
+        this.#agents = dropChosen(this.#agents.filter((a) => a.workspaceId !== workspaceId), gone);
         await this.#store.writeWorkspaces(this.#workspaces);
         await this.#store.writeAgents(this.#agents);
         this.#emit();
@@ -574,7 +575,7 @@ export class Registry {
     /** Unmount or delete (§6.2): the record goes; the persona folder is the caller's decision. */
     async forget(agentId: AgentId): Promise<boolean> {
         if (!this.#agents.some((a) => a.id === agentId)) return false;
-        this.#agents = this.#agents.filter((a) => a.id !== agentId);
+        this.#agents = dropChosen(this.#agents.filter((a) => a.id !== agentId), new Set([agentId]));
         await this.#store.writeAgents(this.#agents);
         // A designation never points at nothing: the forgotten default leaves its workspace with none.
         if (this.#workspaces.some((w) => w.defaultAgentId === agentId)) {
@@ -689,8 +690,8 @@ export class Registry {
     }
 
     /** Chosen agents (Tynn #526); `null` turns the choice off. */
-    async setAccessAgents(_agentId: AgentId, _accessAgents: readonly string[] | null): Promise<AgentRecord | null> {
-        return null;
+    async setAccessAgents(agentId: AgentId, accessAgents: readonly string[] | null): Promise<AgentRecord | null> {
+        return this.#update(agentId, ({ accessAgents: _old, ...rest }) => (accessAgents === null ? rest : { ...rest, accessAgents: [...accessAgents] }));
     }
 
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
@@ -788,4 +789,9 @@ export class Registry {
         this.#emit();
         for (const listener of this.#recordListeners) listener(agentId);
     }
+}
+
+/** A deleted agent leaves every chosen-agents list it was on (Tynn #526); a list it was not on is the same object. */
+function dropChosen(agents: AgentRecord[], gone: ReadonlySet<string>): AgentRecord[] {
+    return agents.map((a) => (a.accessAgents?.some((id) => gone.has(id)) ? { ...a, accessAgents: a.accessAgents.filter((id) => !gone.has(id)) } : a));
 }

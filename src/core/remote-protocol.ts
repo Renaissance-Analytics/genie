@@ -43,6 +43,7 @@ export const REMOTE_METHODS = [
     'agents.setBudget',
     'agents.setMode',
     'agents.setAccessScope',
+    'agents.setAccessAgents',
     'agents.setAutoApprove',
     'agents.setManageTabs',
     'agents.setDrivePages',
@@ -181,6 +182,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.setBudget': 'write',
     'agents.setMode': 'write',
     'agents.setAccessScope': 'write',
+    'agents.setAccessAgents': 'write',
     // Autonomy (Tynn #801): what an agent may do without asking — a write, agent-scoped like the other settings.
     'agents.setAutoApprove': 'write',
     'agents.setManageTabs': 'write',
@@ -294,7 +296,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.toolOutput', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.toolOutput', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
 export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 

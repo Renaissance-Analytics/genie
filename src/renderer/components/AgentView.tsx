@@ -15,7 +15,8 @@ import { FidelityDot } from './Dashboard.js';
 import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
-import { Breadcrumbs, Button, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
+import { Breadcrumbs, Button, Checkbox, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
+import { accessChoice, accessFor, toggleChosen, type AccessChoice } from '../../core/agent-access.js';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
 import { IW_DELIVERIES, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
@@ -1365,13 +1366,38 @@ function AgentViewBody({
                                             {ops && has.has('access') ? (
                                                 <label data-settings-row="access" className={rowClass}>
                                                     <span className={labelClass}>Who may message {agent.name}</span>
-                                                    <select data-access-scope={ops.accessScope} value={ops.accessScope === 'specific' ? 'self' : ops.accessScope} onChange={(e) => { touch('access'); ops.onSetAccessScope(e.target.value as 'none' | 'self' | 'all'); }} className={selectClass}>
+                                                    <select data-access-scope={ops.accessScope} value={accessChoice(ops)} onChange={(e) => {
+                                                        touch('access');
+                                                        const choice = e.target.value as AccessChoice;
+                                                        const next = accessFor(choice, ops.accessAgents);
+                                                        if (next.scope !== (ops.accessScope === 'specific' ? 'self' : ops.accessScope)) ops.onSetAccessScope(next.scope);
+                                                        if ((next.agents === null) !== !Array.isArray(ops.accessAgents)) ops.onSetAccessAgents?.(next.agents);
+                                                    }} className={selectClass}>
                                                         <option value="none">nobody</option>
                                                         <option value="self">this workspace</option>
+                                                        {ops.onSetAccessAgents ? <option value="self+chosen">this workspace + chosen agents</option> : null}
+                                                        {ops.onSetAccessAgents ? <option value="chosen">chosen agents</option> : null}
                                                         <option value="all">any workspace here</option>
                                                     </select>
                                                     {outcomeFor('access')}
                                                 </label>
+                                            ) : null}
+                                            {/* Chosen agents (Tynn #526): every awake workspace's agents, each its logo, name and workspace. */}
+                                            {ops && has.has('access') && ops.onSetAccessAgents && Array.isArray(ops.accessAgents) && ops.accessScope !== 'all' ? (
+                                                <div data-access-picker="" role="group" aria-label={`Agents who may message ${agent.name}`} className="flex max-h-56 flex-col gap-0.5 overflow-y-auto rounded-md border border-[var(--border-1)] px-2 py-1.5">
+                                                    {(ops.accessCandidates ?? []).length === 0 ? <span className="text-[11px] text-[var(--fg-3)]">No other agents</span> : null}
+                                                    {(ops.accessCandidates ?? []).map((c) => {
+                                                        const chosen = ops.accessAgents!.includes(c.id);
+                                                        return (
+                                                            <div key={c.id} data-access-candidate={c.id} data-chosen={chosen ? 'true' : 'false'} className="flex items-center gap-2 py-0.5 text-[12px]">
+                                                                <Checkbox checked={chosen} aria-label={`${c.name} in ${c.workspaceName}`} onCheckedChange={(on) => { touch('access'); ops.onSetAccessAgents?.(toggleChosen(ops.accessAgents ?? [], c.id, on)); }} />
+                                                                <ProviderLogo provider={c.provider} size="xs" />
+                                                                <span className="font-medium text-[var(--fg-1)]">{c.name}</span>
+                                                                <span className="truncate text-[var(--fg-3)]">{c.workspaceName}</span>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
                                             ) : null}
                                             {ops && has.has('autonomous') ? (
                                                 <label data-settings-row="autonomous" className={rowClass} title="Each one is recorded. Genie keeps an engine’s data on every remove; deleting data is always yours. Creating an agent always asks you. Applies to its next action.">
