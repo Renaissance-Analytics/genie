@@ -7,6 +7,7 @@ import { PluginHost, type PluginEntry } from './plugin-host.js';
 import { launchSubprocessIn, runPluginTool } from './plugin-runner.js';
 import type { EditorBytesDecision } from '../core/plugin-editors.js';
 import type { PluginsApi } from './plugins-replica.js';
+import type { PublisherKeyRegistry } from './marketplace-client.js';
 
 /**
  * THE PLUGINS ARE GENIE-HOST'S (ADF A3, Tynn #447; spec .ai/plans/specs/adf-sdk.md). The host opens the plugin host over
@@ -28,17 +29,26 @@ export interface PluginsDump {
 export class PluginsService {
     #plugins: PluginHost;
     readonly #open: () => Promise<PluginHost>;
+    readonly #registry: PublisherKeyRegistry | undefined;
+    #refreshing: Promise<boolean> | null = null;
     readonly #listeners = new Set<(dump: PluginsDump) => void>();
 
-    private constructor(plugins: PluginHost, open: () => Promise<PluginHost>) {
+    private constructor(plugins: PluginHost, open: () => Promise<PluginHost>, registry?: PublisherKeyRegistry) {
         this.#plugins = plugins;
         this.#open = open;
+        this.#registry = registry;
     }
 
     /** `publisherChecksOff` is read at every (re)open: the setting is the host's own (P3.2; ADF B5). */
-    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; publisherChecksOff: () => boolean }): Promise<PluginsService> {
-        const open = () => PluginHost.open({ dir: input.dir, keys: input.keys, publisherChecksOff: input.publisherChecksOff(), official: OFFICIAL_PLUGINS });
-        return new PluginsService(await open(), open);
+    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; publisherChecksOff: () => boolean; registry?: PublisherKeyRegistry }): Promise<PluginsService> {
+        const registry = input.registry;
+        const open = () => PluginHost.open({
+            dir: input.dir,
+            keys: registry?.publisherKeys(input.keys) ?? input.keys,
+            publisherChecksOff: input.publisherChecksOff(), official: OFFICIAL_PLUGINS,
+            ...(registry ? { keyState: (id: string) => Object.hasOwn(input.keys, id) ? 'trusted' as const : registry.keyState(id) } : {}),
+        });
+        return new PluginsService(await open(), open, registry);
     }
 
     /** The plugin host now (a refresh replaces it). */
@@ -69,9 +79,8 @@ export class PluginsService {
                 return changed;
             }
             case 'refresh':
-                this.#plugins = await this.#open();
-                this.#emit();
-                return true;
+                this.#refreshing ??= this.#refresh().finally(() => { this.#refreshing = null; });
+                return this.#refreshing;
             case 'setNetworkAllowed': {
                 // ADF B5: an Unverified package's network, allowed or taken back by the person; kept.
                 const changed = await this.#plugins.setNetworkAllowed(String(args[0] ?? ''), args[1] === true);
@@ -81,6 +90,18 @@ export class PluginsService {
             default:
                 throw new Error(`the plugins have no ${method}`);
         }
+    }
+
+    async #refresh(): Promise<boolean> {
+        let failure: unknown;
+        let failed = false;
+        try { await this.#registry?.refresh(); }
+        catch (error) { failed = true; failure = error; }
+        // Even offline, re-open against current cache freshness and any completed-snapshot withdrawals.
+        this.#plugins = await this.#open();
+        this.#emit();
+        if (failed) throw failure;
+        return true;
     }
 
     #emit(): void {
@@ -120,6 +141,8 @@ export class LocalPlugins implements PluginsApi {
     /** The ENABLED plugins' tools and each one's guard, live across a refresh. */
     tools(): ReturnType<PluginHost['tools']> { return this.#host.tools(); }
     guard(pluginId: string): ReturnType<PluginHost['guard']> { return this.#host.guard(pluginId); }
+    /** Every installable plugin's manifest, for the catalog built from these plugins (ADF A5). */
+    manifests(): ReturnType<PluginHost['manifests']> { return this.#host.manifests(); }
 }
 
 export interface PluginToolsRunOptions {

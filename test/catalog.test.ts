@@ -172,7 +172,7 @@ describe('one envelope, one validator', () => {
     });
 
     it('the kinds: what a plugin or GApp can contribute, plus Genie 1’s reserved families (decision 1 and 3)', () => {
-        expect([...ELEMENT_KINDS].sort()).toEqual(['editor', 'flow-node', 'host-service', 'overlay', 'page', 'panel', 'provider', 'recipe', 'service-engine', 'tool']);
+        expect([...ELEMENT_KINDS].sort()).toEqual(['app', 'editor', 'flow-node', 'host-service', 'overlay', 'page', 'panel', 'provider', 'recipe', 'service-engine', 'tool']);
         expect([...RESERVED_KINDS].sort()).toEqual(['flyout', 'modal', 'wizard', 'workspace-settings-page', 'workstation-page']);
         expect([...ELEMENT_SOURCES]).toEqual(['builtin', 'plugin', 'gapp']);
         expect(validateDefinition(tool({ kind: 'flyout', payload: {} })).ok).toBe(true);

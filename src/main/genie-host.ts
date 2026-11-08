@@ -85,6 +85,16 @@ import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
 import { hostRemoteApi, RelayBridgeHost, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
+import type { HostApi } from './remote-host.js';
+import { hostAloneApi } from './host-alone-api.js';
+import { Registry } from './registry.js';
+import { FilesHost } from './files-host.js';
+import { fileEventsOf } from '../core/files-panel.js';
+import { gitFileStatus, gitShowHead } from './git-ports.js';
+import { assembleDeckItems } from './deck-assembly.js';
+import { Coalescer, realSchedule } from '../core/coalesce.js';
+import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
+import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileText } from './toolchain-runner.js';
 import { workstationKeyStore } from './workstation-identity.js';
@@ -92,6 +102,10 @@ import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
 import { sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
+import { openRelayMember, PopKeypair } from './relay-member.js';
+import { mintConnectGrant } from './tynn-network.js';
+import { RemoteBrowsers } from './remote-browsers.js';
+import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
 import { deviceSocket } from './device-socket.js';
 import { configWriter, writeWorkspaceConfig } from './workspace-config-sync.js';
@@ -110,8 +124,11 @@ import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { attentionLimitsFrom } from './attention-store.js';
 import { startHostMcp, type HostMcp } from './host-mcp.js';
-import { hostPluginTools, PluginsService } from './plugins-host.js';
+import { hostPluginTools } from './plugins-host.js';
+import { MARKETPLACE_PAGE_BYTES, openMarketplacePlugins } from './marketplace-client.js';
 import { CatalogService } from './catalog-host.js';
+import { setOfferedFlowKinds } from '../core/flow-canvas.js';
+import { catalogFlowKinds } from '../core/catalog-projections.js';
 import { hostCatalog } from './genie-catalog.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
@@ -459,6 +476,9 @@ async function main(): Promise<void> {
         log: say,
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
     })));
+    /** This host's Tynn account once open (Tynn #552): a relay connection asks it synchronously whether it is signed in. */
+    let tynnAccountNow: TynnAccount | null = null;
+    void tynnOpening.then((account) => { tynnAccountNow = account; }, () => {});
     // GITHUB'S ACCOUNT (P3.4 cut c): its tokens and the authenticated git are here, and never cross to a window.
     const githubOpening = proxyMemory.then((memory) => {
         const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say, followSameOrigin: 5 });
@@ -689,13 +709,26 @@ async function main(): Promise<void> {
      * under developer mode (the host's own setting). Its MCP server offers and runs their tools with no window; every
      * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
      */
-    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true });
+    let marketplaceTransport: ReturnType<typeof hostHttpsFetch> | undefined;
+    const marketplacePlugins = await openMarketplacePlugins({
+        pluginsDir: join(home, 'plugins'), cacheFile: join(home, 'marketplace-publisher-keys.json'), origin: TYNN_HOST,
+        keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true,
+        fetch: async (url, init) => {
+            const memory = await proxyMemory;
+            marketplaceTransport ??= hostHttpsFetch({ proxyRoutes: target => memory.routesFor(target), log: say, maxResponseBytes: MARKETPLACE_PAGE_BYTES });
+            return marketplaceTransport(url, init);
+        }, log: say,
+    });
+    const pluginsService = marketplacePlugins.plugins;
     /*
      * THE CATALOG (ADF A4, Tynn #448): Genie's own elements and every ENABLED installed plugin's, revisioned. Built again
      * whenever the plugins change; every window follows it over the engine connection (catalog.snapshot, catalog.changed).
      */
     const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins()));
     pluginsService.onEvent(() => catalogService.rebuild());
+    // The flow palette's door and the runner here offer what the catalog holds, as it changes (ADF A5).
+    setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions));
+    catalogService.onEvent(() => setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions)));
     /*
      * REMOTE ACCESS'S HOST SIDE (Tynn #409, host split P5d.1): the tailnet listener, the remote host, the paired devices,
      * the PIN, the pair prompts, the baton and the lock are HERE, so a paired phone reaches this machine with every window
@@ -728,6 +761,8 @@ async function main(): Promise<void> {
     const relayBridge = new RelayBridgeHost((owner, event) => engineRef?.remoteAccessEvent(owner, { kind: 'bridge', event }));
     const remoteHub = transportHub(remoteListen.transport);
     remoteHub.add(relayBridge);
+    /** genie-host's own answers to a phone (Tynn #551): built once its session host is up, below. */
+    let phoneApi: HostApi | null = null;
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
         hostName: hostname(),
@@ -742,6 +777,8 @@ async function main(): Promise<void> {
                 invoke: (method, args) => (engineRef ? engineRef.remoteInvoke(method, args) : Promise.reject(new Error('no Genie window is connected'))),
             },
             onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
+            // The phone's methods and events with every window closed (host-alone-api.ts).
+            alone: () => phoneApi,
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
         }),
     });
@@ -755,7 +792,6 @@ async function main(): Promise<void> {
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
     });
     settings.onChange((key, _value, workspaceId) => { if (key === 'remote_access' && workspaceId === undefined) void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`)); });
-    void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`));
     const engine = new SessionEngineServer({
         token,
         build,
@@ -802,6 +838,21 @@ async function main(): Promise<void> {
             socket: (url) => deviceSocket(url),
             send: (owner, event) => engine.deviceEvent(owner, event),
             log: say,
+            /*
+             * A PILOT'S CONNECTION TO ANOTHER TYNN WORKSTATION (Tynn #552, host split P5d.4; audit M-e): the grant is minted
+             * here with this host's Tynn account, the proof key made and kept here, the relay member opened and renewed
+             * here; the window gets a channel. The browser's door to that workstation's sites is here too.
+             */
+            relay: {
+                signedIn: () => tynnAccountNow?.status().signedIn === true,
+                keypair: () => PopKeypair.generate(),
+                mint: (workstationId, jwk) => (tynnAccountNow
+                    ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
+                    : Promise.resolve({ ok: false as const, reason: 'sign in to Tynn to connect to a Tynn workstation' })),
+                // Through the one socket this host dials with (device-socket.ts): the machine's roots, no redirects.
+                open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
+            },
+            browsers: new RemoteBrowsers(siteDoor),
         }),
         workstation: new WorkstationService({
             store: workstationKeyStore(join(home, 'workstation.json'), keychain),
@@ -948,6 +999,78 @@ async function main(): Promise<void> {
         restart: (id) => trustRestart(id),
     });
     host.subscribe((id) => hostVerdicts?.check(id));
+    /*
+     * THE PHONE, WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2): the same host API a window runs (host-alone-api.ts),
+     * over a registry on this host's own registry store, this session host, its attention, inbox and approval stores, and
+     * the workspaces' files. The remote host uses it for the phone's methods only while no window is connected.
+     */
+    const phoneRegistry = new Registry(registryStore);
+    await phoneRegistry.load({ name: hostname(), healthy: true });
+    phoneRegistry.setWorkspaceNamer(workspaceNameFor);
+    phoneRegistry.setProbe((id) => host.probe(id));
+    phoneRegistry.setHandoffProbe((id) => own.attention.lastHandoff(id));
+    phoneRegistry.setSafeMode(() => safeMode.view());
+    phoneRegistry.setHangNotice(() => crashState.view().notice);
+    const phoneAgents = () => Object.fromEntries(hostRegistry.listAgents().map((a) => [a.id as string, { name: a.name, workspaceId: a.workspaceId }]));
+    phoneRegistry.setDeckSource(() => assembleDeckItems({
+        workspaces: hostRegistry.listWorkspaces(),
+        workspaceName: workspaceNameFor,
+        approvals: approvals.deckItems(),
+        trust: hostingStack?.trustDeckItems() ?? [],
+        attention: own.attention,
+        inbox: own.inbox,
+        agents: phoneAgents(),
+    }));
+    // What this host can measure itself: mail agents have not collected, the OS agent working. Flows in flight and GitHub's
+    // block are the window's to say (Tynn #551 notes it); with no window they read none.
+    phoneRegistry.setSignals(() => ({
+        flowsRunning: 0,
+        uncollectedMail: hostRegistry.listAgents().reduce((n, a) => n + own.inbox.unread(a.id).length, 0),
+        githubBlocked: false,
+        osAgentWorking: (() => { const os = hostRegistry.listAgents().find(isOsAgent); return os ? host.probe(os.id)?.turnState === 'working' : false; })(),
+    }));
+    // Its snapshot follows the stores and the sessions, coalesced as the window's is, and only while no window is
+    // connected: a snapshot is built on every touch, and with a window open the window answers.
+    const phoneEstate = new Coalescer<'estate'>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: () => { if (engine.newestLocalWindow() === null) phoneRegistry.touch(); }, schedule: realSchedule, now: () => Date.now() });
+    const phoneTouch = () => { if (engine.newestLocalWindow() === null) phoneEstate.request('estate'); };
+    stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
+    host.subscribe(() => phoneTouch());
+    approvals.onChange(phoneTouch);
+    const phoneFiles = new FilesHost({
+        gitStatus: gitFileStatus,
+        gitShowHead,
+        gitTree: gitTreeStatus,
+        workspace: (id) => hostRegistry.workspace(id),
+        agentsOf: (workspaceId) => hostRegistry.listAgents().filter((a) => a.workspaceId === workspaceId).map((a) => ({ id: a.id, name: a.name })),
+        eventsOf: (agentId) => {
+            const record = hostRegistry.find(agentId);
+            return record ? fileEventsOf(host.rowsFor(record.id), { id: record.id, name: record.name }) : [];
+        },
+    });
+    const phoneCwd = (record: AgentRecord): string => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome;
+    phoneApi = hostAloneApi({
+        hostName: hostname(),
+        registry: phoneRegistry,
+        engine: () => host,
+        cwdFor: phoneCwd,
+        startRefusal: (r) => startRefusal({ registry: hostRegistry }, r, {
+            running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
+            cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
+        }),
+        attention: own.attention,
+        approvals,
+        inbox: own.inbox,
+        deliverToAgent: (agentId, text) => host.deliver(agentId as AgentId, text, 'you'),
+        files: {
+            children: async (workspaceId, dir) => (await phoneFiles.children(workspaceId, dir)) ?? null,
+            open: (workspaceId, path) => phoneFiles.open(workspaceId, path),
+            readBytes: (workspaceId, path) => phoneFiles.readBytes(workspaceId, path),
+            upload: (workspaceId, dir, name, bytes) => phoneFiles.upload(workspaceId, dir, name, bytes),
+        },
+        updates: { state: () => updatesService.dump(), onChange: (listener) => updatesService.onEvent(listener), check: async () => { throw new Error('check for updates from Genie’s window'); }, download: async () => false, install: () => null },
+    });
+    // The tailnet listener starts only now (remote_access on): a phone that connects finds the host's own answers ready.
+    void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`));
     tynnRecovery = hostTynnRecovery({
         watchWake: wallClockJumps,
         names: (asked) => agentKeys.recovery(asked),
@@ -969,7 +1092,7 @@ async function main(): Promise<void> {
     let flowsOpening: Promise<void> | null = null;
     let processBookNow: ProcessBook | null = null;
     /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
-    const clocks: Array<{ stop(): void }> = [];
+    const clocks: Array<{ stop(): void }> = [marketplacePlugins];
     /** The clocks to plan again when the person leaves safe mode — arming what may fire later, and starting nothing now. */
     const planners: Array<{ plan(): void }> = [];
     safeMode.onChange((view) => { if (!view.active) for (const p of planners) p.plan(); });

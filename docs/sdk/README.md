@@ -20,6 +20,7 @@ A package is signed over every file in it: [the package format](packages.md) (`g
 | [recipe](kinds/recipe.md) | active | per definition | A guided sequence of steps the person walks through. |
 | [flow-node](kinds/flow-node.md) | active | per definition | A node in the Flows palette. The executor the payload names runs it. |
 | [host-service](kinds/host-service.md) | active | host or both | A service genie-host runs and keeps running with no window open (remote access, a relay). On both sides it has a client part, and its reach.link says how the two talk. |
+| [app](kinds/app.md) | active | both | A GApp: a UI that runs in its own window and talks to Genie only through the host, over the bridge, within what the person granted it. Its window draws it; its grant, storage and calls live in genie-host. |
 | [page](kinds/page.md) | active | per definition | A family a package may contribute. It has no fixed payload fields yet: its payload is any JSON object, and the Genie release that runs it adds them here. |
 | [overlay](kinds/overlay.md) | active | per definition | A family a package may contribute. It has no fixed payload fields yet: its payload is any JSON object, and the Genie release that runs it adds them here. |
 | [provider](kinds/provider.md) | active | per definition | A family a package may contribute. It has no fixed payload fields yet: its payload is any JSON object, and the Genie release that runs it adds them here. |
