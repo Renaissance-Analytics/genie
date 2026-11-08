@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -138,5 +138,17 @@ describe('the Files push budget (Tynn #523)', () => {
         expect(before.reasons).toEqual(['a: p95 140000 bytes per Files push (bound 32768)', 'a: mean 140000 bytes per Files push (bound 24576)']);
         expect(pushVerdict([{ pass: 'a', sizes: [30_000, 30_000, 30_000] }]).reasons).toEqual(['a: mean 30000 bytes per Files push (bound 24576)']);
         expect(pushVerdict([{ pass: 'a', sizes: [] }]).reasons).toEqual(['a: no Files push during the build']);
+    });
+});
+
+describe('the page budget while a terminal streams (Tynn #525)', () => {
+    it('passes within the slack of idle, and names each way it fails', () => {
+        expect(pageVerdict({ idle: { count: 50, p95: 45 }, streaming: { count: 50, p95: 52, worstFrameGapMs: 83 } }).ok).toBe(true);
+        // The measured page before (Linux): p95 66.5 against idle 45.2, a 117 ms frame gap.
+        expect(pageVerdict({ idle: { count: 50, p95: 45.2 }, streaming: { count: 50, p95: 66.5, worstFrameGapMs: 117 } }).reasons).toEqual([
+            'mouse to frame p95 66.5 ms while the terminal streams, idle 45.2 ms (bound idle + 10)',
+            'a frame gap of 117 ms while the terminal streams (bound 100)',
+        ]);
+        expect(pageVerdict({ idle: { count: 0, p95: 0 }, streaming: { count: 50, p95: 10, worstFrameGapMs: 0 } }).ok).toBe(false);
     });
 });

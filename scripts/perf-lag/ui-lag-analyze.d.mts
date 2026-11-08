@@ -37,3 +37,6 @@ export function pushVerdict(passes: Array<{ pass: string; sizes: number[] }>, op
     ok: boolean; p95Bytes: number; meanBytes: number;
     rows: Array<{ pass: string; count: number; meanBytes: number | null; p95Bytes: number | null; maxBytes: number | null }>; reasons: string[];
 };
+export function pageVerdict(input: { idle: { count: number; p95: number } | null; streaming: { count: number; p95: number; worstFrameGapMs: number } | null }, options?: { p95SlackMs?: number; maxFrameGapMs?: number }): {
+    ok: boolean; p95SlackMs: number; maxFrameGapMs: number; idleP95: number | null; streamingP95: number | null; worstFrameGapMs: number | null; reasons: string[];
+};
