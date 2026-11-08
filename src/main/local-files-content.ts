@@ -9,7 +9,7 @@ import { LocalBlobs } from './local-blobs.js';
 import { LocalPageBudget, LocalPages } from './local-pages.js';
 import { beginArtboardBuildTiming } from './artboard-build-timing.js';
 
-interface Scope { ref: string; expires: number; timer: ReturnType<typeof setTimeout>; releaseBudget: () => void; refs: Set<string>; sources: Set<BlobSource>; heldSources: Set<StreamResource>; opening: Map<AbortController, Promise<void>>; closing: Promise<void> }
+interface Scope { ref: string; label: string; expires: number; timer: ReturnType<typeof setTimeout>; releaseBudget: (() => void) | null; refs: Set<string>; sources: Set<BlobSource>; heldSources: Set<StreamResource>; opening: Map<AbortController, Promise<void>>; closing: Promise<void> }
 interface StreamResource { scope: Scope; type: 'source'; source: BlobSource; closing: Promise<void> | null }
 interface ArtboardFileResource { scope: Scope; type: 'artboard-file'; artifact: ArtboardArtifact }
 type Resource = StreamResource | ArtboardFileResource | ({ scope: Scope } & ({ type: 'blob'; kind: BlobKind; bytes: Buffer | null; sha256: string } | { type: 'page'; kind: FilesPageKind; value: readonly unknown[] | Record<string, unknown>; object: boolean; projected: boolean; cache?: Map<number, MetadataItem> } | { type: 'draft-page'; items: readonly DraftMetadata[] } | { type: 'artboard-page'; items: readonly ArtboardMetadata[] }));
@@ -29,15 +29,19 @@ export class LocalFilesContent {
         this.blobs = new LocalBlobs(async (kind, ref) => this.#refs.has(ref) ? this.#blob(kind, ref) : deps.openBlob ? deps.openBlob(kind, ref) : Promise.reject(new Error('no such workspace content ref on this connection')));
         this.pages = new LocalPages(async (kind, ref) => this.#refs.has(ref) ? this.#page(kind, ref) : deps.openPage ? deps.openPage(kind, ref) : Promise.reject(new Error('no such workspace metadata ref on this connection')), this.#budget, ref => this.#refs.get(ref)?.scope.ref);
     }
-    begin(): string {
+    /**
+     * A response scope for one call. It takes a page slot only when its result is actually HELD (its first ref), never
+     * while the host is still running the call or for a result that travels inline (Tynn #547). `label` names the holder.
+     */
+    begin(label = 'a response'): string {
         this.#assertOpen(); this.#expire();
-        const ref = randomUUID(), releaseBudget = this.#budget.hold(ref);
+        const ref = randomUUID();
         const timer = setTimeout(() => this.release(ref), LOCAL_UPLOAD_TTL_MS); timer.unref?.();
-        this.#scopes.set(ref, { ref, releaseBudget, timer, expires: this.#now() + LOCAL_UPLOAD_TTL_MS, refs: new Set(), sources: new Set(), heldSources: new Set(), opening: new Map(), closing: Promise.resolve() });
+        this.#scopes.set(ref, { ref, label, releaseBudget: null, timer, expires: this.#now() + LOCAL_UPLOAD_TTL_MS, refs: new Set(), sources: new Set(), heldSources: new Set(), opening: new Map(), closing: Promise.resolve() });
         return ref;
     }
-    capture(value: unknown, kind: FilesPageKind, bytes = false): unknown {
-        const ref = this.begin();
+    capture(value: unknown, kind: FilesPageKind, bytes = false, label?: string): unknown {
+        const ref = this.begin(label);
         try { return this.result(ref, value, kind, bytes); } catch (error) { this.release(ref); throw error; }
     }
     result(ref: string, value: unknown, kind: FilesPageKind, bytes = false): unknown {
@@ -108,7 +112,7 @@ export class LocalFilesContent {
         scope.closing = Promise.all([...scope.opening.values(), ...[...scope.heldSources].map(resource => this.#closeStream(resource).catch(() => { console.warn('[genie] a content response source could not be released'); }))]).then(() => {});
         scope.heldSources.clear();
         for (const id of scope.refs) { const resource = this.#refs.get(id); if (resource?.type === 'blob') resource.bytes = null; this.#refs.delete(id); }
-        scope.refs.clear(); scope.sources.clear(); scope.releaseBudget();
+        scope.refs.clear(); scope.sources.clear(); scope.releaseBudget?.(); scope.releaseBudget = null;
         return { released: true };
     }
     async releaseAndWait(ref: unknown): Promise<{ released: boolean }> {
@@ -126,7 +130,9 @@ export class LocalFilesContent {
         const scope = this.#scopes.get(ref); if (!scope) throw new Error('the content ref was released or expired on this connection'); return scope;
     }
     #resource(scope: Scope, value: Resource): string {
-        this.#scope(scope.ref); const ref = randomUUID(); scope.refs.add(ref); this.#refs.set(ref, value); return ref;
+        this.#scope(scope.ref);
+        scope.releaseBudget ??= this.#budget.hold(scope.ref, scope.label);
+        const ref = randomUUID(); scope.refs.add(ref); this.#refs.set(ref, value); return ref;
     }
     #project(scope: Scope, value: unknown, kind: FilesPageKind, bytes: boolean, key?: string): FilesProjection {
         if (value === undefined) return { t: 'undefined' };
