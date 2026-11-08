@@ -31,8 +31,9 @@ import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
 import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
-const SLICE_PAIRS = 5, SLICE_MS = 1200, SETTLE_MS = 400;
-const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, HOST_BUDGET_MS = 100, IDLE_MS = 6000, BUILD_MS = 34000, CONTROL_MS = 120;
+// Ten pairs (the coordinator's (b), Tynn #536): a stable median of paired differences on the Linux runner.
+const SLICE_PAIRS = 10, SLICE_MS = 1200, SETTLE_MS = 400;
+const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, HOST_BUDGET_MS = 100, IDLE_MS = 6000, BUILD_MS = 52000, CONTROL_MS = 120;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
 const json = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };

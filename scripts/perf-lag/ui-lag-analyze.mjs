@@ -183,16 +183,18 @@ const median = (values) => { const v = values.filter(Number.isFinite).sort((a, b
  * no terminal at all).
  */
 export function sliceVerdict({ on, off }, { p95SlackMs = 10, maxFrameGapMs = 100, minSlices = 3 } = {}) {
-    const usable = (xs) => xs.filter((x) => x.count > 0);
-    const onU = usable(on), offU = usable(off), reasons = [];
-    const onP95 = median(onU.map((x) => x.p95)), offP95 = median(offU.map((x) => x.p95)), onGap = median(onU.map((x) => x.worstGapMs));
+    // PAIRED (the coordinator's (b)): slice k "on" against slice k "off", next to it in time, so a runner that slows down or
+    // speeds up during the build moves both. Only pairs where both slices had input count.
+    const pairs = on.map((x, k) => [x, off[k]]).filter(([a, b]) => a && b && a.count > 0 && b.count > 0);
+    const diffs = pairs.map(([a, b]) => a.p95 - b.p95), reasons = [];
+    const diff = median(diffs), onP95 = median(pairs.map(([a]) => a.p95)), offP95 = median(pairs.map(([, b]) => b.p95)), onGap = median(pairs.map(([a]) => a.worstGapMs));
     const r = (v) => (v === null ? null : Math.round(v * 10) / 10);
-    if (onU.length < minSlices || offU.length < minSlices) reasons.push(`too few slices with input: ${onU.length} with the terminal on screen, ${offU.length} off (need ${minSlices} each)`);
+    if (pairs.length < minSlices) reasons.push(`too few pairs with input on both sides: ${pairs.length} (need ${minSlices})`);
     else {
-        if (onP95 > offP95 + p95SlackMs) reasons.push(`mouse to frame p95, median of ${onU.length} slices: ${r(onP95)} ms with the terminal on screen, ${r(offP95)} ms off (bound off + ${p95SlackMs})`);
-        if (onGap > maxFrameGapMs) reasons.push(`worst frame gap, median of ${onU.length} slices with the terminal on screen: ${r(onGap)} ms (bound ${maxFrameGapMs})`);
+        if (diff > p95SlackMs) reasons.push(`mouse to frame p95, median of ${pairs.length} paired differences: the terminal on screen ${r(diff)} ms over off (bound ${p95SlackMs}; on ${r(onP95)}, off ${r(offP95)})`);
+        if (onGap > maxFrameGapMs) reasons.push(`worst frame gap, median of ${pairs.length} slices with the terminal on screen: ${r(onGap)} ms (bound ${maxFrameGapMs})`);
     }
-    return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, onSlices: onU.length, offSlices: offU.length, onP95: r(onP95), offP95: r(offP95), onWorstGapMs: r(onGap), reasons };
+    return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, pairs: pairs.length, diffP95: r(diff), diffs: diffs.map(r), onP95: r(onP95), offP95: r(offP95), onWorstGapMs: r(onGap), reasons };
 }
 
 /**

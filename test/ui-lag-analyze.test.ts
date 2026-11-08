@@ -160,12 +160,16 @@ describe('the page budget from interleaved slices (Tynn #536)', () => {
         expect(sliceVerdict({ on: [slice(64), slice(66), slice(65)], off: [slice(63), slice(62), slice(64)] }).ok).toBe(true);
         // One bad slice among good ones does not fail it.
         expect(sliceVerdict({ on: [slice(20), slice(90, 120), slice(21)], off: [slice(18), slice(19), slice(18)] }).ok).toBe(true);
-        // The old per-chunk render: every "on" slice slower.
+        // The old per-chunk render: every "on" slice slower than the "off" slice beside it.
         expect(sliceVerdict({ on: [slice(60, 100), slice(62, 117), slice(66, 117)], off: [slice(44), slice(45), slice(46)] }).reasons).toEqual([
-            'mouse to frame p95, median of 3 slices: 62 ms with the terminal on screen, 45 ms off (bound off + 10)',
+            'mouse to frame p95, median of 3 paired differences: the terminal on screen 17 ms over off (bound 10; on 62, off 45)',
             'worst frame gap, median of 3 slices with the terminal on screen: 117 ms (bound 100)',
         ]);
-        expect(sliceVerdict({ on: [slice(1), slice(1, 0, 0)], off: [slice(1), slice(1), slice(1)] }).reasons).toEqual(['too few slices with input: 1 with the terminal on screen, 3 off (need 3 each)']);
+        // PAIRED: a runner that slows down during the build moves both slices of a pair, not the verdict.
+        expect(sliceVerdict({ on: [slice(30), slice(50), slice(70)], off: [slice(25), slice(45), slice(65)] }).diffs).toEqual([5, 5, 5]);
+        expect(sliceVerdict({ on: [slice(30), slice(50), slice(70)], off: [slice(25), slice(45), slice(65)] }).ok).toBe(true);
+        // A pair with no input on one side does not count.
+        expect(sliceVerdict({ on: [slice(1), slice(1, 0, 0), slice(1)], off: [slice(1), slice(1), slice(1)] }).reasons).toEqual(['too few pairs with input on both sides: 2 (need 3)']);
     });
 });
 
