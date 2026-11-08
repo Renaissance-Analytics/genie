@@ -24,7 +24,7 @@ export const MAX_SECRET_CHARS = 1280;
 const NO_KEYCHAIN = 'Genie needs a keyring to keep your sign-ins safe, and it did not answer, so nothing was saved';
 
 /** What is kept, by name. The agents' and the workstations' are one entry each. */
-export type SecretName = 'tynn/pairing' | 'github/access' | 'github/refresh' | `tynn/agent/${string}` | `workstation/${string}` | `device/${string}`;
+export type SecretName = 'tynn/pairing' | 'github/access' | 'github/refresh' | `tynn/agent/${string}` | `workstation/${string}` | `device/${string}` | `mail/inbox/${string}`;
 
 export type KeychainRead =
     | { readonly kind: 'value'; readonly value: string }

@@ -12,6 +12,9 @@ export const MAILPIT_SMTP_AUTH_FILE = 'smtp-auth';
 /** Where that directory is inside the Mailpit container. */
 export const MAILPIT_AUTH_MOUNT = '/genie-mail';
 
+/** A workspace's default inbox, the one its sites and processes send as (Genie Mail G5): `app@<workspace>.mail.gen`. */
+export const DEFAULT_INBOX = 'app';
+
 /** Decision 5 (approved 2026-11-07): per inbox, 500 messages or 200 MB, the oldest pruned first. */
 export const MAIL_INBOX_CAPS = { messages: 500, bytes: 200 * 1024 * 1024 } as const;
 
