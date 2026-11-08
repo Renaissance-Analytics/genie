@@ -51,7 +51,7 @@ export function outputBatch(ports: OutputBatchPorts): OutputBatch {
             cancel ??= later(flush, BATCH_MS);
         },
         flush,
-        drop(id) { held.delete(id); if (held.size === 0) unschedule(); },
+        drop(_id) { /* PROBE */ },
         close() { closed = true; held.clear(); unschedule(); },
     };
 }
