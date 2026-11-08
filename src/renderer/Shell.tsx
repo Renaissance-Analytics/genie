@@ -857,6 +857,7 @@ export function Shell({
                             onPauseAgent={onPauseAgent}
                             onResumeAgent={onResumeAgent}
                             pluginPanels={features.plugins?.panels ?? []}
+                            pluginEntries={features.plugins?.entries ?? []}
                             ops={workspaceOps}
                         />
                         </ErrorBoundary>

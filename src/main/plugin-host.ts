@@ -140,6 +140,11 @@ export class PluginHost {
         return Object.fromEntries(this.#entries.filter((e) => e.manifest && (e.state === 'enabled' || e.state === 'disabled')).map((e) => [e.id, e.manifest!]));
     }
 
+    /** The plugins directory this host reads. */
+    dir(): string {
+        return this.#dir;
+    }
+
     list(): readonly PluginEntry[] {
         return this.#entries.map(({ manifest: _m, ...entry }) => entry);
     }

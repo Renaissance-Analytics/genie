@@ -75,6 +75,9 @@ describe('the Workspace surface with plugin panes', () => {
         const state = pluginOpened(terminalOpened(emptyWorkspace(), tab('t1'), ''), 'acme.gone', 'x');
         const html = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} pluginPanels={panels} initialState={state} />);
         expect(html).toContain('data-plugin-pane-missing="acme.gone/x"');
-        expect(html).toMatch(/not enabled|no longer/);
+        // ADF A6 (Tynn #450): the reason, as the plugins are now — here not installed at all.
+        expect(html).toContain('acme.gone is not installed any more: close this pane.');
+        const off = renderToStaticMarkup(<Workspace view="terminals" workspace={workspace} terminals={NO_TERMINALS} pluginPanels={panels} pluginEntries={[{ id: 'acme.gone', name: 'Gone', state: 'disabled' }]} initialState={state} />);
+        expect(off).toContain('Gone is turned off: turn it on in Settings, Plugins, or close this pane.');
     });
 });
