@@ -22,7 +22,7 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-host-catalog-
 afterEach(async () => { await mcp?.stop(); mcp = null; await rm(dir, { recursive: true, force: true }); });
 
 const never = () => { throw new Error('not exercised'); };
-function ports(plugins: HostMcpPorts['plugins'], windowConnected: () => boolean): HostMcpPorts {
+function ports(plugins: NonNullable<HostMcpPorts['plugins']>, windowConnected: () => boolean): HostMcpPorts {
     return {
         stores: { inbox: never, attention: never, knowledge: never, approvals: { gate: async () => 'denied' } } as never,
         settings: { snapshot: () => ({}), snapshotFor: () => ({}) } as never,

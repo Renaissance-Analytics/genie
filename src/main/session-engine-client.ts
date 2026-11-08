@@ -48,6 +48,8 @@ import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-in
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
+import type { PluginsDump } from './plugins-host.js';
+import { PluginsReplica } from './plugins-replica.js';
 import type { BrowserEvent } from './browser-service.js';
 import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
@@ -172,6 +174,7 @@ export class SessionEngineClient {
     #hosting: HostingReplica | null = null;
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
+    #plugins: PluginsReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
     #tynn: TynnAccountReplica | null = null;
@@ -362,6 +365,9 @@ export class SessionEngineClient {
                 return;
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
+                return;
+            case 'plugins.event':
+                this.plugins().rebase(payload as PluginsDump);
                 return;
             case 'appInbox.dump':
                 this.appInbox().rebase(payload as AppInboxDump);
@@ -744,6 +750,16 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#flows;
+    }
+
+    /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */
+    plugins(): PluginsReplica {
+        this.#plugins ??= new PluginsReplica(async (method, args) => {
+            const reply = await this.call('engine.plugins', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#plugins;
     }
 
     /** genie-host's process book and scheduler, as this window lists and manages them (P3.3c). */

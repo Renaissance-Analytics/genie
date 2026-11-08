@@ -135,6 +135,11 @@ export class PluginHost {
         return editorBytesAccess(entry.manifest, path);
     }
 
+    /** Every installable plugin's manifest, by id (refused and invalid ones have none to trust): what a window decides from. */
+    manifests(): Readonly<Record<string, PluginManifest>> {
+        return Object.fromEntries(this.#entries.filter((e) => e.manifest && (e.state === 'enabled' || e.state === 'disabled')).map((e) => [e.id, e.manifest!]));
+    }
+
     list(): readonly PluginEntry[] {
         return this.#entries.map(({ manifest: _m, ...entry }) => entry);
     }

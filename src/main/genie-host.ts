@@ -100,6 +100,8 @@ import { AgentStoresService } from './agent-stores-host.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { startHostMcp, type HostMcp } from './host-mcp.js';
+import { hostPluginTools, PluginsService } from './plugins-host.js';
+import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
 import { readV1Knowledge } from './v1-import.js';
@@ -633,6 +635,12 @@ async function main(): Promise<void> {
         onHang: (hang) => { crashState.hung({ at: hang.at, hangs: hang.hangs, agents: (hostForNotes?.startedIds() ?? []).map((id) => ({ id, name: hostRegistry.find(id)?.name ?? id })) }); },
     });
     hangWatchdog.start();
+    /*
+     * THE PLUGINS (ADF A3, Tynn #447): this host's, beside the rest of Genie's state; signed by default, unsigned only
+     * under developer mode (the host's own setting). Its MCP server offers and runs their tools with no window; every
+     * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
+     */
+    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, developerMode: () => settings.snapshot().developer_mode === true });
     const engine = new SessionEngineServer({
         token,
         build,
@@ -659,6 +667,7 @@ async function main(): Promise<void> {
         ...(hostingService ? { hosting: hostingService } : {}),
         appInbox: appInboxDoor,
         processes: processesService,
+        plugins: pluginsService,
         flows: flowsService,
         browser: browserService,
         updates: updatesService,
@@ -1003,6 +1012,15 @@ async function main(): Promise<void> {
             },
         } : {}),
         flowCallers,
+        // The plugins' tools, run here (ADF A3): an official one in process, anyone else's in its sandboxed child. The Genie
+        // API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
+        plugins: hostPluginTools(pluginsService, {
+            sandboxDir: join(home, 'plugin-sandbox'),
+            api: async (method, params) => {
+                if (method === 'knowledge.search') return own.knowledge.search({ ...(typeof params === 'object' && params !== null ? params : {}) } as never);
+                throw new Error(`${method} is not offered to plugins`);
+            },
+        }),
         endpointFile: join(home, 'mcp-endpoint.json'),
         osaDir: osaHome,
         log: (line) => { say(line); lifecycleLog(line); },

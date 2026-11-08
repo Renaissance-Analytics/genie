@@ -47,6 +47,8 @@ export interface ForwardedToolCall {
 }
 
 export interface HostToolsOptions {
+    /** Further tools this host runs itself: its plugins' (ADF A3, host-mcp.ts). Absent = only HOST_NATIVE_TOOLS. */
+    readonly native?: (name: string) => boolean;
     readonly resolveCaller: (id: string) => Caller | null;
     readonly window: {
         connected(): boolean;
@@ -82,6 +84,8 @@ export function hostRegistrations(all: readonly Registration[], options: HostToo
     const can = options.capabilities ?? { window: true, browser: true };
     return all.map((r) => {
         const name = r.definition.name;
+        // A plugin's tool, when this host has the plugins (ADF A3): its own, like the host-native ones.
+        if (options.native?.(name) === true) return r;
         if (HOST_NATIVE_TOOLS.has(name) && WINDOW_ACTIONS[name] === undefined) return r;
         const forward = async (args: JsonObject, context: ToolContext): Promise<McpToolResult> => {
             const resolved = callerFrom(args, context.headers, options.resolveCaller);
