@@ -112,6 +112,18 @@ describe('C3 publisher-key REST client and host trust integration', () => {
         expect(client.publisherKeys()).toEqual({});
     });
 
+    it.each([503, 200])('aborts the transport after rejecting an unread response (status %s)', async status => {
+        let signal: AbortSignal | null = null;
+        fetcher.mockImplementation(async (_url, init) => {
+            signal = init?.signal ?? null;
+            return new Response('unread', { status, headers: { 'Content-Length': '524289' } });
+        });
+        const client = await open();
+        await expect(client.refresh()).rejects.toThrow(/503|size|limit/i);
+        expect((signal as AbortSignal | null)?.aborted).toBe(true);
+        expect(client.publisherKeys()).toEqual({});
+    });
+
     it('reloads a valid cache, expires it at the deadline, and never extends freshness on failure', async () => {
         const client = await open();
         await client.refresh();
