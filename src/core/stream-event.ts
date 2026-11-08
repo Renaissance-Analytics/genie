@@ -332,7 +332,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
             return {
                 kind: 'tool',
                 toolCallId: stringOrNull(update['toolCallId']) ?? '',
-                name: stringOrNull(update['name']),
+                name: null, // PROBE: provider name dropped
                 title: stringOrNull(update['title']),
                 status: toolStatusOf(update['status']),
                 toolKind: toolKindOf(update['kind']),

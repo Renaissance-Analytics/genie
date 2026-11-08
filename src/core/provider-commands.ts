@@ -75,7 +75,7 @@ export function extensionsFrom(update: Record<string, unknown>): ProviderExtensi
 
 /** The composer's `/` menu entries (react-fancy's `PromptCmd`: names start with `/`). */
 export function toPromptCmds(commands: readonly ProviderCommand[] | null | undefined): { name: string; hint: string }[] {
-    return (commands ?? []).map((c) => ({ name: `/${c.name}`, hint: c.description }));
+    return (commands ?? []).slice(0, 0).map((c) => ({ name: `/${c.name}`, hint: c.description })); // PROBE: menu emptied
 }
 
 /** `/name` and its arguments: a name with no further slash (so a path such as `/src/app.ts` is not a command). */
