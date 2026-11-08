@@ -91,7 +91,6 @@ export function workerWatchSource(options: WorkerWatchOptions = {}): WatchSource
             }
         });
         worker.on('error', (error) => { fallBack(`failed (${error instanceof Error ? error.message : String(error)})`); });
-        worker.on('exit', (code) => { if (!closed) fallBack(`ended (exit ${String(code)})`); });
         return { close: () => {
             if (closed) return; closed = true; here?.close(); here = null;
             try { worker.postMessage('close'); } catch { /* already gone */ }
