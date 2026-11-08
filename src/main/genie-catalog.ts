@@ -1,6 +1,7 @@
 import { Catalog, type ElementDefinition, type ElementSource } from '../core/catalog.js';
 import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
 import { parseManifest, type PluginManifest } from '../core/plugins.js';
+import { builtinFlowPackage } from '../core/builtin-flow-nodes.js';
 import type { BuiltinTool } from './builtin-tool.js';
 import { AGENT_TOOLS } from './mcp-tools-agents.js';
 import { ATTENTION_TOOLS } from './mcp-tools-attention.js';
@@ -13,6 +14,7 @@ import { pluginToolOffer } from './mcp-tools-plugins.js';
 import { PROCESS_TOOLS } from './mcp-tools-processes.js';
 import { WORKSPACE_TABS_TOOLS } from './mcp-tools-workspace-tabs.js';
 import { GENIE_TOOLS } from './mcp-tools.js';
+import { PERSON_ONLY_TOOLS } from '../core/gapp-grants.js';
 
 /**
  * GENIE'S OWN ELEMENTS IN THE CATALOG (ADF A2, Tynn #446; spec .ai/plans/specs/adf-sdk.md). Builtins go through the SAME
@@ -92,7 +94,11 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
             docs: { name: t.title, description: t.description },
             reach: TOOL_REACH,
             permissions: { capabilities: [], network: [] },
-            payload: { handler: t.name, inputSchema: t.inputSchema, ...(t.annotations === undefined ? {} : { annotations: t.annotations }) },
+            payload: {
+                handler: t.name, inputSchema: t.inputSchema, ...(t.annotations === undefined ? {} : { annotations: t.annotations }),
+                // GApps v2 decision 3: a tool that acts as the person, or waits on their approval, is never granted to an app.
+                ...(PERSON_ONLY_TOOLS.has(t.name) ? { grantable: false } : {}),
+            },
         } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT]),
     };
 }
@@ -118,12 +124,12 @@ export function pluginPackage(manifest: PluginManifest, source: ElementSource): 
     const editors: ElementDefinition[] = (manifest.editors ?? []).map((e) => ({
         ...base, id: `${manifest.id}.${e.id}`, kind: 'editor', reach: viewReach(e.fancyEditor.export), permissions,
         docs: { name: e.title, description: `${manifest.name}: opens ${e.extensions.join(', ')} in ${e.title}.` },
-        payload: { title: e.title, extensions: [...e.extensions], fancyEditor: e.fancyEditor.export },
+        payload: { title: e.title, extensions: [...e.extensions], fancyEditor: e.fancyEditor.export, pluginName: manifest.name },
     }));
     const panels: ElementDefinition[] = manifest.panels.map((p) => ({
         ...base, id: `${manifest.id}.${p.id}`, kind: 'panel', reach: viewReach(p.fancyComponent.export), permissions,
         docs: { name: p.title, description: `${manifest.name}: the ${p.title} panel.` },
-        payload: { title: p.title, fancyComponent: p.fancyComponent.export, props: { ...p.props } },
+        payload: { title: p.title, fancyComponent: p.fancyComponent.export, props: { ...p.props }, pluginName: manifest.name },
     }));
     return { id: manifest.id, version: manifest.version, source, contributions: [...tools, ...editors, ...panels] };
 }
@@ -134,7 +140,7 @@ export function pluginPackage(manifest: PluginManifest, source: ElementSource): 
  */
 export function genieCatalog(opts: { builtins?: readonly BuiltinTool[] } = {}): Catalog {
     const catalog = new Catalog();
-    const packages: PackageDeclaration[] = [builtinToolPackage(opts.builtins ?? BUILTIN_TOOLS)];
+    const packages: PackageDeclaration[] = [builtinToolPackage(opts.builtins ?? BUILTIN_TOOLS), builtinFlowPackage()];
     for (const official of OFFICIAL_PLUGINS) {
         const parsed = parseManifest(official.manifest);
         if (!parsed.ok) throw new Error(`official plugin ${String(official.manifest.id)} does not parse: ${parsed.reason}`);
@@ -162,5 +168,7 @@ export function hostCatalog(plugins: { tools(): readonly { pluginId: string; man
         if (entry.state === 'enabled' && m && !catalog.packages().some((p) => p.id === entry.id)) enabled.set(entry.id, m);
     }
     for (const manifest of enabled.values()) catalog.register(pluginPackage(manifest, 'plugin'));
+    // A DISABLED package is out of the catalog, Genie's own included: its editor, panel, tools and flow steps go together (A5).
+    for (const entry of plugins.list?.() ?? []) if (entry.state === 'disabled' && catalog.packages().some((p) => p.id === entry.id)) catalog.unregister(entry.id);
     return catalog;
 }

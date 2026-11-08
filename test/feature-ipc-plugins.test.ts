@@ -7,6 +7,7 @@ import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { PluginsService } from '../src/main/plugins-host.js';
 import { PluginsReplica } from '../src/main/plugins-replica.js';
+import { hostCatalog } from '../src/main/genie-catalog.js';
 
 /**
  * PLUGINS IN THE SNAPSHOT (§6.7). The plugin host at `<userData>/plugins` is GENIE-HOST'S (ADF A3, Tynn #447): the
@@ -35,7 +36,8 @@ beforeEach(async () => {
     const replica = new PluginsReplica((method, args) => host.call(method, args));
     host.onEvent((dump) => replica.rebase(dump));
     replica.rebase(host.dump());
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, plugins: replica });
+    // The host's catalog, as the window's replica of it reads (ADF A5: the editors and panels are the catalog's).
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, plugins: replica, catalog: { list: () => hostCatalog(host.plugins()).list() } });
     publisherChecksOff = () => services.settings.snapshot().publisher_checks_off === true;
 });
 afterEach(async () => {
