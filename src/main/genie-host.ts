@@ -111,6 +111,7 @@ import { HostRegistry } from './host-registry.js';
 import { wireHostMailWake } from './host-mail-wake.js';
 import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
 import { TYNN_ISSUES_FEED } from './tynn-issues-live.js';
+import { TYNN_FEATURES_FEED } from './tynn-features-live.js';
 import type { SocketLike } from './issue-watch-client.js';
 import { dialTynnSocket } from './tynn-socket.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
@@ -484,6 +485,16 @@ async function main(): Promise<void> {
         send: (owner, event) => { engineRef?.tynnIssuesEvent(owner, event); },
         log: say,
     });
+    // The Features page (row F1) follows its own channel, as the Issues queue does.
+    const tynnFeatures = new TynnBoardHub({
+        tynn: () => hostTynn,
+        socket: tynnSocket,
+        schedule: tynnTimer,
+        projectFor: workspaceTynnProject,
+        feed: TYNN_FEATURES_FEED,
+        send: (owner, event) => { engineRef?.tynnFeaturesEvent(owner, event); },
+        log: say,
+    });
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now; and once the account opens.
     void tynnOpening.then((account) => {
         account.onChange(() => { issueWatch.restart(); });
@@ -713,6 +724,7 @@ async function main(): Promise<void> {
         issueWatch,
         tynnBoard,
         tynnIssues,
+        tynnFeatures,
         tynnPages: {
             read: async (workspaceId, page, query) => {
                 // Opening has its own deadline; never mistake a pairing still opening for a signed-out owner.

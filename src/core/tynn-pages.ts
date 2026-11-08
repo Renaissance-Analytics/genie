@@ -1,4 +1,5 @@
-import { BOARD_CLAIMS, BOARD_LIVE, initialsOf, LIVE_QUIET_MS, parseClaims, type BoardClaim, type BoardClaims, type BoardOp, type BoardRefusal, type TynnBoardHost } from './tynn-board.js';
+import { type BoardLiveSignal, BOARD_CLAIMS, BOARD_LIVE, initialsOf, LIVE_QUIET_MS, parseClaims, type BoardClaim, type BoardClaims, type BoardOp, type BoardRefusal, type TynnBoardHost } from './tynn-board.js';
+import { parseFeatures, type FeaturesView } from './tynn-features.js';
 import { issuesQueryPath, normalizeIssueFilters, parseIssueQueue, type IssueQueueView } from './tynn-issues.js';
 
 /**
@@ -25,14 +26,15 @@ export const TYNN_SECTIONS: readonly TynnSection[] = [
     { id: 'wip', icon: 'play', label: 'WIP' },
     { id: 'board', icon: 'columns-3', label: 'Board' },
     { id: 'releases', icon: 'rocket', label: 'Releases' },
+    { id: 'features', icon: 'layout-grid', label: 'Features' },
 ];
 
 /** The page the tab opens on: the project's Home, as tynn.ai's project opens on it (row H1). Without a page door, the board. */
 export const TYNN_FIRST_SECTION: TynnSectionId = 'home';
 
 /** A page of the tab that is read as one answer (the board has its own door and scope query). */
-export type TynnPage = 'wip' | 'issues' | 'releases' | 'home';
-export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues', 'releases', 'home'];
+export type TynnPage = 'wip' | 'issues' | 'releases' | 'home' | 'features';
+export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues', 'releases', 'home', 'features'];
 
 // ── WIP (workspace-ux 0.6.0, surface `wip`) ──────────────────────────────────────────────────────────────────────────
 
@@ -441,17 +443,29 @@ export function detailsBody(raw: unknown): Record<string, unknown> | null {
 }
 
 /** One write on a page of the tab, by the contract's action id (the Home's `details.update`). */
-export interface TynnPageActionInput { readonly action: string; readonly body?: unknown }
+export interface TynnPageActionInput {
+    readonly action: string;
+    /** The row a row's write names (a feature, domain or repository); absent for a create or the Home's save. */
+    readonly id?: string;
+    readonly body?: unknown;
+}
+/**
+ * A page write's answer: the page as Tynn now has it (the Home's Details save answers its Details), or `page: null` when
+ * the write answers only its row and the tab reads the page again (Features' writes).
+ */
+export type TynnPageActionAnswer = ({ ok: true } & TynnPageView) | { ok: true; page: null } | BoardRefusal;
 
 // ── Reading a page ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type TynnPageQuery = Readonly<Record<string, string | undefined>>;
-export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'issues'; readonly view: IssueQueueView } | { readonly page: 'releases'; readonly view: ReleasesView } | { readonly page: 'home'; readonly view: HomeView };
+export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'issues'; readonly view: IssueQueueView } | { readonly page: 'releases'; readonly view: ReleasesView } | { readonly page: 'home'; readonly view: HomeView } | { readonly page: 'features'; readonly view: FeaturesView };
 
 /** GET a page of the workspace's project: only the query the page's contract declares, and only real values. */
 export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQuery): string {
     if (page === 'issues') return issuesQueryPath(projectId, normalizeIssueFilters(query));
     const q = new URLSearchParams();
+    // Features is read whole: the page takes no query (its tabs are the tab's own).
+    if (page === 'features') return `/api/v1/projects/${encodeURIComponent(projectId)}/features`;
     if (page === 'home') {
         if (query.section !== undefined && (HOME_SECTIONS as readonly string[]).includes(query.section)) q.append('section', query.section);
         if (query.range !== undefined && (HOME_RANGES as readonly string[]).includes(query.range)) q.append('range', query.range);
@@ -492,6 +506,10 @@ export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | nul
         const view = parseHome(json);
         return view ? { page, view } : null;
     }
+    if (page === 'features') {
+        const view = parseFeatures(json);
+        return view ? { page, view } : null;
+    }
     return null;
 }
 
@@ -499,7 +517,9 @@ export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | nul
 export interface TynnTabHost extends TynnBoardHost {
     page?(workspaceId: string, page: TynnPage, query: TynnPageQuery): Promise<({ ok: true } & TynnPageView) | BoardRefusal>;
     /** One write on a page (the Home's Details save); answers the page as Tynn now has it. */
-    pageAct?(workspaceId: string, input: TynnPageActionInput): Promise<({ ok: true } & TynnPageView) | BoardRefusal>;
+    pageAct?(workspaceId: string, input: TynnPageActionInput): Promise<TynnPageActionAnswer>;
+    /** Follow the workspace's Features page (its own channel, row F1) until the answer is called. */
+    featuresWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
 }
 
 export type TynnPageState<V> =

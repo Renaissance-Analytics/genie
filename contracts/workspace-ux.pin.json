@@ -1,8 +1,8 @@
 {
   "repository": "Renaissance-Analytics/tynn.ai",
   "contract": "workspace-ux",
-  "version": "0.9.0",
-  "commit": "7cd8ef3fc83f365f02bdbf58683d90f930d88ca7",
-  "path": "contracts/workspace-ux/0.9.0/workspace-ux.json",
-  "sha256": "26bccc3973925f1359f4d9e4e88a748e2b225089e62c754c03c75500ba918d2d"
+  "version": "0.10.0",
+  "commit": "9772e4e9f7d884f6b3dc066ffbcedeae4d7defa0",
+  "path": "contracts/workspace-ux/0.10.0/workspace-ux.json",
+  "sha256": "8f9d773647761dd0f979e4212582cd1f2a988f0d769937a3f2716bec797da3df"
 }

@@ -43,6 +43,8 @@ export const ICON_NAMES: readonly string[] = [
     'columns-3', 'circle-play', 'book-open',
     // The Tynn tab's Home (row H1): its nav house, the velocity trend, what is waiting (blocked, QA).
     'home', 'trending-up', 'trending-down', 'octagon-alert', 'clipboard-check',
+    // Its Features page (row F1): the nav's grid, an empty Features tab, Repositories' heading and the kinds, Models.
+    'layout-grid', 'puzzle', 'folder-git-2', 'code', 'database',
     // Its claims (row B3): Claim + Start and Assign to.
     'hand', 'user-plus',
     'settings', 'folder', 'x', 'square-terminal', 'pin',

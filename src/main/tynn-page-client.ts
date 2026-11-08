@@ -1,4 +1,5 @@
-import { detailsBody, homeActionRequest, parseTynnPage, tynnPagePath, TYNN_PAGES, type TynnPage, type TynnPageActionInput, type TynnPageView } from '../core/tynn-pages.js';
+import { featuresActionRequest, featuresBody } from '../core/tynn-features.js';
+import { detailsBody, homeActionRequest, parseTynnPage, tynnPagePath, TYNN_PAGES, type TynnPage, type TynnPageActionAnswer, type TynnPageActionInput, type TynnPageView } from '../core/tynn-pages.js';
 import { bodyOf, NOT_LINKED, refusal, SIGNED_OUT, type TynnBoardPorts, type TynnBoardRefusal } from './tynn-board-client.js';
 import { readTynnIssues } from './tynn-issues-client.js';
 
@@ -45,9 +46,20 @@ const PAGE_BODY: Readonly<Record<string, { build: (raw: unknown) => Record<strin
  * pairing — the same way the board's and the Issues' writes go. Only the contract's action, only the web form's fields;
  * Tynn's 422 in Tynn's words. Tynn answers the page as it now stands, and that answer is what the tab draws.
  */
-export async function runTynnPageAction(ports: TynnBoardPorts, workspaceId: string, input: TynnPageActionInput): Promise<({ ok: true } & TynnPageView) | TynnBoardRefusal> {
+export async function runTynnPageAction(ports: TynnBoardPorts, workspaceId: string, input: TynnPageActionInput): Promise<TynnPageActionAnswer> {
     const projectId = ports.projectFor(workspaceId);
     if (projectId === null) return NOT_LINKED;
+    // Features, Domains and Repositories (row F1): the row's own door; Tynn answers the row, and the tab reads the page again.
+    const featureRequest = typeof input.action === 'string' ? featuresActionRequest(projectId, input.action, input.id) : null;
+    if (featureRequest !== null) {
+        const built = featuresBody(input.action, input.body);
+        if (!built.ok) return { ok: false, state: 'error', reason: built.reason };
+        if (!ports.signedIn()) return SIGNED_OUT;
+        let answer;
+        try { answer = await ports.request(featureRequest.path, { method: featureRequest.method, ...(built.body !== undefined ? { body: built.body } : {}) }); }
+        catch (error) { return { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) }; }
+        return answer.ok ? { ok: true, page: null } : refusal(answer);
+    }
     const request = typeof input.action === 'string' ? homeActionRequest(projectId, input.action) : null;
     const shape = request ? PAGE_BODY[input.action] : undefined;
     if (request === null || shape === undefined) return { ok: false, state: 'error', reason: `The Tynn tab does not offer ${String(input.action)} here.` };

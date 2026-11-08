@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Renaissance-Analytics/tynn.ai/main/contracts/workspace-ux/0.9.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Renaissance-Analytics/tynn.ai/main/contracts/workspace-ux/0.10.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.9.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Renaissance-Analytics/tynn.ai at contracts/workspace-ux/0.9.0/workspace-ux.json, published on main and never rewritten (genie#1295). Genie and genie-cloud carry a byte-identical copy beside a pin that records the version and sha256 of these bytes.",
+  "version": "0.10.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Renaissance-Analytics/tynn.ai at contracts/workspace-ux/0.10.0/workspace-ux.json, published on main and never rewritten (genie#1295). Genie and genie-cloud carry a byte-identical copy beside a pin that records the version and sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -1503,6 +1503,312 @@
           "api": {
             "method": "PATCH",
             "path": "/details"
+          }
+        }
+      ]
+    },
+    {
+      "id": "features",
+      "title": "Features",
+      "tynn": {
+        "page": "v2/Project/Features",
+        "route": "features",
+        "pageAccess": "features"
+      },
+      "scope": "genie:features",
+      "data": {
+        "api": {
+          "method": "GET",
+          "path": "/features"
+        },
+        "about": "tynn.ai's Features page: features, domains (the parent of a feature), repositories, models. Its own pairing scope (genie:features). The read uses the page's gate (page features) and its own builder; every write needs the project's update authority (canManage) and goes through the web page's own actions and form rules.",
+        "tabs": [
+          "features",
+          "domains",
+          "models",
+          "repos"
+        ],
+        "answer": [
+          "project_id",
+          "features",
+          "domains",
+          "repositories",
+          "models",
+          "envelope_status",
+          "can_manage"
+        ],
+        "fields": {
+          "feature": [
+            "id",
+            "title",
+            "slug",
+            "description",
+            "docs_url",
+            "domain_id",
+            "domain",
+            "task_count",
+            "task_done"
+          ],
+          "domain": [
+            "id",
+            "name",
+            "slug",
+            "description",
+            "feature_count"
+          ],
+          "repository": [
+            "id",
+            "url",
+            "default_branch",
+            "scm_provider",
+            "repo_mode",
+            "ci_provider",
+            "ci_config_path",
+            "codeowners_path",
+            "kind",
+            "is_product",
+            "label",
+            "github_url",
+            "versioning_pattern",
+            "versioning_pattern_label",
+            "release_cycle",
+            "git_linkage"
+          ],
+          "model": [
+            "id",
+            "name",
+            "table",
+            "description",
+            "field_count"
+          ]
+        },
+        "forms": {
+          "feature": {
+            "fields": [
+              "title",
+              "description",
+              "domain_id",
+              "docs_url"
+            ],
+            "required": [
+              "title",
+              "description"
+            ],
+            "max": {
+              "title": 24
+            }
+          },
+          "domain": {
+            "fields": [
+              "name",
+              "description"
+            ],
+            "required": [
+              "name"
+            ],
+            "max": {
+              "name": 24
+            }
+          },
+          "repository": {
+            "fields": [
+              "url",
+              "default_branch",
+              "scm_provider",
+              "repo_mode",
+              "ci_provider",
+              "ci_config_path",
+              "codeowners_path",
+              "kind",
+              "versioning_pattern"
+            ],
+            "required": [
+              "url"
+            ],
+            "kind": "a .agi remote is the envelope; otherwise code unless set"
+          }
+        },
+        "manage": {
+          "guard": "can_manage",
+          "what": "add, edit and delete are offered only to a person who may manage the project; models are read only for everyone"
+        },
+        "envelope": {
+          "field": "envelope_status",
+          "values": [
+            "present",
+            "none"
+          ],
+          "what": "none: the Repositories tab offers to add the workspace's .agi container"
+        },
+        "live": {
+          "about": "The page follows Tynn as features and domains change. An event is a doorbell: the client reads the page again, once per burst and one read at a time, as tynn.ai's page reloads its props.",
+          "channel": "private-project-features.{projectId}",
+          "web": "routes/channels.php project-features.{projectId}: exactly whoever may open the Features page (page features); feature and domain events ring there and on project.{projectId}, where tynn.ai's page goes live (ProjectShell → useProjectChannel). A repository change rings nothing, on the web or here",
+          "push": {
+            "method": "GET",
+            "path": "/api/v1/broadcasting-config",
+            "scope": "genie:discovery"
+          },
+          "auth": {
+            "method": "POST",
+            "path": "/features/broadcasting-auth",
+            "body": [
+              "socket_id",
+              "channel_name"
+            ]
+          },
+          "events": [
+            "feature.created",
+            "feature.updated",
+            "feature.deleted",
+            "domain.created",
+            "domain.updated",
+            "domain.deleted"
+          ],
+          "refresh": "read"
+        }
+      },
+      "states": [
+        {
+          "id": "loading",
+          "what": "the page is being read"
+        },
+        {
+          "id": "tabs",
+          "what": "Features, Domains, Models and Repositories, each with its count"
+        },
+        {
+          "id": "empty",
+          "what": "a tab with nothing in it says so (and, for a person who may manage, offers to add one)"
+        },
+        {
+          "id": "feature-row",
+          "what": "a feature shows its title, domain, description, docs link and its tasks done of total"
+        },
+        {
+          "id": "domain-row",
+          "what": "a domain shows its name, description and how many features it holds"
+        },
+        {
+          "id": "repository-row",
+          "what": "a repository shows its label, url, default branch, kind and, for a product, its versioning pattern"
+        },
+        {
+          "id": "model-row",
+          "what": "a model shows its name, table, description and field count; read only"
+        },
+        {
+          "id": "form",
+          "what": "add or edit opens the web form's fields with its limits"
+        },
+        {
+          "id": "manage",
+          "what": "add, edit and delete only for a person who may manage"
+        },
+        {
+          "id": "envelope-offer",
+          "what": "a workspace with no .agi container is offered one on the Repositories tab"
+        },
+        {
+          "id": "refused",
+          "what": "a refused write shows the reason Tynn gave (a field the form refuses)"
+        },
+        {
+          "id": "live",
+          "what": "the page follows Tynn as it changes, without a reload; a small live icon says so"
+        },
+        {
+          "id": "reconnecting",
+          "what": "the link to Tynn dropped: an icon says it is reconnecting, and the page is read again once it is back"
+        },
+        {
+          "id": "not-linked",
+          "what": "the workspace has no Tynn project"
+        },
+        {
+          "id": "signed-out",
+          "what": "Genie is not paired with Tynn, or the pairing lacks the features scope"
+        }
+      ],
+      "actions": [
+        {
+          "id": "features.read",
+          "web": "GET features",
+          "api": {
+            "method": "GET",
+            "path": "/features"
+          }
+        },
+        {
+          "id": "feature.create",
+          "web": "POST features.store",
+          "api": {
+            "method": "POST",
+            "path": "/features"
+          }
+        },
+        {
+          "id": "feature.update",
+          "web": "PATCH features.update",
+          "api": {
+            "method": "PATCH",
+            "path": "/features/{featureId}"
+          }
+        },
+        {
+          "id": "feature.delete",
+          "web": "DELETE features.destroy",
+          "api": {
+            "method": "DELETE",
+            "path": "/features/{featureId}"
+          }
+        },
+        {
+          "id": "domain.create",
+          "web": "POST domains.store",
+          "api": {
+            "method": "POST",
+            "path": "/domains"
+          }
+        },
+        {
+          "id": "domain.update",
+          "web": "PATCH domains.update",
+          "api": {
+            "method": "PATCH",
+            "path": "/domains/{domainId}"
+          }
+        },
+        {
+          "id": "domain.delete",
+          "web": "DELETE domains.destroy",
+          "api": {
+            "method": "DELETE",
+            "path": "/domains/{domainId}"
+          }
+        },
+        {
+          "id": "repository.create",
+          "web": "POST repositories.store",
+          "api": {
+            "method": "POST",
+            "path": "/repositories"
+          }
+        },
+        {
+          "id": "repository.update",
+          "web": "PATCH repositories.update",
+          "api": {
+            "method": "PATCH",
+            "path": "/repositories/{repositoryId}"
+          }
+        },
+        {
+          "id": "repository.delete",
+          "web": "DELETE repositories.destroy",
+          "api": {
+            "method": "DELETE",
+            "path": "/repositories/{repositoryId}"
           }
         }
       ]

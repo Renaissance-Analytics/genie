@@ -149,6 +149,22 @@ const bridge: PreloadBridge = {
         tynnIssues: (workspaceId, filters) => ipcRenderer.invoke('genie:workspace-tynn-issues', workspaceId, filters) as never,
         tynnIssueAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-issue-action', workspaceId, input) as never,
         tynnIssueChanges: (workspaceId, filters, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-issues-changes', workspaceId, filters, cursor, [...ids]) as never,
+        // Row F1: follow the Features page; the host holds one socket for every open tab.
+        tynnFeaturesWatch: (workspaceId, listener) => {
+            const handler = (_e: unknown, id: string, signal: Parameters<typeof listener>[0]) => { if (id === workspaceId) listener(signal); };
+            ipcRenderer.on('genie:workspace-tynn-features-live', handler);
+            let watchId: number | null = null;
+            let stopped = false;
+            void (ipcRenderer.invoke('genie:workspace-tynn-features-watch', workspaceId) as Promise<number | null>).then((id) => {
+                watchId = id;
+                if (stopped && id !== null) void ipcRenderer.invoke('genie:workspace-tynn-features-unwatch', id);
+            });
+            return () => {
+                stopped = true;
+                ipcRenderer.removeListener('genie:workspace-tynn-features-live', handler);
+                if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-features-unwatch', watchId);
+            };
+        },
         tynnIssuesWatch: (workspaceId, listener) => {
             const handler = (_e: unknown, id: string, signal: Parameters<typeof listener>[0]) => { if (id === workspaceId) listener(signal); };
             ipcRenderer.on('genie:workspace-tynn-issues-live', handler);

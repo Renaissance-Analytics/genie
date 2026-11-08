@@ -165,6 +165,8 @@ export class SessionEngineClient {
     readonly #boardListeners = new Set<(event: TynnBoardHubEvent) => void>();
     readonly #issuesViews = new Map<string, string>();
     readonly #issuesListeners = new Set<(event: TynnBoardHubEvent) => void>();
+    readonly #featuresViews = new Map<string, string>();
+    readonly #featuresListeners = new Set<(event: TynnBoardHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
     #hosting: HostingReplica | null = null;
@@ -326,6 +328,7 @@ export class SessionEngineClient {
         for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
         for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
         for (const [viewId, workspaceId] of this.#issuesViews) void this.call('engine.tynnIssuesWatch', [viewId, workspaceId]);
+        for (const [viewId, workspaceId] of this.#featuresViews) void this.call('engine.tynnFeaturesWatch', [viewId, workspaceId]);
     }
 
     #onEvent(channel: string, payload: unknown): void {
@@ -428,6 +431,9 @@ export class SessionEngineClient {
                 return;
             case 'tynnIssues.event':
                 for (const l of [...this.#issuesListeners]) l(payload as TynnBoardHubEvent);
+                return;
+            case 'tynnFeatures.event':
+                for (const l of [...this.#featuresListeners]) l(payload as TynnBoardHubEvent);
                 return;
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
@@ -796,6 +802,25 @@ export class SessionEngineClient {
     onTynnIssuesEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
         this.#issuesListeners.add(listener);
         return () => { this.#issuesListeners.delete(listener); };
+    }
+
+    /** The host owns Features subscriptions (row F1); remember the intended views across a reconnect. */
+    tynnFeaturesWatch(viewId: string, workspaceId: string): Promise<boolean> {
+        this.#featuresViews.set(viewId, workspaceId);
+        return this.#value('engine.tynnFeaturesWatch', [viewId, workspaceId], false).then((v) => {
+            if (v !== true) this.#featuresViews.delete(viewId);
+            return v === true;
+        });
+    }
+
+    tynnFeaturesUnwatch(viewId: string): Promise<boolean> {
+        this.#featuresViews.delete(viewId);
+        return this.#value('engine.tynnFeaturesUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    onTynnFeaturesEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
+        this.#featuresListeners.add(listener);
+        return () => { this.#featuresListeners.delete(listener); };
     }
 
     /** The host reads the workspace's Tynn page; a disconnected or refusing host is a visible error. */
