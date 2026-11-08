@@ -85,7 +85,8 @@ describe('the capability table', () => {
         // 100 with family5's twelve owner operations; every one starts local.
         // 115 with local Files; 120 with drafts; 122 with the two explicitly local ArtBoard operations;
         // 123 with agents.toolOutput, a tool row's whole output when a person opens it (Tynn story #386).
-        expect(REMOTE_METHODS.length).toBe(123);
+        // 124 with host.home, where a picker opens on the host this window drives (Tynn #527): a read.
+        expect(REMOTE_METHODS.length).toBe(124);
         for (const method of ['artboard.read', 'artboard.review'] as const) expect(capabilityOf(method)).toBe('local');
         for (const method of ['chatDrafts.load', 'chatDrafts.save', 'chatDrafts.putFile', 'chatDrafts.readFile', 'chatDrafts.release'] as const) expect(capabilityOf(method)).toBe('local');
         expect(capabilityOf('resolvePrompt')).toBe('write');
