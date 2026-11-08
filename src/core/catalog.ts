@@ -20,12 +20,17 @@ import { VETTED_FANCY_EXPORTS } from './plugin-panels.js';
 /** The envelope's own version; a client that reads a newer one says it needs a newer Genie. */
 export const CATALOG_SCHEMA_VERSION = 1;
 
-export const ELEMENT_KINDS = ['tool', 'panel', 'editor', 'recipe', 'flow-node', 'page', 'overlay', 'provider', 'service-engine'] as const;
+export const ELEMENT_KINDS = ['tool', 'panel', 'editor', 'recipe', 'flow-node', 'host-service', 'page', 'overlay', 'provider', 'service-engine'] as const;
 /** Declared by Genie 1, never run there: accepted and documented, executable one story each later (decision 3). */
 export const RESERVED_KINDS = ['flyout', 'modal', 'wizard', 'workstation-page', 'workspace-settings-page'] as const;
 export const ELEMENT_SOURCES = ['builtin', 'plugin', 'gapp'] as const;
 export const ELEMENT_SCOPES = ['workspace', 'workstation'] as const;
-export const ELEMENT_SIDES = ['host', 'client'] as const;
+/**
+ * WHERE IT RUNS (the owner's ruling q_d71981d6: "ADF and the host split are one design"): on the host, in a client (a
+ * window, or another machine's), or BOTH — and then its `reach.link` says how its halves talk.
+ */
+export const ELEMENT_SIDES = ['host', 'client', 'both'] as const;
+export type ElementSide = (typeof ELEMENT_SIDES)[number];
 /** Who may reach it from another machine: anyone the host lets in, only its owner, or only this machine's own window. */
 export const ELEMENT_REMOTE = ['allowed', 'owner', 'local'] as const;
 
@@ -62,11 +67,12 @@ export interface KindSpec {
     /** `reserved`: accepted and registered; nothing runs it yet (decision 3). */
     readonly status: 'active' | 'reserved';
     /**
-     * The side every definition of this family runs on (the owner, 2026-11-08: the ADF models the client/host
-     * relationship): genie-host runs a tool; a client draws a panel or an editor. Enforced against `reach.side`. `null`:
-     * each definition says its own side.
+     * The sides a definition of this family may run on (the owner's rulings, 2026-11-08 and q_d71981d6: the ADF models
+     * the client/host relationship). genie-host runs a tool; an editor is drawn by a client and reads and writes its file
+     * on the host, so it is both; a panel is a client's, or both when it works on the host's data. Enforced against
+     * `reach.side`. `null`: each definition says its own side.
      */
-    readonly side: (typeof ELEMENT_SIDES)[number] | null;
+    readonly sides: readonly ElementSide[] | null;
     readonly summary: string;
     readonly fields: readonly FieldSpec[];
     /** A payload that validates, shown in the docs (and checked: test/adf-b7-sdk-docs.test.ts). */
@@ -86,7 +92,7 @@ const RESERVED_SUMMARY = 'Reserved: accepted and registered, so a package that d
 
 export const KIND_SPECS: readonly KindSpec[] = [
     {
-        kind: 'tool', status: 'active', side: 'host',
+        kind: 'tool', status: 'active', sides: ['host'],
         summary: 'An MCP tool agents call. The host runs it with the handler the payload names; it appears in every agent\'s tool list under its id.',
         fields: [
             { name: 'handler', type: 'string', required: true, description: 'The host handler that runs the tool.', rule: 'nonEmptyString', problem: 'payload.handler must name the host handler that runs the tool' },
@@ -99,7 +105,7 @@ export const KIND_SPECS: readonly KindSpec[] = [
         example: { handler: 'com.example.notes.append', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, process: 'worker', gated: false },
     },
     {
-        kind: 'panel', status: 'active', side: 'client',
+        kind: 'panel', status: 'active', sides: ['client', 'both'],
         summary: 'A panel in the workspace grid. It mounts one vetted Fancy component, drawn by Genie\'s own compiled adapter: a package ships no UI code.',
         fields: [
             { name: 'fancyComponent', type: `one of ${VETTED_FANCY_EXPORTS.join(', ')}`, required: true, description: 'The vetted Fancy component the panel mounts.', rule: 'vettedComponent' },
@@ -109,7 +115,7 @@ export const KIND_SPECS: readonly KindSpec[] = [
         example: { title: 'Notes', fancyComponent: 'ContentRenderer', props: {} },
     },
     {
-        kind: 'editor', status: 'active', side: 'client',
+        kind: 'editor', status: 'active', sides: ['both'],
         summary: 'Opens files of the extensions it claims in one vetted Fancy editor. Genie\'s own editor wins a claim by default; another is offered in Open with.',
         fields: [
             { name: 'extensions', type: 'list of extensions, like `".md"`', required: true, description: 'The file types it opens: a dot, then letters or digits.', rule: 'extensions' },
@@ -119,7 +125,7 @@ export const KIND_SPECS: readonly KindSpec[] = [
         example: { title: 'Notes', extensions: ['.md'], fancyEditor: 'Editor' },
     },
     {
-        kind: 'recipe', status: 'active', side: null,
+        kind: 'recipe', status: 'active', sides: null,
         summary: 'A guided sequence of steps the person walks through.',
         fields: [
             { name: 'steps', type: 'non-empty list of step objects', required: true, description: 'The steps, in order.', rule: 'steps', problem: 'payload.steps must be a non-empty list of steps' },
@@ -127,7 +133,7 @@ export const KIND_SPECS: readonly KindSpec[] = [
         example: { steps: [{ tool: 'com.example.notes.append' }] },
     },
     {
-        kind: 'flow-node', status: 'active', side: null,
+        kind: 'flow-node', status: 'active', sides: null,
         summary: 'A node in the Flows palette. The executor the payload names runs it.',
         fields: [
             { name: 'executor', type: 'string', required: true, description: 'What runs the node.', rule: 'nonEmptyString', problem: 'payload.executor must name what runs the node' },
@@ -136,13 +142,24 @@ export const KIND_SPECS: readonly KindSpec[] = [
         ],
         example: { executor: 'com.example.notes.append', inputs: ['text'], outputs: ['path'] },
     },
+    {
+        kind: 'host-service', status: 'active', sides: ['host', 'both'],
+        summary: 'A service genie-host runs and keeps running with no window open (remote access, a relay). On both sides it has a client part, and its reach.link says how the two talk.',
+        fields: [
+            { name: 'start', type: 'string', required: true, description: 'The host handler that starts it.', rule: 'nonEmptyString', problem: 'payload.start must name the host handler that starts it' },
+            { name: 'stop', type: 'string', required: true, description: 'The host handler that stops it.', rule: 'nonEmptyString', problem: 'payload.stop must name the host handler that stops it' },
+            { name: 'health', type: 'string', required: true, description: 'The host handler that answers whether it is healthy, and why not.', rule: 'nonEmptyString', problem: 'payload.health must name the host handler that answers its health' },
+            { name: 'settingsSection', type: 'string', required: true, description: 'The settings section it owns: its switches live there and nowhere else.', rule: 'nonEmptyString', problem: 'payload.settingsSection must name the settings section it owns' },
+        ],
+        example: { start: 'com.example.relay.start', stop: 'com.example.relay.stop', health: 'com.example.relay.health', settingsSection: 'relay' },
+    },
     ...(['page', 'overlay', 'provider', 'service-engine'] as const).map((kind): KindSpec => ({
-        kind, status: 'active', side: null,
+        kind, status: 'active', sides: null,
         summary: 'A family a package may contribute. It has no fixed payload fields yet: its payload is any JSON object, and the Genie release that runs it adds them here.',
         fields: [],
         example: {},
     })),
-    ...RESERVED_KINDS.map((kind): KindSpec => ({ kind, status: 'reserved', side: null, summary: RESERVED_SUMMARY, fields: [], example: {} })),
+    ...RESERVED_KINDS.map((kind): KindSpec => ({ kind, status: 'reserved', sides: null, summary: RESERVED_SUMMARY, fields: [], example: {} })),
 ];
 
 export const ENVELOPE_FIELDS: readonly EnvelopeField[] = [
@@ -151,14 +168,16 @@ export const ENVELOPE_FIELDS: readonly EnvelopeField[] = [
     { name: 'version', type: 'semver', required: true, description: 'Its own version, like `1.2.0`.' },
     { name: 'packageId', type: 'reverse-DNS', required: true, description: 'The package that contributes it: every definition of a package registers together, or none does.' },
     { name: 'source', type: `one of ${ELEMENT_SOURCES.join(', ')}`, required: true, description: 'Who contributes it. An installed package never replaces one of Genie\'s own.' },
-    { name: 'aliases', type: 'list of dotted names', required: false, default: [], description: 'Older names that still find it.' },
     { name: 'docs', type: 'object', required: true, description: 'What people and agents read about it.' },
     { name: 'docs.name', type: 'string', required: true, description: 'Its name.' },
     { name: 'docs.description', type: 'string', required: true, description: 'What it does.' },
     { name: 'docs.guide', type: 'string', required: false, description: 'How an agent should use it.' },
     { name: 'reach', type: 'object', required: true, description: 'Where it runs and who may reach it.' },
     { name: 'reach.scopes', type: `one or more of ${ELEMENT_SCOPES.join(', ')}`, required: true, description: 'Whether it acts in a workspace, on the workstation, or both.' },
-    { name: 'reach.side', type: `one of ${ELEMENT_SIDES.join(', ')}`, required: true, description: 'Whether genie-host runs it or a client draws it.' },
+    { name: 'reach.side', type: `one of ${ELEMENT_SIDES.join(', ')}`, required: true, description: 'Whether genie-host runs it, a client draws it, or it has a part on each side.' },
+    { name: 'reach.link', type: 'object', required: false, description: 'How its two sides talk, required when `reach.side` is `both` and refused otherwise: the only channel between its halves.' },
+    { name: 'reach.link.calls', type: 'list of host method names', required: true, description: 'The host methods its client side calls.' },
+    { name: 'reach.link.events', type: 'list of host event names', required: true, description: 'The host events its client side follows. Calls and events together name at least one.' },
     { name: 'reach.requiresWindow', type: 'boolean', required: true, description: 'Whether it needs a Genie window open.' },
     { name: 'reach.remote', type: `one of ${ELEMENT_REMOTE.join(', ')}`, required: true, description: 'Who may reach it from another machine: anyone the host lets in, only its owner, or only this machine\'s own window.' },
     { name: 'permissions', type: 'object', required: true, description: 'What it asks for. Registering is not a grant: the host decides at install and at each call.' },
@@ -177,14 +196,14 @@ export interface ElementDefinition {
     readonly version: string;
     readonly packageId: string;
     readonly source: ElementSource;
-    /** Older names that still resolve to it (decision 2: today's `ai.genie.*` names next to a restored namespace). */
-    readonly aliases: readonly string[];
     readonly docs: { readonly name: string; readonly description: string; readonly guide?: string };
     readonly reach: {
         readonly scopes: readonly (typeof ELEMENT_SCOPES)[number][];
-        readonly side: (typeof ELEMENT_SIDES)[number];
+        readonly side: ElementSide;
         readonly requiresWindow: boolean;
         readonly remote: (typeof ELEMENT_REMOTE)[number];
+        /** How its two halves talk, when it runs on BOTH sides: the host methods its client calls, the host events it follows. */
+        readonly link?: { readonly calls: readonly string[]; readonly events: readonly string[] };
     };
     /** What it asks for. Registration is not a grant: the host decides at install and at each call. */
     readonly permissions: { readonly capabilities: readonly string[]; readonly network: readonly string[] };
@@ -207,6 +226,7 @@ const ENVELOPE_KEYS = fieldsUnder('');
 const DOCS_KEYS = fieldsUnder('docs');
 const REACH_KEYS = fieldsUnder('reach');
 const PERMISSION_KEYS = fieldsUnder('permissions');
+const LINK_KEYS = fieldsUnder('reach.link');
 const PACKAGE_KEYS = new Set(['id', 'version', 'source', 'contributions']);
 /**
  * A dotted name: `ai.genie.spreadsheet.createWorkbook`, or a bare one like `imDone` for a builtin tool. Each part holds
@@ -293,8 +313,6 @@ export function validateDefinition(raw: unknown): DefinitionCheck {
     if (typeof raw.version !== 'string' || !SEMVER.test(raw.version)) say('version must be semver, like 1.2.0');
     if (typeof raw.packageId !== 'string' || !PACKAGE_ID.test(raw.packageId)) say('packageId must be reverse-DNS, like com.example.plugin');
     if (!oneOf(ELEMENT_SOURCES, raw.source)) say(`source must be one of ${ELEMENT_SOURCES.join(', ')}`);
-    const aliases = raw.aliases ?? [];
-    if (!isStringList(aliases) || !aliases.every((a) => ELEMENT_ID.test(a))) say('aliases must be a list of dotted names');
 
     if (!isRecord(raw.docs)) say('docs must be an object with a name and a description');
     else {
@@ -311,9 +329,17 @@ export function validateDefinition(raw: unknown): DefinitionCheck {
         if (!Array.isArray(r.scopes) || r.scopes.length === 0 || !r.scopes.every((s) => oneOf(ELEMENT_SCOPES, s))) say(`reach.scopes must list one or more of ${ELEMENT_SCOPES.join(', ')}`);
         if (!oneOf(ELEMENT_SIDES, r.side)) say(`reach.side must be one of ${ELEMENT_SIDES.join(', ')}`);
         else {
-            const fixed = KIND_SPECS.find((k) => k.kind === raw.kind)?.side ?? null;
-            if (fixed !== null && r.side !== fixed) say(`reach.side must be "${fixed}" for a ${String(raw.kind)}: ${fixed === 'host' ? 'genie-host runs it' : 'a client draws it'}`);
+            const allowed = KIND_SPECS.find((k) => k.kind === raw.kind)?.sides ?? null;
+            if (allowed !== null && !allowed.includes(r.side)) say(`reach.side must be ${allowed.map((s) => `"${s}"`).join(' or ')} for a ${String(raw.kind)}`);
         }
+        if (r.side === 'both') {
+            if (!isRecord(r.link)) say('reach.link must say how its two sides talk when it runs on both: { calls: [host methods], events: [host events] }');
+            else {
+                problems.push(...unknownKeys(r.link, LINK_KEYS, `${where} reach.link`));
+                if (!isStringList(r.link.calls) || !isStringList(r.link.events)) say('reach.link.calls and reach.link.events must be lists of names');
+                else if (r.link.calls.length + r.link.events.length === 0) say('reach.link must name at least one call or event: an element on both sides talks across');
+            }
+        } else if (r.link !== undefined) say('reach.link is for an element on both sides; one side alone has no link');
         if (typeof r.requiresWindow !== 'boolean') say('reach.requiresWindow must be true or false');
         if (!oneOf(ELEMENT_REMOTE, r.remote)) say(`reach.remote must be one of ${ELEMENT_REMOTE.join(', ')}`);
     }
@@ -332,7 +358,6 @@ export function validateDefinition(raw: unknown): DefinitionCheck {
     const permissions = raw.permissions as Record<string, unknown>;
     const definition: ElementDefinition = {
         ...(raw as unknown as ElementDefinition),
-        aliases: aliases as string[],
         permissions: { capabilities: permissions.capabilities as string[], network: (permissions.network as string[] | undefined) ?? [] },
     };
     return { ok: true, definition: deepFreeze(structuredClone(definition)) };
@@ -354,7 +379,7 @@ export function validatePackage(raw: unknown): PackageCheck {
         const d = check.definition;
         if (d.packageId !== raw.id) problems.push(`"${d.id}": packageId "${d.packageId}" is not this package (${String(raw.id)})`);
         if (d.source !== raw.source) problems.push(`"${d.id}": source "${d.source}" is not this package's (${String(raw.source)})`);
-        for (const name of [d.id, ...d.aliases]) {
+        for (const name of [d.id]) {
             const first = names.get(name);
             if (first !== undefined) problems.push(`"${name}" is named twice in this package (by ${first} and ${d.id})`);
             else names.set(name, d.id);
@@ -372,7 +397,7 @@ export function validatePackage(raw: unknown): PackageCheck {
 export class Catalog {
     #revision = 0;
     readonly #packages = new Map<string, CatalogPackage>();
-    /** Every id and alias, to the definition it names. */
+    /** Every id, to the definition it names. */
     readonly #names = new Map<string, ElementDefinition>();
 
     get revision(): number { return this.#revision; }
@@ -387,7 +412,7 @@ export class Catalog {
         const previous = this.#packages.get(pkg.id);
         if (previous && previous.source !== pkg.source) problems.push(`package ${pkg.id} is already registered as a ${previous.source} package; a ${pkg.source} package cannot replace it`);
         for (const d of pkg.contributions) {
-            for (const name of [d.id, ...d.aliases]) {
+            for (const name of [d.id]) {
                 const holder = this.#names.get(name);
                 if (holder && holder.packageId !== pkg.id) problems.push(`"${name}" is already registered by ${holder.id} of ${holder.packageId}`);
             }
@@ -395,7 +420,7 @@ export class Catalog {
         if (problems.length > 0) return { ok: false, problems };
         this.#drop(pkg.id);
         this.#packages.set(pkg.id, pkg);
-        for (const d of pkg.contributions) for (const name of [d.id, ...d.aliases]) this.#names.set(name, d);
+        for (const d of pkg.contributions) for (const name of [d.id]) this.#names.set(name, d);
         return { ok: true, revision: ++this.#revision };
     }
 
@@ -405,12 +430,12 @@ export class Catalog {
         return { ok: true, revision: ++this.#revision };
     }
 
-    /** By id or alias; `null` when nothing has that name. */
+    /** By id; `null` when nothing has that name. */
     get(name: string): ElementDefinition | null {
         return this.#names.get(name) ?? null;
     }
 
-    /** Every registered definition (one per id, never once per alias), optionally of one kind. */
+    /** Every registered definition, optionally of one kind. */
     list(kind?: CatalogKind): ElementDefinition[] {
         const all = [...this.#packages.values()].flatMap((p) => p.contributions);
         return kind === undefined ? all : all.filter((d) => d.kind === kind);
@@ -423,7 +448,7 @@ export class Catalog {
     #drop(packageId: string): void {
         const old = this.#packages.get(packageId);
         if (!old) return;
-        for (const d of old.contributions) for (const name of [d.id, ...d.aliases]) if (this.#names.get(name)?.packageId === packageId) this.#names.delete(name);
+        for (const d of old.contributions) for (const name of [d.id]) if (this.#names.get(name)?.packageId === packageId) this.#names.delete(name);
         this.#packages.delete(packageId);
     }
 }

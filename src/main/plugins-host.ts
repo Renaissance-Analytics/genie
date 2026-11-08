@@ -1,6 +1,6 @@
 import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
 import type { ClaimingEditor } from '../core/plugin-editors.js';
-import type { PluginManifest } from '../core/plugins.js';
+import type { PluginCapabilities, PluginManifest } from '../core/plugins.js';
 import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 import { runOfficialTool } from './official-tools.js';
 import { PluginHost, type PluginEntry } from './plugin-host.js';
@@ -35,9 +35,9 @@ export class PluginsService {
         this.#open = open;
     }
 
-    /** `developerMode` is read at every (re)open: the setting is the host's own (P3.2). */
-    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; developerMode: () => boolean }): Promise<PluginsService> {
-        const open = () => PluginHost.open({ dir: input.dir, keys: input.keys, developerMode: input.developerMode(), official: OFFICIAL_PLUGINS });
+    /** `publisherChecksOff` is read at every (re)open: the setting is the host's own (P3.2; ADF B5). */
+    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; publisherChecksOff: () => boolean }): Promise<PluginsService> {
+        const open = () => PluginHost.open({ dir: input.dir, keys: input.keys, publisherChecksOff: input.publisherChecksOff(), official: OFFICIAL_PLUGINS });
         return new PluginsService(await open(), open);
     }
 
@@ -72,6 +72,12 @@ export class PluginsService {
                 this.#plugins = await this.#open();
                 this.#emit();
                 return true;
+            case 'setNetworkAllowed': {
+                // ADF B5: an Unverified package's network, allowed or taken back by the person; kept.
+                const changed = await this.#plugins.setNetworkAllowed(String(args[0] ?? ''), args[1] === true);
+                if (changed) this.#emit();
+                return changed;
+            }
             default:
                 throw new Error(`the plugins have no ${method}`);
         }
@@ -107,6 +113,9 @@ export class LocalPlugins implements PluginsApi {
     editors(): readonly ClaimingEditor[] { return this.#host.editors(); }
     editorBytes(pluginId: string, path: string): EditorBytesDecision { return this.#host.editorBytes(pluginId, path); }
     setEnabled(pluginId: string, enabled: boolean): Promise<boolean> { return this.#host.setEnabled(pluginId, enabled); }
+    setNetworkAllowed(pluginId: string, allowed: boolean): Promise<boolean> { return this.#host.setNetworkAllowed(pluginId, allowed); }
+    /** What an enabled plugin's tool may reach as it runs (ADF B5). */
+    capabilities(pluginId: string): PluginCapabilities | null { return this.#host.capabilities(pluginId); }
     async refresh(): Promise<void> { this.#host = await this.#open(); }
     /** The ENABLED plugins' tools and each one's guard, live across a refresh. */
     tools(): ReturnType<PluginHost['tools']> { return this.#host.tools(); }
@@ -122,7 +131,7 @@ export interface PluginToolsRunOptions {
 
 /** The plugins' tools as the host's MCP server runs them (ADF A3): genie-host's own plugins. */
 export function hostPluginTools(service: PluginsService, opts: PluginToolsRunOptions): PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] } {
-    return localPluginTools({ tools: () => service.plugins().tools(), guard: (id) => service.plugins().guard(id) }, opts);
+    return localPluginTools({ tools: () => service.plugins().tools(), guard: (id) => service.plugins().guard(id), capabilities: (id) => service.plugins().capabilities(id) }, opts);
 }
 
 /**
@@ -130,7 +139,7 @@ export function hostPluginTools(service: PluginsService, opts: PluginToolsRunOpt
  * tool in process (main/official-tools.ts), anyone else's in its sandboxed child (main/plugin-runner.ts, genie#871: its
  * folder, the workspace only if declared, the declared hosts only). genie-host's, or a window's with no genie-host.
  */
-export function localPluginTools(source: Pick<PluginToolsDeps['plugins'], 'tools' | 'guard'>, opts: PluginToolsRunOptions): PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] } {
+export function localPluginTools(source: Pick<PluginToolsDeps['plugins'], 'tools' | 'guard'> & { capabilities?(pluginId: string): PluginCapabilities | null }, opts: PluginToolsRunOptions): PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] } {
     return {
         tools: () => source.tools(),
         guard: (id) => source.guard(id),
@@ -144,7 +153,9 @@ export function localPluginTools(source: Pick<PluginToolsDeps['plugins'], 'tools
                 guard: input.guard,
                 api: opts.api,
                 launch: launchSubprocessIn(opts.sandboxDir),
-                capabilities: input.manifest.capabilities,
+                // Read AT THE RUN (ADF B5): an Unverified package's network follows the person's allowing, even for a tool
+                // registered before it. A plugin no longer enabled reaches nothing.
+                capabilities: source.capabilities ? (source.capabilities(input.pluginId ?? input.manifest.id) ?? { network: { hosts: [] }, genieApi: [] }) : input.manifest.capabilities,
                 timeoutMs: 30_000,
                 label: `${input.manifest.id}.${input.tool.name}`,
             }),

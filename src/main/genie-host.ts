@@ -682,7 +682,7 @@ async function main(): Promise<void> {
      * under developer mode (the host's own setting). Its MCP server offers and runs their tools with no window; every
      * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
      */
-    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, developerMode: () => settings.snapshot().developer_mode === true });
+    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true });
     /*
      * REMOTE ACCESS'S HOST SIDE (Tynn #409, host split P5d.1): the tailnet listener, the remote host, the paired devices,
      * the PIN, the pair prompts, the baton and the lock are HERE, so a paired phone reaches this machine with every window

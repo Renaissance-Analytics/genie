@@ -22,6 +22,7 @@ import { mailSignals, type MailSignal } from '../core/mail-signals.js';
 import { arrive, NO_PULSES, pulse, pulsingIds, type Pulses } from '../core/view-requests.js';
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
+import { takeOverTerminalOf } from '../core/take-over-route.js';
 import { chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
@@ -434,7 +435,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     // A Take Over window reads its ticket first (Tynn #529 part A).
     useEffect(() => {
         if (!bound) return;
-        const takeOverWindow = typeof window !== 'undefined' && window.location.hash.startsWith('#genie://takeover/');
+        // Either form of its hash: as main opened it, or machine-qualified as this window rewrites it (core/take-over-route.ts).
+        const takeOverWindow = typeof window !== 'undefined' && takeOverTerminalOf(window.location.hash) !== null;
         if (!takeOverWindow) { void connectTo(bound, ''); return; }
         void (async () => {
             const ticket = await window.genie?.remoteWindows?.takeOverTicket?.().catch(() => null) ?? null;
