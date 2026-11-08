@@ -120,7 +120,7 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const oldInvoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         const snapshot = vi.fn(async () => ({ workspaces: null }));
         const hibernate = vi.fn(async () => ({ ok: false, reason: 'agent still working' }));
-        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWizard(oldInvoke), hibernate } } as unknown as PreloadBridge;
+        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWizard(oldInvoke), tynnBoard: hibernate } } as unknown as PreloadBridge;
         const bridge = pageBridge(preload);
         expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge.workspaces, row)).toEqual(row.result);
@@ -128,14 +128,14 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
         expect(oldInvoke).not.toHaveBeenCalled();
         expect(await bridge.snapshot()).toEqual({ workspaces: null });
-        expect(await bridge.workspaces.hibernate('sample')).toEqual({ ok: false, reason: 'agent still working' });
-        expect(snapshot).toHaveBeenCalledTimes(1); expect(hibernate).toHaveBeenCalledExactlyOnceWith('sample');
+        expect(await bridge.workspaces.tynnBoard!('sample', undefined as never)).toEqual({ ok: false, reason: 'agent still working' });
+        expect(snapshot).toHaveBeenCalledTimes(1); expect(hibernate).toHaveBeenCalledExactlyOnceWith('sample', undefined);
     });
     it.each(rows)('$name retires its matching native handler, preload forwarding and inventory row', (row) => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
-        expect(main).toContain("ipcMain.handle('genie:workspace-hibernate'");
-        expect(preload).toContain("ipcRenderer.invoke('genie:workspace-hibernate'");
-        expect(inventory).toContain("['genie:workspace-hibernate', 'protocol:workspaces.hibernate']");
+        expect(main).toContain("ipcMain.handle('genie:workspace-tynn-board'");
+        expect(preload).toContain("ipcRenderer.invoke('genie:workspace-tynn-board'");
+        expect(inventory).toContain("['genie:workspace-tynn-board', 'protocol:workspaces.tynnBoard']");
         expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
         expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
         expect(inventory.includes(`['${row.channel}',`)).toBe(false);
