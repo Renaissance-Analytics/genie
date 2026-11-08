@@ -92,12 +92,77 @@ export class MailService {
 
     /** Bring every attached workspace's default inbox and credentials up, then let Mailpit read the book, in that order. */
     sync(): Promise<void> {
-        const run = this.#syncing.then(() => this.#sync());
-        this.#syncing = run.catch(() => undefined);
+        return this.#serial(() => this.#sync());
+    }
+
+    /** A workspace's inboxes (Genie Mail G6, the `mail` tool): never a password or a hash. */
+    inboxes(workspaceId: string): Inbox[] {
+        return this.#book.list(workspaceId);
+    }
+
+    /**
+     * A new inbox for the `mail` tool (G6), its password answered once; then Mailpit restarted to read it (G1's finding
+     * 7). Only for a workspace whose mail is Genie Mail; another is refused with nothing written.
+     */
+    createInbox(workspaceId: string, name: string): Promise<{ inbox: Inbox; password: string }> {
+        return this.#serial(async () => {
+            if (!this.#ports.attachedWorkspaces().includes(workspaceId)) {
+                throw new Error('this workspace has no Genie Mail: its mail is not the shared Mailpit. Add one with `services add` (engine mailpit). Nothing was created');
+            }
+            const made = await this.#book.create({ workspaceId, workspaceSlug: mailSlugOf(workspaceId), name }, { restart: false });
+            await this.#sync(true);
+            return made;
+        });
+    }
+
+    /**
+     * A new password for one of the workspace's inboxes (G6), answered once. Its DEFAULT inbox is its sites' and
+     * processes' identity (G5), so that one goes the G5 way: the keychain, the env, its running processes, then Mailpit.
+     */
+    rotateInbox(workspaceId: string, inboxId: string): Promise<{ inbox: Inbox; password: string }> {
+        return this.#serial(async () => {
+            const inbox = this.#own(workspaceId, inboxId);
+            const rotated = await this.#book.rotate(inbox.id);
+            if (inbox.name === DEFAULT_INBOX) {
+                if (await this.#ports.secrets.set(secretOf(rotated.inbox), rotated.password)) {
+                    this.#credentials.set(workspaceId, { username: rotated.inbox.smtpUser, password: rotated.password, from: rotated.inbox.address });
+                    this.#ports.envChanged([workspaceId]);
+                    this.#pending.add(workspaceId);
+                } else {
+                    // Not kept: the env cannot be restored to it after a restart, so the env is not given it. Said.
+                    this.#credentials.delete(workspaceId);
+                    this.#ports.say?.(`Genie Mail: the keychain did not keep ${rotated.inbox.address}'s new password; its workspace's apps get it again on the next sync`);
+                }
+            }
+            await this.#sync(true);
+            return rotated;
+        });
+    }
+
+    /** Delete one of the workspace's inboxes (G6); never its default inbox, which its sites and processes send as. */
+    removeInbox(workspaceId: string, inboxId: string): Promise<void> {
+        return this.#serial(async () => {
+            const inbox = this.#own(workspaceId, inboxId);
+            if (inbox.name === DEFAULT_INBOX) throw new Error(`${inbox.address} is this workspace's default inbox: its sites and processes send as it, so it is not deleted`);
+            await this.#book.remove(inbox.id);
+            await this.#sync(true);
+        });
+    }
+
+    #own(workspaceId: string, inboxId: string): Inbox {
+        const inbox = this.#book.list(workspaceId).find((i) => i.id === inboxId);
+        if (!inbox) throw new Error(`${inboxId} is not one of this workspace's inboxes; nothing was changed`);
+        return inbox;
+    }
+
+    #serial<T>(work: () => Promise<T>): Promise<T> {
+        const run = this.#syncing.then(work);
+        this.#syncing = run.then(() => undefined, () => undefined);
         return run;
     }
 
-    async #sync(): Promise<void> {
+    /** `bookChanged`: the book was just changed (G6), so Mailpit reads it again even if no env changed. */
+    async #sync(bookChanged = false): Promise<void> {
         const changed: string[] = [];
         for (const workspaceId of this.#ports.attachedWorkspaces()) {
             if (this.#credentials.has(workspaceId)) continue;
@@ -125,9 +190,9 @@ export class MailService {
         // 2: the env (its running sites restart with it), before Mailpit reads the book.
         if (changed.length > 0) this.#ports.envChanged(changed);
         for (const workspaceId of changed) this.#pending.add(workspaceId);
-        if (this.#pending.size === 0) return;
+        if (this.#pending.size === 0 && !bookChanged) return;
         // 2b: the running background processes too: one left on the old env would send with no credentials and get 530.
-        const processes = this.#ports.restartProcesses ? await this.#ports.restartProcesses([...this.#pending]) : { ok: true as const };
+        const processes = this.#pending.size > 0 && this.#ports.restartProcesses ? await this.#ports.restartProcesses([...this.#pending]) : { ok: true as const };
         if (!processes.ok) {
             // Mailpit waits: reading the book now would refuse that process. Said, and tried again on the next sync.
             this.#waiting = processes.reason;

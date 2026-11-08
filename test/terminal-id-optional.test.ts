@@ -29,7 +29,7 @@ describe('terminalId', () => {
     const schemaOf = (d: (typeof tools)[number]) => d.inputSchema as { required?: string[]; properties?: Record<string, { description?: string }> };
 
     it('is required by NO tool — counted, the offenders named (the control: tools that take it exist)', () => {
-        expect(tools.filter((d) => schemaOf(d).properties?.terminalId).length).toBe(15); // fourteen Genie tools (no runAgent sidecar since 2026-10-19; plan since 2026-10-20; flows since 2026-10-21) + the plugin tool
+        expect(tools.filter((d) => schemaOf(d).properties?.terminalId).length).toBe(16); // fifteen Genie tools (no runAgent sidecar since 2026-10-19; plan since 2026-10-20; flows since 2026-10-21; mail since 2026-11-08, Genie Mail G6) + the plugin tool
         expect(tools.filter((d) => schemaOf(d).required?.includes('terminalId')).map((d) => d.name)).toEqual([]);
     });
 

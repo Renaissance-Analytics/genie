@@ -6,6 +6,7 @@ import { agentTools, type AgentToolsDeps } from './mcp-tools-agents.js';
 import { pluginTools, type PluginToolsDeps } from './mcp-tools-plugins.js';
 import { processTools, type ProcessToolsDeps } from './mcp-tools-processes.js';
 import { flowTools, type FlowToolsDeps } from './mcp-tools-flows.js';
+import { mailTools, type MailToolsDeps } from './mcp-tools-mail.js';
 import { workspaceTabsTools, type WorkspaceTabsToolDeps } from './mcp-tools-workspace-tabs.js';
 import { pagesTools, type PagesToolDeps } from './mcp-tools-pages.js';
 import type { Catalog } from '../core/catalog.js';
@@ -27,6 +28,8 @@ export interface AllToolsDeps {
     readonly hosting: HostingToolsDeps;
     readonly processes: ProcessToolsDeps;
     readonly flows: FlowToolsDeps;
+    /** `mail` (Genie Mail G6). Absent = no Genie Mail here, and the tool says so. */
+    readonly mail?: MailToolsDeps;
     readonly plugins: PluginToolsDeps;
     /** `createAgent`, visible to a workspace's default agent only (mcp-tools-agents.ts). Absent = not registered (doctor mode). */
     readonly agents?: AgentToolsDeps;
@@ -58,6 +61,7 @@ export function allGenieTools(deps: AllToolsDeps, catalog: Catalog = genieCatalo
     bind(hostingTools(deps.hosting));
     bind(processTools(deps.processes));
     bind(flowTools(deps.flows));
+    bind(mailTools(deps.mail ?? { resolveCaller: deps.processes.resolveCaller, mail: null }));
     if (deps.agents) bind(agentTools(deps.agents));
     if (deps.workspaceTabs) bind(workspaceTabsTools(deps.workspaceTabs));
     if (deps.pages) bind(pagesTools(deps.pages));
