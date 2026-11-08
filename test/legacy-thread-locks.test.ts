@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -37,6 +37,16 @@ describe('a legacy thread lock file', () => {
         const started = Date.now();
         await openAgentThread(store, id).record(row('after its holder'));
         expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+        expect((await readWholeHistory(store, id)).rows).toHaveLength(1);
+    });
+
+    it('a stamp absurdly far ahead on an old file cannot hang the write: its age bounds it', async () => {
+        const id = mintAgentId();
+        await writeFile(lockOf(id), `${Date.now() + 3_600_000}\n`, 'utf8');
+        const longAgo = new Date(Date.now() - 10 * 60_000);
+        await utimes(lockOf(id), longAgo, longAgo);
+        const store = new ThreadStore(dir);
+        await openAgentThread(store, id).record(row('not hung'));
         expect((await readWholeHistory(store, id)).rows).toHaveLength(1);
     });
 
