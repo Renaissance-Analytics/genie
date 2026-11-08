@@ -34,17 +34,20 @@ describe('the registry', () => {
 
 describe('the sounds (Genie 1’s five, all shipped — Tynn #766)', () => {
     it('Genie 1’s choices in Genie 1’s order — the Default chime first, None last; every wav ships and is a real RIFF/WAVE', () => {
-        expect(SOUND_CHOICES).toEqual([
+        expect(SOUND_CHOICES.slice(0, 6)).toEqual([
             { value: 'synth', label: 'Default chime' },
             { value: '3tootpipe', label: '3 Toot Pipe' },
             { value: 'dingdongdoink', label: 'Ding Dong Doink' },
             { value: 'sparkle', label: 'Sparkle' },
             { value: 'triumphant', label: 'Triumphant' },
             { value: 'winddown', label: 'Wind Down' },
+        ]);
+        // The library between them (Tynn #441) is test/alert-sound-library.test.ts.
+        expect(SOUND_CHOICES.slice(-2)).toEqual([
             { value: 'custom', label: 'Custom file…' },
             { value: 'off', label: 'None' },
         ]);
-        for (const c of SOUND_CHOICES.filter((c) => c.value !== 'off' && c.value !== 'synth' && c.value !== 'custom')) {
+        for (const c of SOUND_CHOICES.slice(1, 6)) {
             const file = new URL(`../src/renderer/sounds/${c.value}.wav`, import.meta.url);
             expect(existsSync(file), c.value).toBe(true);
             expect(readFileSync(file).subarray(0, 4).toString('latin1'), c.value).toBe('RIFF');
@@ -55,7 +58,7 @@ describe('the sounds (Genie 1’s five, all shipped — Tynn #766)', () => {
         const dir = new URL('../src/renderer/sounds/', import.meta.url);
         expect(exists(dir)).toBe(true);
         const shipped = readdirSync(dir).filter((f) => f.endsWith('.wav')).map((f) => f.replace(/\.wav$/, '')).sort();
-        expect(shipped).toEqual(SOUND_CHOICES.filter((c) => c.value !== 'off' && c.value !== 'synth' && c.value !== 'custom').map((c) => c.value).sort());
+        expect(shipped).toEqual(SOUND_CHOICES.slice(1, 6).map((c) => c.value).sort());
     });
 });
 

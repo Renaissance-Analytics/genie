@@ -12,16 +12,18 @@ const general = (values: Record<string, boolean | string>) =>
     renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} section="notifications" />);
 
 describe('a sound per alert', () => {
-    it('each alert row offers the sounds by name — the Default chime first, Custom file…, None last; COUNTED: twenty-six rows of eight choices', () => {
+    it('each alert row offers the sounds by name, grouped by family — Genie’s own with the Default chime first, the library (Tynn #441), Custom file… and None last; COUNTED: twenty-six rows of fifty-five choices in seven groups', () => {
         const html = general({});
         const rows = html.match(/<li[^>]*data-setting="sound_[a-z]+"[\s\S]*?<\/li>/g) ?? [];
         expect(rows).toHaveLength(26);
         for (const row of rows) {
-            expect(row.match(/<option /g)).toHaveLength(8);
+            expect(row.match(/<option /g)).toHaveLength(55);
+            expect([...row.matchAll(/<optgroup label="([^"]+)"/g)].map((m) => m[1])).toEqual(['Genie', 'Chimes and confirmations', 'Alerts and errors', 'Clicks and moves', 'Digital', 'Jingles', 'Other']);
             expect(row).toMatch(/value="custom"[^>]*>Custom file…<\/option><option value="off"/);
-            expect(row).toMatch(/<select[^>]*><option value="synth"[^>]*>Default chime<\/option>/);
+            expect(row).toMatch(/<select[^>]*><optgroup label="Genie"><option value="synth"[^>]*>Default chime<\/option>/);
             expect(row).toContain('>Wind Down</option>');
-            expect(row).toMatch(/value="off"[^>]*>None<\/option><\/select>/);
+            expect(row).toMatch(/<optgroup label="Jingles">[\s\S]*>Jingles · Robin<\/option>/);
+            expect(row).toMatch(/value="off"[^>]*>None<\/option><\/optgroup><\/select>/);
         }
     });
 
