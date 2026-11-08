@@ -1,5 +1,9 @@
 import type { PluginCapabilities, PluginManifest } from './plugins.js';
 
+export const MARKETPLACE_METHODS = ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const;
+export type MarketplaceMethod = (typeof MARKETPLACE_METHODS)[number];
+export const isMarketplaceMethod = (method: unknown): method is MarketplaceMethod => typeof method === 'string' && (MARKETPLACE_METHODS as readonly string[]).includes(method);
+
 /** C2's anonymous REST contract. These values describe a package; they never authorize it. */
 export interface MarketplaceVersion {
     readonly version: string;

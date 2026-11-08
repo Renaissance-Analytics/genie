@@ -43,6 +43,7 @@ import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, KnowledgeSurface, SettingsSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { InboxFlyout } from './components/InboxFlyout.js';
 import { EMPTY_FEATURES, type ActOutcome, type FeatureAction, type FeatureData } from './features.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
 import { mayBrowse } from '../core/workstation-role.js';
 import type { ProviderStatus } from './components/FeatureSurfaces.js';
 import { openFileRoute } from '../core/files-panel.js';
@@ -141,6 +142,7 @@ export interface ShellProps {
     chatSession?: LiveSession | null | undefined;
     /** What the feature surfaces render from; `null` sections draw skeletons. Defaults to nothing asked yet. */
     features?: FeatureData | undefined;
+    marketplace?: MarketplaceApi | undefined;
     /** A feature surface asking the main process for something. */
     onFeature?: ((action: FeatureAction) => void | Promise<ActOutcome>) | undefined;
     /**
@@ -331,6 +333,7 @@ export function Shell({
     onLocateRepo,
     servable,
     features = EMPTY_FEATURES,
+    marketplace,
     onFeature = () => {},
     featureAsk,
     pickFiles,
@@ -710,7 +713,7 @@ export function Shell({
                     {canServe && parsed.surface === 'knowledge' ? <ErrorBoundary surface="Knowledge"><KnowledgeSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'flows' ? <ErrorBoundary surface="Flows"><FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'hosting' ? <ErrorBoundary surface="Hosting" resetKeys={[parsed.tab]}><HostingSurface tab={parsed.tab} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /></ErrorBoundary> : null}
-                    {canServe && parsed.surface === 'settings' ? <ErrorBoundary surface="Settings" resetKeys={[parsed.section]}><SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} /></ErrorBoundary> : null}
+                    {canServe && parsed.surface === 'settings' ? <ErrorBoundary surface="Settings" resetKeys={[parsed.section]}><SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} marketplace={marketplace} /></ErrorBoundary> : null}
                     {canServe && parsed.surface === 'browser' ? <ErrorBoundary surface="Browser"><BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /></ErrorBoundary> : null}
 
                     {canServe && parsed.surface === 'deck' ? (

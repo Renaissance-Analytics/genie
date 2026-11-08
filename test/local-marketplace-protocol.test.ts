@@ -24,9 +24,8 @@ const review: MarketplaceReview = {
     manifest: { id: 'org.example.plugin', name: 'Example', version: '1.0.0', publisher: { name: 'Example', keyId: 'k' }, capabilities: { network: { hosts: [] }, genieApi: [] }, mcpTools: [], panels: [] },
 };
 const futureApi = (bridge: GenieBridge): MarketplaceApi => {
-    const future = bridge as GenieBridge & { marketplace?: MarketplaceApi };
-    expect(future.marketplace, 'Marketplace must use the admitted local frame bridge').toBeDefined();
-    return future.marketplace!;
+    expect(bridge.marketplace, 'Marketplace must use the admitted local frame bridge').toBeDefined();
+    return bridge.marketplace!;
 };
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise<void>(resolve => setTimeout(resolve, 0)); };
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; };

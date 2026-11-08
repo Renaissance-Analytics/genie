@@ -59,6 +59,7 @@ describe('C4 Marketplace pane', () => {
     });
     it('passes the actual local bridge API from App into Settings', () => {
         expect(readFileSync('src/renderer/App.tsx', 'utf8')).toMatch(/marketplace=\{resolvedBridge\?\.marketplace\}/);
+        expect(readFileSync('src/renderer/Shell.tsx', 'utf8')).toMatch(/<SettingsSurface[^\n]+marketplace=\{marketplace\}/);
     });
     it('shows registry name, verified publisher, version and declared permissions', async () => {
         await draw();

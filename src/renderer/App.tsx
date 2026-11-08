@@ -1914,6 +1914,7 @@ function DesktopApp({ bridge }: AppProps) {
             // workspace (core/chat-scope.ts), so the composer never quietly keeps a project the person left (beta.26).
             onNavigate={(r) => navigate(carryChat(r, parsed, snapshot.agents, openedThreads))}
             features={features}
+            marketplace={resolvedBridge?.marketplace}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) =>
                 (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => {
