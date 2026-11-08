@@ -93,9 +93,22 @@ beforeAll(async () => {
         wire: async () => { await docker('rm', '-f', name); await startFrom(true); wired = true; },
         restart: async () => { await docker('restart', name); },
         envChanged: () => {},
+        // A running background process holds the env it started with; restarted, it reads the env as it is now.
+        restartProcesses: async (ids) => {
+            for (const ws of ids) if (worker.workspaceId === ws) worker.env = envOf(ws);
+            return { ok: true };
+        },
     });
     await startFrom(false);
 }, 180_000);
+
+/** A workspace's mail env as its processes get it: its default inbox's credentials, or none yet. */
+const envOf = (ws: string): { user?: string; password?: string } => {
+    const c = service.credentialsFor(ws);
+    return c ? { user: c.username, password: c.password } : {};
+};
+/** A running queue worker of ws-a, started BEFORE the workspace had credentials (as one is on a machine today). */
+const worker: { workspaceId: string; env: { user?: string; password?: string } } = { workspaceId: 'ws-a', env: {} };
 
 afterAll(async () => {
     if (name) await docker('rm', '-f', name).catch(() => '');
@@ -125,5 +138,14 @@ describe('the live shared Mailpit, wired to the book with every workspace\'s cre
         expect(code(sentB.mail)).toBe(250);
         expect(code(crossed.auth)).toBe(535);
         expect(code(none.mail)).toBe(530);
+    });
+
+    it('a background process that was running before is restarted with the credentials first, and sends after wiring', async () => {
+        // It started before ws-a had an inbox; sync restarted it before Mailpit read the book (the test above ran sync).
+        const sent = await send(worker.env.user, worker.env.password);
+        finding('g5-running-process', { user: worker.env.user, auth: sent.auth, mail: sent.mail });
+        expect(worker.env.user).toBe(service.credentialsFor('ws-a')!.username);
+        expect(code(sent.auth)).toBe(235);
+        expect(code(sent.mail)).toBe(250);
     });
 });
