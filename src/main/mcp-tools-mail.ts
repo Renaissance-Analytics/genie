@@ -4,6 +4,7 @@ import { DEFAULT_INBOX, type Inbox } from '../core/mail.js';
 import { routeMessage } from '../core/mail-routing.js';
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
+import { MailpitEvents, type MailEventsSource, type SocketFactory } from './mailpit-events.js';
 import { mailpitReader, type MailpitReader, type MailpitSummary } from './mailpit-reader.js';
 import type { MailService } from './mail-service.js';
 
@@ -39,6 +40,8 @@ export interface MailPort {
     reader(): MailpitReader | null;
     /** Why Mailpit is not reading the book yet (mail-service.ts `waiting`), or null. */
     waiting?(): string | null;
+    /** The host's subscription to the shared Mailpit's websocket (G7 `wait`), or null when there is none to read. */
+    events?(): MailEventsSource | null;
 }
 
 export interface MailToolsDeps {
@@ -52,7 +55,11 @@ export function mailToolPort(input: {
     service: Pick<MailService, 'inboxes' | 'createInbox' | 'rotateInbox' | 'removeInbox' | 'waiting'>;
     envFor: (workspaceId: string) => Readonly<Record<string, string>>;
     apiUrl: () => string | null;
+    /** Tests: how a websocket is opened. Absent = the runtime's own WebSocket. */
+    connect?: SocketFactory;
 }): MailPort {
+    // ONE subscription for every wait: one socket while anyone waits, none otherwise.
+    const events = new MailpitEvents({ url: input.apiUrl, ...(input.connect ? { connect: input.connect } : {}) });
     return {
         inboxes: (ws) => input.service.inboxes(ws),
         create: (ws, name) => input.service.createInbox(ws, name),
@@ -68,6 +75,7 @@ export function mailToolPort(input: {
             return url ? mailpitReader(url) : null;
         },
         waiting: () => input.service.waiting(),
+        events: () => (input.apiUrl() ? events : null),
     };
 }
 
@@ -75,7 +83,9 @@ const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload)
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined);
 
-const ACTIONS = 'create, list, messages, read, delete, rotate';
+const ACTIONS = 'create, list, messages, read, delete, rotate, wait';
+const DEFAULT_WAIT_SECONDS = 60;
+const MAX_WAIT_SECONDS = 300;
 const NOT_HERE = 'this Genie has no Genie Mail (doctor mode runs none); nothing was done';
 const NO_MAIL = 'this workspace has no Genie Mail: its mail is not the shared Mailpit. Add one with `services add` (engine mailpit), then call mail again. Nothing was done';
 const NO_MAILPIT = "Genie's shared Mailpit is not there to read (`services list` shows it); nothing was read";
@@ -89,6 +99,14 @@ const ONCE = 'The password is shown once: Genie keeps only its hash. `rotate` gi
 const notMine = (id: string) => `${id} is not in this workspace's inboxes; nothing was done`;
 const iso = (value: string) => { const t = Date.parse(value); return Number.isNaN(t) ? value : new Date(t).toISOString(); };
 const addresses = (list: ReadonlyArray<{ Address: string }> | null | undefined) => (list ?? []).map((a) => a.Address);
+
+/** A message as `messages` and `wait` answer it: metadata only, never its body. */
+function summaryView(s: MailpitSummary, inboxes: readonly string[]): Record<string, unknown> {
+    return {
+        id: s.ID, inboxes, from: s.From?.Address ?? null, to: addresses(s.To), cc: addresses(s.Cc), subject: s.Subject,
+        date: iso(s.Created), size: s.Size, read: s.Read, attachments: s.Attachments, snippet: s.Snippet,
+    };
+}
 
 function inboxView(i: Inbox): Record<string, unknown> {
     return { id: i.id, name: i.name, address: i.address, default: i.name === DEFAULT_INBOX, createdAt: new Date(i.createdAt).toISOString() };
@@ -176,10 +194,7 @@ export function mailTools(deps: MailToolsDeps): Registration[] {
                                 if (unread && s.Read) continue;
                                 const inboxes = routedTo(s, within, reader);
                                 if (inboxes.length === 0) continue;
-                                found.push({
-                                    id: s.ID, inboxes, from: s.From?.Address ?? null, to: addresses(s.To), cc: addresses(s.Cc), subject: s.Subject,
-                                    date: iso(s.Created), size: s.Size, read: s.Read, attachments: s.Attachments, snippet: s.Snippet,
-                                });
+                                found.push(summaryView(s, inboxes));
                                 if (found.length >= limit) break;
                             }
                         }
@@ -228,6 +243,57 @@ export function mailTools(deps: MailToolsDeps): Registration[] {
                         if (!smtp) return err(`${rotated.inbox.address} has a new password, but this workspace's mail env is gone; rotate it again once Mail is back`);
                         return ok({ ok: true, ...credentials(rotated, smtp), note: one.name === DEFAULT_INBOX ? `${ONCE} The workspace's sites and running processes were given it.` : ONCE, ...pendingNote() });
                     }
+                    case 'wait': {
+                        const reader = port.reader();
+                        const events = port.events?.() ?? null;
+                        if (!reader || !events) return err(NO_MAILPIT);
+                        let within = mine();
+                        if (args.inbox !== undefined) {
+                            const one = inboxOf(str(args.inbox));
+                            if (typeof one === 'string') return err(one);
+                            within = [one];
+                        }
+                        const secs = args.timeoutSeconds;
+                        if (secs !== undefined && (typeof secs !== 'number' || !Number.isFinite(secs) || secs < 1 || secs > MAX_WAIT_SECONDS)) {
+                            return err(`\`timeoutSeconds\` is 1 to ${MAX_WAIT_SECONDS} (default ${DEFAULT_WAIT_SECONDS})`);
+                        }
+                        const seconds = typeof secs === 'number' ? secs : DEFAULT_WAIT_SECONDS;
+                        const needle = str(args.match)?.toLowerCase();
+                        const matches = (s: MailpitSummary) => needle === undefined
+                            || [s.Subject, s.Snippet, s.From?.Address, s.From?.Name, ...addresses(s.To), ...addresses(s.Cc)].some((v) => typeof v === 'string' && v.toLowerCase().includes(needle));
+                        return await new Promise<McpToolResult>((resolve) => {
+                            let done = false;
+                            const finish = (result: McpToolResult) => {
+                                if (done) return;
+                                done = true;
+                                clearTimeout(timer);
+                                subscription.close();
+                                context.signal?.removeEventListener('abort', onAbort);
+                                resolve(result);
+                            };
+                            // An UNREAD message of the caller's that matches: one already read was dealt with before.
+                            const consider = (s: MailpitSummary) => {
+                                if (done || s.Read || !matches(s)) return;
+                                const inboxes = routedTo(s, within, reader);
+                                if (inboxes.length > 0) finish(ok({ ok: true, message: summaryView(s, inboxes) }));
+                            };
+                            // Subscribed FIRST, so nothing taken between the look at what is there and the wait is missed.
+                            const subscription = events.subscribe(consider);
+                            const timer = setTimeout(() => finish(ok({ ok: true, timedOut: true, note: `timed out after ${seconds} s: nothing matching arrived in this workspace's inboxes` })), seconds * 1000);
+                            const onAbort = () => finish(err('the wait was cancelled'));
+                            if (context.signal?.aborted) { onAbort(); return; }
+                            context.signal?.addEventListener('abort', onAbort);
+                            subscription.ready.then(async () => {
+                                // What is already there, once (newest first): then only the websocket. Never polled.
+                                try {
+                                    const page = await reader.page({ start: 0, limit: PAGE });
+                                    for (const s of page.messages) consider(s);
+                                } catch (error) {
+                                    finish(err(`Genie's Mailpit could not be read: ${(error as Error).message}`));
+                                }
+                            }, (error: Error) => finish(err(`${error.message}; nothing was waited for`)));
+                        });
+                    }
                     default:
                         return err(`unknown action ${JSON.stringify(action)}; the actions are ${ACTIONS}`);
                 }
@@ -252,18 +318,21 @@ export const MAIL_TOOL: BuiltinTool = declareBuiltinTool(
         + '`read` {id} — one message: text, HTML, headers, attachment names and sizes. '
         + '`delete` {id} — a message; `delete` {inbox} — an inbox (not the default one). '
         + '`rotate` {inbox} — a new password, shown once. '
+        + '`wait` {inbox?, match?, timeoutSeconds? (default 60, at most 300)} — after making your app send (a signup, a reset), wait for the mail: answers the first UNREAD message of your inboxes whose subject, sender, recipients or snippet contains `match`, as it arrives; with none it answers timedOut (not an error). Then `read` it. '
         + 'You see only this workspace’s inboxes and the messages sent to or from them.',
     {
         type: 'object',
         properties: {
             terminalId: MIRRORED_TERMINAL_ID,
-            action: { type: 'string', enum: ['create', 'list', 'messages', 'read', 'delete', 'rotate'] },
+            action: { type: 'string', enum: ['create', 'list', 'messages', 'read', 'delete', 'rotate', 'wait'] },
             name: { type: 'string', description: 'create: the inbox’s name, lower-case letters, digits and hyphens (signup).' },
             inbox: { type: 'string', description: 'messages / delete / rotate: an inbox’s name, address or id, from `list`.' },
             id: { type: 'string', description: 'read / delete: a message’s id, from `messages`.' },
             unread: { type: 'boolean', description: 'messages: unread only.' },
             search: { type: 'string', description: 'messages: Mailpit’s search (words, subject:, from:, to:).' },
             limit: { type: 'number', description: 'messages: how many, newest first (default 20, at most 200).' },
+            match: { type: 'string', description: 'wait: text the subject, sender, recipients or snippet contains (case-insensitive); absent = any message.' },
+            timeoutSeconds: { type: 'number', description: 'wait: how long to wait, 1 to 300 seconds (default 60).' },
         },
         required: ['action'],
     },

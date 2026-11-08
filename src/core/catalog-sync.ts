@@ -37,8 +37,6 @@ export function diffCatalog(before: readonly ElementDefinition[], after: readonl
 export class CatalogReplica {
     #revision = -1;
     #defs = new Map<string, ElementDefinition>();
-    /** Every alias, to its definition's id. */
-    #aliases = new Map<string, string>();
     readonly #snapshot: () => Promise<CatalogSnapshot>;
 
     constructor(snapshot: () => Promise<CatalogSnapshot>) {
@@ -51,7 +49,6 @@ export class CatalogReplica {
     rebase(snapshot: CatalogSnapshot): void {
         this.#revision = snapshot.revision;
         this.#defs = new Map(snapshot.definitions.map((d) => [d.id, d]));
-        this.#reindex();
     }
 
     /** A change from the revision held is applied; from any other, the snapshot is asked for again. */
@@ -64,7 +61,6 @@ export class CatalogReplica {
         for (const id of change.remove) this.#defs.delete(id);
         for (const d of change.upsert) this.#defs.set(d.id, d);
         this.#revision = change.revision;
-        this.#reindex();
     }
 
     list(kind?: ElementDefinition['kind']): ElementDefinition[] {
@@ -72,13 +68,9 @@ export class CatalogReplica {
         return kind === undefined ? all : all.filter((d) => d.kind === kind);
     }
 
-    /** By id or alias; `null` when this replica holds nothing by that name. */
-    get(name: string): ElementDefinition | null {
-        return this.#defs.get(name) ?? this.#defs.get(this.#aliases.get(name) ?? '') ?? null;
-    }
-
-    #reindex(): void {
-        this.#aliases = new Map([...this.#defs.values()].flatMap((d) => d.aliases.map((a) => [a, d.id] as const)));
+    /** By id (ids are the only names: no aliases, the owner's ruling q_d71981d6); `null` when this replica holds none. */
+    get(id: string): ElementDefinition | null {
+        return this.#defs.get(id) ?? null;
     }
 }
 
@@ -89,16 +81,20 @@ export interface WindowAdapters {
 }
 
 /**
- * Which compiled adapter opens this element in THIS window. An element that names one this window does not carry (a
- * newer Genie's) is said, with its name: "needs a newer Genie" — never a blank pane. A kind a window does not open (a
- * tool) is not something to open here.
+ * Which compiled adapter opens this element in THIS window, and how its halves talk. Every element says where it runs
+ * (the owner's ruling q_d71981d6): a window opens what runs on a client; an element on BOTH sides opens with its
+ * `reach.link`, the host calls and events its client side may use, and nothing else. An element that names an adapter
+ * this window does not carry (a newer Genie's) is said, with its name: "needs a newer Genie" — never a blank pane.
  */
-export function adapterFor(def: ElementDefinition, has: WindowAdapters): { ok: true; adapter: string } | { ok: false; reason: string } {
+export function adapterFor(def: ElementDefinition, has: WindowAdapters): { ok: true; adapter: string; calls: readonly string[]; events: readonly string[] } | { ok: false; reason: string } {
     const name = def.docs.name;
+    const side = def.reach.side as string;
+    if (side === 'host') return { ok: false, reason: `${name} runs on the host; a window does not open it.` };
     if (def.kind === 'editor' || def.kind === 'panel') {
         const adapter = def.kind === 'editor' ? def.payload.fancyEditor : def.payload.fancyComponent;
         const carried = def.kind === 'editor' ? has.editors : has.panels;
-        if (typeof adapter === 'string' && carried.includes(adapter)) return { ok: true, adapter };
+        const link = (def.reach as { link?: { calls: readonly string[]; events: readonly string[] } }).link;
+        if (typeof adapter === 'string' && carried.includes(adapter)) return { ok: true, adapter, calls: link?.calls ?? [], events: link?.events ?? [] };
         return { ok: false, reason: `${name} needs a newer Genie: this window does not have its ${def.kind} (${String(adapter)}).` };
     }
     return { ok: false, reason: `${name} is a ${def.kind}; a window does not open it.` };
