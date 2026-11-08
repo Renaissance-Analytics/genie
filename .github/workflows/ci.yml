@@ -44,6 +44,7 @@ jobs:
       # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
       # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
       - uses: actions/cache@v4
+        id: electron-cache
         with:
           path: |
             ~/.cache/electron
@@ -51,6 +52,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
 
@@ -196,6 +199,7 @@ jobs:
       # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
       # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
       - uses: actions/cache@v4
+        id: electron-cache
         with:
           path: |
             ~/.cache/electron
@@ -203,6 +207,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
         if: steps.changed.outputs.flows == 'true'
@@ -233,6 +239,7 @@ jobs:
       # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
       # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
       - uses: actions/cache@v4
+        id: electron-cache
         with:
           path: |
             ~/.cache/electron
@@ -240,6 +247,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
       # Native staging tests exercise the same built worker that the packaged app loads.
@@ -338,6 +347,7 @@ jobs:
       # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
       # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
       - uses: actions/cache@v4
+        id: electron-cache
         with:
           path: |
             ~/.cache/electron
@@ -345,6 +355,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
         if: steps.changed.outputs.zip64 == 'true'
@@ -374,6 +386,7 @@ jobs:
       # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
       # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
       - uses: actions/cache@v4
+        id: electron-cache
         with:
           path: |
             ~/.cache/electron
@@ -381,6 +394,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
       - run: npm run verify:mailpit
@@ -429,6 +444,7 @@ jobs:
       # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
       # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
       - uses: actions/cache@v4
+        id: electron-cache
         with:
           path: |
             ~/.cache/electron
@@ -436,6 +452,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
 
@@ -643,6 +661,7 @@ jobs:
       # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
       # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
       - uses: actions/cache@v4
+        id: electron-cache
         with:
           path: |
             ~/.cache/electron
@@ -650,6 +669,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
 
@@ -753,6 +774,7 @@ jobs:
       # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
       # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
       - uses: actions/cache@v4
+        id: electron-cache
         with:
           path: |
             ~/.cache/electron
@@ -760,6 +782,8 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
       - run: npm run build
