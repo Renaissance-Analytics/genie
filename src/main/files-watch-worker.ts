@@ -65,7 +65,7 @@ export function workerWatchSource(options: WorkerWatchOptions = {}): WatchSource
          * as nodeWatchSource's does, so a write the moment a view opens is never missed. Kept for good when the worker
          * cannot start, fails, or ends on its own: a watch is never simply lost.
          */
-        let here: { close(): void } | null = onThisThread();
+        let here: { close(): void } | null = null;
         let kept = false;
         const fallBack = (why: string) => {
             if (closed || kept) return;
