@@ -9,6 +9,7 @@ import type { MarketplacePackage } from '../src/core/marketplace.js';
 import { MarketplaceHost, type MarketplaceHostOptions as HostOptions } from '../src/main/marketplace-host.js';
 import { MarketplaceClient } from '../src/main/marketplace-client.js';
 import { PluginsService } from '../src/main/plugins-host.js';
+import { PluginHost } from '../src/main/plugin-host.js';
 import { signPackage } from './plugin-sign-helper.js';
 
 type PackageData = { -readonly [K in keyof MarketplacePackage]: MarketplacePackage[K] };
@@ -168,6 +169,20 @@ describe('C4 host-owned Marketplace review and installation', () => {
         await fixture('1.10.0'); await fixture('1.9.0');
         const results = await host.search('');
         expect(results.packages).toMatchObject([{ id, installedVersion: '1.0.0', updateAvailable: true, version: { version: '1.10.0' } }]);
+    });
+
+    it.each(['reload', 'refresh'] as const)('an earlier %s cannot replace a newly installed snapshot after finishing late', async operation => {
+        await fixture(); const host = await open(); await host.install((await host.prepare(id, '1.0.0')).token, true);
+        const old = plugins.plugins(); let release!: (value: PluginHost) => void;
+        const pending = new Promise<PluginHost>(resolve => { release = resolve; });
+        const openedOld = vi.fn(() => pending), spy = vi.spyOn(PluginHost, 'open').mockImplementationOnce(openedOld);
+        const stale = operation === 'reload' ? plugins.reload() : plugins.call('refresh', []);
+        try {
+            await vi.waitFor(() => expect(openedOld).toHaveBeenCalledTimes(1));
+            await fixture('1.1.0'); await host.install((await host.prepare(id, '1.1.0')).token, false);
+            expect(installed()).toMatchObject({ version: '1.1.0', state: 'enabled' });
+        } finally { release(old); await stale; spy.mockRestore(); }
+        expect(installed()).toMatchObject({ version: '1.1.0', state: 'enabled' });
     });
 
     it('cancel, unknown tokens, consumed tokens and expired reviews cannot install', async () => {
