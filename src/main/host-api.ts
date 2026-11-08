@@ -2,6 +2,7 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
 import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import type { Headroom } from '../core/headroom.js';
+import { homedir } from 'node:os';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
@@ -604,6 +605,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return listHostDir(str(args[0]));
             case 'host.mkdir':
                 return makeHostDir(str(args[0]), str(args[1]));
+            case 'host.home':
+                return homedir();
             case 'updates.state':
                 return deps.updates?.state() ?? null;
             case 'updates.check':

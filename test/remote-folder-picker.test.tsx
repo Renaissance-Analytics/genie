@@ -126,7 +126,7 @@ describe('host.home over the remote protocol', () => {
         const api: HostApi = {
             invoke: async (method, args) => {
                 calls.push({ method, args });
-                if ((method as string) === 'host.home') return '/home/wish';
+                if (method === 'host.home') return '/home/wish';
                 if (method === 'host.listDir') return { ok: true, path: args[0], entries: [{ path: `${String(args[0])}/repos`, name: 'repos', kind: 'dir' }] };
                 if (method === 'host.mkdir') return { ok: true, path: `${String(args[0])}/${String(args[1])}` };
                 return { ok: true };
@@ -152,7 +152,7 @@ describe('host.home over the remote protocol', () => {
     const owner = { label: 'me', isOwner: true, workspaceId: null, readonly: false };
 
     it('is a read', () => {
-        expect(capabilityOf('host.home' as never)).toBe('read');
+        expect(capabilityOf('host.home')).toBe('read');
     });
 
     it('the remote bridge asks the REMOTE for its home', async () => {
@@ -170,7 +170,7 @@ describe('host.home over the remote protocol', () => {
 
     it('the host answers its own home folder', async () => {
         const api = buildHostApi(protocolContractDeps(dir));
-        expect(await api.invoke('host.home' as never, [])).toBe(homedir());
+        expect(await api.invoke('host.home', [])).toBe(homedir());
     });
 
     it('the picker opened over the remote starts at the remote’s home and lists, goes Up and makes folders THERE', async () => {

@@ -109,6 +109,7 @@ export const REMOTE_METHODS = [
     'updates.state',
     'host.listDir',
     'host.mkdir',
+    'host.home',
     'updates.check',
     'updates.download',
     'updates.install',
@@ -204,6 +205,9 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'host.listDir': 'read',
     // The folder picker's New folder (2026-10-22): a folder made on the host's disk — a write, and owner-only on a host.
     'host.mkdir': 'write',
+    // The host's home folder, where a picker opens when nothing better is known (Tynn #527): a read; a guest is answered
+    // the folder it was given (main/remote-host.ts).
+    'host.home': 'read',
     'workspaces.confirmAdd': 'write',
     'workspaces.create': 'write',
     'workspaces.previewAddFromGit': 'read',

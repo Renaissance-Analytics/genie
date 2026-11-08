@@ -568,6 +568,12 @@ export class RemoteHost {
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         // A guest browses inside what it was given; the owner, the whole disk (Genie 1's approved scope, Tynn #835).
+        // A guest's picker opens in what it was given, never at the host's home (Tynn #527): the host is not asked.
+        if (!auth.isOwner && method === 'host.home') {
+            const paths = this.#api.workspacePaths?.() ?? {};
+            const given = auth.workspaceId !== null ? paths[auth.workspaceId] : Object.values(paths)[0];
+            return ok(typeof given === 'string' ? given : '/');
+        }
         if (!auth.isOwner && method === 'host.listDir') {
             const paths = this.#api.workspacePaths?.() ?? {};
             const roots = auth.workspaceId !== null ? [paths[auth.workspaceId]].filter((p): p is string => typeof p === 'string') : Object.values(paths);
