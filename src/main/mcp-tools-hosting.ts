@@ -304,7 +304,8 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const variant = str(args.variant);
                     const kind = str(args.kind);
                     const form: ServiceForm = {
-                        workspaceId: caller.workspaceId, engine, major: custom ? '' : version, scope: args.scope === 'shared' ? 'shared' : 'dedicated',
+                        // No scope named: dedicated, except an engine that is only ever shared (WebSockets, Mailpit, S3), which is.
+                        workspaceId: caller.workspaceId, engine, major: custom ? '' : version, scope: args.scope === 'shared' || (args.scope === undefined && SERVICE_CATALOG.find((d) => d.engine === engine)?.sharing === 'shared-only') ? 'shared' : 'dedicated',
                         ...(variant !== undefined ? { variant } : {}),
                         ...(custom ? { custom: { name: version, image: str(args.image) ?? '', port: typeof args.port === 'number' ? args.port : null, env, ...(kind !== undefined ? { kind } : {}) } } : {}),
                     };
@@ -636,7 +637,7 @@ export const SERVICES_TOOL: BuiltinTool = declareBuiltinTool(
             version: { type: 'string', description: 'add: a version `catalog` lists for that engine (postgres: 14–17). Not for custom.' },
             variant: { type: 'string', description: 'add: a variant `catalog` lists for that engine — postgres: "pgvector" (pgvector/pgvector:pg<version>).' },
             kind: { type: 'string', enum: ['postgres', 'mysql', 'mariadb', 'redis', 'mongo'], description: 'add (custom): the engine the image IS, so this workspace gets that engine’s env (DB_*, PG*, DATABASE_URL…) from it with its live port.' },
-            scope: { type: 'string', enum: ['dedicated', 'shared'], description: 'add: dedicated (this workspace only; the default) or shared (one engine for every workspace on this machine).' },
+            scope: { type: 'string', enum: ['dedicated', 'shared'], description: 'add: dedicated (this workspace only; the default) or shared (one engine for every workspace on this machine). An engine `catalog` lists as shared only (WebSockets, Mailpit, S3) is always shared.' },
             image: { type: 'string', description: 'add (custom): the image to run, e.g. registry.example/team/app:1.' },
             port: { type: 'number', description: 'add (custom): the port the image listens on inside its container.' },
             env: { type: 'object', description: 'add (custom): NAME: value strings for the container — and this workspace’s processes.' },
