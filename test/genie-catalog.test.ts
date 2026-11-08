@@ -6,25 +6,25 @@ import { allGenieTools, type AllToolsDeps } from '../src/main/mcp-registrations.
 import { parseManifest } from '../src/core/plugins.js';
 
 /**
- * ADF A2 (Tynn #446; spec .ai/plans/specs/adf-sdk.md, story A2): BUILTINS THROUGH THE SAME PATH. The 17 builtin MCP tools
+ * ADF A2 (Tynn #446; spec .ai/plans/specs/adf-sdk.md, story A2): BUILTINS THROUGH THE SAME PATH. The 18 builtin MCP tools
  * and the five official plugins (Document, Spreadsheet, Presentation, Repository, ArtBoard) register as catalog
  * definitions through A1's validator — the one a plugin goes through — and `allGenieTools` offers what the catalog
  * holds. A wrapper around the old hand-composed list does not count: a tool the catalog does not hold is not offered,
  * whatever module could run it.
  */
 
-/** Today's list, every part present (normal Genie): 17 builtin tools, then the three official plugin tools. */
+/** Today's list, every part present (normal Genie): 18 builtin tools (Genie Mail's `mail` since G6, Tynn #492), then the three official plugin tools. */
 const TODAY = [
     'imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan',
-    'services', 'sites', 'processes', 'flows', 'createAgent', 'workspaceTabs', 'pages',
+    'services', 'sites', 'processes', 'flows', 'mail', 'createAgent', 'workspaceTabs', 'pages',
     'ai.genie.spreadsheet.createWorkbook', 'ai.genie.presentation.createDeck', 'ai.genie.artboard.post',
 ];
 
 describe('the catalog alone lists today’s MCP tools', () => {
-    it('exactly today’s 20 names, in today’s order — from the catalog, with no tool module and no deps', () => {
+    it('exactly today’s 21 names, in today’s order — from the catalog, with no tool module and no deps', () => {
         const names = genieCatalog().list('tool').map((d) => d.id);
         expect(names).toEqual(TODAY);
-        expect(names).toHaveLength(20);
+        expect(names).toHaveLength(21);
     });
 
     it('the five official plugins are there whole: their editors and panels too, each in its own package', () => {
@@ -37,8 +37,8 @@ describe('the catalog alone lists today’s MCP tools', () => {
         expect(catalog.revision).toBe(6);
     });
 
-    it('CONTROL: there are 17 builtin tool declarations and three official plugin tools (17 + 3 = 20)', () => {
-        expect(BUILTIN_TOOLS).toHaveLength(17);
+    it('CONTROL: there are 18 builtin tool declarations and three official plugin tools (18 + 3 = 21)', () => {
+        expect(BUILTIN_TOOLS).toHaveLength(18);
         const official = OFFICIAL_PLUGINS.flatMap((p) => ((p.manifest.mcpTools as unknown[] | undefined) ?? []));
         expect(official).toHaveLength(3);
     });
