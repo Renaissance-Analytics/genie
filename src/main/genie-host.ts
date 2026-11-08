@@ -76,7 +76,15 @@ import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
-import { readFile as readFileText } from 'node:fs/promises';
+import { chmod, mkdir, readFile as readFileText } from 'node:fs/promises';
+import { attachWebSocketServer } from '@particle-academy/fancy-ws';
+import { transportHub } from '../core/remote-protocol.js';
+import { REMOTE_PORT } from '../core/tailscale.js';
+import { resolveProgram } from '../core/program-lookup.js';
+import { remoteListener } from './remote-listen.js';
+import { remoteAccess } from './remote-access.js';
+import { staticServer } from './static-page.js';
+import { hostRemoteApi, RelayBridgeHost, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileText } from './toolchain-runner.js';
 import { workstationKeyStore } from './workstation-identity.js';
@@ -675,6 +683,66 @@ async function main(): Promise<void> {
      * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
      */
     const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, developerMode: () => settings.snapshot().developer_mode === true });
+    /*
+     * REMOTE ACCESS'S HOST SIDE (Tynn #409, host split P5d.1): the tailnet listener, the remote host, the paired devices,
+     * the PIN, the pair prompts, the baton and the lock are HERE, so a paired phone reaches this machine with every window
+     * closed. The window's relay host (until P5d.3) bridges each relay connection it admits into this same remote host: one
+     * baton, one lock. What this host owns is answered here; the rest by the newest local window, or refused with what to do.
+     */
+    const remoteWindowEvents = new Set<(channel: string, payload: unknown) => void>();
+    const remoteListen = remoteListener({
+        tailscale: () => execFileText(resolveProgram('tailscale'), ['status', '--json'], { timeoutMs: 15_000 }),
+        port: REMOTE_PORT,
+        attach: attachWebSocketServer,
+        // The phone's page (§6.8): the built renderer, beside this host's own bundle, as the window serves it.
+        serve: staticServer(join(dirname(fileURLToPath(import.meta.url)), '../renderer'), { hostName: () => hostname() }),
+        // HTTPS on the MagicDNS name (a Tailscale cert, renewed each start), else http inside WireGuard: as the window did.
+        cert: async (dnsName) => {
+            const dir = join(runtime, 'mobile-tls');
+            const certFile = join(dir, 'cert.pem');
+            const keyFile = join(dir, 'key.pem');
+            try {
+                await mkdir(dir, { recursive: true });
+                await execFileText(resolveProgram('tailscale'), ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { timeoutMs: 60_000 });
+                await chmod(keyFile, 0o600).catch(() => {});
+                return { cert: await readFileText(certFile, 'utf8'), key: await readFileText(keyFile, 'utf8') };
+            } catch (error) {
+                say(`remote: no Tailscale cert for ${dnsName}, serving http inside the tailnet: ${error instanceof Error ? error.message : String(error)}`);
+                return null;
+            }
+        },
+    });
+    const relayBridge = new RelayBridgeHost((owner, event) => engineRef?.remoteAccessEvent(owner, { kind: 'bridge', event }));
+    const remoteHub = transportHub(remoteListen.transport);
+    remoteHub.add(relayBridge);
+    const remoteAccessHost = await RemoteAccessHost.open({
+        home,
+        hostName: hostname(),
+        transport: remoteHub,
+        build,
+        api: hostRemoteApi({
+            hostName: hostname(),
+            // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
+            own: { 'updates.state': async () => updatesService.dump() },
+            window: {
+                connected: () => (engineRef?.newestLocalWindow() ?? null) !== null,
+                invoke: (method, args) => (engineRef ? engineRef.remoteInvoke(method, args) : Promise.reject(new Error('no Genie window is connected'))),
+            },
+            onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
+            workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
+        }),
+    });
+    // OFF BY DEFAULT (Tynn #820): the listener runs only while `remote_access` is on, applied at boot and on every change.
+    let remoteAccessService: RemoteAccessService | null = null;
+    const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => remoteAccessService?.pushStatus() });
+    remoteAccessService = new RemoteAccessService(remoteAccessHost, relayBridge, {
+        switch: remoteSwitch,
+        newestWindow: () => engineRef?.newestLocalWindow() ?? null,
+        windowEvent: (channel, payload) => { for (const l of [...remoteWindowEvents]) l(channel, payload); },
+        send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
+    });
+    settings.onChange((key, _value, workspaceId) => { if (key === 'remote_access' && workspaceId === undefined) void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`)); });
+    void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`));
     const engine = new SessionEngineServer({
         token,
         build,
@@ -705,6 +773,7 @@ async function main(): Promise<void> {
         flows: flowsService,
         browser: browserService,
         updates: updatesService,
+        remoteAccess: remoteAccessService,
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.

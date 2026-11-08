@@ -3,6 +3,9 @@ import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
+import { hostname } from 'node:os';
+import { RemoteAccessReplica } from './remote-access-replica.js';
+import type { RemoteAccessEvent } from './remote-access-host.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import type { DeviceLinkEvent } from './device-link-service.js';
@@ -105,6 +108,8 @@ export interface EngineClientOptions {
     readonly onToolSignal?: (signal: unknown) => void;
     /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
+    /** A remote method genie-host does not own yet (Tynn #409): done here, by this window's own host API. Absent = refused. */
+    readonly onRemoteInvoke?: (method: string, args: unknown[]) => Promise<unknown>;
     /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
     readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
@@ -182,6 +187,7 @@ export class SessionEngineClient {
     #keyring: KeyringReplica | null = null;
     #workstation: WorkstationReplica | null = null;
     #deviceLink: DeviceLinkReplica | null = null;
+    #remoteAccess: RemoteAccessReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -268,6 +274,7 @@ export class SessionEngineClient {
                 this.#hosting?.linkDown();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
                 this.#deviceLink?.lost('the host closed the connection');
+                this.#remoteAccess?.lost();
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
             transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: this.#options.label ?? WINDOW_LINK_LABEL }));
@@ -420,6 +427,9 @@ export class SessionEngineClient {
             case 'tynn.event':
                 this.tynn().rebase(payload as TynnAccountDump);
                 return;
+            case 'remoteAccess.event':
+                this.remoteAccess().deliver(payload as RemoteAccessEvent);
+                return;
             case 'device.event':
                 this.deviceLink().deliver(payload as DeviceLinkEvent);
                 return;
@@ -488,6 +498,12 @@ export class SessionEngineClient {
             if (method === 'client.elevate') {
                 if (!this.#options.elevate) throw new Error('this window runs no elevation');
                 reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
+                this.#transport?.send(JSON.stringify(reply));
+                return;
+            }
+            if (method === 'client.remoteInvoke') {
+                if (!this.#options.onRemoteInvoke) throw new Error('this window answers no remote calls');
+                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), Array.isArray(args[1]) ? args[1] : []) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
@@ -676,6 +692,16 @@ export class SessionEngineClient {
         const reply = await this.call('engine.configSync', [request]);
         if (!reply.ok) throw new Error(reply.reason);
         return reply.value as SyncResult[];
+    }
+
+    /** Remote access (Tynn #409, P5d.1): genie-host listens, pairs and holds the baton; this window reads and drives it. */
+    remoteAccess(): RemoteAccessReplica {
+        this.#remoteAccess ??= new RemoteAccessReplica(hostname(), async (method, args) => {
+            const reply = await this.call('engine.remoteAccess', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#remoteAccess;
     }
 
     /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */

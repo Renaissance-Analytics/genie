@@ -235,3 +235,66 @@ export class RelayBridgeHost implements ServerTransport {
         return true;
     }
 }
+
+/** What genie-host tells its local windows about remote access. */
+export type RemoteAccessEvent = { readonly kind: 'status'; readonly status: RemoteAccessStatus } | { readonly kind: 'bridge'; readonly event: BridgeEvent };
+
+export interface RemoteAccessServicePorts {
+    /** The listener's switch (remote-access.ts): applied when `remote_access` changes, Restart from Settings. */
+    readonly switch: { apply(): Promise<void>; restart(): Promise<void> };
+    /** The newest local window's connection: only its events reach remote connections (one window feeds them). */
+    readonly newestWindow: () => string | null;
+    /** An event the newest window forwarded, for remote connections. */
+    readonly windowEvent: (channel: string, payload: unknown) => void;
+    /** To one window (`owner`), or every local window (`null`). */
+    readonly send: (owner: string | null, event: RemoteAccessEvent) => void;
+}
+
+/**
+ * REMOTE ACCESS, AS THE WINDOW DRIVES IT (Tynn #409): the engine link's `engine.remoteAccess`, from a LOCAL window only
+ * (session-engine-server.ts). Settings → Workstation's remote section reads the status and drives the PIN, the devices,
+ * the lock and the pair answers; the window's relay host bridges its connections; the newest window forwards its events.
+ */
+export class RemoteAccessService {
+    readonly #access: RemoteAccessHost;
+    readonly #bridge: RelayBridgeHost;
+    readonly #ports: RemoteAccessServicePorts;
+
+    constructor(access: RemoteAccessHost, bridge: RelayBridgeHost, ports: RemoteAccessServicePorts) {
+        this.#access = access;
+        this.#bridge = bridge;
+        this.#ports = ports;
+        access.onChange(() => this.pushStatus());
+    }
+
+    pushStatus(): void {
+        this.#ports.send(null, { kind: 'status', status: this.#access.status() });
+    }
+
+    async call(owner: string, method: string, args: unknown[]): Promise<unknown> {
+        const a = this.#access;
+        switch (method) {
+            case 'status': return a.status();
+            case 'issuePin': return a.issuePin(typeof (args[0] as { replaces?: unknown } | null)?.replaces === 'string' ? { replaces: (args[0] as { replaces: string }).replaces } : {});
+            case 'revokeDevice': return a.revokeDevice(String(args[0]));
+            case 'lock': a.lock(); return true;
+            case 'unlock': a.unlock(); return true;
+            case 'answerPair': return a.answerPair(String(args[0]), args[1] === true);
+            case 'apply': await this.#ports.switch.apply(); return a.status();
+            case 'restart': await this.#ports.switch.restart(); return a.status();
+            case 'bridge.open': return this.#bridge.open(owner, args[0]);
+            case 'bridge.frame': return this.#bridge.frame(owner, String(args[0]), String(args[1]));
+            case 'bridge.close': this.#bridge.closed(owner, String(args[0])); return true;
+            case 'event':
+                // One window feeds remote connections: the newest local one, the same that does their calls.
+                if (owner !== this.#ports.newestWindow()) return false;
+                this.#ports.windowEvent(String(args[0]), args[1]);
+                return true;
+            default: throw new Error(`remote access has no ${method}`);
+        }
+    }
+
+    dropOwner(owner: string): void {
+        this.#bridge.dropOwner(owner);
+    }
+}
