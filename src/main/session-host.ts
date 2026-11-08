@@ -8,7 +8,7 @@ import { LiveReadings, planStepsOf } from '../core/live-readings.js';
 import { BackgroundCount } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
-import type { Headroom } from '../core/headroom.js';
+import { resetsIn, type Headroom } from '../core/headroom.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
@@ -650,19 +650,43 @@ export class SessionHost {
 
     /** A session's readings: the gate decides; a closed login holds every agent on it, and the wake is (re)scheduled. */
     #limitReport(provider: string, readings: readonly LimitReading[], message: string | null): void {
-        const view = this.#gate.report(this.#loginOf(provider), readings, this.#clock(), message);
-        if (view.state !== 'open') this.#holdLogin(provider);
+        this.#gate.report(this.#loginOf(provider), readings, this.#clock(), message);
+        // The provider's own reading says the login is limited: every agent on it waits (Tynn #793).
+        if (this.#gate.limitedByReading(this.#loginOf(provider), this.#clock())) this.#holdLogin(provider);
         this.#wake();
     }
 
     /**
-     * A turn the provider ended on its limit with no reading (Tynn #791): the gate holds the login on its stated
-     * backoff — there is no reset to wait for — and every agent on it is held.
+     * A turn the provider ended on its limit with no reading (Tynn #791): the gate retries on its stated backoff — there
+     * is no reset to wait for. ONE TURN'S BREACH HOLDS ONLY THE AGENT THAT HIT IT (Tynn #556): the others on the login are
+     * held only when the provider's own reading says the login is limited (`#limitReport`); the held agent's next re-read
+     * asks for that reading.
      */
-    #limitBreach(provider: string, reason: string): void {
+    #limitBreach(agentId: AgentId, provider: string, reason: string): void {
         this.#gate.breach(this.#loginOf(provider), this.#clock(), `The provider ended a turn on its rate limit (${reason}).`);
-        this.#holdLogin(provider);
+        this.#emit(agentId);
+        this.#onAction?.(agentId, 'limited');
         this.#wake();
+    }
+
+    /**
+     * The limit an agent is under: its login's, as the gate holds it — except a breach's retry, which is the agent's own
+     * that hit it and not the login's (Tynn #556): an agent it did not hold reads open.
+     */
+    #limitOf(provider: string, held: boolean): GateView {
+        const login = this.#loginOf(provider), now = this.#clock(), view = this.#gate.view(login, now);
+        if (view.state === 'retrying' && !held && !this.#gate.limitedByReading(login, now)) return { state: 'open' };
+        return view;
+    }
+
+    /** Why an agent is held, and until when — said in its chat when it comes up held (Tynn #556), never silent. */
+    #heldWords(provider: string): string {
+        const now = this.#clock(), view = this.#gate.view(this.#loginOf(provider), now);
+        const name = provider.charAt(0).toUpperCase() + provider.slice(1);
+        const at = view.state === 'paused' ? view.resumeAtMs : view.state === 'retrying' ? view.nextTryAtMs : null;
+        if (at === null) return `Held: the ${name} login needs you before it can go on${view.state === 'needs-person' && view.message ? ` (${view.message})` : ''}. Genie starts this agent once it is sorted.`;
+        const clock = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `Held: the ${name} login is at its rate limit. Genie resumes this agent at ${clock} (${resetsIn(at, now).replace(/^resets/, 'resumes')}); Resume now starts it at once.`;
     }
 
     #holdLogin(provider: string): void {
@@ -732,7 +756,9 @@ export class SessionHost {
         const out: Array<{ provider: string; view: GateView }> = [];
         for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
             const view = this.#gate.view(this.#loginOf(provider), now);
-            if (view.state !== 'open') out.push({ provider, view });
+            // A breach's retry is the login's only while it holds one of its agents (Tynn #556).
+            const holds = view.state !== 'retrying' || this.#gate.limitedByReading(this.#loginOf(provider), now) || [...this.#running.values()].some((e) => e.provider === provider && e.session.held);
+            if (view.state !== 'open' && holds) out.push({ provider, view });
         }
         return out;
     }
@@ -945,7 +971,7 @@ export class SessionHost {
             ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions, { untrusted: this.#untrustedNow?.(record) ?? this.#running.get(record.id)?.launchedUntrusted === true }) } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
             mayTakeWork: () => !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
-            onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
+            onLimitBreach: (reason) => this.#limitBreach(record.id, record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
              *
@@ -1067,8 +1093,12 @@ export class SessionHost {
          */
         try {
             session.start();
-            // Its login is at its limit: held from the start, so nothing is sent to a provider that would refuse it.
-            if (this.#gate.view(this.#loginOf(record.provider), this.#clock()).state !== 'open') session.hold();
+            // Its login is at its limit (the provider's reading says so): held from the start, so nothing is sent to a
+            // provider that would refuse it — and the chat says why and until when (Tynn #556).
+            if (this.#gate.limitedByReading(this.#loginOf(record.provider), this.#clock())) {
+                session.hold();
+                session.notice(this.#heldWords(record.provider));
+            }
         } catch (error) {
             this.#running.delete(record.id);
 
@@ -1652,7 +1682,7 @@ export class SessionHost {
                 : null;
 
         return {
-            limit: this.#gate.view(this.#loginOf(entry.provider), this.#clock()),
+            limit: this.#limitOf(entry.provider, entry.session.held),
             signedOut: entry.session.signedOut,
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),
