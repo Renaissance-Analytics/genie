@@ -103,7 +103,7 @@ describe('what the docs say', () => {
 describe('each element\'s side: the host, a client, or both (the owner\'s ruling q_d71981d6)', () => {
     // The ADF models the client/host relationship: every element declares where it runs, and an element on both sides
     // declares how its halves talk (`reach.link`). A family Genie runs today allows only the sides it can run on.
-    const ALLOWED: Record<string, readonly string[]> = { tool: ['host'], panel: ['client', 'both'], editor: ['both'] };
+    const ALLOWED: Record<string, readonly string[]> = { tool: ['host'], panel: ['client', 'both'], editor: ['both'], 'host-service': ['host', 'both'] };
     const onSide = (spec: KindSpec, side: string) => {
         const def = envelope(spec);
         def.reach = { ...def.reach, side };

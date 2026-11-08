@@ -17,6 +17,7 @@ Catalog schema version: 1.
 | [editor](kinds/editor.md) | active | both | Opens files of the extensions it claims in one vetted Fancy editor. Genie's own editor wins a claim by default; another is offered in Open with. |
 | [recipe](kinds/recipe.md) | active | per definition | A guided sequence of steps the person walks through. |
 | [flow-node](kinds/flow-node.md) | active | per definition | A node in the Flows palette. The executor the payload names runs it. |
+| [host-service](kinds/host-service.md) | active | host or both | A service genie-host runs and keeps running with no window open (remote access, a relay). On both sides it has a client part, and its reach.link says how the two talk. |
 | [page](kinds/page.md) | active | per definition | A family a package may contribute. It has no fixed payload fields yet: its payload is any JSON object, and the Genie release that runs it adds them here. |
 | [overlay](kinds/overlay.md) | active | per definition | A family a package may contribute. It has no fixed payload fields yet: its payload is any JSON object, and the Genie release that runs it adds them here. |
 | [provider](kinds/provider.md) | active | per definition | A family a package may contribute. It has no fixed payload fields yet: its payload is any JSON object, and the Genie release that runs it adds them here. |

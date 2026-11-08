@@ -20,7 +20,7 @@ import { VETTED_FANCY_EXPORTS } from './plugin-panels.js';
 /** The envelope's own version; a client that reads a newer one says it needs a newer Genie. */
 export const CATALOG_SCHEMA_VERSION = 1;
 
-export const ELEMENT_KINDS = ['tool', 'panel', 'editor', 'recipe', 'flow-node', 'page', 'overlay', 'provider', 'service-engine'] as const;
+export const ELEMENT_KINDS = ['tool', 'panel', 'editor', 'recipe', 'flow-node', 'host-service', 'page', 'overlay', 'provider', 'service-engine'] as const;
 /** Declared by Genie 1, never run there: accepted and documented, executable one story each later (decision 3). */
 export const RESERVED_KINDS = ['flyout', 'modal', 'wizard', 'workstation-page', 'workspace-settings-page'] as const;
 export const ELEMENT_SOURCES = ['builtin', 'plugin', 'gapp'] as const;
@@ -141,6 +141,17 @@ export const KIND_SPECS: readonly KindSpec[] = [
             { name: 'outputs', type: 'list of port names', required: false, default: [], description: 'Its output ports.', rule: 'stringList', problem: 'payload.outputs must be a list of port names' },
         ],
         example: { executor: 'com.example.notes.append', inputs: ['text'], outputs: ['path'] },
+    },
+    {
+        kind: 'host-service', status: 'active', sides: ['host', 'both'],
+        summary: 'A service genie-host runs and keeps running with no window open (remote access, a relay). On both sides it has a client part, and its reach.link says how the two talk.',
+        fields: [
+            { name: 'start', type: 'string', required: true, description: 'The host handler that starts it.', rule: 'nonEmptyString', problem: 'payload.start must name the host handler that starts it' },
+            { name: 'stop', type: 'string', required: true, description: 'The host handler that stops it.', rule: 'nonEmptyString', problem: 'payload.stop must name the host handler that stops it' },
+            { name: 'health', type: 'string', required: true, description: 'The host handler that answers whether it is healthy, and why not.', rule: 'nonEmptyString', problem: 'payload.health must name the host handler that answers its health' },
+            { name: 'settingsSection', type: 'string', required: true, description: 'The settings section it owns: its switches live there and nowhere else.', rule: 'nonEmptyString', problem: 'payload.settingsSection must name the settings section it owns' },
+        ],
+        example: { start: 'com.example.relay.start', stop: 'com.example.relay.stop', health: 'com.example.relay.health', settingsSection: 'relay' },
     },
     ...(['page', 'overlay', 'provider', 'service-engine'] as const).map((kind): KindSpec => ({
         kind, status: 'active', sides: null,
