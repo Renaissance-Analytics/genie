@@ -140,6 +140,10 @@ const VERB_WORDS: Record<string, { running: string; done: string }> = {
     'task.restart': { running: 'Restarting…', done: 'Restarted' },
     // The Home's Details save (row H1).
     'details.update': { running: 'Saving…', done: 'Saved' },
+    // The VIP lane (row V1): Start VIP, a story's move on, the Release.
+    'vip.create': { running: 'Starting VIP…', done: 'VIP started' },
+    'story.move': { running: 'Moving…', done: 'Moved' },
+    'version.release': { running: 'Releasing…', done: 'Released' },
     // The Features page's writes (row F1).
     'feature.create': { running: 'Creating feature…', done: 'Feature created' },
     'feature.update': { running: 'Saving…', done: 'Saved' },

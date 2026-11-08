@@ -1,4 +1,4 @@
-import { type BoardLiveSignal, BOARD_CLAIMS, BOARD_LIVE, initialsOf, LIVE_QUIET_MS, parseClaims, type BoardClaim, type BoardClaims, type BoardOp, type BoardRefusal, type TynnBoardHost } from './tynn-board.js';
+import { type BoardLiveSignal, BOARD_API, BOARD_CLAIMS, BOARD_LIVE, initialsOf, LIVE_QUIET_MS, parseClaims, type BoardClaim, type BoardClaims, type BoardOp, type BoardRefusal, type TynnBoardHost } from './tynn-board.js';
 import { parseFeatures, type FeaturesView } from './tynn-features.js';
 import { issuesQueryPath, normalizeIssueFilters, parseIssueQueue, type IssueQueueView } from './tynn-issues.js';
 
@@ -25,6 +25,7 @@ export const TYNN_SECTIONS: readonly TynnSection[] = [
     { id: 'issues', icon: 'sparkles', label: 'Issues' },
     { id: 'wip', icon: 'play', label: 'WIP' },
     { id: 'board', icon: 'columns-3', label: 'Board' },
+    { id: 'vip', icon: 'flame', label: 'VIP' },
     { id: 'releases', icon: 'rocket', label: 'Releases' },
     { id: 'features', icon: 'layout-grid', label: 'Features' },
 ];
@@ -33,8 +34,8 @@ export const TYNN_SECTIONS: readonly TynnSection[] = [
 export const TYNN_FIRST_SECTION: TynnSectionId = 'home';
 
 /** A page of the tab that is read as one answer (the board has its own door and scope query). */
-export type TynnPage = 'wip' | 'issues' | 'releases' | 'home' | 'features';
-export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues', 'releases', 'home', 'features'];
+export type TynnPage = 'wip' | 'issues' | 'releases' | 'home' | 'features' | 'vip';
+export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues', 'releases', 'home', 'features', 'vip'];
 
 // ── WIP (workspace-ux 0.6.0, surface `wip`) ──────────────────────────────────────────────────────────────────────────
 
@@ -455,10 +456,91 @@ export interface TynnPageActionInput {
  */
 export type TynnPageActionAnswer = ({ ok: true } & TynnPageView) | { ok: true; page: null } | BoardRefusal;
 
+// ── VIP (workspace-ux 0.11.0, surface `vip`, parity row V1) ──────────────────────────────────────────────────────────
+
+export const VIP_DATA_API = { method: 'GET', path: '/vip' } as const;
+export const VIP_ANSWER = ['project_id', 'vip_version', 'stories', 'past_vips', 'can_start_vip'] as const;
+export const VIP_FIELDS = {
+    version: ['id', 'number', 'title', 'status'],
+    story: ['id', 'slug', 'story_number', 'title', 'status', 'description', 'task_count', 'tasks_done'],
+    pastVip: ['id', 'number', 'title', 'status', 'story_count', 'ended_at'],
+} as const;
+export const VIP_COLUMNS = ['backlog', 'blocked', 'in_progress', 'qa', 'done'] as const;
+/** Each column's one-click next column (tynn.ai's Vip.jsx FLOW); done has none. */
+export const VIP_FLOW: Readonly<Record<(typeof VIP_COLUMNS)[number], string | null>> = { backlog: 'in_progress', blocked: 'in_progress', in_progress: 'qa', qa: 'done', done: null };
+export const VIP_RELEASE = { action: 'version.release', when: 'every story is done (and there is at least one)' } as const;
+export const VIP_START = { action: 'vip.create', guard: 'can_start_vip', body: ['title', 'why'] } as const;
+/**
+ * The lane's actions at their doors: Start VIP is the page's own write; a story's move and the Release are the BOARD's
+ * verbs, at the board's very doors (no second copy: the board's action path runs them).
+ */
+export const VIP_API: Readonly<Record<string, { readonly method: string; readonly path: string }>> = {
+    'vip.create': { method: 'POST', path: '/vip' },
+    'story.move': BOARD_API['story.move']!,
+    'version.release': BOARD_API['version.release']!,
+};
+export const VIP_LIVE = { channel: BOARD_LIVE.channel, events: BOARD_LIVE.events, refresh: 'read' } as const;
+export const VIP_STATES = ['loading', 'idle', 'start-form', 'in-flight', 'advance', 'release-gated', 'past-vips', 'transition-refused', 'live', 'reconnecting', 'not-linked', 'signed-out'] as const;
+/** The web card's move puts a story at the end of its next column. */
+export const VIP_MOVE_ORDER = 999999;
+
+const VIP_LABEL: Readonly<Record<string, string>> = { backlog: 'Backlog', blocked: 'Blocked', in_progress: 'In Progress', qa: 'QA', done: 'Done' };
+/** A VIP column's label (`QA`, `In Progress`). */
+export const vipColumnLabel = (status: string): string => VIP_LABEL[status] ?? status;
+
+export interface VipStory extends WipStory { readonly next: string | null }
+export interface VipPast { readonly id: string; readonly number: string | null; readonly title: string; readonly status: string; readonly storyCount: number; readonly endedAt: string | null }
+export interface VipView {
+    readonly version: { readonly id: string; readonly number: string | null; readonly title: string } | null;
+    /** Tasks done of all the VIP's tasks (the rose banner's bar). */
+    readonly progress: { readonly done: number; readonly total: number; readonly percent: number };
+    readonly columns: ReadonlyArray<{ readonly status: string; readonly label: string; readonly stories: readonly VipStory[] }>;
+    readonly allDone: boolean;
+    readonly canStart: boolean;
+    readonly past: readonly VipPast[];
+}
+
+/** Tynn's VIP answer (GET /vip, and POST /vip's) as the tab draws it, in Tynn's order; null when it is not the VIP lane. */
+export function parseVip(json: unknown): VipView | null {
+    if (!isRow(json) || !('vip_version' in json) || !Array.isArray(json.stories) || !Array.isArray(json.past_vips)) return null;
+    const v = isRow(json.vip_version) ? json.vip_version : null;
+    const versionId = v ? str(v.id) : null;
+    const stories = rows(json.stories).flatMap((row): VipStory[] => {
+        const x = wipStory(row);
+        return x === null ? [] : [{ ...x, next: VIP_FLOW[x.status as keyof typeof VIP_FLOW] ?? null }];
+    });
+    const total = stories.reduce((n, x) => n + x.taskCount, 0);
+    const done = stories.reduce((n, x) => n + x.tasksDone, 0);
+    return {
+        version: v && versionId !== null ? { id: versionId, number: str(v.number), title: str(v.title) ?? '' } : null,
+        progress: { done, total, percent: total > 0 ? Math.round((done / total) * 100) : 0 },
+        columns: VIP_COLUMNS.map((status) => ({ status, label: vipColumnLabel(status), stories: stories.filter((x) => x.status === status) })),
+        allDone: stories.length > 0 && stories.every((x) => x.status === 'done'),
+        canStart: json.can_start_vip === true,
+        past: rows(json.past_vips).flatMap((r): VipPast[] => {
+            const id = str(r.id);
+            return id === null ? [] : [{ id, number: str(r.number), title: str(r.title) ?? '', status: str(r.status) ?? '', storyCount: num(r.story_count), endedAt: str(r.ended_at) }];
+        }),
+    };
+}
+
+/** The lane's own write (Start VIP) at its door; null for anything else (the board verbs go through the board). */
+export function vipActionRequest(projectId: string, action: string): { method: 'POST'; path: string } | null {
+    return action === 'vip.create' ? { method: 'POST', path: `/api/v1/projects/${encodeURIComponent(projectId)}/vip` } : null;
+}
+
+/** Start VIP work: a title and why it cannot wait, both required; nothing else is sent. */
+export function vipCreateBody(raw: unknown): { title: string; why: string } | null {
+    if (!isRow(raw)) return null;
+    const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+    const why = typeof raw.why === 'string' ? raw.why.trim() : '';
+    return title !== '' && why !== '' ? { title, why } : null;
+}
+
 // ── Reading a page ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type TynnPageQuery = Readonly<Record<string, string | undefined>>;
-export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'issues'; readonly view: IssueQueueView } | { readonly page: 'releases'; readonly view: ReleasesView } | { readonly page: 'home'; readonly view: HomeView } | { readonly page: 'features'; readonly view: FeaturesView };
+export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'issues'; readonly view: IssueQueueView } | { readonly page: 'releases'; readonly view: ReleasesView } | { readonly page: 'home'; readonly view: HomeView } | { readonly page: 'features'; readonly view: FeaturesView } | { readonly page: 'vip'; readonly view: VipView };
 
 /** GET a page of the workspace's project: only the query the page's contract declares, and only real values. */
 export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQuery): string {
@@ -466,6 +548,8 @@ export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQ
     const q = new URLSearchParams();
     // Features is read whole: the page takes no query (its tabs are the tab's own).
     if (page === 'features') return `/api/v1/projects/${encodeURIComponent(projectId)}/features`;
+    // The VIP lane is read whole too.
+    if (page === 'vip') return `/api/v1/projects/${encodeURIComponent(projectId)}${VIP_DATA_API.path}`;
     if (page === 'home') {
         if (query.section !== undefined && (HOME_SECTIONS as readonly string[]).includes(query.section)) q.append('section', query.section);
         if (query.range !== undefined && (HOME_RANGES as readonly string[]).includes(query.range)) q.append('range', query.range);
@@ -508,6 +592,10 @@ export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | nul
     }
     if (page === 'features') {
         const view = parseFeatures(json);
+        return view ? { page, view } : null;
+    }
+    if (page === 'vip') {
+        const view = parseVip(json);
         return view ? { page, view } : null;
     }
     return null;
