@@ -129,6 +129,9 @@ function ProviderSwitchStatus({ state, onRetry }: { state: ProviderSwitchState |
  * AGENT OPERATIONS (§6.2) as the view sees them. Absent for an Observed agent and for a window that
  * cannot operate agents — no dead controls. A delete is previewed (the plan) before it is confirmed.
  */
+/** One agent the "chosen agents" picker offers (Tynn #526). */
+export interface AccessCandidate { readonly id: string; readonly name: string; readonly provider: string; readonly workspaceName: string }
+
 export interface AgentOpsProps {
     readonly deletePreview: DeletePlan | null;
     readonly diagnosis: Diagnosis | null;
@@ -141,6 +144,12 @@ export interface AgentOpsProps {
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     readonly onSetMode: (mode: 'automated' | 'manual') => void;
     readonly onSetAccessScope: (scope: 'none' | 'self' | 'all') => void;
+    /** Chosen agents who may message it (Tynn #526); absent = the choice is off. */
+    readonly accessAgents?: readonly string[] | undefined;
+    /** The agents the picker offers: every awake workspace's, never a hibernated one, never this agent or genie@system. */
+    readonly accessCandidates?: readonly AccessCandidate[] | undefined;
+    /** Absent = no chosen-agents choice (a window that cannot set it). `null` turns it off. */
+    readonly onSetAccessAgents?: ((ids: readonly string[] | null) => void) | undefined;
     /** Autonomous (Tynn #801): its services/processes/sites/terminals actions run without asking. Absent setter = no switch. */
     readonly autoApprove?: boolean;
     readonly onSetAutoApprove?: (on: boolean) => void;

@@ -688,6 +688,11 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, issueWatch }));
     }
 
+    /** Chosen agents (Tynn #526); `null` turns the choice off. */
+    async setAccessAgents(_agentId: AgentId, _accessAgents: readonly string[] | null): Promise<AgentRecord | null> {
+        return null;
+    }
+
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, accessScope }));
     }

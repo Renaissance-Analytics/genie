@@ -519,6 +519,11 @@ export async function setAccessScope(ports: AgentOpsPorts, agentId: string, scop
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 
+/** Chosen agents who may message this one (Tynn #526); `null` = none chosen, the choice off. */
+export async function setAccessAgents(_ports: AgentOpsPorts, _agentId: string, _ids: readonly string[] | null): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    return { ok: false, reason: 'Tynn #526: not built yet' };
+}
+
 export async function diagnose(ports: AgentOpsPorts, agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
