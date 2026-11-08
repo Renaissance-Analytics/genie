@@ -169,3 +169,46 @@ export function pageVerdict({ idle, streaming }, { p95SlackMs = 10, maxFrameGapM
     if (streaming?.worstFrameGapMs > maxFrameGapMs) reasons.push(`a frame gap of ${Math.round(streaming.worstFrameGapMs)} ms while the terminal streams (bound ${maxFrameGapMs})`);
     return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, idleP95: idle?.p95 ?? null, streamingP95: streaming?.p95 ?? null, worstFrameGapMs: streaming?.worstFrameGapMs ?? null, reasons };
 }
+
+const median = (values) => { const v = values.filter(Number.isFinite).sort((a, b) => a - b); if (v.length === 0) return null; const m = Math.floor(v.length / 2); return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+
+/**
+ * THE PAGE BUDGET, FROM A DISTRIBUTION (Tynn #536). The terminal's cost to the page, under the SAME build load: slices with
+ * the terminal on screen against slices with it off screen, interleaved, each slice's mouse-to-frame p95 and worst frame
+ * gap. The median of the "on" slices' p95 within `p95SlackMs` of the "off" slices' median, and the median of their worst
+ * frame gaps within `maxFrameGapMs`. Too few slices with input on either side fails: nothing measured.
+ *
+ * Against the idle phase (Tynn #525's first form) it was a comparison with NO build running: on a slow runner the build's
+ * own load was counted against the terminal (run 42450996960: 65 ms streaming, 45.1 idle, and 63.7 in the Files phase with
+ * no terminal at all).
+ */
+export function sliceVerdict({ on, off }, { p95SlackMs = 10, maxFrameGapMs = 100, minSlices = 3 } = {}) {
+    const usable = (xs) => xs.filter((x) => x.count > 0);
+    const onU = usable(on), offU = usable(off), reasons = [];
+    const onP95 = median(onU.map((x) => x.p95)), offP95 = median(offU.map((x) => x.p95)), onGap = median(onU.map((x) => x.worstGapMs));
+    const r = (v) => (v === null ? null : Math.round(v * 10) / 10);
+    if (onU.length < minSlices || offU.length < minSlices) reasons.push(`too few slices with input: ${onU.length} with the terminal on screen, ${offU.length} off (need ${minSlices} each)`);
+    else {
+        if (onP95 > offP95 + p95SlackMs) reasons.push(`mouse to frame p95, median of ${onU.length} slices: ${r(onP95)} ms with the terminal on screen, ${r(offP95)} ms off (bound off + ${p95SlackMs})`);
+        if (onGap > maxFrameGapMs) reasons.push(`worst frame gap, median of ${onU.length} slices with the terminal on screen: ${r(onGap)} ms (bound ${maxFrameGapMs})`);
+    }
+    return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, onSlices: onU.length, offSlices: offU.length, onP95: r(onP95), offP95: r(offP95), onWorstGapMs: r(onGap), reasons };
+}
+
+/**
+ * The row's own fixture git, bounded (Tynn #536: spawnSync git ETIMEDOUT on the Windows runner, genie#1718). `run` is
+ * tried up to `attempts` times while it times out, `reset` between tries; any other failure is thrown at once.
+ */
+export function retryOnTimeout(run, { attempts = 2, reset = () => {} } = {}) {
+    const tries = [];
+    for (let i = 1; ; i += 1) {
+        const started = Date.now();
+        try { const value = run(i); tries.push({ attempt: i, ms: Date.now() - started, ok: true }); return { value, tries }; }
+        catch (error) {
+            const timedOut = error?.code === 'ETIMEDOUT' || /ETIMEDOUT/.test(String(error?.message ?? ''));
+            tries.push({ attempt: i, ms: Date.now() - started, ok: false, timedOut });
+            if (!timedOut || i >= attempts) { error.tries = tries; throw error; }
+            reset(i);
+        }
+    }
+}

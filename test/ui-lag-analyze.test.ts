@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { describe, expect, it, vi } from 'vitest';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -150,5 +150,36 @@ describe('the page budget while a terminal streams (Tynn #525)', () => {
             'a frame gap of 117 ms while the terminal streams (bound 100)',
         ]);
         expect(pageVerdict({ idle: { count: 0, p95: 0 }, streaming: { count: 50, p95: 10, worstFrameGapMs: 0 } }).ok).toBe(false);
+    });
+});
+
+describe('the page budget from interleaved slices (Tynn #536)', () => {
+    const slice = (p95: number, worstGapMs = 0, count = 30) => ({ count, p95, worstGapMs });
+    it('the terminal\'s cost under the same load: medians, so one bad slice is not a verdict', () => {
+        // A slow runner: everything is slow, on and off alike. Not the terminal's cost.
+        expect(sliceVerdict({ on: [slice(64), slice(66), slice(65)], off: [slice(63), slice(62), slice(64)] }).ok).toBe(true);
+        // One bad slice among good ones does not fail it.
+        expect(sliceVerdict({ on: [slice(20), slice(90, 120), slice(21)], off: [slice(18), slice(19), slice(18)] }).ok).toBe(true);
+        // The old per-chunk render: every "on" slice slower.
+        expect(sliceVerdict({ on: [slice(60, 100), slice(62, 117), slice(66, 117)], off: [slice(44), slice(45), slice(46)] }).reasons).toEqual([
+            'mouse to frame p95, median of 3 slices: 62 ms with the terminal on screen, 45 ms off (bound off + 10)',
+            'worst frame gap, median of 3 slices with the terminal on screen: 117 ms (bound 100)',
+        ]);
+        expect(sliceVerdict({ on: [slice(1), slice(1, 0, 0)], off: [slice(1), slice(1), slice(1)] }).reasons).toEqual(['too few slices with input: 1 with the terminal on screen, 3 off (need 3 each)']);
+    });
+});
+
+describe('the fixture git, bounded (Tynn #536)', () => {
+    it('retries a timeout, resets between tries, and stops at the bound; any other failure at once', () => {
+        const reset = vi.fn();
+        let n = 0;
+        const ok = retryOnTimeout(() => { n += 1; if (n === 1) throw Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }); return 'done'; }, { attempts: 2, reset });
+        expect(ok.value).toBe('done');
+        expect(ok.tries.map((t) => t.ok)).toEqual([false, true]);
+        expect(reset).toHaveBeenCalledOnce();
+        expect(() => retryOnTimeout(() => { throw Object.assign(new Error('x'), { code: 'ETIMEDOUT' }); }, { attempts: 2 })).toThrow('x');
+        let calls = 0;
+        expect(() => retryOnTimeout(() => { calls += 1; throw new Error('not a repository'); }, { attempts: 3 })).toThrow('not a repository');
+        expect(calls).toBe(1);
     });
 });
