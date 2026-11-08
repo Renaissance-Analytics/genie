@@ -13,6 +13,7 @@ import { pluginToolOffer } from './mcp-tools-plugins.js';
 import { PROCESS_TOOLS } from './mcp-tools-processes.js';
 import { WORKSPACE_TABS_TOOLS } from './mcp-tools-workspace-tabs.js';
 import { GENIE_TOOLS } from './mcp-tools.js';
+import { PERSON_ONLY_TOOLS } from '../core/gapp-grants.js';
 
 /**
  * GENIE'S OWN ELEMENTS IN THE CATALOG (ADF A2, Tynn #446; spec .ai/plans/specs/adf-sdk.md). Builtins go through the SAME
@@ -92,7 +93,11 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
             docs: { name: t.title, description: t.description },
             reach: TOOL_REACH,
             permissions: { capabilities: [], network: [] },
-            payload: { handler: t.name, inputSchema: t.inputSchema, ...(t.annotations === undefined ? {} : { annotations: t.annotations }) },
+            payload: {
+                handler: t.name, inputSchema: t.inputSchema, ...(t.annotations === undefined ? {} : { annotations: t.annotations }),
+                // GApps v2 decision 3: a tool that acts as the person, or waits on their approval, is never granted to an app.
+                ...(PERSON_ONLY_TOOLS.has(t.name) ? { grantable: false } : {}),
+            },
         } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT]),
     };
 }
