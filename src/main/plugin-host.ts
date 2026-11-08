@@ -44,6 +44,22 @@ export interface PluginEntry {
     readonly networkHosts?: readonly string[];
     /** May it reach them now: a signed package always; an Unverified one only once the person allowed it. */
     readonly networkAllowed?: boolean;
+    /**
+     * ADF B8: who published it, what it adds and what it may touch (`files`: the extensions it may touch in a workspace, null
+     * for none). From its manifest, so a disabled or refused package, which has left the catalog, still says.
+     */
+    readonly publisher?: string;
+    readonly adds?: { readonly tools: readonly string[]; readonly panels: readonly string[]; readonly editors: readonly string[] };
+    readonly touches?: { readonly files: readonly string[] | null; readonly network: readonly string[]; readonly genieApi: readonly string[] };
+}
+
+/** What the Plugins page says of a package, from its manifest (ADF B8). */
+function summaryOf(m: PluginManifest): Pick<PluginEntry, 'publisher' | 'adds' | 'touches'> {
+    return {
+        publisher: m.publisher.name,
+        adds: { tools: m.mcpTools.map((t) => t.name), panels: m.panels.map((p) => p.title), editors: (m.editors ?? []).map((e) => e.title) },
+        touches: { files: m.capabilities.fs ? [...m.capabilities.fs.extensions] : null, network: [...m.capabilities.network.hosts], genieApi: [...m.capabilities.genieApi] },
+    };
 }
 
 interface Loaded extends PluginEntry {
@@ -101,7 +117,7 @@ export class PluginHost {
             // An official manifest that does not parse is Genie's own bug: listed invalid with the parser's words, never hidden.
             if (!parsed.ok) { entries.push({ id: `(official ${String(o.manifest.id)})`, folder: OFFICIAL_FOLDER, name: String(o.manifest.name), version: null, state: 'invalid', label: null, reason: parsed.reason, manifest: null }); continue; }
             officialIds.add(parsed.manifest.id);
-            entries.push({ id: parsed.manifest.id, folder: OFFICIAL_FOLDER, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: OFFICIAL_LABEL, reason: null, manifest: parsed.manifest, unverified: false, networkHosts: [...parsed.manifest.capabilities.network.hosts], networkAllowed: true });
+            entries.push({ id: parsed.manifest.id, folder: OFFICIAL_FOLDER, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: OFFICIAL_LABEL, reason: null, manifest: parsed.manifest, ...summaryOf(parsed.manifest), unverified: false, networkHosts: [...parsed.manifest.capabilities.network.hosts], networkAllowed: true });
         }
         for (const folder of folders) {
             let text: string;
@@ -124,18 +140,18 @@ export class PluginHost {
             // ADF B4: the signature covers EVERY file of the package (core/plugin-integrity.ts), not the manifest alone.
             const withdrawn = publisherRefusal(input.keyState?.(parsed.manifest.publisher.keyId), false);
             if (withdrawn) {
-                entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: withdrawn, manifest: parsed.manifest });
+                entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: withdrawn, manifest: parsed.manifest, ...summaryOf(parsed.manifest) });
                 continue;
             }
             const { decision, digest } = await checkPackage(join(input.dir, folder), { keyId: parsed.manifest.publisher.keyId, keys: input.keys, publisherChecksOff: input.publisherChecksOff });
             const registryReason = publisherRefusal(input.keyState?.(parsed.manifest.publisher.keyId), !!digest);
             if (!decision.install || registryReason) {
-                entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: registryReason ?? (!decision.install ? decision.reason : null), manifest: parsed.manifest });
+                entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: registryReason ?? (!decision.install ? decision.reason : null), manifest: parsed.manifest, ...summaryOf(parsed.manifest) });
                 continue;
             }
             const unverified = decision.label === UNVERIFIED_LABEL;
             entries.push({
-                id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: decision.label, reason: null, manifest: parsed.manifest, digest,
+                id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: decision.label, reason: null, manifest: parsed.manifest, digest, ...summaryOf(parsed.manifest),
                 unverified, networkHosts: [...parsed.manifest.capabilities.network.hosts], networkAllowed: !unverified || networkAllowed.has(parsed.manifest.id),
             });
         }
@@ -176,7 +192,7 @@ export class PluginHost {
         const after = registryReason();
         if (after) return refuse(after);
         if (now.ok && now.digest === entry.digest) return null;
-        const reason = `refused as tampered: ${now.ok ? 'a file changed, was added or was removed since the package was loaded, after it was signed' : now.reason}. A package changed after it was signed never runs, with publisher checks on or off.`;
+        const reason = `refused as tampered: ${now.ok ? 'a file changed, was added or was removed since the package was loaded, after it was signed' : now.reason}; reinstall it from its publisher, because a package changed after it was signed never runs, with publisher checks on or off.`;
         return refuse(reason);
     }
 
