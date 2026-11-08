@@ -259,7 +259,7 @@ function ownWindowBridge(): GenieBridge | undefined {
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
  */
-function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress; boundName: string | null; relayConnect: RelayConnect } {
+function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress; boundName: string | null; relayConnect: RelayConnect; takeControl: () => Promise<void>; clearRefusal: () => void } {
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     // THE HOST DIALS OTHER MACHINES AND HOLDS THEIR TOKENS (P3.4 cut e): this window has a channel, and the addresses that are paired.
@@ -317,6 +317,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     useEffect(() => {
         if (!client) return;
         const off = client.onState(setState);
+        // What changed before this listener was on (the welcome's take, Tynn #529) is read now, not at the next change.
+        setState(client.state());
         return off;
     }, [client]);
 
@@ -358,7 +360,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                     const transport = ipcRelayTransport(net, opened.channel);
                     // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
                     const localBrowser = window.genie?.browserWindow;
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', localBrowser ? { browse: (address, hosts) => localBrowser.open(address, hosts) } : {});
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { drive: true, ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}) });
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
@@ -387,7 +389,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 const opened = await link.open(url.url);
                 if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
                 const transport = ipcRelayTransport(net, opened.channel);
-                const next = connectRemote(transport, auth, label || 'another screen');
+                const next = connectRemote(transport, auth, label || 'another screen', { drive: true });
                 // Dropped after it was up: the host's words, when it has some.
                 transport.onClose(() => { const why = transport.closedBecause(); if (why) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: why })); });
                 setClient(next);
@@ -453,6 +455,9 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         tynnRefresh,
         boundName,
         relayConnect,
+        // Take control (Tynn #529): from nobody, or from whoever drives — the host says no only to a guest asking the owner.
+        takeControl: async () => { if (client) await client.takeBaton({ force: true }); },
+        clearRefusal: () => client?.clearRefusal(),
     };
 }
 
@@ -1807,7 +1812,11 @@ function DesktopApp({ bridge }: AppProps) {
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
             servable={SERVABLE}
-            remote={remote.state?.connected && remote.state.host ? { host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked } : null}
+            remote={remote.state?.connected && remote.state.host ? {
+                host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked,
+                lostTo: remote.state.batonLostTo ?? null, onTakeControl: () => { void remote.takeControl(); },
+                refusal: remote.state.lastRefusal, needsBaton: remote.state.needsBaton === true, onDismissRefusal: remote.clearRefusal,
+            } : null}
             remoteConnect={{
                 state: remote.state, remembered: remote.remembered, onConnect: remote.connect, onDisconnect: remote.disconnect,
                 known: remote.known, onForgetHost: remote.forget, onReconnect: remote.reconnect,
@@ -1973,7 +1982,8 @@ function DesktopApp({ bridge }: AppProps) {
             pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files', initialPath: pickerStart({ workspacePath: workspaceRow?.path ?? null, primaryWorkspace, home: hostHome }) }).then(async (p) => { const paths = Array.isArray(p) ? p : typeof p === 'string' ? [p] : []; await resolvedBridge?.features?.picked?.(paths); return paths; }) : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
-            onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
+            // A refused Take over is said, never a dead click (Tynn #529): a remote window's bridge keeps it under the title bar.
+            onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => { if (!r.ok && !remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); }, (error: unknown) => showAlert({ title: 'Take over', body: error instanceof Error ? error.message : String(error) })); }}
             {...(resolvedBridge?.crashReport ? { crashReport: { draft: () => resolvedBridge.crashReport!.draft(), send: (text: string, notes: string) => resolvedBridge.crashReport!.send(text, notes), copy: (text: string) => copyToClipboard({ plain: text }) } } : {})}
             {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.

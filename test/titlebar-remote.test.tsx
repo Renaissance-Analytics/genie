@@ -37,7 +37,7 @@ describe('the REMOTE badge', () => {
 describe('Take control', () => {
     const take = () => {};
     const withTake = (remote: { host: string; driver: string | null; driving: boolean; locked: boolean; lostTo?: string | null }) =>
-        renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} remote={{ ...remote, onTakeControl: take } as never} onNavigate={() => {}} onOpenPalette={() => {}} />);
+        renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} remote={{ ...remote, onTakeControl: take }} onNavigate={() => {}} onOpenPalette={() => {}} />);
 
     it('is offered when nobody drives, and names who drives when someone else does', () => {
         const nobody = withTake({ host: 'aion', driver: null, driving: false, locked: false });
