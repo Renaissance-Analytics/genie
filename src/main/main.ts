@@ -1108,7 +1108,7 @@ const hostPicks = new HostPicks();
 /** The Tynn account each relay window was opened under (accountKeyOf). */
 const remoteWindowAccount = new Map<BrowserWindow, string | null>();
 const tynnAccountKeyNow = (): string | null => { const status = tynnAccount?.status(); return status ? accountKeyOf(status) : null; };
-const relayLiveFor = (win: BrowserWindow): boolean => [...relayChannels.values()].some((c) => c.sender === win.webContents);
+const relayLiveFor = (win: BrowserWindow): boolean => [...relayChannels.values(), ...linkedRelays.values()].some((c) => c.sender === win.webContents);
 function openRemoteWindow(url: string, name?: string | null): void {
     // The machine's NAME rides with the window (Genie 1's openWorkstationById: "The display name drives the host window
     // title"): its connecting screen says it, never the raw `relay:<id>`.
@@ -1211,6 +1211,11 @@ let relayStatusNow: RelayHostStatus = { state: 'off' };
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
 const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieRoot()))(`keychain ${line}`); } catch { /* the console has it */ } };
 const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents; workstationId: string }>();
+/**
+ * A window's connection to a Tynn workstation that GENIE-HOST holds (Tynn #552, P5d.4; audit M-e): the grant, the key and
+ * the relay member are the host's; this window has the channel. (`relayChannels` is the emergency path, with no host.)
+ */
+const linkedRelays = new Map<string, { sender: Electron.WebContents; workstationId: string }>();
 /** The sockets to other machines the host holds for each window (genie:device-open). */
 const deviceChannels = new Map<string, Electron.WebContents>();
 /** The Genie browser for each Tynn workstation a window here drives: a door per connection (remote-browsers.ts). */
@@ -2278,10 +2283,19 @@ async function boot(): Promise<void> {
         if (!browser) return { ok: false, error: 'Genie’s browser is not ready yet' };
         const at = typeof address === 'string' ? address : undefined;
         const remoteUrl = [...remoteWindows].find(([, w]) => !w.isDestroyed() && w.webContents === event.sender)?.[0] ?? null;
-        const conn = browserConnectionFor({ remoteUrl, relays: [...relayChannels.values()].filter((c) => c.sender === event.sender) });
+        const link = deviceLinkNow();
+        const relays: Array<{ workstationId: string; transport: RelayMemberTransport | string }> = [
+            ...[...relayChannels.values()].filter((c) => c.sender === event.sender),
+            ...(link ? [...linkedRelays].filter(([, c]) => c.sender === event.sender).map(([channel, c]) => ({ workstationId: c.workstationId, transport: channel })) : []),
+        ];
+        const conn = browserConnectionFor({ remoteUrl, relays });
         if (conn.kind === 'refused') return { ok: false, error: conn.reason };
         if (conn.kind === 'local') return openLocalBrowser(at, 'user-gesture');
-        const via = await remoteBrowsers.connect(conn.workstationId, conn.transport);
+        // A channel genie-host holds (Tynn #552): its door to that workstation's sites is the host's too.
+        const via = typeof conn.transport === 'string'
+            ? (link ? await link.browserVia(conn.transport) : null)
+            : await remoteBrowsers.connect(conn.workstationId, conn.transport);
+        if (!via) return { ok: false, error: 'This window is not connected to its workstation right now. Reconnect, then open the browser again.' };
         const hosts = Array.isArray(rawHosts) ? rawHosts.filter(isGenHost) : [];
         const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
         return browser.open(at, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
@@ -2326,6 +2340,21 @@ async function boot(): Promise<void> {
         if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
         const refusedByRole = droneRefusal(workstationRoleNow);
         if (refusedByRole) return { ok: false, reason: refusedByRole };
+        // GENIE-HOST DIALS (Tynn #552, P5d.4; audit M-e): it mints the grant, keeps the key, opens the relay member; this
+        // window gets a channel. Tynn's own refusal comes back for this window to word, from the role it read.
+        const link = deviceLinkNow();
+        if (link) {
+            hearDeviceLink(link);
+            const sender = event.sender;
+            const offStep = link.onStep((id, step) => { if (id === workstationId && !sender.isDestroyed()) sender.send('genie:relay-open-step', workstationId, step); });
+            const opened = await link.openRelay(workstationId).finally(offStep);
+            if (!opened.ok) return 'refusal' in opened ? { ...(await wordTynnRefusal(opened.refusal, rereadRole)), stage: 'tynn' } : opened;
+            deviceChannels.set(opened.channel, sender);
+            linkedRelays.set(opened.channel, { sender, workstationId });
+            // The window went: its connection goes with it.
+            sender.once('destroyed', () => { if (deviceChannels.delete(opened.channel)) { linkedRelays.delete(opened.channel); link.close(opened.channel); } });
+            return { ok: true, channel: opened.channel };
+        }
         const account = tynnAccount;
         if (!account?.status().signedIn) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = PopKeypair.generate();
@@ -2370,6 +2399,7 @@ async function boot(): Promise<void> {
         link.onClosed((channel, reason) => {
             const sender = deviceChannels.get(channel);
             deviceChannels.delete(channel);
+            linkedRelays.delete(channel);
             if (sender && !sender.isDestroyed()) sender.send('genie:relay-closed', channel, reason);
         });
     };
