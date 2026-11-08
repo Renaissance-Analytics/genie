@@ -40,7 +40,7 @@ export function protocolContractDeps(root: string): HostApiDeps {
             delete: async () => ({ ok: true, plan: { outcome: 'unmount', removes: [], keeps: [], external: [] } }),
             switchDriver: async () => ({ ok: false, reason: 'the driver is not installed' }),
             setBudget: async () => ({ ok: true, decision: { kind: 'proceed', remainingUsd: null } }),
-            setMode: async () => ({ ok: true }), setAccessScope: async () => ({ ok: true }),
+            setMode: async () => ({ ok: true }), setAccessScope: async () => ({ ok: true }), setAccessAgents: async () => ({ ok: true }),
             setAutoApprove: async () => ({ ok: true }), setManageTabs: async () => ({ ok: true }), setDrivePages: async () => ({ ok: true }),
             setIssueWatch: async () => ({ ok: true }), setPermissions: async () => ({ ok: true }), setModel: async () => ({ ok: true }),
             models: async () => ({ ok: true }),

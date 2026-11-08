@@ -1385,6 +1385,9 @@ function DesktopApp({ bridge }: AppProps) {
               budgetUsd: detail?.agent.dailyBudgetUsd ?? null,
               mode: detail?.agent.mode ?? 'manual',
               accessScope: detail?.agent.accessScope ?? 'self',
+              ...(detail?.agent.accessAgents ? { accessAgents: detail.agent.accessAgents } : {}),
+              // The chosen-agents picker (Tynn #526): the snapshot's agents — awake workspaces only, genie@system apart — but this one.
+              accessCandidates: snapshot.agents.filter((a) => a.id !== agentId).map((a) => ({ id: a.id, name: a.name, provider: a.provider, workspaceName: (snapshot.workspaces ?? []).find((w) => w.id === a.workspaceId)?.name ?? a.workspaceId })),
               autoApprove: detail?.agent.autoApprove === true,
               manageTabs: detail?.agent.manageTabs === true,
               drivePages: detail?.agent.drivePages === true,
@@ -1397,6 +1400,7 @@ function DesktopApp({ bridge }: AppProps) {
               onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', permissions === 'edits' ? 'edits only' : permissions === 'ask' ? 'asks before shell commands' : 'all tools', r.apply ?? { when: 'next-start' }) : r.reason }))); },
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetAccessScope: (scope) => { void resolvedBridge.agents.setAccessScope(agentId, scope).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+              onSetAccessAgents: (ids) => { void resolvedBridge.agents.setAccessAgents(agentId, ids).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetAutoApprove: (on) => { void resolvedBridge.agents.setAutoApprove(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetManageTabs: (on) => { void resolvedBridge.agents.setManageTabs(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetDrivePages: (on) => { void resolvedBridge.agents.setDrivePages(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },

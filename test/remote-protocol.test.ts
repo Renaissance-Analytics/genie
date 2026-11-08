@@ -90,7 +90,8 @@ describe('the capability table', () => {
         // 123 with agents.toolOutput, a tool row's whole output when a person opens it (Tynn story #386).
         // 136 with family8B's six native-local aliases and seven owner-scoped stream controls.
         // 137 with the Tynn tab's other pages (genie#1295 W1): a read, owner-only and workspace-scoped.
-        expect(REMOTE_METHODS.length).toBe(139);
+        // 140 with agents.setAccessAgents (Tynn #526): chosen agents who may message one, a write, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(140);
         for (const method of LOCAL_TERMINAL_METHODS) expect(capabilityOf(method)).toBe('local');
         for (const method of ['artboard.read', 'artboard.review'] as const) expect(capabilityOf(method)).toBe('local');
         for (const method of ['chatDrafts.load', 'chatDrafts.save', 'chatDrafts.putFile', 'chatDrafts.readFile', 'chatDrafts.release'] as const) expect(capabilityOf(method)).toBe('local');

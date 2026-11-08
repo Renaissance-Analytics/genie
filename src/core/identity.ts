@@ -149,6 +149,12 @@ export interface AgentRecord {
     /** Who may discover and message this agent. */
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     /**
+     * CHOSEN AGENTS (Tynn #526): agents, by id, that may message this one whatever `accessScope` says — alone (scope
+     * `none`) or on top of this workspace (scope `self`). Absent = the choice is off; `[]` = on, nobody chosen yet.
+     * A deleted agent leaves every list; a hibernated one stays (it cannot send while asleep). Optional: older records load.
+     */
+    readonly accessAgents?: readonly string[];
+    /**
      * A daily dollar limit (§6.2) that parks the NEXT turn and asks — never kills one in flight.
      * OPTIONAL and not in AGENT_RECORD_FIELDS, so records written before it exist still load.
      * No provider reports a cost over ACP today, so it is shown as unenforceable until one does.
