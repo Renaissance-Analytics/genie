@@ -43,8 +43,8 @@ describe('outputViewObserver', () => {
         expect(r.renders).toHaveLength(1);
         r.tick();
         expect(r.renders).toHaveLength(2);
-        // 6 + 50 characters arrived; the newest 20 are kept.
-        expect(r.stream()).toEqual({ text: '01234567890123456789', end: 56, epoch: 1 });
+        // 50 characters arrived in one batch, which holds only the cap's worth (its newest 20): the view kept 20 of 26.
+        expect(r.stream()).toEqual({ text: '01234567890123456789', end: 26, epoch: 1 });
     });
 
     it('an exit applies what is held first; a snapshot drops what was held before it and clears the exit and the error', async () => {

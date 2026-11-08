@@ -1,5 +1,6 @@
 import { activityRows } from '../../core/stream-view.js';
-import { flushSync } from 'react-dom';
+import type { OutputStream } from '../../core/terminal-output-stream.js';
+import { outputViewObserver } from '../terminal-output-view.js';
 import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
@@ -302,19 +303,17 @@ export interface AgentViewProps {
  */
 function ObservedTerminal({ terminalId, terminals }: { terminalId: string; terminals: GenieBridge['terminals'] }) {
     const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
-    const [output, setOutput] = useState('');
+    // Batched, kept to the cap, and written as appended (Tynn #544): see terminal-output-view.ts.
+    const [stream, setStream] = useState<OutputStream | null>(null);
     const [terminalError, setTerminalError] = useState<string | null>(null);
     const [exited, setExited] = useState<number | null>(null);
     const size = useRef({ cols: 120, rows: 30 });
     useEffect(() => {
         let live = true;
         void import('./TerminalPane.js').then((m) => { if (live) setPane(() => m.TerminalPane); });
-        const off = watchTerminal(terminals, null, terminalId, {
-            snapshot: joined => flushSync(() => { setOutput(joined.scrollback); setTerminalError(null); setExited(null); }),
-            data: text => flushSync(() => setOutput(value => value + text)),
-            exit: code => flushSync(() => setExited(code)), error: error => setTerminalError(error.message),
-        });
-        return () => { live = false; off(); };
+        const view = outputViewObserver({ update: (fn) => setStream(fn), exited: setExited, error: setTerminalError });
+        const off = watchTerminal(terminals, null, terminalId, view);
+        return () => { live = false; view.close(); off(); };
     }, [terminals, terminalId]);
     return (
         <div data-observed-terminal={terminalId} className="min-h-0 flex-1 bg-[var(--bg-0)]">
@@ -322,7 +321,9 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
             {Pane ? (
                 <Pane
                     paneId={`observed-${terminalId}`}
-                    output={output}
+                    output={stream?.text ?? ''}
+                    outputEnd={stream?.end ?? 0}
+                    outputEpoch={stream?.epoch ?? 0}
                     readOnly={exited !== null}
                     onData={(data) => terminalAction(() => terminals.write(terminalId, data), setTerminalError)}
                     onResize={({ cols, rows }) => { size.current = { cols, rows }; terminalAction(() => terminals.resize(terminalId, cols, rows), setTerminalError); }}
