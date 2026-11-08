@@ -17,7 +17,9 @@ import { MAILPIT_MEASURED_IMAGE } from './mailpit-image.js';
  * GENIE MAIL G7 AGAINST THE REAL MAILPIT (Tynn story #493): `mail wait`, composed as genie-host composes it, answered by
  * the host's subscription to the real Mailpit's websocket (/api/events).
  *   1. A waits; the matching mail is sent half a second later; the wait answers within a second of Mailpit taking it.
- *   2. A waits; a matching mail to B's inbox arrives; A's wait times out ("timed out", not an error).
+ *   2. A waits; a matching mail that is B's alone (B's app to B's own inbox) arrives; A's wait times out ("timed out",
+ *      not an error). A mail A's app SENDS is A's (its Sent, G4) wherever it is addressed, and does answer A's wait: an
+ *      app under test mails whatever address was typed into it.
  *   3. With nothing matching at all, it answers "timed out" at the timeout.
  */
 const run = promisify(execFile);
@@ -140,8 +142,9 @@ describe('mail wait on the real Mailpit\'s websocket', () => {
     it('a matching message to ANOTHER workspace\'s inbox never satisfies the wait: it times out', async () => {
         const waiting = call('term-a', { action: 'wait', match: 'G7 reset', timeoutSeconds: 3 });
         await new Promise((r) => setTimeout(r, 500));
-        const a = appOf('ws-a');
-        const queued = await sendAs(a.user, a.password, 'app@ws-b.mail.gen', 'G7 reset your password');
+        // B's alone: B's app sends it to B's own inbox. (One A's app sent would be A's Sent mail, and A's to wait for.)
+        const b = appOf('ws-b');
+        const queued = await sendAs(b.user, b.password, 'app@ws-b.mail.gen', 'G7 reset your password');
         const r = await waiting;
         // CONTROL: B, whose inbox it was, does see it (its unread message, already there).
         const forB = await call('term-b', { action: 'wait', match: 'G7 reset', timeoutSeconds: 3 });
