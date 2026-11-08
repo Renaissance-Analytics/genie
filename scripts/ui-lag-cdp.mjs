@@ -151,6 +151,26 @@ function installPageGauge(create) {
     return { now: performance.now(), longtasks: s.longtaskSupported === true };
 }
 
+/**
+ * WHAT IS COMPOSITED OVER THE WINDOW (Tynn #537): every element with a backdrop filter or a filter, where it is and what it
+ * says. The trace of run 42489513576 showed, on and off alike, a backdrop-filter render surface and the whole window
+ * damaged on every drawn frame, each draw ~45 ms in Linux's software compositor. Serialized into the page.
+ */
+function uiLagComposited() {
+    const out = [];
+    for (const el of document.querySelectorAll('*')) {
+        const cs = getComputedStyle(el);
+        if ((cs.backdropFilter && cs.backdropFilter !== 'none') || (cs.filter && cs.filter !== 'none')) {
+            const r = el.getBoundingClientRect();
+            const data = Object.fromEntries([...el.attributes].filter((a) => a.name.startsWith('data-') || a.name === 'role' || a.name.startsWith('aria-')).map((a) => [a.name, a.value.slice(0, 60)]));
+            let up = el.parentElement, owner = null;
+            while (up && !owner) { if ([...up.attributes].some((a) => a.name.startsWith('data-') || a.name === 'role')) owner = up.outerHTML.slice(0, up.outerHTML.indexOf('>') + 1).slice(0, 200); up = up.parentElement; }
+            out.push({ tag: el.tagName.toLowerCase(), backdrop: cs.backdropFilter, filter: cs.filter, rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)], visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden', data, owner, cls: String(el.className).slice(0, 160), text: (el.textContent ?? '').trim().slice(0, 120) });
+        }
+    }
+    return out.slice(0, 20);
+}
+
 /** A deliberate block, the gauges' positive control and the profiles' alignment marker. Serialized into each thread. */
 function uiLagControlBusyMain(ms) { const start = performance.now(); let x = 0; while (performance.now() - start < ms) for (let i = 0; i < 10000; i += 1) x += i; return { start, end: performance.now(), x: x > 0 }; }
 function uiLagControlBusyHost(ms) { const start = performance.now(); let x = 0; while (performance.now() - start < ms) for (let i = 0; i < 10000; i += 1) x += i; return { start, end: performance.now(), x: x > 0 }; }
@@ -336,6 +356,7 @@ try {
                 let s, trace = null;
                 if (profiled && k === TRACE_PAIR) { const t = await traced(slice); s = t.value; trace = t.events; } else s = await slice();
                 mouse.push(...s.d.mouse); keys.push(...s.d.keys);
+                if (profiled && k === TRACE_PAIR) console.log(`UI_LAG_COMPOSITED ${cond} ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
                 if (trace?.length) { writeFileSync(join(OUT, `ui-lag-trace-${cond}.json`), JSON.stringify({ traceEvents: trace })); traces[cond] = traceSummary(trace); }
                 slices.push({ cond, from: s.from, to: s.to });
             }
