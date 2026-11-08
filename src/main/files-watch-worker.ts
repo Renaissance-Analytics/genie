@@ -25,8 +25,9 @@ import { nodeWatchSource, type WatchSource } from './files-watch-hub.js';
 export const WATCH_WORKER_SOURCE = [
     "const { parentPort, workerData } = require('node:worker_threads');",
     "const { watch, stat } = require('node:fs');",
+    "const { readdir, stat: statAsync } = require('node:fs/promises');",
     "const { join, sep } = require('node:path');",
-    'const { root, ignored } = workerData;',
+    'const { root, ignored, since, limit } = workerData;',
     'const skip = new Set(ignored);',
     'let batch = [], timer = null;',
     'const flush = () => { timer = null; const out = batch; batch = []; if (out.length) parentPort.postMessage(out); };',
@@ -42,7 +43,38 @@ export const WATCH_WORKER_SOURCE = [
     "watcher.on('error', () => {});",
     "parentPort.on('message', (m) => { if (m === 'close') { watcher.close(); if (timer) clearTimeout(timer); flush(); process.exit(0); } });",
     "parentPort.postMessage('ready');",
+    // THE CATCH-UP (Tynn #539): what was written between the watch being asked for and this watch being up, found here,
+    // off genie-host's thread: every file (ignored folders skipped) changed since then, as the watch would have said it.
+    'const catchUp = async () => {',
+    "    const dirs = [''];",
+    '    let entries = 0;',
+    '    while (dirs.length > 0 && entries < limit) {',
+    '        const dir = dirs.pop();',
+    '        let list;',
+    '        try { list = await readdir(join(root, dir), { withFileTypes: true }); } catch { continue; }',
+    '        for (const e of list) {',
+    '            if (skip.has(e.name)) continue;',
+    "            const rel = dir === '' ? e.name : dir + '/' + e.name;",
+    '            entries += 1;',
+    '            if (e.isDirectory()) { dirs.push(rel); continue; }',
+    '            try {',
+    '                const info = await statAsync(join(root, rel));',
+    '                if (info.mtimeMs >= since) { batch.push([rel, info.mtimeMs, false]); if (timer === null) timer = setTimeout(flush, 20); }',
+    '            } catch { /* gone again: its own event says so */ }',
+    '        }',
+    '    }',
+    '};',
+    'void catchUp();',
 ].join('\n');
+
+/**
+ * How far before the watch was asked for the catch-up looks: Linux stamps a file's time from a coarse clock that can lag
+ * Date.now() (a write just after the ask could carry an earlier time), so it looks a little further back. A file written
+ * just before the view opened may be reported as changed: it was, while Genie was starting to look.
+ */
+export const CATCH_UP_SLACK_MS = 2_000;
+/** At most this many entries walked by one catch-up: a bound, never reached by a workspace whose build output is ignored. */
+export const CATCH_UP_LIMIT = 200_000;
 
 export interface WorkerWatchOptions {
     /** Told once when the worker could not start and the watch runs on this thread instead. */
@@ -61,11 +93,12 @@ export function workerWatchSource(options: WorkerWatchOptions = {}): WatchSource
         let closed = false;
         let worker: Pick<Worker, 'on' | 'postMessage' | 'terminate'>;
         /*
-         * THE WATCH ON THIS THREAD, until the worker's own is up (it says `ready`): a watch starts when it is asked for,
-         * as nodeWatchSource's does, so a write the moment a view opens is never missed. Kept for good when the worker
-         * cannot start, fails, or ends on its own: a watch is never simply lost.
+         * NO WATCH ON THIS THREAD while the worker starts (Tynn #539): on Linux starting one scans the whole workspace on
+         * genie-host's thread, and on Windows it takes a build's change events here until the worker is up. A write the
+         * moment the watch is asked for is found by the worker's own catch-up instead. A worker that cannot start, fails,
+         * or ends on its own is replaced by the watch on this thread: a watch is never simply lost.
          */
-        let here: { close(): void } | null = onThisThread();
+        let here: { close(): void } | null = null;
         let kept = false;
         const fallBack = (why: string) => {
             if (closed || kept) return;
@@ -75,14 +108,14 @@ export function workerWatchSource(options: WorkerWatchOptions = {}): WatchSource
         };
         try {
             const start = options.startWorker ?? ((source, workerData) => new Worker(source, { eval: true, workerData }));
-            worker = start(WATCH_WORKER_SOURCE, { root, ignored: [...IGNORED_NAMES] });
+            worker = start(WATCH_WORKER_SOURCE, { root, ignored: [...IGNORED_NAMES], since: Date.now() - CATCH_UP_SLACK_MS, limit: CATCH_UP_LIMIT });
         } catch (error) {
             fallBack(`could not start (${error instanceof Error ? error.message : String(error)})`);
             return { close: () => { closed = true; here?.close(); } };
         }
         worker.on('message', (batch: unknown) => {
             if (closed || kept) return;
-            if (batch === 'ready') { here?.close(); here = null; return; }
+            if (batch === 'ready') return;
             if (!Array.isArray(batch)) return;
             for (const [name, mtimeMs, isDirectory] of batch as Array<[string, number | null, boolean]>) {
                 const rel = confine(root, name);
