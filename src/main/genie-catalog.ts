@@ -14,6 +14,7 @@ import { pluginToolOffer } from './mcp-tools-plugins.js';
 import { PROCESS_TOOLS } from './mcp-tools-processes.js';
 import { WORKSPACE_TABS_TOOLS } from './mcp-tools-workspace-tabs.js';
 import { GENIE_TOOLS } from './mcp-tools.js';
+import { PERSON_ONLY_TOOLS } from '../core/gapp-grants.js';
 
 /**
  * GENIE'S OWN ELEMENTS IN THE CATALOG (ADF A2, Tynn #446; spec .ai/plans/specs/adf-sdk.md). Builtins go through the SAME
@@ -61,6 +62,24 @@ function viewReach(adapter: string): ElementDefinition['reach'] {
         : { scopes: ['workspace'], side: 'client', requiresWindow: true, remote: 'allowed' };
 }
 
+/**
+ * REMOTE ACCESS (Tynn #409, host split P5d.1; the owner: the host split is built on ADF). A host-service on BOTH sides:
+ * genie-host runs the tailnet listener, the remote host, the paired devices, the PIN, the baton and the lock, window or
+ * not (remote-access-host.ts); this machine's own window draws Settings → Workstation's remote section and drives it. The
+ * engine link's `engine.remoteAccess` call and `remoteAccess.event` event are the only channel between them.
+ */
+export const REMOTE_ACCESS_ELEMENT: ElementDefinition = {
+    id: 'genie.remote-access',
+    kind: 'host-service',
+    version: BUILTIN_VERSION,
+    packageId: BUILTIN_PACKAGE_ID,
+    source: 'builtin',
+    docs: { name: 'Remote access', description: 'A paired phone (over the tailnet) or a Pilot (over the Tynn relay) reaches this machine, with every Genie window closed. One baton, one lock, one list of paired devices.' },
+    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.remoteAccess'], events: ['remoteAccess.event'] } },
+    permissions: { capabilities: [], network: [] },
+    payload: { start: 'remoteAccess.start', stop: 'remoteAccess.stop', health: 'remoteAccess.health', settingsSection: 'workstation' },
+};
+
 export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclaration {
     return {
         id: BUILTIN_PACKAGE_ID,
@@ -75,8 +94,12 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
             docs: { name: t.title, description: t.description },
             reach: TOOL_REACH,
             permissions: { capabilities: [], network: [] },
-            payload: { handler: t.name, inputSchema: t.inputSchema, ...(t.annotations === undefined ? {} : { annotations: t.annotations }) },
-        })),
+            payload: {
+                handler: t.name, inputSchema: t.inputSchema, ...(t.annotations === undefined ? {} : { annotations: t.annotations }),
+                // GApps v2 decision 3: a tool that acts as the person, or waits on their approval, is never granted to an app.
+                ...(PERSON_ONLY_TOOLS.has(t.name) ? { grantable: false } : {}),
+            },
+        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT]),
     };
 }
 

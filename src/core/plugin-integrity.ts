@@ -35,15 +35,20 @@ export function packagePathProblem(path: string): string | null {
 /**
  * The limits, on what a package holds before anything is read: its files' paths and sizes. Null when within them; the
  * first one broken, in words, otherwise.
+ *
+ * The file count and the total size are over the SIGNED files only, the ones the digest covers: the root signature file
+ * is not counted (the coordinator's ruling, 2026-11-08, matching the Tynn marketplace's upload check, C2). Every file, the
+ * signature file too, is held to the per-file and path limits: those bound what Genie reads at all.
  */
 export function packageLimitProblem(entries: ReadonlyArray<{ readonly path: string; readonly size: number }>): string | null {
-    if (entries.length > PACKAGE_LIMITS.files) return `the package holds ${n(entries.length)} files; a package may hold at most ${n(PACKAGE_LIMITS.files)}`;
+    const signedCount = entries.filter((e) => e.path !== PACKAGE_SIGNATURE_FILE).length;
+    if (signedCount > PACKAGE_LIMITS.files) return `the package holds ${n(signedCount)} files; a package may hold at most ${n(PACKAGE_LIMITS.files)}`;
     let total = 0;
     for (const e of entries) {
         const pathBytes = utf8(e.path).length;
         if (pathBytes > PACKAGE_LIMITS.pathBytes) return `the package has a path of ${n(pathBytes)} bytes (${e.path.slice(0, 60)}…); a path may be at most ${n(PACKAGE_LIMITS.pathBytes)} bytes`;
         if (e.size > PACKAGE_LIMITS.fileBytes) return `${e.path} is ${n(e.size)} bytes; a package may hold at most ${mb(PACKAGE_LIMITS.fileBytes)} a file (${n(PACKAGE_LIMITS.fileBytes)} bytes)`;
-        total += e.size;
+        if (e.path !== PACKAGE_SIGNATURE_FILE) total += e.size;
     }
     if (total > PACKAGE_LIMITS.totalBytes) return `the package is ${n(total)} bytes; a package may be at most ${mb(PACKAGE_LIMITS.totalBytes)} in all (${n(PACKAGE_LIMITS.totalBytes)} bytes)`;
     return null;
@@ -91,7 +96,7 @@ export const PACKAGE_FORMAT_DOC: readonly string[] = [
     '',
     '## 3. Limits',
     '',
-    'Checked on the files\' paths and sizes before any byte is read or hashed; a package past one is refused, the reason saying which:',
+    'Checked on the files\' paths and sizes before any byte is read or hashed; a package past one is refused, the reason saying which. The limits count the signed files only: `genie-plugin.sig` is not counted in the number of files or the total, and is still held to the size a file may be.',
     '',
     `- at most ${n(PACKAGE_LIMITS.files)} files;`,
     `- at most ${mb(PACKAGE_LIMITS.totalBytes)} in all (1 MB = 1,048,576 bytes);`,

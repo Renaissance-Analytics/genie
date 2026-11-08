@@ -70,6 +70,8 @@ interface LoginState {
     message: string | null;
     retry: { nextTryAtMs: number; attempt: number } | null;
     needsPerson: boolean;
+    /** The retry came from the provider's own reading (a rejected window with no reset), not from one turn's breach. */
+    retryByReading: boolean;
     /** Was held (paused, retrying or needs-person) and has not yet been reported by due(). */
     held: boolean;
 }
@@ -91,7 +93,7 @@ export class RateLimitGate {
         const id = `${key.provider}\u0000${key.account}`;
         let entry = this.#logins.get(id);
         if (!entry) {
-            entry = { key: { provider: key.provider, account: key.account }, state: { rejected: new Map(), message: null, retry: null, needsPerson: false, held: false } };
+            entry = { key: { provider: key.provider, account: key.account }, state: { rejected: new Map(), message: null, retry: null, needsPerson: false, retryByReading: false, held: false } };
             this.#logins.set(id, entry);
         }
         return entry.state;
@@ -111,6 +113,7 @@ export class RateLimitGate {
                 s.held = true;
             } else if (r.status === 'rejected') {
                 this.#retry(s, nowMs);
+                s.retryByReading = true;
             } else {
                 s.rejected.delete(r.window);
             }
@@ -126,8 +129,17 @@ export class RateLimitGate {
     breach(key: GateKey, nowMs: number, message: string | null): GateView {
         const s = this.#state(key);
         if (message !== null) s.message = message;
-        if (s.rejected.size === 0 && !s.needsPerson) this.#retry(s, nowMs);
+        if (s.rejected.size === 0 && !s.needsPerson) { const byReading = s.retry !== null && s.held && s.retryByReading; this.#retry(s, nowMs); s.retryByReading = byReading; }
         return this.view(key, nowMs);
+    }
+
+    /**
+     * Whether the PROVIDER says this login is limited (Tynn #556): a rejected window, a reading that needs the person, or
+     * a rejected reading with no reset. One turn's breach alone is not: it holds the agent that hit it, never the login.
+     */
+    limitedByReading(key: GateKey, nowMs: number): boolean {
+        const s = this.#state(key), v = this.view(key, nowMs);
+        return v.state === 'paused' || v.state === 'needs-person' || (v.state === 'retrying' && s.retryByReading);
     }
 
     #retry(s: LoginState, nowMs: number): void {

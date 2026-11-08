@@ -7,7 +7,7 @@ Every definition, of every family and from every source, has these fields. A key
 | Field | Type | Required | Default | What it is |
 |---|---|---|---|---|
 | `id` | dotted name | yes | — | Unique in the catalog, like `ai.genie.spreadsheet.createWorkbook`. A tool is offered to agents under it. |
-| `kind` | one of tool, panel, editor, recipe, flow-node, host-service, page, overlay, provider, service-engine, flyout, modal, wizard, workstation-page, workspace-settings-page | yes | — | Its contribution family: what its payload holds. |
+| `kind` | one of tool, panel, editor, recipe, flow-node, host-service, app, page, overlay, provider, service-engine, flyout, modal, wizard, workstation-page, workspace-settings-page | yes | — | Its contribution family: what its payload holds. |
 | `version` | semver | yes | — | Its own version, like `1.2.0`. |
 | `packageId` | reverse-DNS | yes | — | The package that contributes it: every definition of a package registers together, or none does. |
 | `source` | one of builtin, plugin, gapp | yes | — | Who contributes it. An installed package never replaces one of Genie's own. |

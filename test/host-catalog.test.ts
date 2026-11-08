@@ -116,7 +116,11 @@ describe('the wiring: composed in genie-host, not in the window', () => {
 
     it('genie-host opens the plugins and hands their tools to its MCP server', () => {
         const host = code('src/main/genie-host.ts');
-        expect(host).toMatch(/await PluginsService\.open\(\{/);
+        expect(host).toMatch(/await openMarketplacePlugins\(\{/);
+        expect(code('src/main/marketplace-client.ts')).toMatch(/await PluginsService\.open\(\{/);
+        expect(host).toMatch(/const pluginsService = marketplacePlugins\.plugins/);
+        expect(host).toMatch(/const clocks: Array<\{ stop\(\): void \}> = \[marketplacePlugins\]/);
+        expect(host).toMatch(/maxResponseBytes: MARKETPLACE_PAGE_BYTES/);
         expect(host).toMatch(/plugins: hostPluginTools\(/);
     });
 

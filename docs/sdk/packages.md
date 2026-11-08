@@ -14,7 +14,7 @@ Relative to the package root, `/` between segments, UTF-8, exactly as stored. A 
 
 ## 3. Limits
 
-Checked on the files' paths and sizes before any byte is read or hashed; a package past one is refused, the reason saying which:
+Checked on the files' paths and sizes before any byte is read or hashed; a package past one is refused, the reason saying which. The limits count the signed files only: `genie-plugin.sig` is not counted in the number of files or the total, and is still held to the size a file may be.
 
 - at most 10,000 files;
 - at most 200 MB in all (1 MB = 1,048,576 bytes);

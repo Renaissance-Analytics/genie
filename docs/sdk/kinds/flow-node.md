@@ -15,6 +15,7 @@ A node in the Flows palette. The executor the payload names runs it.
 | `executor` | string | yes | — | What runs the node. |
 | `inputs` | list of port names | no | `[]` | Its input ports. |
 | `outputs` | list of port names | no | `[]` | Its output ports. |
+| `grantable` | boolean | no | `true` | Whether a GApp may be granted it. `false` for what only the person may do: an app that lists it is refused at install. |
 
 ## Example payload
 
