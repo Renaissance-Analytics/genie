@@ -9,7 +9,12 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'onSettingsChanged'
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
-    | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn';
+    | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn'
+    // P4 family 12 (Tynn #561): the Tynn tab.
+    | 'tynnBoard' | 'tynnBoardAction' | 'tynnPage' | 'tynnPageAction' | 'tynnBoardChanges' | 'tynnBoardWatch'
+    | 'tynnIssues' | 'tynnIssueAction' | 'tynnIssueChanges' | 'tynnIssuesWatch' | 'tynnFeaturesWatch'
+    // P4 family 10 (Tynn #559): the workspace lifecycle.
+    | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
 type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry'>>;
@@ -33,7 +38,7 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
@@ -128,6 +133,12 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     });
     return {
         terminals,
+        // P4 family 10 (Tynn #559): the host's folders, for every picker — a failure rejects, as the IPC call did.
+        host: {
+            listDir: (path) => read((b) => b.host!.listDir(path)),
+            mkdir: (parent, name) => read((b) => b.host!.mkdir!(parent, name)),
+            home: () => read((b) => b.host!.home!()),
+        },
         artboard: { read: id => read(b => b.artboard!.read(id)), review: (id, post, verdict, comment) => read(b => b.artboard!.review(id, post, verdict, comment)) },
         chatDrafts: {
             load: () => read(b => b.chatDrafts!.load()), save: (id, draft) => read(b => b.chatDrafts!.save(id, draft)),
@@ -243,6 +254,21 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setDefaultAgent: (id, agentId) => request((ws) => ws.setDefaultAgent(id, agentId)),
             setColor: (id, color) => request((ws) => ws.setColor!(id, color)),
             onSettingsChanged: (listener) => { settingsListeners.add(listener); return () => { settingsListeners.delete(listener); }; },
+            // The Tynn tab (P4 family 12): reads and actions reject on a failed connection, as the IPC calls did.
+            tynnBoard: (id, scope) => read((b) => b.workspaces.tynnBoard!(id, scope)),
+            tynnBoardAction: (id, input) => read((b) => b.workspaces.tynnBoardAction!(id, input)),
+            tynnPage: (id, page, query) => read((b) => b.workspaces.tynnPage!(id, page, query)),
+            tynnPageAction: (id, input) => read((b) => b.workspaces.tynnPageAction!(id, input)),
+            tynnBoardChanges: (id, scope, cursor, ids) => read((b) => b.workspaces.tynnBoardChanges!(id, scope, cursor, ids)),
+            tynnIssues: (id, filters) => read((b) => b.workspaces.tynnIssues!(id, filters)),
+            tynnIssueAction: (id, input) => read((b) => b.workspaces.tynnIssueAction!(id, input)),
+            tynnIssueChanges: (id, filters, cursor, ids) => read((b) => b.workspaces.tynnIssueChanges!(id, filters, cursor, ids)),
+            tynnBoardWatch: (id, listener) => subscribe((b) => b.workspaces.tynnBoardWatch!(id, listener)),
+            tynnIssuesWatch: (id, listener) => subscribe((b) => b.workspaces.tynnIssuesWatch!(id, listener)),
+            tynnFeaturesWatch: (id, listener) => subscribe((b) => b.workspaces.tynnFeaturesWatch!(id, listener)),
+            hibernate: (id) => request((ws) => ws.hibernate(id)),
+            wake: (id) => request((ws) => ws.wake(id)),
+            remove: (id) => request((ws) => ws.remove(id)),
         },
     };
 }

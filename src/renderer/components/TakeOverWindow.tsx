@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
-import { flushSync } from 'react-dom';
+import type { OutputStream } from '../../core/terminal-output-stream.js';
+import { outputViewObserver } from '../terminal-output-view.js';
 import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import type { GenieBridge } from '../bridge.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
@@ -70,7 +71,8 @@ function LoginNotice({ provider }: { provider: string }) {
 }
 
 export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowProps) {
-    const [output, setOutput] = useState('');
+    // Batched, kept to the cap, and written as appended (Tynn #544): see terminal-output-view.ts.
+    const [stream, setStream] = useState<OutputStream | null>(null);
     const [exited, setExited] = useState<number | null>(null);
     const [terminalError, setTerminalError] = useState<string | null>(null);
     const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
@@ -82,13 +84,11 @@ export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowP
         return () => { live = false; };
     }, []);
 
-    // Commit the displayed model before the protocol grants more output credit.
-    useEffect(() => watchTerminal(terminals, null, terminalId, {
-        snapshot: joined => flushSync(() => { setOutput(joined.scrollback); setTerminalError(null); setExited(null); }),
-        data: text => flushSync(() => setOutput(value => value + text)),
-        exit: code => flushSync(() => setExited(code)),
-        error: error => setTerminalError(error.message),
-    }), [terminals, terminalId]);
+    useEffect(() => {
+        const view = outputViewObserver({ update: (fn) => setStream(fn), exited: setExited, error: setTerminalError });
+        const off = watchTerminal(terminals, null, terminalId, view);
+        return () => { view.close(); off(); };
+    }, [terminals, terminalId]);
 
     return (
         <main data-surface="takeover" data-terminal={terminalId} className="flex h-screen w-screen flex-col bg-[var(--bg-0)]">
@@ -98,7 +98,9 @@ export function TakeOverWindow({ terminalId, terminals, login }: TakeOverWindowP
             {Pane ? (
                 <Pane
                     paneId={terminalId}
-                    output={output}
+                    output={stream?.text ?? ''}
+                    outputEnd={stream?.end ?? 0}
+                    outputEpoch={stream?.epoch ?? 0}
                     readOnly={exited !== null}
                     onData={(data) => terminalAction(() => terminals.write(terminalId, data), setTerminalError)}
                     onResize={({ cols, rows }) => {

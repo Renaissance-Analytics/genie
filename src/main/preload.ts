@@ -121,65 +121,6 @@ const bridge: PreloadBridge = {
         ipcRenderer.invoke('genie:restart-with-handoff', agentId, finishedId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     workspaces: {
-        hibernate: (workspaceId) => ipcRenderer.invoke('genie:workspace-hibernate', workspaceId) as never,
-        wake: (workspaceId) => ipcRenderer.invoke('genie:workspace-wake', workspaceId) as never,
-        remove: (workspaceId) => ipcRenderer.invoke('genie:workspace-remove', workspaceId) as never,
-        tynnBoard: (workspaceId, scope) => ipcRenderer.invoke('genie:workspace-tynn-board', workspaceId, scope) as never,
-        tynnBoardAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-board-action', workspaceId, input) as never,
-        tynnPage: (workspaceId, page, query) => ipcRenderer.invoke('genie:workspace-tynn-page', workspaceId, page, query) as never,
-        tynnPageAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-page-action', workspaceId, input) as never,
-        tynnBoardChanges: (workspaceId, scope, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-board-changes', workspaceId, scope, cursor, [...ids]) as never,
-        // Follow a workspace's board: main holds one socket for every open tab; this window hears its workspace's signals.
-        tynnBoardWatch: (workspaceId, listener) => {
-            const handler = (_e: unknown, id: string, signal: Parameters<typeof listener>[0]) => { if (id === workspaceId) listener(signal); };
-            ipcRenderer.on('genie:workspace-tynn-board-live', handler);
-            let watchId: number | null = null;
-            let stopped = false;
-            void (ipcRenderer.invoke('genie:workspace-tynn-board-watch', workspaceId) as Promise<number | null>).then((id) => {
-                watchId = id;
-                if (stopped && id !== null) void ipcRenderer.invoke('genie:workspace-tynn-board-unwatch', id);
-            });
-            return () => {
-                stopped = true;
-                ipcRenderer.removeListener('genie:workspace-tynn-board-live', handler);
-                if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-board-unwatch', watchId);
-            };
-        },
-        // Row I1, the Tynn tab's Issues: the queue, its actions, what changed, and following it (one socket in main).
-        tynnIssues: (workspaceId, filters) => ipcRenderer.invoke('genie:workspace-tynn-issues', workspaceId, filters) as never,
-        tynnIssueAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-issue-action', workspaceId, input) as never,
-        tynnIssueChanges: (workspaceId, filters, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-issues-changes', workspaceId, filters, cursor, [...ids]) as never,
-        // Row F1: follow the Features page; the host holds one socket for every open tab.
-        tynnFeaturesWatch: (workspaceId, listener) => {
-            const handler = (_e: unknown, id: string, signal: Parameters<typeof listener>[0]) => { if (id === workspaceId) listener(signal); };
-            ipcRenderer.on('genie:workspace-tynn-features-live', handler);
-            let watchId: number | null = null;
-            let stopped = false;
-            void (ipcRenderer.invoke('genie:workspace-tynn-features-watch', workspaceId) as Promise<number | null>).then((id) => {
-                watchId = id;
-                if (stopped && id !== null) void ipcRenderer.invoke('genie:workspace-tynn-features-unwatch', id);
-            });
-            return () => {
-                stopped = true;
-                ipcRenderer.removeListener('genie:workspace-tynn-features-live', handler);
-                if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-features-unwatch', watchId);
-            };
-        },
-        tynnIssuesWatch: (workspaceId, listener) => {
-            const handler = (_e: unknown, id: string, signal: Parameters<typeof listener>[0]) => { if (id === workspaceId) listener(signal); };
-            ipcRenderer.on('genie:workspace-tynn-issues-live', handler);
-            let watchId: number | null = null;
-            let stopped = false;
-            void (ipcRenderer.invoke('genie:workspace-tynn-issues-watch', workspaceId) as Promise<number | null>).then((id) => {
-                watchId = id;
-                if (stopped && id !== null) void ipcRenderer.invoke('genie:workspace-tynn-issues-unwatch', id);
-            });
-            return () => {
-                stopped = true;
-                ipcRenderer.removeListener('genie:workspace-tynn-issues-live', handler);
-                if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-issues-unwatch', watchId);
-            };
-        },
     },
 
     addWorkspace: () => {
@@ -236,7 +177,6 @@ const bridge: PreloadBridge = {
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
     browserWindow: { open: (address, hosts) => ipcRenderer.invoke('genie:browser-window-open', address, hosts) as Promise<never> },
     // This machine's disk, one folder at a time, for every picker (Tynn #835).
-    host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, mkdir: (parent, name) => ipcRenderer.invoke('genie:host-mkdir', parent, name) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
     // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
     // P5 retains outgoing channel ownership in main; device memory and Tynn reads/actions use the local client.
     deviceLink: {

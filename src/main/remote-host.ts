@@ -15,6 +15,7 @@ import {
     REMOTE_PROTOCOL,
     CONTROL_METHODS as CONTROL_METHOD_LIST,
     type BatonEvent,
+    type CallContext,
     type CompanionEvent,
     type ControlMethod,
     type RemoteMethod,
@@ -39,6 +40,7 @@ import { localDraftArguments } from './local-drafts-api.js';
 import { isLocalArtboardMethod } from '../core/local-artboard.js';
 import { localArtboardArguments } from './local-artboard-api.js';
 import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
+import { isTynnWatchKind, type TynnWatchEvent, type TynnWatchKind, type TynnWatchPort } from '../core/local-tynn-watch.js';
 import type { FilesHubEvent } from './files-watch-hub.js';
 
 /**
@@ -55,9 +57,11 @@ import type { FilesHubEvent } from './files-watch-hub.js';
 
 export interface HostApi {
     readonly filesWatch?: FilesWatchPort;
+    /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
+    readonly tynnWatch?: TynnWatchPort;
     readonly localTerminals?: NativeTerminalPort;
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
-    invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
+    invoke(method: RemoteMethod, args: unknown[], context?: CallContext): Promise<unknown>;
     /**
      * Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`.
      * `wantsAgent`: whether anyone listening wants an agent's detail now — one nobody wants is not built (genie#1346).
@@ -125,6 +129,8 @@ interface Connection {
     /** Independent activity views belonging to this admitted local window. */
     readonly activityViews: Set<string>;
     filesViews: LocalFilesWatches | null;
+    /** This local window's Tynn-tab watches (P4 family 12): by watch id, its kind, workspace and the host's view id. */
+    readonly tynnWatches: Map<number, { kind: TynnWatchKind; workspaceId: string; viewId: string }>;
     blobs: LocalBlobs | null;
     uploads: LocalUploads | null;
     uploadOpening: Promise<LocalUploads> | null;
@@ -192,6 +198,7 @@ export class RemoteHost {
     readonly #staging: UploadStaging;
     #pin: { code: string; expiresAt: number } | null = null;
     #next = 0;
+    #tynnWatchSeq = 0;
     #locked = false;
     /**
      * The host API's events, listened to ONLY while an authenticated connection exists (genie#1200). Listening builds an
@@ -250,6 +257,9 @@ export class RemoteHost {
         // Disposal marks the connection closed synchronously, then drains any pending disk operation.
         if (connection.uploads) void connection.uploads.dispose().catch(() => console.warn('[genie] a local upload area could not be released'));
         connection.activityViews.clear();
+        // Its Tynn-tab watches go with it (P4 family 12).
+        for (const w of connection.tynnWatches.values()) this.#api.tynnWatch?.unwatch(w.kind, w.viewId);
+        connection.tynnWatches.clear();
         if (connection.pendingPair !== null) {
             this.#confirm.cancel(connection.pendingPair);
             connection.pendingPair = null;
@@ -405,7 +415,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -562,7 +572,7 @@ export class RemoteHost {
                 if (String(args[0] ?? '') !== companion.terminalId) return refuse(COMPANION_ONLY);
                 if (companion.revoked !== null) return refuse(companion.revoked);
                 if (this.#locked) return refuse('this Genie is locked');
-                try { return ok(await this.#api.invoke(method as RemoteMethod, args)); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+                try { return ok(await this.#api.invoke(method as RemoteMethod, args, this.#callContext(connection))); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
             }
             const read = method === 'baton.status' || method === 'agent.watch' || method === 'agent.unwatch'
                 || (!(CONTROL_METHOD_LIST as readonly string[]).includes(method) && capabilityOf(method as RemoteMethod) === 'read');
@@ -570,6 +580,29 @@ export class RemoteHost {
         }
 
         switch (method) {
+            // FOLLOWING THE TYNN TAB (P4 family 12, Tynn #561): the local window's own, by subscription.
+            case 'tynn.watch': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                const port = this.#api.tynnWatch;
+                const [kind, workspaceId] = args;
+                if (!port) return ok(null);
+                if (!isTynnWatchKind(kind) || typeof workspaceId !== 'string' || workspaceId === '') return refuse('tynn.watch names board, issues or features, and a workspace');
+                const id = ++this.#tynnWatchSeq;
+                const viewId = `${connection.id}:tynn-${kind}-${id}`;
+                if (!(await port.watch(kind, viewId, workspaceId))) return ok(null);
+                // The window left while its watch was being opened: nothing is kept for it.
+                if (!this.#connections.has(connection.id)) { port.unwatch(kind, viewId); return ok(null); }
+                connection.tynnWatches.set(id, { kind, workspaceId, viewId });
+                return ok(id);
+            }
+            case 'tynn.unwatch': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                const watch = typeof args[0] === 'number' ? connection.tynnWatches.get(args[0]) : undefined;
+                if (!watch) return ok({ unwatched: false });
+                connection.tynnWatches.delete(args[0] as number);
+                this.#api.tynnWatch?.unwatch(watch.kind, watch.viewId);
+                return ok({ unwatched: true });
+            }
             case 'files.watch':
             case 'files.unwatch':
             case 'files.watchState': {
@@ -579,7 +612,7 @@ export class RemoteHost {
                 try {
                     if (method === 'files.watch') return ok(await views.watch(args[0], args[1], args[2]));
                     if (method === 'files.unwatch') return ok(views.unwatch(args[0]));
-                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree'));
+                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree', false, method));
                 } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
             }
             case 'content.release': {
@@ -733,7 +766,7 @@ export class RemoteHost {
             try {
                 const value = await terminals.call(connection.id, method, args, (channel, payload) => this.#send(connection, { kind: 'event', channel, payload }));
                 if (!this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
-                return ok(this.#content(connection).terminalResult(value));
+                return ok(this.#content(connection).terminalResult(value, method));
             } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
         }
         const materialized = this.#materialize(connection, method, args);
@@ -741,16 +774,16 @@ export class RemoteHost {
 
         let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, artboard: Awaited<ReturnType<typeof localArtboardArguments>> | null = null, response: string | null = null;
         try {
-            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(); }
+            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(method); }
             if (isLocalDraftMethod(method)) {
                 drafts = await localDraftArguments(method, materialized.args, connection.uploads);
-                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin();
+                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin(method);
             }
             if (isLocalArtboardMethod(method)) {
                 artboard = await localArtboardArguments(method, materialized.args, connection.uploads);
-                if (method === 'artboard.read') response = this.#content(connection).begin();
+                if (method === 'artboard.read') response = this.#content(connection).begin(method);
             }
-            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args);
+            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args, this.#callContext(connection));
             if (files) { await files.close(); files = null; }
             if (drafts) { await drafts.close(); drafts = null; }
             if (artboard) { await artboard.close(); artboard = null; }
@@ -776,6 +809,13 @@ export class RemoteHost {
             if (drafts) { try { await drafts.close(); } catch { console.warn('[genie] a consumed draft stage could not be released'); } }
             if (artboard) { try { await artboard.close(); } catch { console.warn('[genie] a consumed ArtBoard stage could not be released'); } }
         }
+    }
+
+    /** Who this call came from (Tynn #578): what this host admitted, the door's or the relay's proof, never the hello's say-so. */
+    #callContext(connection: Connection): CallContext {
+        const auth = connection.auth!, pre = connection.socket.preAuth;
+        const origin = connection.local ? (pre?.window === 'main' ? 'local-window' : 'remote-window') : pre ? 'relay' : 'device';
+        return { connectionId: connection.id, origin, profile: connection.profile ?? 'desktop', isOwner: auth.isOwner, workspaceId: auth.workspaceId, readonly: auth.readonly, label: auth.label };
     }
 
     #content(connection: Connection): LocalFilesContent {
@@ -815,7 +855,7 @@ export class RemoteHost {
     async #watch(connection: Connection, agentId: string, options: WatchOptions): Promise<{ seq: number; detail: unknown; rows: unknown }> {
         const auth = connection.auth!;
         if (auth.workspaceId !== null && this.#api.workspaceOfAgent(agentId) !== auth.workspaceId) throw new Error(`${agentId} is not in the workspace this link shares`);
-        const detail = (await this.#api.invoke('agentDetail', [agentId])) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
+        const detail = (await this.#api.invoke('agentDetail', [agentId], this.#callContext(connection))) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
         if (!this.#connections.has(connection.id)) throw new Error('the connection closed before its agent watch was ready');
         if (detail === null || detail === undefined) {
             connection.watching.delete(agentId);
@@ -866,6 +906,11 @@ export class RemoteHost {
                 continue;
             }
             if (channel === LOCAL_EVENT_CHANNELS.activity && c.activityViews.size === 0) continue;
+            // A Tynn-tab signal goes to the window that watches that kind and workspace, and to no other (P4 family 12).
+            if (channel === LOCAL_EVENT_CHANNELS.tynn) {
+                const e = payload as TynnWatchEvent;
+                if (![...c.tynnWatches.values()].some((w) => w.kind === e.kind && w.workspaceId === e.workspaceId)) continue;
+            }
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
             if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);

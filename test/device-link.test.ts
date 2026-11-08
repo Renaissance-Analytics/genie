@@ -78,8 +78,8 @@ function rig(k: Lockable = keychain(), options: { dialTimeoutMs?: number } = {})
         if (!result.ok) throw new Error(result.reason);
         return { channel: result.channel, socket: sockets.at(-1)!.socket };
     };
-    const framesTo = (channel: string) => events.filter((e) => e.channel === channel && e.type === 'frame').map((e) => (e as { text: string }).text);
-    const closedTo = (channel: string) => events.filter((e) => e.channel === channel && e.type === 'closed').map((e) => (e as { reason: string | null }).reason);
+    const framesTo = (channel: string) => events.filter((e) => 'channel' in e && e.channel === channel && e.type === 'frame').map((e) => (e as { text: string }).text);
+    const closedTo = (channel: string) => events.filter((e) => 'channel' in e && e.channel === channel && e.type === 'closed').map((e) => (e as { reason: string | null }).reason);
     return { k, tokens, service, sockets, events, owners, lines, opened, framesTo, closedTo };
 }
 const settle = async () => { for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r)); };

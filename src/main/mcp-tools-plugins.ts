@@ -19,6 +19,8 @@ export interface PluginToolRef {
     readonly tool: PluginTool;
     /** Genie's own (an official plugin, beta.33 item 14): run in-process, not launched from a plugin folder. */
     readonly official?: boolean;
+    /** ADF B4: check the package again before its code is loaded to run; null = run it, else why it is refused. */
+    readonly verify?: () => Promise<string | null>;
 }
 
 export interface PluginToolsDeps {
@@ -71,14 +73,27 @@ export function pluginTools(deps: PluginToolsDeps): Registration[] {
         const handler = async (args: JsonObject, context: { headers: Record<string, string> } & McpCall): Promise<McpToolResult> => {
             const caller = callerFrom(args, context.headers, deps.resolveCaller);
             if (typeof caller === 'string') return err(caller);
-            const guard = deps.plugins.guard(ref.pluginId);
-            if (!guard) return err(`plugin ${ref.pluginId} is not enabled`);
+            /*
+             * THE PACKAGE AS IT IS NOW (ADF A6, Tynn #450): the tool is resolved at the call, never from the list this
+             * registration was built with, so a disabled, uninstalled or updated package's OLD handler is never called. A
+             * call already running when that happens finishes; this one is refused with the reason, or runs the new one.
+             */
+            const current = deps.plugins.tools().find((t) => t.pluginId === ref.pluginId && t.tool.name === ref.tool.name);
+            if (!current) {
+                const now = deps.plugins.tools().find((t) => t.pluginId === ref.pluginId);
+                return err(now ? `${name} is unavailable: ${ref.pluginId} ${now.manifest.version} no longer offers it` : `${name} is unavailable: ${ref.pluginId} is not enabled any more`);
+            }
+            const guard = deps.plugins.guard(current.pluginId);
+            if (!guard) return err(`${name} is unavailable: ${ref.pluginId} is not enabled any more`);
+            // ADF B4: a signed package's files are checked again before its code is loaded to run — the CURRENT one's (A6).
+            const refused = current.verify ? await current.verify() : null;
+            if (refused) return err(refused);
             const { terminalId: _omit, ...rest } = args;
-            if (ref.tool.gated) {
+            if (current.tool.gated) {
                 const verdict = await deps.approve(caller, 'plugin', name, context);
                 if (verdict !== 'allowed') return err(`${name} was denied by the person; nothing ran`);
             }
-            const result = await deps.run({ dir: ref.dir, manifest: ref.manifest, tool: ref.tool, args: rest, caller, guard, official: ref.official === true, pluginId: ref.pluginId });
+            const result = await deps.run({ dir: current.dir, manifest: current.manifest, tool: current.tool, args: rest, caller, guard, official: current.official === true, pluginId: current.pluginId });
             return result.ok ? ok(result) : err(result.reason);
         };
         return { definition, handler: handler as Registration['handler'] };

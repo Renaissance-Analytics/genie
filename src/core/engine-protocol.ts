@@ -19,7 +19,7 @@ import { parseFrame, type Frame } from './remote-protocol.js';
  */
 
 /** Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced. */
-export const ENGINE_PROTOCOL = 2;
+export const ENGINE_PROTOCOL = 3;
 
 /**
  * What a link says in its `hello`. A WINDOW answers the host's calls to it (a forwarded tool, an elevation); the Genie
@@ -126,6 +126,15 @@ export const ENGINE_METHODS = [
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
     'engine.processes',
+    // The host's plugins (ADF A3, Tynn #447: plugins-host.ts): `[method, args]` — a LOCAL window's setEnabled or refresh.
+    // Their state is sent as `plugins.event` before `engine.ready` and again on every change.
+    'engine.plugins',
+    // THE CATALOG (ADF A4, Tynn #448: protocol 3). `catalog.snapshot []` answers `{ revision, definitions }`, also sent as
+    // the `catalog.snapshot` event before `engine.ready`; every change is pushed as `catalog.changed` (upserts and
+    // removals from a base revision; a window that missed one asks for the snapshot again). `catalog.docs [kind, id]`
+    // answers one element's definition, or null.
+    'catalog.snapshot',
+    'catalog.docs',
     // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
     'engine.browser',
     'engine.flows',
@@ -144,6 +153,8 @@ export const ENGINE_METHODS = [
     'engine.workstation',
     // Another machine's socket, dialled by the host; the window holds a channel (P3.4 cut e): `[method, args]`.
     'engine.deviceLink',
+    // Remote access's host side (Tynn #409, P5d.1): its status, the PIN, devices, lock, pair answers, and the relay bridge.
+    'engine.remoteAccess',
     // A workspace's agent config: the host writes it, under the lock its agent preparation holds.
     'engine.configSync',
     // The keyring card, as the host found it: `[method, args]`.
@@ -165,6 +176,8 @@ export const ENGINE_METHODS = [
     // An elevation the host's hosting needs (the hosts file, the trust store), run by the window as a window always has:
     // `[steps]`. The host never raises a prompt itself; with no window it waits (hosting-host.ts WindowElevation).
     'client.elevate',
+    // A remote method genie-host does not own yet, done by the newest local window (Tynn #409): `[method, args]`.
+    'client.remoteInvoke',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];

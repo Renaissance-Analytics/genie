@@ -1,7 +1,7 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-store.js';
-import { boundToolEvent } from './tool-row-bound.js';
+import { boundToolEvent, utf8Bytes } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
 import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
@@ -494,6 +494,13 @@ export class AgentSession {
     /** Why the pending cancel was asked (`CancelIntent`): only a Stop latches `#stoppedByYou` (Tynn #672 part 3). */
     #stopIntent: CancelIntent = 'stop';
     /**
+     * A STOP IS IN FLIGHT (Tynn #556): from the Stop until a prompt opens a fresh turn after it. A turn that ends crashed
+     * meanwhile was ended by the Stop (the CLI killed under it), whatever the dying CLI said: stopped, never a limit hit.
+     */
+    #stopWindow = false;
+    /** The run's tree as it was when the Stop was asked, read before any kill can orphan a tool (Tynn #556). */
+    #stopCapture: Promise<readonly ProcessInfo[]> | null = null;
+    /**
      * STOP MEANS STOP UNTIL THE PERSON ACTS (genie#1565): the person stopped the last turn they saw running, and has not
      * sent anything since. While set no inbox notice is handed over (`deliverable`); at the stop itself only what the person
      * queued was kept to send, which, if anything, ends the pause at once (`#keepOnlyYours`). The person's own message (`deliver`/`prompt` by `you`) or `resumeAfterStop` clears it. A turn the
@@ -609,6 +616,13 @@ export class AgentSession {
     #echoSeen = '';
     /** Writes in flight, chained so the thread records rows in the order they were emitted. */
     #writes: Promise<void> = Promise.resolve();
+    /**
+     * Rows waiting for the next write on the chain (Tynn #550): rows emitted together go to the thread together, as one
+     * `record`, in order — one lock, one append, one sync — never one each.
+     */
+    #pendingRows: Array<{ event: StreamEvent; whole: string | null }> = [];
+    /** The chained write that will take `#pendingRows`, while it has not started. */
+    #pendingWrite: Promise<void> | null = null;
     /**
      * The approval a human has not answered yet, and the resolver the PROVIDER is blocked on.
      *
@@ -1233,6 +1247,64 @@ export class AgentSession {
         this.#stopCooling();
         void this.#emitRow({ kind: 'notice', level: 'warning', message: 'The Stop could not be confirmed, so this run was ended to be sure nothing kept going. Your next message starts the agent again on the same conversation.' });
         this.#changed();
+        void this.#endStoppedTools();
+    }
+
+    /**
+     * THE RUN'S TREE AT THE STOP (Tynn #556), read before the driver can end its CLI: what a tool started then (a Bash
+     * tool's shell, its php) is known by pid, start time and name, so a kill that orphans it cannot hide it.
+     */
+    #captureForStop(): void {
+        const tree = this.#options.processTree ?? systemProcessTree;
+        const keep = (table: readonly ProcessInfo[] | null): readonly ProcessInfo[] => {
+            const roots = this.#roots;
+            if (!table || !roots || roots.length === 0) return [];
+            const captured = subtreeOf(table, roots);
+            this.#members = unionOf(this.#members, captured);
+            // The run's own roots (its supervisor or shell) end with the run's stop; what is below them is the turn's.
+            return captured.filter((p) => !roots.some((r) => r.pid === p.pid && r.started === p.started));
+        };
+        // A tree that reads off the loop is read off the loop; one that only reads synchronously is read NOW.
+        if (!tree.read && !this.#rootsReading) {
+            let table: readonly ProcessInfo[] | null = null;
+            try { table = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null; } catch { table = null; }
+            this.#stopCapture = Promise.resolve(keep(table));
+            return;
+        }
+        const read = tree.read ? tree.read.bind(tree) : (): Promise<readonly ProcessInfo[] | null> => Promise.resolve(tree.snapshot());
+        this.#stopCapture = (this.#rootsReading ?? Promise.resolve()).then(() => read()).then(keep).catch(() => []);
+    }
+
+    /**
+     * THE DRIVER ENDED ITS CLI after a Stop it could not confirm (Tynn #556): it ends the CLI only, so the stopped turn's
+     * tools live on under a dead parent. Everything below the run's roots that the Stop's reading found and that still
+     * runs is ended now, verified, and named in the chat. Never anything that reading did not find.
+     */
+    async #endStoppedTools(): Promise<void> {
+        const captured = await (this.#stopCapture ?? Promise.resolve([] as readonly ProcessInfo[]));
+        if (captured.length === 0) return;
+        const tree = this.#options.processTree ?? systemProcessTree;
+        const read = tree.read ? tree.read.bind(tree) : (): Promise<readonly ProcessInfo[] | null> => Promise.resolve(tree.snapshot());
+        const reap = tree.reap ? tree.reap.bind(tree) : (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]): Promise<ReapResult> => Promise.resolve(tree.killTree(targets, now));
+        let now = await read().catch(() => null);
+        if (!now) { void this.#emitRow({ kind: 'notice', level: 'warning', message: 'Genie could not read the machine’s processes to end what the stopped turn left running.' }); return; }
+        const targets = stillRunning(captured, now);
+        if (targets.length === 0) return;
+        let result = await reap(targets, now);
+        let left = targets;
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+            now = await read().catch(() => null);
+            if (!now) break;
+            left = stillRunning(targets, now);
+            if (left.length === 0 || result.refused) break;
+            await new Promise((r) => setTimeout(r, 250));
+            result = await reap(left, now);
+        }
+        const message = now && left.length === 0
+            ? `The Stop ended what the stopped turn left running: ${describeProcesses(targets)}.`
+            : `Still running after the Stop: ${describeProcesses(left)}${result.refused && result.reason ? ` (${result.reason})` : ''}.`;
+        void this.#emitRow({ kind: 'notice', level: left.length === 0 && now ? 'info' : 'warning', message });
+        this.#changed();
     }
 
     start(): void {
@@ -1364,17 +1436,21 @@ export class AgentSession {
                     // the human did, and painting it as a fault blames the agent for being
                     // stopped.
                     const crashed = outcome.stopReason === null || outcome.isError;
+                    // ENDED BY A STOP (Tynn #556): the person's Stop, the driver ending its CLI after one it could not confirm,
+                    // or this run's own stop. Whatever the dying CLI reported, that is not a limit, a sign-out or a fault.
+                    const endedByStop = crashed && (this.#stopWindow || this.#needsNewDriver || this.#ended);
+                    const failed = crashed && !endedByStop;
                     // Ended by the limit: a reading said so during the turn, or the turn's own failure does (Tynn #791).
                     const readingSaidSo = this.#limitThisTurn;
-                    const byLimit = crashed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
+                    const byLimit = failed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
                     // Ended by the LOGIN (the owner, 2026-10-18): the provider says this account is not signed in.
                     // Ended by the ACCOUNT (the owner, 2026-10-21: a payment failure paused it): checked before the login,
                     // because prism-acp files `oauth_org_not_allowed` under `auth` and logging in does not fix it.
-                    const paused = crashed && !byLimit ? accountPauseOf(outcome.failure) : null;
-                    const bySignOut = crashed && !byLimit && paused === null && outcome.failure?.kind === 'auth';
+                    const paused = failed && !byLimit ? accountPauseOf(outcome.failure) : null;
+                    const bySignOut = failed && !byLimit && paused === null && outcome.failure?.kind === 'auth';
                     // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
-                    const byOverload = crashed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
-                    this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
+                    const byOverload = failed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
+                    this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : failed ? 'failed' : outcome.stopReason === 'cancelled' || endedByStop ? 'stopped' : 'replied';
                     // The carry-over this turn took: gone with a reply; otherwise the next prompt carries it again (Tynn story #380).
                     if (this.#carryInFlight !== null) {
                         const carried = this.#carryInFlight;
@@ -1420,7 +1496,12 @@ export class AgentSession {
                         this.#failedAt = null;
                         this.#signedOut = true;
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: `Signed out: the provider refused this login (${outcome.failure?.reason ?? 'auth'}). Use "Log in" above; Genie brings this agent back once you are signed in.` });
-                    } else if (crashed) {
+                    } else if (endedByStop) {
+                        // Stopped, as the person asked: idle, nothing Broken and nothing held.
+                        this.#turnState = 'idle';
+                        this.#failure = null;
+                        this.#failedAt = null;
+                    } else if (failed) {
                         this.#turnState = 'failed';
                         // The provider's own reason (`authentication_failed`, `overloaded`…) says more than the CLI's generic one.
                         const reason = outcome.failure?.reason ?? outcome.raw;
@@ -1761,6 +1842,7 @@ export class AgentSession {
             void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
             this.#inTurn = true;
             this.#limitThisTurn = false;
+            this.#stopWindow = false;
         }
         // What the turn carried, marked where it happened: the exact text sent, opened from the chat — never your message.
         if (redock) void this.#emitRow({ kind: 'notice', level: 'info', message: redock });
@@ -2071,9 +2153,12 @@ export class AgentSession {
 
         this.#stopAskedBy = by;
         this.#stopIntent = intent;
+        this.#stopWindow = true;
+        this.#captureForStop();
         const refused = (cause: unknown): void => {
             this.#stopAskedBy = null;
             this.#stopIntent = 'stop';
+            this.#stopWindow = false;
             const why = cause instanceof Error ? cause.message : String(cause);
             void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn could not be stopped: ${why}. It is still running; Stop agent ends the session.` });
             this.#changed();
@@ -2193,32 +2278,56 @@ export class AgentSession {
      */
     /** `whole`: a tool's output that did not fit its row's preview, kept beside the ledger first (Tynn story #386). */
     #record(event: StreamEvent, whole: string | null = null): Promise<void> {
+        this.#pendingRows.push({ event, whole });
+        // A write already waiting on the chain takes this row too; otherwise one is chained for it.
+        if (this.#pendingWrite !== null) return this.#pendingWrite;
         const write = async (): Promise<void> => {
-            const store = this.#options.store;
+            this.#pendingWrite = null;
+            const rows = this.#pendingRows;
+            this.#pendingRows = [];
+            for (let at = 0; at < rows.length;) {
+                // Bounded batches: a burst of large rows is never one giant append.
+                let end = at, bytes = 0;
+                while (end < rows.length && (end === at || (end - at < WRITE_BATCH_ROWS && bytes < WRITE_BATCH_BYTES))) {
+                    bytes += utf8Bytes(JSON.stringify(rows[end]!.event) ?? '');
+                    end += 1;
+                }
+                await this.#writeBatch(rows.slice(at, end));
+                at = end;
+            }
+        };
+        const chained = this.#writes.then(write, write);
+        this.#pendingWrite = chained;
+        this.#writes = chained;
+        return chained;
+    }
+
+    /** One batch of rows to the thread, in order, as ONE record — retried as a row was (genie#1315). */
+    async #writeBatch(rows: ReadonlyArray<{ event: StreamEvent; whole: string | null }>): Promise<void> {
+        const store = this.#options.store;
+        for (const { event, whole } of rows) {
             if (whole !== null && event.kind === 'tool' && store instanceof ThreadStore) {
                 // Before the row that names it. A sidecar that cannot be written leaves the row and its preview: the
                 // whole is then "not kept" when a person opens it, and the conversation is still saved.
                 try { await store.writeToolOutput(threadKeyFor(this.agentId), event.toolCallId, whole); } catch { /* the preview stands */ }
             }
-            for (let attempt = 0; ; attempt += 1) {
-                try {
-                    const thread = openAgentThread(this.#options.store, this.agentId);
-                    await thread.record([persistable(event, this.#options.runId)]);
-                    return;
-                } catch (error) {
-                    const wait = WRITE_RETRY_MS[attempt];
-                    if (wait !== undefined && clearsOnItsOwn(error)) {
-                        await new Promise((r) => setTimeout(r, wait));
-                        continue;
-                    }
-                    this.#unpersisted += 1;
-                    this.#sayNotSaved(error);
-                    return;
+        }
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                const thread = openAgentThread(store, this.agentId);
+                await thread.record(rows.map(({ event }) => persistable(event, this.#options.runId)));
+                return;
+            } catch (error) {
+                const wait = WRITE_RETRY_MS[attempt];
+                if (wait !== undefined && clearsOnItsOwn(error)) {
+                    await new Promise((r) => setTimeout(r, wait));
+                    continue;
                 }
+                this.#unpersisted += rows.length;
+                this.#sayNotSaved(error);
+                return;
             }
-        };
-        this.#writes = this.#writes.then(write, write);
-        return this.#writes;
+        }
     }
 
     /**
@@ -2511,6 +2620,9 @@ function promptRow(text: string, by: string | null, sent: { attachments: readonl
  * off mid-way is reclaimed by the second attempt. Bounded, so a store that never frees costs a row ~20 s, not forever.
  */
 const WRITE_RETRY_MS: readonly number[] = [250, 1000, 2000];
+/** The most rows, and about the most bytes, one thread write takes at once (Tynn #550). */
+const WRITE_BATCH_ROWS = 256;
+const WRITE_BATCH_BYTES = 2 * 1024 * 1024;
 
 /**
  * A thread write fault that CLEARS ON ITS OWN: the lock was held (`session_locked`, prism-harness), or Windows refused a

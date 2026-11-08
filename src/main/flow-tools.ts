@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { ConfigField, NodeKindDefinition } from '@particle-academy/fancy-flow/engine';
 import { registerToolKinds } from '../core/flow-canvas.js';
+import { builtinFlowPackage } from '../core/builtin-flow-nodes.js';
+import { catalogFlowTools } from '../core/catalog-projections.js';
 import type { AgentId } from '../core/identity.js';
 import type { AttentionStore, QuestionLeft } from './attention-store.js';
 import type { FlowRecord } from './flow-store.js';
@@ -31,7 +33,7 @@ import type { Caller, Registration } from './mcp-tools.js';
  * Ports, as Genie 1's (kinds.ts ROUTING_PORTS, outputsFor): checkIssues routes `found` / `none`; imDone ends a chain.
  */
 
-export const FLOW_TOOLS: readonly string[] = ['knowledge', 'manageTerminals', 'processes', 'sites', 'services', 'checkIssues', 'openFileForUser', 'imDone', 'agentinbox', 'ForceTheQuestion'];
+export const FLOW_TOOLS: readonly string[] = catalogFlowTools(builtinFlowPackage().contributions);
 
 export const TOOL_KIND_PREFIX = '@genie/';
 

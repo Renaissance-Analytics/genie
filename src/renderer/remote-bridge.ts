@@ -2,6 +2,7 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import { localTerminalClient } from './local-terminal-client.js';
 import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
+import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js';
 import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
@@ -12,7 +13,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
-import { localPageClient, localUploadClient } from './local-content-client.js';
+import { heldLimiter, localPageClient, localUploadClient } from './local-content-client.js';
 import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
@@ -559,14 +560,54 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
     }) : undefined;
     if (local) {
-        terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on });
+        // ONE limiter for every family on this connection: together they never ask the host to hold more than it can (Tynn #547).
+        const limit = heldLimiter();
+        terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });
         bridge.terminals = terminalClient.terminals;
-        bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
-        bridge.chatDrafts = localDraftsClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
-        const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
+        bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });
+        bridge.chatDrafts = localDraftsClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });
+        const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });
         Object.assign(bridge.files, files.files); bridge.repo = files.repo;
-        filesWatches = localFilesWatchClient({ read: blobRead, decode: filesContentReader({ release: ref => blobRead('content.release', ref), blobs: blobs!, pages: pages! }), on: listener => on(LOCAL_EVENTS.files, listener), refusal: reason => setState({ lastRefusal: reason }) });
+        filesWatches = localFilesWatchClient({ read: blobRead, decode: filesContentReader({ release: ref => blobRead('content.release', ref), blobs: blobs!, pages: pages! }), on: listener => on(LOCAL_EVENTS.files, listener), refusal: reason => setState({ lastRefusal: reason }), limit });
         Object.assign(bridge.files, filesWatches.files);
+        /*
+         * THE TYNN TAB (P4 family 12, Tynn #561): this machine's window only, as it had over IPC; a remote window's
+         * bridge is unchanged. Following a board, the issues or the Features page is BY SUBSCRIPTION: the watch is this
+         * connection's, its signals come on `local-tynn` for the kind and workspace it watches, and stopping releases it.
+         */
+        const tynnFollow = (kind: TynnWatchKind) => (workspaceId: string, listener: (signal: never) => void): (() => void) => {
+            let watchId: number | null = null;
+            let stopped = false;
+            const off = on(LOCAL_EVENTS.tynn, (payload) => {
+                const e = payload as TynnWatchEvent;
+                if (e.kind === kind && e.workspaceId === workspaceId) listener(e.signal as never);
+            });
+            void call('tynn.watch', kind, workspaceId).then((r) => {
+                const id = r.ok && typeof r.value === 'number' ? r.value : null;
+                if (id === null) return;
+                if (stopped) void call('tynn.unwatch', id);
+                else watchId = id;
+            });
+            return () => {
+                stopped = true;
+                off();
+                if (watchId !== null) void call('tynn.unwatch', watchId);
+                watchId = null;
+            };
+        };
+        Object.assign(bridge.workspaces, {
+            tynnBoard: (id: string, scope: unknown) => read('workspaces.tynnBoard', id, scope),
+            tynnBoardAction: (id: string, input: unknown) => read('workspaces.tynnBoardAction', id, input),
+            tynnPage: (id: string, page: unknown, query: unknown) => read('workspaces.tynnPage', id, page, query),
+            tynnPageAction: (id: string, input: unknown) => read('workspaces.tynnPageAction', id, input),
+            tynnBoardChanges: (id: string, scope: unknown, cursor: string, ids: readonly string[]) => read('workspaces.tynnBoardChanges', id, scope, cursor, Array.isArray(ids) ? [...ids] : ids),
+            tynnIssues: (id: string, filters: unknown) => read('workspaces.tynnIssues', id, filters),
+            tynnIssueAction: (id: string, input: unknown) => read('workspaces.tynnIssueAction', id, input),
+            tynnIssueChanges: (id: string, filters: unknown, cursor: string, ids: readonly string[]) => read('workspaces.tynnIssueChanges', id, filters, cursor, Array.isArray(ids) ? [...ids] : ids),
+            tynnBoardWatch: tynnFollow('board'),
+            tynnIssuesWatch: tynnFollow('issues'),
+            tynnFeaturesWatch: tynnFollow('features'),
+        });
     }
 
     return {

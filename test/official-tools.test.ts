@@ -42,7 +42,7 @@ describe('the official manifests carry their tools and panels', () => {
     });
 
     it('the host offers their tools and panels — and marks the tools as Genie\'s own, run in-process', async () => {
-        const host = await PluginHost.open({ dir: join(ws, 'plugins'), keys: {}, developerMode: false, official: OFFICIAL_PLUGINS });
+        const host = await PluginHost.open({ dir: join(ws, 'plugins'), keys: {}, publisherChecksOff: false, official: OFFICIAL_PLUGINS });
         const tools = host.tools().map((t) => `${t.pluginId}.${t.tool.name}:${t.official === true}`);
         expect(tools).toEqual(expect.arrayContaining(['ai.genie.presentation.createDeck:true', 'ai.genie.spreadsheet.createWorkbook:true', 'ai.genie.artboard.post:true']));
         expect(host.panels().map((p) => `${p.pluginId}/${p.id}`)).toEqual(expect.arrayContaining(['ai.genie.artboard/board', 'ai.genie.repository/changes']));

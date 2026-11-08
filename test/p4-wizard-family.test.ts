@@ -110,7 +110,7 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const invoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         expect(await call(client.bridge.workspaces, row)).toEqual(await call(oldWizard(invoke), row));
         expect(invoke).toHaveBeenCalledExactlyOnceWith(row.channel, ...row.args);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
     });
     it.each(rows)('pageBridge routes $name through the real local client without calling the old preload', async (row) => {
@@ -120,22 +120,22 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const oldInvoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         const snapshot = vi.fn(async () => ({ workspaces: null }));
         const hibernate = vi.fn(async () => ({ ok: false, reason: 'agent still working' }));
-        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWizard(oldInvoke), hibernate } } as unknown as PreloadBridge;
+        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWizard(oldInvoke) }, takeOver: hibernate } as unknown as PreloadBridge;
         const bridge = pageBridge(preload);
         expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge.workspaces, row)).toEqual(row.result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
         expect(oldInvoke).not.toHaveBeenCalled();
         expect(await bridge.snapshot()).toEqual({ workspaces: null });
-        expect(await bridge.workspaces.hibernate('sample')).toEqual({ ok: false, reason: 'agent still working' });
+        expect(await bridge.takeOver('sample')).toEqual({ ok: false, reason: 'agent still working' });
         expect(snapshot).toHaveBeenCalledTimes(1); expect(hibernate).toHaveBeenCalledExactlyOnceWith('sample');
     });
     it.each(rows)('$name retires its matching native handler, preload forwarding and inventory row', (row) => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
-        expect(main).toContain("ipcMain.handle('genie:workspace-hibernate'");
-        expect(preload).toContain("ipcRenderer.invoke('genie:workspace-hibernate'");
-        expect(inventory).toContain("['genie:workspace-hibernate', 'protocol:workspaces.hibernate']");
+        expect(main).toContain("ipcMain.handle('genie:take-over'");
+        expect(preload).toContain("'genie:take-over'");
+        expect(inventory).toContain("['genie:take-over', 'window-port']");
         expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
         expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
         expect(inventory.includes(`['${row.channel}',`)).toBe(false);
@@ -144,7 +144,7 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const deps = protocolContractDeps(dir); Object.assign(deps.workspaceOps, { [row.name]: vi.fn(async () => null) });
         const source = serve(deps), client = await source.connect();
         expect(await call(client.bridge.workspaces, row)).toBeNull();
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
     });
     it('the page shows a domain refusal from the wizard unchanged', async () => {
         const deps = protocolContractDeps(dir), refusal = { ok: false, reason: 'the source already is a workspace' };

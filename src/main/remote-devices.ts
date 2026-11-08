@@ -68,6 +68,14 @@ export class DeviceStore {
         return new DeviceStore(file, deps, await readJson<DevicesFile>(file, { devices: [] }));
     }
 
+    /**
+     * A store of NO devices that writes nothing (Tynn #409): a window linked to genie-host keeps a remote host for its own
+     * protocol door only, and the paired devices are genie-host's (one writer of remote-devices.json).
+     */
+    static memory(deps: { now: () => number; random: () => string }): DeviceStore {
+        return new DeviceStore('', deps, { devices: [] });
+    }
+
     /** Mint a token for a device that just proved it read the PIN. The token is returned ONCE; only its hash is kept. */
     pair(label: string): { device: Device; token: string } {
         const token = this.#random();
@@ -128,6 +136,7 @@ export class DeviceStore {
     }
 
     #flush(): Promise<void> {
+        if (this.#file === '') return this.#pending;
         const snapshot: DevicesFile = { devices: [...this.#data.devices] };
         this.#pending = this.#pending.then(() => writeJsonAtomic(this.#file, snapshot, PRIVATE_FILE));
         return this.#pending;

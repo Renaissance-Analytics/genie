@@ -86,19 +86,19 @@ describe('grouped by workspace — the model', () => {
 describe('grouped by workspace — on screen', () => {
     const html = render();
 
-    it('one section per workspace, in order, each with its rows (counted)', () => {
+    // Stale questions have their own band, "Earlier runs: still unanswered" (2026-11-08): the workspace sections hold what waits.
+    it('one section per workspace, in order, each with its LIVE rows (counted); the stale ones are not in them', () => {
         const sections = sectionsOf(html);
         expect(sections).toEqual([
             { key: 'ws_b', rows: ['q_b1'] },
-            { key: 'ws_a', rows: ['q_a1', 'q_a2', 'q_a3'] },
+            { key: 'ws_a', rows: ['q_a1', 'q_a2'] },
             { key: 'genie:', rows: ['genie:main-error:1'] },
-            { key: 'ws_c', rows: ['q_c1'] },
         ]);
     });
 
     it('each section is headed by the workspace’s NAME, with how many wait and how many are stale; the id is never text', () => {
         expect(html).toMatch(/data-deck-workspace="ws_b"[^>]*>blog\.example</);
-        expect(html).toMatch(/data-deck-workspace="ws_a"[^>]*>shop\.example<\/span><span[^>]*>2 waiting · 1 stale</);
+        expect(html).toMatch(/data-deck-workspace="ws_a"[^>]*>shop\.example<\/span><span[^>]*>2 waiting</);
         expect(html).toMatch(/data-deck-workspace=""[^>]*>Genie</);
         for (const id of ['ws_a', 'ws_b', 'ws_c']) expect(html).not.toContain(`>${id}<`);
     });
@@ -123,12 +123,11 @@ describe('stale: kept, and marked', () => {
     const html = render({ onDismissStale: () => {} });
     const rowOf = (id: string) => html.split(`data-deck-item="${id}"`)[1]!.split('data-deck-item="')[0]!;
 
-    it('a stale question is greyed and SAYS why; its form is folded behind "Answer anyway"; one-click Dismiss', () => {
+    it('a stale question SAYS why; its form is folded behind Answer; one-click Dismiss', () => {
         expect(html).toContain('data-deck-item-stale="agent-gone"');
         expect(html).toContain('data-deck-item-stale="session-ended"');
         expect(rowOf('q_c1')).toMatch(/data-deck-stale-reason="agent-gone"[\s\S]*?>agent gone</);
         expect(rowOf('q_a3')).toMatch(/data-deck-stale-reason="session-ended"[\s\S]*?>session ended</);
-        expect(html).toMatch(/data-deck-item="q_c1"[^>]*class="[^"]*opacity-60/);
         expect(html).not.toContain('data-deck-form="q_c1"');
         expect(html).toContain('data-deck-answer-anyway="q_c1"');
         expect(control(rowOf('q_c1'), 'data-deck-dismiss="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
@@ -206,5 +205,32 @@ describe('which questions are stale (the source)', () => {
     it('a session with no recorded start is not judged "earlier" — "we have not heard" is not "it was earlier"', () => {
         expect(questionStale(at, true, { running: true, startedAt: null })).toBeNull();
         expect(questionStale(at, true, null)).toBe('session-ended');
+    });
+});
+
+/**
+ * A STALE QUESTION IS NEVER INVISIBLE (the owner, 2026-11-08: greyed at the bottom of its section read as "nowhere"; 7
+ * questions from 11-04 and 11-05 were still unanswered). They have their own band, under its own heading, each said in
+ * full — not greyed — with Answer and Dismiss, its workspace named.
+ */
+describe('Earlier runs: still unanswered', () => {
+    const html = render({ onDismissStale: () => {} });
+    const band = html.split('data-deck-band="earlier-runs"')[1] ?? '';
+
+    it('a band of their own, headed, in rank order, every stale question in it and nothing live', () => {
+        expect(html).toContain('data-deck-band="earlier-runs"');
+        expect(band).toMatch(/^[^>]*>\s*<h2[^>]*>Earlier runs: still unanswered<\/h2>/);
+        expect([...band.matchAll(/data-deck-item="([^"]+)"/g)].map((m) => m[1])).toEqual(['q_c1', 'q_a3']);
+    });
+
+    it('each is said plainly, not greyed: its workspace, why it is here, Answer and Dismiss', () => {
+        expect(band).not.toMatch(/data-deck-item="q_c1"[^>]*class="[^"]*opacity-60/);
+        expect(band).toMatch(/data-deck-earlier-workspace="ws_c"[^>]*>docs\.example</);
+        expect(control(band, 'data-deck-answer-anyway="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Answer' });
+        expect(control(band, 'data-deck-dismiss="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
+    });
+
+    it('CONTROL: nothing stale, no band', () => {
+        expect(render({ items: ITEMS.map((i) => ({ ...i, stale: undefined })) })).not.toContain('data-deck-band="earlier-runs"');
     });
 });

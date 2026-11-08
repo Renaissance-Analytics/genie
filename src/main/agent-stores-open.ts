@@ -2,7 +2,7 @@ import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { InboxSessionProbe } from '../core/inbox.js';
-import { AttentionStore } from './attention-store.js';
+import { AttentionStore, type AttentionLimits } from './attention-store.js';
 import { InboxStore } from './inbox-store.js';
 import { KnowledgeStore } from './knowledge-store.js';
 import { runV1InboxImport } from './v1-inbox.js';
@@ -17,9 +17,11 @@ export async function openAgentStores(
     now: () => string,
     /** The live pause state AgentInbox's automatic reply reads (genie#1515); it starts no session. Absent = never paused. */
     sessionOf?: InboxSessionProbe,
+    /** How much finished history attention keeps (Tynn #549), from the settings; absent = the defaults. */
+    attentionLimits?: () => AttentionLimits,
 ): Promise<{ inbox: InboxStore; attention: AttentionStore; knowledge: KnowledgeStore }> {
     const inbox = await InboxStore.open(userData, now, sessionOf);
-    const attention = await AttentionStore.open(userData, inbox, now);
+    const attention = await AttentionStore.open(userData, inbox, now, attentionLimits);
     const knowledge = KnowledgeStore.open(userData, now);
     return { inbox, attention, knowledge };
 }

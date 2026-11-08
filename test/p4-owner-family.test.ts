@@ -109,7 +109,7 @@ describe('family5 owner methods and real recorded bridge calls', () => {
         expect(owner, 'local-only facade on the same client').toBeDefined();
         expect(await row.call(owner)).toEqual(row.value);
         expect(f.calls).toEqual([{ method: row.method, args: row.args }]);
-        expect(f.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args);
+        expect(f.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args, expect.anything());
         expect(f.ports[row.port as keyof typeof f.ports]).toHaveBeenCalledWith(...row.portArgs);
     });
     it.each(['tailnet owner', 'relay owner', 'workspace guest', 'host guest', 'readonly relay', 'phone owner', 'phone relay guest'])('%s is refused before invocation and receives no local key/share payload', async kind => {
@@ -232,7 +232,7 @@ describe('native paths retired and P5/window boundaries pinned', () => {
     });
     it('leaves all five retained native bodies byte-identical apart from line endings', () => {
         const main = readFileSync('src/main/main.ts', 'utf8').replace(/\r\n/g, '\n');
-        const hashes = { 'connect-link': '0b9ae3b3eda218ec458bcd0d9b770a714b31301cf031296696221ca672511252', 'relay-open': 'dca6a87c27dd79d32160394c490b63c01f1eb04c1546b27c2dac98d5362794f7', 'device-open': '2751229ddfd8bb2a12b227926d5b620bb794a1416290745538fa5c543045d753', 'relay-send': 'f6d54a0b0ffe0c6aea96a79181e7b0022623ebde512cedfbfb85410279231c95', 'relay-close': '6555bcd95a145d3b60b88bba0061da764f5dec0f0988909f1ad39310a2d1e9c0' };
+        const hashes = { 'connect-link': '0b9ae3b3eda218ec458bcd0d9b770a714b31301cf031296696221ca672511252', 'relay-open': '878a8232c25dbe219b17191002104384339e843e7aff8e1b523c8907abaca3bc', 'device-open': '2751229ddfd8bb2a12b227926d5b620bb794a1416290745538fa5c543045d753', 'relay-send': 'f6d54a0b0ffe0c6aea96a79181e7b0022623ebde512cedfbfb85410279231c95', 'relay-close': '6555bcd95a145d3b60b88bba0061da764f5dec0f0988909f1ad39310a2d1e9c0' };
         for (const [channel, hash] of Object.entries(hashes)) {
             const body = new RegExp(`^    ipcMain\\.(?:handle|on)\\('genie:${channel}'.*?^    \\}\\);`, 'ms').exec(main)?.[0];
             expect(body, channel).toBeDefined(); expect(createHash('sha256').update(body!).digest('hex'), channel).toBe(hash);
@@ -247,7 +247,7 @@ describe('native paths retired and P5/window boundaries pinned', () => {
         expect(inv).toContain("['genie:connect-link', 'window-port']"); expect(main).toContain("ipcMain.handle('genie:connect-link'"); expect(preload).toContain("ipcRenderer.invoke('genie:connect-link'");
         for (const channel of ['relay-open', 'device-open', 'relay-send', 'relay-close']) expect(inv).toContain(`['genie:${channel}', 'later:P5 relay client moves into genie-host']`);
         expect(main).toContain("ipcMain.handle('genie:relay-open', async (event, workstationId: unknown)"); expect(main).toContain("ipcMain.handle('genie:device-open', async (event, url: unknown)");
-        expect(main.match(/deviceChannels\.get\(channel\) === event\.sender/g)).toHaveLength(2); expect(main.match(/c\.sender === event\.sender/g)).toHaveLength(3);
+        expect(main.match(/deviceChannels\.get\(channel\) === event\.sender/g)).toHaveLength(2); expect(main.match(/c\.sender === event\.sender/g)).toHaveLength(4);
         for (const event of ['relay-open-step', 'relay-message', 'relay-closed']) { expect(main).toContain(`'genie:${event}'`); expect(preload).toContain(`'genie:${event}'`); }
         const protocol = readFileSync('src/core/remote-protocol.ts', 'utf8'); for (const event of ['local-relay-step', 'local-relay-message', 'local-relay-closed']) expect(protocol).not.toContain(event);
     });

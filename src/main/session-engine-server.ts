@@ -25,7 +25,7 @@ import {
 } from '../core/engine-protocol.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { cancelIntent } from '../core/session.js';
-import type { ClientTransport } from '../core/remote-protocol.js';
+import type { CallContext, ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
@@ -94,6 +94,8 @@ export interface EngineServerOptions {
     readonly workstation?: WorkstationService;
     /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
     readonly deviceLink?: DeviceLinkService;
+    /** Remote access's host side (Tynn #409, P5d.1): driven from a LOCAL window only; a window leaving ends its bridged connections. */
+    readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown; dropOwner(owner: string): void };
     /** A workspace's agent config (P3.4): one writer, here. */
     readonly configSync?: (asked: WorkspaceConfigRequest) => Promise<readonly SyncResult[]>;
     /** The keyring card, as the host found it (P3.4 cut c). */
@@ -165,6 +167,10 @@ export interface EngineServerOptions {
     readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
     readonly flows?: FlowsService;
+    /** The host's catalog (ADF A4: catalog-host.ts). Absent = `catalog.*` is refused and no window is sent one. */
+    readonly catalog?: Pick<import('./catalog-host.js').CatalogService, 'snapshot' | 'docs' | 'onEvent'>;
+    /** The host's plugins (ADF A3: plugins-host.ts). Absent = `engine.plugins` is refused and no window is told of any. */
+    readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -289,6 +295,12 @@ export class SessionEngineServer {
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
         });
+        options.catalog?.onEvent((change) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'catalog.changed', change);
+        });
+        options.plugins?.onEvent((dump) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'plugins.event', dump);
+        });
         options.browser?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'browser.event', event);
         });
@@ -366,6 +378,21 @@ export class SessionEngineServer {
         return this.#reverse('client.elevate', [steps], { localOnly: true }) as Promise<ElevationOutcome>;
     }
 
+    /** A remote method genie-host does not own yet, done by the newest LOCAL window (Tynn #409). Rejects with none. */
+    remoteInvoke(method: string, args: unknown[], context?: CallContext): Promise<unknown> {
+        return this.#reverse('client.remoteInvoke', [method, args, context ?? null], { localOnly: true });
+    }
+
+    /** The newest local window's connection: the one remote calls go to, and whose events remote connections follow. */
+    newestLocalWindow(): string | null {
+        return [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1)?.id ?? null;
+    }
+
+    /** Remote access's status (to every local window) or a bridged connection's frame (to the window that owns it). */
+    remoteAccessEvent(owner: string | null, event: unknown): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local && (owner === null || conn.id === owner)) this.#event(conn, 'remoteAccess.event', event);
+    }
+
     /** Whether a LOCAL window is connected now: the only kind asked to elevate (P5a.2). */
     localWindowConnected(): boolean {
         return [...this.#connections].some((c) => c.authed && c.window && c.local);
@@ -417,6 +444,7 @@ export class SessionEngineServer {
             if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
+            if (was) this.#options.remoteAccess?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
         });
     }
@@ -489,6 +517,10 @@ export class SessionEngineServer {
         }
         if (this.#options.issueWatch && conn.local) this.#event(conn, 'issueWatch.dump', this.#options.issueWatch.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
+        // The catalog BEFORE ready (ADF A4): a window has the snapshot it follows changes from as soon as it connects.
+        if (this.#options.catalog) this.#event(conn, 'catalog.snapshot', this.#options.catalog.snapshot());
+        // The plugins BEFORE ready (ADF A3): a window lists them and routes files to their editors as soon as it connects.
+        if (this.#options.plugins) this.#event(conn, 'plugins.event', this.#options.plugins.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
         // Safe mode BEFORE ready: the window's own boot restore holds on it (relaunch-restore.ts).
@@ -524,6 +556,17 @@ export class SessionEngineServer {
             if (!this.#options.crash || !conn.local) throw new Error('This window is not told about crashes here.');
             if (args[0] !== 'dismiss') throw new Error('engine.crash takes dismiss');
             return this.#options.crash.dismiss();
+        }
+        // Remote access is the host's own too (Tynn #409), up before any agent engine: a phone may already be connected.
+        if (method === 'engine.remoteAccess') {
+            if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
+            if (!conn.local) throw new Error('Remote access is driven from a local window only.');
+            return this.#options.remoteAccess.call(conn.id, typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
+        }
+        // The catalog is the host's own, ready before any agent engine is (ADF A4): answered here.
+        if (method === 'catalog.snapshot' || method === 'catalog.docs') {
+            if (!this.#options.catalog) throw new Error('This host keeps no catalog.');
+            return method === 'catalog.snapshot' ? this.#options.catalog.snapshot() : this.#options.catalog.docs(String(args[0] ?? '') as never, String(args[1] ?? ''));
         }
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
@@ -676,6 +719,10 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.plugins':
+                if (!this.#options.plugins) throw new Error('This host keeps no plugins.');
+                if (!conn.local) throw new Error('Genie’s plugins are changed from a local window only.');
+                return this.#options.plugins.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.appInbox':
                 if (!this.#options.appInbox) throw new Error('This host runs no app door.');
                 if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');

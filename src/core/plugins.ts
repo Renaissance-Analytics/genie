@@ -1,4 +1,4 @@
-import { createPublicKey, verify } from 'node:crypto';
+import { createHash, createPublicKey, verify } from 'node:crypto';
 
 /**
  * PLUGINS (§6.7) — pure. A plugin is a package with a `genie-plugin.json`. The manifest is STRICT:
@@ -183,28 +183,50 @@ export function bridgeAccess(manifest: PluginManifest, request: AccessRequest): 
     }
 }
 
-export type SignatureCheck = { signed: true; keyId: string } | { signed: false; reason: string };
+/**
+ * `tampered`: a signature is there and does not verify (ADF B4): never installed, with developer mode on or off. Not
+ * tampered: there is no signature, or Genie does not hold the key it names; that is unsigned.
+ */
+export type SignatureCheck = { signed: true; keyId: string } | { signed: false; tampered: boolean; reason: string };
 
-/** Ed25519 over the manifest bytes, against the publisher keys Genie carries (PEM, by keyId). */
+/**
+ * Ed25519 over a package's signing bytes (core/plugin-integrity.ts `packageSigningBytes`: the digest of EVERY file,
+ * ADF B4), against the publisher keys Genie holds, each under its id: `sha256:` + hex SHA-256 of its SPKI DER (the Tynn
+ * marketplace registry's `key_id`). A key held under an id that is not its fingerprint is not trusted.
+ */
 export function verifyPluginSignature(input: { bytes: Buffer; signature: string | null; keyId: string }, keys: Readonly<Record<string, string>>): SignatureCheck {
-    if (input.signature === null) return { signed: false, reason: 'no signature file (genie-plugin.sig) beside the manifest' };
+    if (input.signature === null) return { signed: false, tampered: false, reason: 'no signature file (genie-plugin.sig) beside the manifest' };
     const pem = keys[input.keyId];
-    if (pem === undefined) return { signed: false, reason: `Genie does not know publisher key "${input.keyId}"` };
+    if (pem === undefined) return { signed: false, tampered: false, reason: `Genie does not know publisher key "${input.keyId}"` };
+    let key: ReturnType<typeof createPublicKey>;
+    try {
+        key = createPublicKey(pem);
+    } catch {
+        return { signed: false, tampered: false, reason: `Genie's publisher key "${input.keyId}" is not a public key` };
+    }
+    const fingerprint = `sha256:${createHash('sha256').update(key.export({ type: 'spki', format: 'der' })).digest('hex')}`;
+    if (fingerprint !== input.keyId) return { signed: false, tampered: false, reason: `Genie holds a key under "${input.keyId}", but "${input.keyId}" is not the fingerprint of the key (${fingerprint}); that key is not trusted` };
     let ok = false;
     try {
         const sig = Buffer.from(input.signature.trim(), 'base64');
-        ok = sig.length > 0 && verify(null, input.bytes, createPublicKey(pem), sig);
+        ok = sig.length > 0 && verify(null, input.bytes, key, sig);
     } catch {
-        return { signed: false, reason: 'genie-plugin.sig is not a valid signature' };
+        return { signed: false, tampered: true, reason: 'genie-plugin.sig is not a valid signature' };
     }
-    return ok ? { signed: true, keyId: input.keyId } : { signed: false, reason: 'the signature does not match the manifest — the bytes changed after signing' };
+    return ok ? { signed: true, keyId: input.keyId } : { signed: false, tampered: true, reason: 'the signature does not match the package: a file changed, was added or was removed after signing' };
 }
 
 export type InstallDecision = { install: true; label: string } | { install: false; reason: string };
 
+/** What a package running only because publisher checks are off is called, wherever it shows (ADF B5). */
+export const UNVERIFIED_LABEL = 'Unverified';
+
 /** Signed by default. Unsigned runs only under developer mode, and then it is labelled wherever it shows. */
-export function installDecision(check: SignatureCheck, options: { developerMode: boolean }): InstallDecision {
+export function installDecision(check: SignatureCheck, options: { publisherChecksOff: boolean }): InstallDecision {
     if (check.signed) return { install: true, label: `signed by ${check.keyId}` };
-    if (options.developerMode) return { install: true, label: 'UNSIGNED — developer mode' };
-    return { install: false, reason: `unsigned plugins are not installed: ${check.reason}. Turn on developer mode to run a local unsigned plugin, labelled as such.` };
+    // ADF B4: a package changed after signing is never run, whatever developer mode says.
+    if (check.tampered) return { install: false, reason: `refused as tampered: ${check.reason}; reinstall it from its publisher, because a package changed after it was signed never runs, with publisher checks on or off.` };
+    // ADF B5: publisher checks off, it runs, Unverified, with no network until the person allows it (plugin-host.ts).
+    if (options.publisherChecksOff) return { install: true, label: UNVERIFIED_LABEL };
+    return { install: false, reason: `unsigned plugins are not installed: ${check.reason}; turn off publisher checks (Settings → Plugins) to run it at your own risk, labelled Unverified.` };
 }

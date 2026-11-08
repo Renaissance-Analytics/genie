@@ -2,15 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
-import { deckItemsFrom, type AskerState } from '../core/deck-sources.js';
-import { folderName } from '../core/workspace-name.js';
+import type { AskerState } from '../core/deck-sources.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
-import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
+import { agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { OS_WORKSPACE } from '../core/os-agent.js';
@@ -33,12 +32,17 @@ import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type Host
 import { holdMigration, portsOf } from './migration-holds.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
+import type { PluginsApi } from './plugins-replica.js';
+import { LocalPlugins } from './plugins-host.js';
+import { hostCatalog } from './genie-catalog.js';
+import type { ElementDefinition } from '../core/catalog.js';
 import { PluginHost } from './plugin-host.js';
-import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
+import type { Verification } from './mcp-server.js';
 import { Baton, PairingPins } from '../core/remote.js';
 import { PairApprovals } from '../core/pair-confirm.js';
+import { assembleDeckItems } from './deck-assembly.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import type { AgentSessionsPort } from './flow-runner.js';
@@ -48,12 +52,14 @@ import type { FlowSchedulerApi, FlowsApi } from './flows-host.js';
 import { FlowStore } from './flow-store.js';
 import type { OwnAgentStores, WindowAgentStores } from './agent-stores-api.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
+import { attentionLimitsFrom } from './attention-store.js';
 import { runtimeDir } from './paths.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import { DeviceStore } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
+import type { PairingView, RemoteAccessReplica, RemoteAccessView } from './remote-access-replica.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
 import type { WorkTracking } from '../core/genie-protocol.js';
@@ -132,6 +138,10 @@ export interface ComposeInput extends HostingOptions {
      * window then builds none of its own. Absent = it builds its own (hosting-compose.ts) — the emergency path, until P6.
      */
     readonly hosting?: HostingApi;
+    /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
+    readonly plugins?: PluginsApi;
+    /** genie-host's catalog, through this window's replica (ADF A4/A5). Absent = this window builds its own from its plugins. */
+    readonly catalog?: { list(): ElementDefinition[] };
     /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
     readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
     /**
@@ -156,6 +166,11 @@ export interface ComposeInput extends HostingOptions {
     readonly remoteTransport?: ServerTransport;
     /** What a remote connection may perform here; main.ts wires the real one. Refuses everything by default. */
     readonly remoteApi?: HostApi;
+    /**
+     * Remote access is genie-host's (Tynn #409, P5d.1): the paired devices, the PIN, the pair prompts, the baton and the lock.
+     * This window's remote host then serves its own protocol door only, with no devices; Settings reads the host's.
+     */
+    readonly remoteAccess?: RemoteAccessReplica;
     /**
      * A site's or a kept process's OWN app credential (genie#1345, main/app-inbox-service.ts): `GENIE_INBOX_URL` and
      * `GENIE_INBOX_TOKEN`, or nothing. Compose lays it over THAT site's env only — never the service env — and gives none
@@ -282,9 +297,9 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
     readonly approvals: S['approvals'];
     /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
-    readonly remote: RemoteHost;
+    readonly remote: RemoteAccessView;
     /** "Pair this device?" — what waits for Allow on this screen (q_8c07b142). */
-    readonly pairing: PairApprovals;
+    readonly pairing: PairingView;
     /**
      * The Deck's signal strip, MEASURED (§4.5): flows and uncollected mail from the stores; the OS agent's turn and whether
      * GitHub blocks features (the GitHub account's reading of GitHub, main/github-account.ts) handed in by main.
@@ -305,8 +320,15 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     syncConfig(workspacePath: string, source?: SyncSource): Promise<SyncResult[]>;
     /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md, then the skills (separate from the four config-sync targets). */
     syncAgentDocs(workspacePath: string, source?: SyncSource): Promise<void>;
-    /** §6.7: the plugin host over `<userData>/plugins`; re-read when developer mode changes. */
-    readonly plugins: PluginHost;
+    /** §6.7: the plugins, genie-host's through its replica (ADF A3); re-read when developer mode changes. */
+    readonly plugins: PluginsApi;
+    /** This window's OWN plugins, opened only with no genie-host (the emergency path); `null` when the host owns them. */
+    readonly ownPlugins: LocalPlugins | null;
+    /**
+     * Every element the catalog holds now (ADF A5): what the window's editors, panels and flow palette are projected from.
+     * genie-host's through the replica; with no host, this window's own plugins' catalog.
+     */
+    catalogDefinitions(): readonly ElementDefinition[];
     readonly pluginsDir: string;
     /** Re-read the plugins folder (after developer mode flips, or a plugin was dropped in). */
     pluginsRefresh(): Promise<void>;
@@ -371,7 +393,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
     stage?.begin('agent-stores');
     if (!input.agentStores) {
-        ownStores = await openAgentStores(input.userData, iso, input.inboxSession);
+        ownStores = await openAgentStores(input.userData, iso, input.inboxSession, () => attentionLimitsFrom(settings.snapshot()));
         stage?.end(); stage?.begin('agent-store-imports');
         importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
         await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
@@ -428,13 +450,21 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const approvals: WindowAgentStores['approvals'] = input.agentStores?.approvals ?? ownApprovals!;
 
     const hostName = input.hostName ?? hostname();
-    // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
+    // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode. They are
+    // GENIE-HOST'S (ADF A3, Tynn #447): this window reads them through the host's replica and opens no plugin host itself.
     const pluginsDir = join(input.userData, 'plugins');
-    const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS });
+    // With NO genie-host (the emergency path) this window loads its own, as it always did: no regression (the coordinator's
+    // ruling for the owner, 2026-11-08); genie-host owns them whenever it is there.
+    const openOwnPlugins = () => LocalPlugins.start(() => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, publisherChecksOff: settings.snapshot().publisher_checks_off === true, official: OFFICIAL_PLUGINS }));
     stage?.begin('plugins');
-    let plugins = await openPlugins();
-    stage?.end(); stage?.begin('remote-devices');
-    const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
+    const ownPlugins = input.plugins ? null : await openOwnPlugins();
+    stage?.end();
+    const plugins: PluginsApi = input.plugins ?? ownPlugins!;
+    stage?.begin('remote-devices');
+    // Linked to genie-host: no devices here (one writer of remote-devices.json); the emergency path keeps its own, as always.
+    const remoteDevices = input.remoteAccess
+        ? DeviceStore.memory({ now, random: () => randomBytes(24).toString('base64url') })
+        : await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
     stage?.end();
     // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
     const pairing = new PairApprovals({ host: hostName, now });
@@ -618,8 +648,8 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
             return workspaceTrust.view(workspace.id)?.trusted !== true;
         },
         approvals,
-        remote,
-        pairing,
+        remote: input.remoteAccess ?? remote,
+        pairing: input.remoteAccess?.pairing ?? pairing,
         // Read at each use (P5a.2): a host that comes back on a new port reaches this window.
         get frontDoorPort() { return hosting.frontDoorPort; },
         browserTrust: () => hosting.browserTrust(),
@@ -632,33 +662,18 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         deferTrustCertificate: () => hosting.deferTrustCertificate(),
         routes: () => hosting.routes(),
         configuredHosts: () => hosting.configuredHosts(),
-        deckItems: () => {
-            const awake = (input.workspaces?.() ?? []).filter((workspace) => workspace.asleep !== true);
-            const workspaceNames: Record<string, string> = Object.fromEntries(awake.map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)]));
-            const workspaceColors: Record<string, string> = Object.fromEntries(awake.flatMap((w) => {
-                const color = input.workspaceColor?.(w.path) ?? null;
-                return color ? [[w.id, color]] : [];
-            }));
-            return [
-                // An approval is grouped under its workspace on the Deck like a question is, so it carries the same NAME (and colour).
-                ...approvals.deckItems().map((i) => {
-                    const name = i.workspaceId === null ? undefined : workspaceNames[i.workspaceId];
-                    const color = i.workspaceId === null ? undefined : workspaceColors[i.workspaceId];
-                    return name === undefined && color === undefined ? i : { ...i, ...(name === undefined ? {} : { workspaceName: name }), ...(color === undefined ? {} : { workspaceColor: color }) };
-                }),
-                ...hosting.trustDeckItems(),
-                ...deckItemsFrom({
-                    questions: attention.pending(),
-                    userList: attention.allUserItems(),
-                    unreadDms: inbox.unread(HUMAN),
-                    finished: attention.finished(),
-                    agents: Object.fromEntries(agents()),
-                    workspaceNames,
-                    workspaceColors,
-                    ...(input.askerLive ? { asker: input.askerLive } : {}),
-                }),
-            ];
-        },
+        // One assembly for the window's Deck and genie-host's (deck-assembly.ts, Tynn #551).
+        deckItems: () => assembleDeckItems({
+            workspaces: input.workspaces?.() ?? [],
+            workspaceName: input.workspaceName,
+            workspaceColor: input.workspaceColor,
+            approvals: approvals.deckItems(),
+            trust: hosting.trustDeckItems(),
+            attention,
+            inbox,
+            agents: Object.fromEntries(agents()),
+            ...(input.askerLive ? { asker: input.askerLive } : {}),
+        }),
         inboxReminders: ({ run }) => inboxNotices({ agents: agents(), unread: (id) => inbox.unread(id as never), reminders, run }),
         inboxNoticeSettled: (agentId, delivered) => reminders.settled(agentId, delivered),
         appEnv: (source) => appEnvOf(source),
@@ -675,9 +690,11 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 agentFiles: agentFiles.list(),
             };
         },
-        get plugins() { return plugins; },
+        plugins,
+        ownPlugins,
+        catalogDefinitions: () => (input.catalog ? input.catalog.list() : hostCatalog(ownPlugins ?? { tools: () => [] }).list()),
         pluginsDir,
-        pluginsRefresh: async () => { plugins = await openPlugins(); },
+        pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {
             // Nothing of Genie's goes into a folder the person has not trusted, its token above all.
             if (!(await mayWriteInto(workspacePath))) return [];

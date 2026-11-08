@@ -18,7 +18,7 @@ import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
 import { Deck } from './components/Deck.js';
 import { ApprovalToasts } from './components/ApprovalToasts.js';
-import { needsYouCount, type DeckItem } from '../core/deck.js';
+import { earlierRuns, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { turnStopOffered } from '../core/agent-view.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
@@ -64,6 +64,10 @@ import { HangNoticeBar } from './components/HangNoticeBar.js';
 import { RendererNoticeBar } from './components/RendererNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
+import type { GAppListing } from '../core/gapps.js';
+
+/** No GApps until the install book (GApps D2) supplies them: one list, so the store's view never changes for nothing. */
+const NO_GAPPS: readonly GAppListing[] = [];
 
 /**
  * The updater's state, pushed by the main process. Starts as `null` — "no updater has said
@@ -531,6 +535,9 @@ export function Shell({
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh }}
+                // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it. No app is listed until the install book (D2)
+                // supplies them, so the store says it has none yet rather than routing to a surface nobody serves.
+                gapps={{ apps: NO_GAPPS }}
             />
             {remote?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />
@@ -601,6 +608,7 @@ export function Shell({
                     route={route}
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
                     deckCount={snapshot.deckItems === null ? null : needsYouCount(snapshot.deckItems)}
+                    deckStaleCount={snapshot.deckItems === null ? null : earlierRuns(snapshot.deckItems).length}
                     // Genie 1's row: the pulse from the agents' sessions, and the process / site indicators from Hosting.
                     workspaces={[...railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] }), ...(snapshot.hibernatedWorkspaces ?? []).map((workspace) => ({ ...workspace, count: null, alert: null }))]}
                     onWakeWorkspace={onWakeWorkspace}
@@ -857,6 +865,7 @@ export function Shell({
                             onPauseAgent={onPauseAgent}
                             onResumeAgent={onResumeAgent}
                             pluginPanels={features.plugins?.panels ?? []}
+                            pluginEntries={features.plugins?.entries ?? []}
                             ops={workspaceOps}
                         />
                         </ErrorBoundary>
