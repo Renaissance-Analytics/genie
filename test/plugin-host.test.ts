@@ -1,9 +1,10 @@
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PluginHost } from '../src/main/plugin-host.js';
+import { signPackage } from './plugin-sign-helper.js';
 
 /**
  * THE PLUGIN HOST (§6.7) over a REAL plugins directory. Every folder with a `genie-plugin.json` is
@@ -13,8 +14,10 @@ import { PluginHost } from '../src/main/plugin-host.js';
  */
 
 const pair = generateKeyPairSync('ed25519');
-const keys = { 'example-2026': pair.publicKey.export({ type: 'spki', format: 'pem' }).toString() };
-const manifest = (id: string, extra: Record<string, unknown> = {}) => JSON.stringify({ id, name: id.split('.').pop(), version: '1.0.0', publisher: { name: 'Example Co', keyId: 'example-2026' }, capabilities: { genieApi: ['openFileForUser'], network: { hosts: [] } }, ...extra });
+// ADF B4: a key is held under its C1 id, `sha256:` + hex SHA-256 of its SPKI DER, and signs the whole package.
+const KEY_ID = `sha256:${createHash('sha256').update(pair.publicKey.export({ type: 'spki', format: 'der' })).digest('hex')}`;
+const keys = { [KEY_ID]: pair.publicKey.export({ type: 'spki', format: 'pem' }).toString() };
+const manifest = (id: string, extra: Record<string, unknown> = {}) => JSON.stringify({ id, name: id.split('.').pop(), version: '1.0.0', publisher: { name: 'Example Co', keyId: KEY_ID }, capabilities: { genieApi: ['openFileForUser'], network: { hosts: [] } }, ...extra });
 
 let dir: string;
 let plugins: string;
@@ -24,11 +27,11 @@ beforeEach(async () => {
     const put = async (folder: string, text: string, signIt: boolean) => {
         await mkdir(join(plugins, folder), { recursive: true });
         await writeFile(join(plugins, folder, 'genie-plugin.json'), text);
-        if (signIt) await writeFile(join(plugins, folder, 'genie-plugin.sig'), sign(null, Buffer.from(text), pair.privateKey).toString('base64'));
+        if (signIt) await signPackage(join(plugins, folder), pair.privateKey);
     };
     await put('presentation', manifest('com.example.presentation'), true);
     await put('local-dev', manifest('com.example.localdev'), false);
-    await put('broken', JSON.stringify({ id: 'nope', name: 'Broken', version: '1.0.0', publisher: { name: 'x', keyId: 'example-2026' }, shell: true }), true);
+    await put('broken', JSON.stringify({ id: 'nope', name: 'Broken', version: '1.0.0', publisher: { name: 'x', keyId: KEY_ID }, shell: true }), true);
     await mkdir(join(plugins, 'not-a-plugin'), { recursive: true });
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
@@ -43,7 +46,7 @@ describe('PluginHost', () => {
         ]);
         expect(host.list()[1]!.reason).toMatch(/^unsigned plugins are not installed/);
         expect(host.list()[2]!.reason).toMatch(/unknown key "shell"/);
-        expect(host.list()[0]!.label).toBe('signed by example-2026');
+        expect(host.list()[0]!.label).toBe(`signed by ${KEY_ID}`);
     });
 
     it('developer mode admits the unsigned one, labelled UNSIGNED', async () => {
