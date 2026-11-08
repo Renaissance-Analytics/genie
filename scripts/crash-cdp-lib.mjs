@@ -218,7 +218,20 @@ export async function twoStreamingAgents(cdp, tag) {
     }
     for (const a of agents) {
         await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(a.id)}, "graceful"); true`, 15_000);
-        check(await until(() => running(cdp, a.id), 30_000) === true, `${a.name}'s session is running (the host says so)`);
+        // ---- PROBE (throwaway, never merged): the agent's session states, once a second, each change logged.
+        const t0 = Date.now();
+        let lastState = '';
+        let ok = false;
+        while (Date.now() - t0 < 30_000) {
+            const why = await whyOf(cdp, a.id);
+            const row = await cdp.evaluate(`window.genie.snapshot().then((s) => JSON.stringify((s?.agents ?? []).filter((x) => x.id === ${JSON.stringify(a.id)}).map((x) => ({ state: x.state, reason: x.reason ?? null, held: x.held ?? null, fidelity: x.fidelity ?? null }))))`, 15_000).catch((e) => `(unread: ${e?.message ?? e})`);
+            const now = `${why} ${row}`;
+            if (now !== lastState) { console.log(`GENIE-PROBE agent=${a.name} t=${Date.now() - t0}ms why=${why} row=${row}`); lastState = now; }
+            if (await running(cdp, a.id).catch(() => false)) { ok = true; break; }
+            await sleep(1_000);
+        }
+        console.log(`GENIE-PROBE agent=${a.name} running=${ok} after=${Date.now() - t0}ms`);
+        check(ok, `${a.name}'s session is running (the host says so)`);
         await cdp.evaluate(`window.genie.prompt(${JSON.stringify(a.id)}, 'Stream ticks until stopped.')`, 15_000);
     }
     for (const a of agents) {

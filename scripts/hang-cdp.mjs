@@ -157,6 +157,8 @@ try {
     session = await attach({ port: PORT, inspect: INSPECT, label: 'first' });
     const { agents } = await twoStreamingAgents(session.cdp, `hang-${process.pid}`);
     for (const a of agents) agentIds.push(a.id);
+    // ---- PROBE: the host's lifecycle lines so far, around the agents' spawns.
+    try { for (const line of readFileSync(h.lifecycle, 'utf8').split(/\r?\n/).filter(Boolean)) console.log(`GENIE-PROBE lifecycle ${line}`); } catch (e) { console.log(`GENIE-PROBE lifecycle (unread: ${e?.message ?? e})`); }
 
     step('B1', 'CONTROL: 40 s with nothing frozen');
     const windowA = session.windowPid;
