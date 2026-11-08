@@ -148,8 +148,8 @@ describe('every choice resolves to a packaged file', () => {
 
     it('the built-renderer check names each sound file the build did not emit, and passes when every one is there', () => {
         const sources = ['jingle-robin.ogg', 'sparkle.wav'];
-        expect(missingSoundAssets(sources, ['assets/index-abc.js', 'assets/sparkle-Ab12_x.wav'])).toEqual(['jingle-robin.ogg']);
-        expect(missingSoundAssets(sources, ['assets/jingle-robin-Zz9.ogg', 'assets/sparkle-Ab12_x.wav'])).toEqual([]);
+        expect(missingSoundAssets(sources, ['assets/index-abc.js', 'assets/sparkle-Ab12_x9Z.wav'])).toEqual(['jingle-robin.ogg']);
+        expect(missingSoundAssets(sources, ['assets/jingle-robin-Zz9-aB3c.ogg', 'assets/sparkle-Ab12_x9Z.wav'])).toEqual([]);
         // A longer name is not the file: chime-amber-extra-….ogg is not chime-amber.ogg.
         expect(missingSoundAssets(['chime-amber.ogg'], ['assets/chime-amber-extra-Q1w2E3r4.ogg'])).toEqual(['chime-amber.ogg']);
     });
