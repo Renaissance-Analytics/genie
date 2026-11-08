@@ -63,7 +63,7 @@ import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { startBeat } from './safe-mode-beat.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
-import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
+import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation, type ActivationRequest } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { settleStaleLegacyPairing, tynnPairingSource, TynnAccount } from './tynn-account.js';
@@ -791,8 +791,19 @@ function openTakeOverWindow(route: string, activation: Activation): void {
     const terminalId = route.split('/').pop() ?? '';
     const request = { activation, reason: `take-over window ${route}`, ledger: activationLedger, label: 'takeover' };
     for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
+        if (!w.isDestroyed() && !remoteTakeOverWindows.has(w) && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
     }
+    takeOverWindow(route, request, null).on('closed', () => {
+        takeOvers?.windowClosed(terminalId);
+        scratchTerminals?.windowClosed(terminalId);
+    });
+}
+
+/**
+ * A TAKE OVER WINDOW: this machine's terminal (`remote` null), or another machine's (Tynn #529 part A) — then bound to
+ * that machine by its query, with the ticket in main's own map for the window to read once. Never in the URL or title.
+ */
+function takeOverWindow(route: string, request: ActivationRequest, remote: { search: string; ticket: string } | null): BrowserWindow {
     const win = new BrowserWindow({
         width: 1100,
         height: 700,
@@ -802,14 +813,17 @@ function openTakeOverWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    if (remote) {
+        takeOverTickets.set(win.webContents.id, remote.ticket);
+        remoteTakeOverWindows.add(win);
+        const contentsId = win.webContents.id;
+        win.on('closed', () => { takeOverTickets.delete(contentsId); remoteTakeOverWindows.delete(win); });
+    }
     localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    win.on('closed', () => {
-        takeOvers?.windowClosed(terminalId);
-        scratchTerminals?.windowClosed(terminalId);
-    });
-    void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+    void win.loadFile(join(here, '../renderer/index.html'), remote ? { search: remote.search, hash: route } : { hash: route });
+    return win;
 }
 
 /**
@@ -841,23 +855,9 @@ const remoteTakeOverWindows = new Set<BrowserWindow>();
 function openRemoteTakeOverWindow(url: string, terminalId: string, ticket: string, name: string | null): void {
     const search = remoteWindowSearch(url, name);
     if (remoteFromSearch(search) === null) return;
-    const win = new BrowserWindow({
-        width: 1100,
-        height: 700,
-        ...genieWindowIcon(here),
-        backgroundColor: '#0a0a0c',
-        show: false,
-        webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
-    });
-    takeOverTickets.set(win.webContents.id, ticket);
-    const contents = win.webContents;
-    remoteTakeOverWindows.add(win);
-    localDoor.admit(contents);
-    guardWindowLinks(contents, (link) => { void shell.openExternal(link).catch(() => {}); });
-    const request = { activation: 'user-gesture' as const, reason: 'remote take-over window', ledger: activationLedger, label: 'takeover' };
-    onceShowable(win, process.platform, () => showWhenReady(win, request));
-    win.on('closed', () => { takeOverTickets.delete(contents.id); remoteTakeOverWindows.delete(win); });
-    void win.loadFile(join(here, '../renderer/index.html'), { search, hash: `genie://takeover/${encodeURIComponent(terminalId)}` });
+    const route = `genie://takeover/${encodeURIComponent(terminalId)}`;
+    const request = { activation: 'user-gesture' as const, reason: `remote take-over window ${route}`, ledger: activationLedger, label: 'takeover' };
+    takeOverWindow(route, request, { search, ticket });
 }
 
 /** THE FILE PANEL IN ITS OWN WINDOW (§4.3): one per workspace; the route names it. Closing it docks the panel back. */

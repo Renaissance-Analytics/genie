@@ -25,8 +25,12 @@ describe('main opens the Take Over window and hands it its ticket once', () => {
     it('a handler opens the window for the remote terminal; the ticket goes into main’s own map, never the URL, the title or a log', () => {
         const open = body(main, "ipcMain.handle('genie:remote-takeover-open'");
         expect(open).toMatch(/openRemoteTakeOverWindow\(/);
-        const fn = main.slice(main.indexOf('function openRemoteTakeOverWindow('), main.indexOf('\n}\n', main.indexOf('function openRemoteTakeOverWindow(')));
-        expect(fn).toMatch(/takeOverTickets\.set\(win\.webContents\.id, ticket\)/);
+        const opener = main.slice(main.indexOf('function openRemoteTakeOverWindow('), main.indexOf('\n}\n', main.indexOf('function openRemoteTakeOverWindow(')));
+        expect(opener).toMatch(/takeOverWindow\(route, request, \{ search, ticket \}\)/);
+        // The one Take Over window maker (main/main.ts `takeOverWindow`): the ticket goes to main's map, nowhere else.
+        const maker = main.slice(main.indexOf('function takeOverWindow('), main.indexOf('\n}\n', main.indexOf('function takeOverWindow(')));
+        expect(maker).toMatch(/takeOverTickets\.set\(win\.webContents\.id, remote\.ticket\)/);
+        const fn = `${opener}\n${maker}`;
         expect(fn).not.toMatch(/remoteWindowSearch\([^)]*ticket/);
         expect(fn).not.toMatch(/hash:[^}]*ticket/);
         expect(fn).not.toMatch(/title:[^,}]*ticket/);
