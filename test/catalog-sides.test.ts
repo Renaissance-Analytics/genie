@@ -33,9 +33,12 @@ describe('reach.side and reach.link', () => {
     });
 
     it('one side alone has no link to declare (CONTROL: host and client alone pass without one)', () => {
+        // A recipe leaves its side to each definition (B7's KIND_SPECS); a panel may be client or both, never host.
+        const recipe = { ...base, kind: 'recipe', payload: { steps: [{ tool: 'imDone' }] } };
         expect(validateDefinition({ ...base, reach: reach({ side: 'client' }) }).ok).toBe(true);
-        expect(validateDefinition({ ...base, reach: reach({ side: 'host', requiresWindow: false }) }).ok).toBe(true);
-        expect(validateDefinition({ ...base, reach: reach({ side: 'host', requiresWindow: false, link: { calls: ['x'], events: [] } }) }).ok).toBe(false);
+        expect(validateDefinition({ ...recipe, reach: reach({ side: 'host', requiresWindow: false }) }).ok).toBe(true);
+        expect(validateDefinition({ ...recipe, reach: reach({ side: 'host', requiresWindow: false, link: { calls: ['x'], events: [] } }) }).ok).toBe(false);
+        expect(validateDefinition({ ...recipe, reach: reach({ side: 'client', link: { calls: ['x'], events: [] } }) }).ok).toBe(false);
     });
 
     it('no Genie 1 aliases: the field is gone, and declaring one is refused as an unknown key', () => {

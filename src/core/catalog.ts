@@ -30,6 +30,7 @@ export const ELEMENT_SCOPES = ['workspace', 'workstation'] as const;
  * window, or another machine's), or BOTH — and then its `reach.link` says how its halves talk.
  */
 export const ELEMENT_SIDES = ['host', 'client', 'both'] as const;
+export type ElementSide = (typeof ELEMENT_SIDES)[number];
 /** Who may reach it from another machine: anyone the host lets in, only its owner, or only this machine's own window. */
 export const ELEMENT_REMOTE = ['allowed', 'owner', 'local'] as const;
 
@@ -37,6 +38,145 @@ export type ElementKind = (typeof ELEMENT_KINDS)[number];
 export type ReservedKind = (typeof RESERVED_KINDS)[number];
 export type CatalogKind = ElementKind | ReservedKind;
 export type ElementSource = (typeof ELEMENT_SOURCES)[number];
+
+/**
+ * THE SCHEMAS (ADF B7, Tynn #457): one table, plain data, that the validator below READS and `npm run docs:sdk` writes
+ * docs/sdk/ from (src/core/sdk-docs.ts). A field added, removed or changed here changes what the host accepts AND what
+ * the SDK's docs say; test/adf-b7-sdk-docs.test.ts fails CI when the checked-in docs were not regenerated.
+ */
+
+/** How a payload field is checked. Each rule's refusal names the field. */
+export const FIELD_RULES = ['nonEmptyString', 'string', 'boolean', 'object', 'objectSchema', 'stringList', 'extensions', 'vettedEditor', 'vettedComponent', 'process', 'steps'] as const;
+export type FieldRule = (typeof FIELD_RULES)[number];
+
+export interface FieldSpec {
+    readonly name: string;
+    /** As the docs say it. */
+    readonly type: string;
+    readonly required: boolean;
+    /** What a missing optional field means. */
+    readonly default?: unknown;
+    readonly description: string;
+    readonly rule: FieldRule;
+    /** The refusal, when the rule's own words are not the clearest for this field. */
+    readonly problem?: string;
+}
+
+export interface KindSpec {
+    readonly kind: CatalogKind;
+    /** `reserved`: accepted and registered; nothing runs it yet (decision 3). */
+    readonly status: 'active' | 'reserved';
+    /**
+     * The sides a definition of this family may run on (the owner's rulings, 2026-11-08 and q_d71981d6: the ADF models
+     * the client/host relationship). genie-host runs a tool; an editor is drawn by a client and reads and writes its file
+     * on the host, so it is both; a panel is a client's, or both when it works on the host's data. Enforced against
+     * `reach.side`. `null`: each definition says its own side.
+     */
+    readonly sides: readonly ElementSide[] | null;
+    readonly summary: string;
+    readonly fields: readonly FieldSpec[];
+    /** A payload that validates, shown in the docs (and checked: test/adf-b7-sdk-docs.test.ts). */
+    readonly example: Readonly<Record<string, unknown>>;
+}
+
+export interface EnvelopeField {
+    /** Dotted for a field inside an object (`docs.name`). */
+    readonly name: string;
+    readonly type: string;
+    readonly required: boolean;
+    readonly default?: unknown;
+    readonly description: string;
+}
+
+const RESERVED_SUMMARY = 'Reserved: accepted and registered, so a package that declares one loads, and nothing runs it yet. A later Genie release makes it run and adds its fields here.';
+
+export const KIND_SPECS: readonly KindSpec[] = [
+    {
+        kind: 'tool', status: 'active', sides: ['host'],
+        summary: 'An MCP tool agents call. The host runs it with the handler the payload names; it appears in every agent\'s tool list under its id.',
+        fields: [
+            { name: 'handler', type: 'string', required: true, description: 'The host handler that runs the tool.', rule: 'nonEmptyString', problem: 'payload.handler must name the host handler that runs the tool' },
+            { name: 'inputSchema', type: 'JSON Schema, `type: "object"`', required: true, description: 'The tool\'s arguments.', rule: 'objectSchema', problem: 'payload.inputSchema must be a JSON Schema with type "object"' },
+            { name: 'outputSchema', type: 'JSON Schema object', required: false, description: 'What the tool answers, when it declares it.', rule: 'object', problem: 'payload.outputSchema must be a JSON Schema object' },
+            { name: 'annotations', type: 'object', required: false, description: 'MCP tool annotations (read-only, destructive…) passed to agents as declared.', rule: 'object' },
+            { name: 'process', type: '`"worker"` or `"subprocess"`', required: false, default: 'worker', description: 'A plugin tool: where its handler runs, isolated from Genie.', rule: 'process' },
+            { name: 'gated', type: 'boolean', required: false, default: false, description: 'Each call waits for the person\'s approval first.', rule: 'boolean' },
+        ],
+        example: { handler: 'com.example.notes.append', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, process: 'worker', gated: false },
+    },
+    {
+        kind: 'panel', status: 'active', sides: ['client', 'both'],
+        summary: 'A panel in the workspace grid. It mounts one vetted Fancy component, drawn by Genie\'s own compiled adapter: a package ships no UI code.',
+        fields: [
+            { name: 'fancyComponent', type: `one of ${VETTED_FANCY_EXPORTS.join(', ')}`, required: true, description: 'The vetted Fancy component the panel mounts.', rule: 'vettedComponent' },
+            { name: 'title', type: 'string', required: false, description: 'The panel\'s title.', rule: 'string' },
+            { name: 'props', type: 'object', required: false, default: {}, description: 'The component\'s props, as plain JSON.', rule: 'object', problem: 'payload.props must be an object' },
+        ],
+        example: { title: 'Notes', fancyComponent: 'ContentRenderer', props: {} },
+    },
+    {
+        kind: 'editor', status: 'active', sides: ['both'],
+        summary: 'Opens files of the extensions it claims in one vetted Fancy editor. Genie\'s own editor wins a claim by default; another is offered in Open with.',
+        fields: [
+            { name: 'extensions', type: 'list of extensions, like `".md"`', required: true, description: 'The file types it opens: a dot, then letters or digits.', rule: 'extensions' },
+            { name: 'fancyEditor', type: `one of ${VETTED_FANCY_EDITORS.join(', ')}`, required: true, description: 'The vetted Fancy editor that opens them.', rule: 'vettedEditor' },
+            { name: 'title', type: 'string', required: false, description: 'The editor\'s name in Open with.', rule: 'string' },
+        ],
+        example: { title: 'Notes', extensions: ['.md'], fancyEditor: 'Editor' },
+    },
+    {
+        kind: 'recipe', status: 'active', sides: null,
+        summary: 'A guided sequence of steps the person walks through.',
+        fields: [
+            { name: 'steps', type: 'non-empty list of step objects', required: true, description: 'The steps, in order.', rule: 'steps', problem: 'payload.steps must be a non-empty list of steps' },
+        ],
+        example: { steps: [{ tool: 'com.example.notes.append' }] },
+    },
+    {
+        kind: 'flow-node', status: 'active', sides: null,
+        summary: 'A node in the Flows palette. The executor the payload names runs it.',
+        fields: [
+            { name: 'executor', type: 'string', required: true, description: 'What runs the node.', rule: 'nonEmptyString', problem: 'payload.executor must name what runs the node' },
+            { name: 'inputs', type: 'list of port names', required: false, default: [], description: 'Its input ports.', rule: 'stringList', problem: 'payload.inputs must be a list of port names' },
+            { name: 'outputs', type: 'list of port names', required: false, default: [], description: 'Its output ports.', rule: 'stringList', problem: 'payload.outputs must be a list of port names' },
+        ],
+        example: { executor: 'com.example.notes.append', inputs: ['text'], outputs: ['path'] },
+    },
+    ...(['page', 'overlay', 'provider', 'service-engine'] as const).map((kind): KindSpec => ({
+        kind, status: 'active', sides: null,
+        summary: 'A family a package may contribute. It has no fixed payload fields yet: its payload is any JSON object, and the Genie release that runs it adds them here.',
+        fields: [],
+        example: {},
+    })),
+    ...RESERVED_KINDS.map((kind): KindSpec => ({ kind, status: 'reserved', sides: null, summary: RESERVED_SUMMARY, fields: [], example: {} })),
+];
+
+export const ENVELOPE_FIELDS: readonly EnvelopeField[] = [
+    { name: 'id', type: 'dotted name', required: true, description: 'Unique in the catalog, like `ai.genie.spreadsheet.createWorkbook`. A tool is offered to agents under it.' },
+    { name: 'kind', type: `one of ${[...ELEMENT_KINDS, ...RESERVED_KINDS].join(', ')}`, required: true, description: 'Its contribution family: what its payload holds.' },
+    { name: 'version', type: 'semver', required: true, description: 'Its own version, like `1.2.0`.' },
+    { name: 'packageId', type: 'reverse-DNS', required: true, description: 'The package that contributes it: every definition of a package registers together, or none does.' },
+    { name: 'source', type: `one of ${ELEMENT_SOURCES.join(', ')}`, required: true, description: 'Who contributes it. An installed package never replaces one of Genie\'s own.' },
+    { name: 'docs', type: 'object', required: true, description: 'What people and agents read about it.' },
+    { name: 'docs.name', type: 'string', required: true, description: 'Its name.' },
+    { name: 'docs.description', type: 'string', required: true, description: 'What it does.' },
+    { name: 'docs.guide', type: 'string', required: false, description: 'How an agent should use it.' },
+    { name: 'reach', type: 'object', required: true, description: 'Where it runs and who may reach it.' },
+    { name: 'reach.scopes', type: `one or more of ${ELEMENT_SCOPES.join(', ')}`, required: true, description: 'Whether it acts in a workspace, on the workstation, or both.' },
+    { name: 'reach.side', type: `one of ${ELEMENT_SIDES.join(', ')}`, required: true, description: 'Whether genie-host runs it, a client draws it, or it has a part on each side.' },
+    { name: 'reach.link', type: 'object', required: false, description: 'How its two sides talk, required when `reach.side` is `both` and refused otherwise: the only channel between its halves.' },
+    { name: 'reach.link.calls', type: 'list of host method names', required: true, description: 'The host methods its client side calls.' },
+    { name: 'reach.link.events', type: 'list of host event names', required: true, description: 'The host events its client side follows. Calls and events together name at least one.' },
+    { name: 'reach.requiresWindow', type: 'boolean', required: true, description: 'Whether it needs a Genie window open.' },
+    { name: 'reach.remote', type: `one of ${ELEMENT_REMOTE.join(', ')}`, required: true, description: 'Who may reach it from another machine: anyone the host lets in, only its owner, or only this machine\'s own window.' },
+    { name: 'permissions', type: 'object', required: true, description: 'What it asks for. Registering is not a grant: the host decides at install and at each call.' },
+    { name: 'permissions.capabilities', type: 'list of names', required: true, description: 'The Genie capabilities it asks for; `[]` for none.' },
+    { name: 'permissions.network', type: 'list of hosts', required: false, default: [], description: 'The hosts it may reach; none unless listed.' },
+    { name: 'payload', type: 'object', required: true, description: 'Its family\'s own fields: see each family\'s page.' },
+];
+
+/** The envelope's keys, and each object's own, as the table names them: the validator refuses any other. */
+const fieldsUnder = (prefix: string) => new Set(ENVELOPE_FIELDS.filter((f) => (prefix === '' ? !f.name.includes('.') : f.name.startsWith(`${prefix}.`))).map((f) => (prefix === '' ? f.name : f.name.slice(prefix.length + 1))));
 
 export interface ElementDefinition {
     /** Fully qualified and unique in the catalog, like `ai.genie.spreadsheet.createWorkbook`. */
@@ -48,13 +188,10 @@ export interface ElementDefinition {
     readonly docs: { readonly name: string; readonly description: string; readonly guide?: string };
     readonly reach: {
         readonly scopes: readonly (typeof ELEMENT_SCOPES)[number][];
-        readonly side: (typeof ELEMENT_SIDES)[number];
+        readonly side: ElementSide;
         readonly requiresWindow: boolean;
         readonly remote: (typeof ELEMENT_REMOTE)[number];
-        /**
-         * How its two halves talk, when it runs on BOTH sides: the host methods its client side calls, the host events it
-         * follows. The only channel between them. Absent for one side alone.
-         */
+        /** How its two halves talk, when it runs on BOTH sides: the host methods its client calls, the host events it follows. */
         readonly link?: { readonly calls: readonly string[]; readonly events: readonly string[] };
     };
     /** What it asks for. Registration is not a grant: the host decides at install and at each call. */
@@ -74,11 +211,11 @@ export type DefinitionCheck = { ok: true; definition: ElementDefinition } | { ok
 export type PackageCheck = { ok: true; pkg: CatalogPackage } | { ok: false; problems: string[] };
 export type CatalogChange = { ok: true; revision: number } | { ok: false; problems: string[] };
 
-const ENVELOPE_KEYS = new Set(['id', 'kind', 'version', 'packageId', 'source', 'docs', 'reach', 'permissions', 'payload']);
-const DOCS_KEYS = new Set(['name', 'description', 'guide']);
-const REACH_KEYS = new Set(['scopes', 'side', 'requiresWindow', 'remote', 'link']);
-const LINK_KEYS = new Set(['calls', 'events']);
-const PERMISSION_KEYS = new Set(['capabilities', 'network']);
+const ENVELOPE_KEYS = fieldsUnder('');
+const DOCS_KEYS = fieldsUnder('docs');
+const REACH_KEYS = fieldsUnder('reach');
+const PERMISSION_KEYS = fieldsUnder('permissions');
+const LINK_KEYS = fieldsUnder('reach.link');
 const PACKAGE_KEYS = new Set(['id', 'version', 'source', 'contributions']);
 /**
  * A dotted name: `ai.genie.spreadsheet.createWorkbook`, or a bare one like `imDone` for a builtin tool. Each part holds
@@ -115,33 +252,37 @@ function unknownKeys(raw: Record<string, unknown>, known: Set<string>, where: st
     return Object.keys(raw).filter((k) => !known.has(k)).map((k) => `${where}: unknown key "${k}"; an element declares only what the envelope names`);
 }
 
-/** The kind's payload, by kind. A reserved kind and the kinds with no fixed fields yet need only an object. */
+/** One field's refusal by its rule, naming the field; null when it holds. */
+function fieldProblem(f: FieldSpec, v: unknown): string | null {
+    const at = `payload.${f.name}`;
+    const say = (fallback: string) => f.problem ?? fallback;
+    switch (f.rule) {
+        case 'nonEmptyString': return typeof v === 'string' && v.length > 0 ? null : say(`${at} must be a non-empty string`);
+        case 'string': return typeof v === 'string' ? null : say(`${at} must be a string`);
+        case 'boolean': return typeof v === 'boolean' ? null : say(`${at} must be true or false`);
+        case 'object': return isRecord(v) ? null : say(`${at} must be an object`);
+        case 'objectSchema': return isRecord(v) && v.type === 'object' ? null : say(`${at} must be a JSON Schema with type "object"`);
+        case 'stringList': return isStringList(v) ? null : say(`${at} must be a list of names`);
+        case 'process': return v === 'worker' || v === 'subprocess' ? null : say(`${at} must be "worker" or "subprocess"`);
+        case 'steps': return Array.isArray(v) && v.length > 0 && v.every(isRecord) ? null : say(`${at} must be a non-empty list of steps`);
+        case 'extensions':
+            if (!isStringList(v) || v.length === 0) return `${at} must claim at least one extension, like ".md"`;
+            return v.every((x) => EXTENSION.test(x)) ? null : `${at}: a dot, then letters or digits, like ".md"`;
+        case 'vettedEditor': return oneOf(VETTED_FANCY_EDITORS, v) ? null : `${at} "${String(v)}" is not a vetted Fancy editor (one of ${VETTED_FANCY_EDITORS.join(', ')})`;
+        case 'vettedComponent': return oneOf(VETTED_FANCY_EXPORTS, v) ? null : `${at} "${String(v)}" is not a vetted Fancy component (one of ${VETTED_FANCY_EXPORTS.join(', ')})`;
+    }
+}
+
+/** The kind's payload, checked field by field against its schema (KIND_SPECS). A family with no fields needs only an object. */
 function payloadProblems(kind: CatalogKind, payload: Record<string, unknown>): string[] {
+    const spec = KIND_SPECS.find((k) => k.kind === kind);
+    if (!spec) return [];
     const out: string[] = [];
-    switch (kind) {
-        case 'tool':
-            if (typeof payload.handler !== 'string' || payload.handler.length === 0) out.push('payload.handler must name the host handler that runs the tool');
-            if (!isRecord(payload.inputSchema) || payload.inputSchema.type !== 'object') out.push('payload.inputSchema must be a JSON Schema with type "object"');
-            if (payload.outputSchema !== undefined && !isRecord(payload.outputSchema)) out.push('payload.outputSchema must be a JSON Schema object');
-            break;
-        case 'editor':
-            if (!isStringList(payload.extensions) || payload.extensions.length === 0) out.push('payload.extensions must claim at least one extension, like ".md"');
-            else if (!payload.extensions.every((x) => EXTENSION.test(x))) out.push('payload.extensions: a dot, then letters or digits, like ".md"');
-            if (!oneOf(VETTED_FANCY_EDITORS, payload.fancyEditor)) out.push(`payload.fancyEditor "${String(payload.fancyEditor)}" is not a vetted Fancy editor (one of ${VETTED_FANCY_EDITORS.join(', ')})`);
-            break;
-        case 'panel':
-            if (!oneOf(VETTED_FANCY_EXPORTS, payload.fancyComponent)) out.push(`payload.fancyComponent "${String(payload.fancyComponent)}" is not a vetted Fancy component (one of ${VETTED_FANCY_EXPORTS.join(', ')})`);
-            if (payload.props !== undefined && !isRecord(payload.props)) out.push('payload.props must be an object');
-            break;
-        case 'flow-node':
-            if (typeof payload.executor !== 'string' || payload.executor.length === 0) out.push('payload.executor must name what runs the node');
-            for (const port of ['inputs', 'outputs'] as const) if (payload[port] !== undefined && !isStringList(payload[port])) out.push(`payload.${port} must be a list of port names`);
-            break;
-        case 'recipe':
-            if (!Array.isArray(payload.steps) || payload.steps.length === 0 || !payload.steps.every(isRecord)) out.push('payload.steps must be a non-empty list of steps');
-            break;
-        default:
-            break;
+    for (const f of spec.fields) {
+        const v = payload[f.name];
+        if (v === undefined && !f.required) continue;
+        const problem = fieldProblem(f, v);
+        if (problem) out.push(problem);
     }
     return out;
 }
@@ -176,8 +317,10 @@ export function validateDefinition(raw: unknown): DefinitionCheck {
         const r = raw.reach;
         if (!Array.isArray(r.scopes) || r.scopes.length === 0 || !r.scopes.every((s) => oneOf(ELEMENT_SCOPES, s))) say(`reach.scopes must list one or more of ${ELEMENT_SCOPES.join(', ')}`);
         if (!oneOf(ELEMENT_SIDES, r.side)) say(`reach.side must be one of ${ELEMENT_SIDES.join(', ')}`);
-        if (typeof r.requiresWindow !== 'boolean') say('reach.requiresWindow must be true or false');
-        if (!oneOf(ELEMENT_REMOTE, r.remote)) say(`reach.remote must be one of ${ELEMENT_REMOTE.join(', ')}`);
+        else {
+            const allowed = KIND_SPECS.find((k) => k.kind === raw.kind)?.sides ?? null;
+            if (allowed !== null && !allowed.includes(r.side)) say(`reach.side must be ${allowed.map((s) => `"${s}"`).join(' or ')} for a ${String(raw.kind)}`);
+        }
         if (r.side === 'both') {
             if (!isRecord(r.link)) say('reach.link must say how its two sides talk when it runs on both: { calls: [host methods], events: [host events] }');
             else {
@@ -186,6 +329,8 @@ export function validateDefinition(raw: unknown): DefinitionCheck {
                 else if (r.link.calls.length + r.link.events.length === 0) say('reach.link must name at least one call or event: an element on both sides talks across');
             }
         } else if (r.link !== undefined) say('reach.link is for an element on both sides; one side alone has no link');
+        if (typeof r.requiresWindow !== 'boolean') say('reach.requiresWindow must be true or false');
+        if (!oneOf(ELEMENT_REMOTE, r.remote)) say(`reach.remote must be one of ${ELEMENT_REMOTE.join(', ')}`);
     }
 
     if (!isRecord(raw.permissions)) say('permissions must be an object (capabilities: [] for none)');
