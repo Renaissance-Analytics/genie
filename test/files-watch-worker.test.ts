@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -53,6 +53,24 @@ describe('workerWatchSource', () => {
         await writeFile(join(root, 'deep', 'er', 'nested.txt'), 'seen');
         await vi.waitFor(() => { expect(seen).toContain('at-once.txt'); expect(seen).toContain('deep/er/nested.txt'); }, { timeout: 5_000, interval: 50 });
         expect(fallback).not.toHaveBeenCalled();
+        handle.close();
+    });
+
+    it('the catch-up does not report a file written well before the watch was asked for (files-watch-cdp: one batch per edit)', async () => {
+        root = await mkdtemp(join(tmpdir(), 'genie-watch-worker-'));
+        // As files-watch-cdp's phases: the last edit 700 ms before the next view's watch; and one stamped by a coarse clock
+        // a few ms behind the ask (Linux), which the catch-up must still report.
+        await writeFile(join(root, 'earlier.txt'), 'before the ask');
+        await writeFile(join(root, 'coarse.txt'), 'at the ask');
+        const now = Date.now();
+        await utimes(join(root, 'earlier.txt'), new Date(now - 700), new Date(now - 700));
+        await utimes(join(root, 'coarse.txt'), new Date(now - 5), new Date(now - 5));
+        const seen: string[] = [], ready = vi.fn();
+        const handle = workerWatchSource({ fallback: vi.fn(() => ({ close: () => {} })), startWorker: (code, data) => { const w = new Worker(code, { eval: true, workerData: data }); w.on('message', (m) => { if (m === 'ready') ready(); }); return w; } })(root, (rel) => seen.push(rel));
+        await vi.waitFor(() => expect(seen).toContain('coarse.txt'), { timeout: 5_000, interval: 20 });
+        await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce(), { timeout: 5_000, interval: 20 });
+        await new Promise((r) => setTimeout(r, 300));
+        expect(seen).not.toContain('earlier.txt');
         handle.close();
     });
 
