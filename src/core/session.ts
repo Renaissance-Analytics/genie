@@ -1,7 +1,7 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-store.js';
-import { boundToolEvent } from './tool-row-bound.js';
+import { boundToolEvent, utf8Bytes } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
 import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
@@ -616,6 +616,13 @@ export class AgentSession {
     #echoSeen = '';
     /** Writes in flight, chained so the thread records rows in the order they were emitted. */
     #writes: Promise<void> = Promise.resolve();
+    /**
+     * Rows waiting for the next write on the chain (Tynn #550): rows emitted together go to the thread together, as one
+     * `record`, in order — one lock, one append, one sync — never one each.
+     */
+    #pendingRows: Array<{ event: StreamEvent; whole: string | null }> = [];
+    /** The chained write that will take `#pendingRows`, while it has not started. */
+    #pendingWrite: Promise<void> | null = null;
     /**
      * The approval a human has not answered yet, and the resolver the PROVIDER is blocked on.
      *
@@ -2271,32 +2278,56 @@ export class AgentSession {
      */
     /** `whole`: a tool's output that did not fit its row's preview, kept beside the ledger first (Tynn story #386). */
     #record(event: StreamEvent, whole: string | null = null): Promise<void> {
+        this.#pendingRows.push({ event, whole });
+        // A write already waiting on the chain takes this row too; otherwise one is chained for it.
+        if (this.#pendingWrite !== null) return this.#pendingWrite;
         const write = async (): Promise<void> => {
-            const store = this.#options.store;
+            this.#pendingWrite = null;
+            const rows = this.#pendingRows;
+            this.#pendingRows = [];
+            for (let at = 0; at < rows.length;) {
+                // Bounded batches: a burst of large rows is never one giant append.
+                let end = at, bytes = 0;
+                while (end < rows.length && (end === at || (end - at < WRITE_BATCH_ROWS && bytes < WRITE_BATCH_BYTES))) {
+                    bytes += utf8Bytes(JSON.stringify(rows[end]!.event) ?? '');
+                    end += 1;
+                }
+                await this.#writeBatch(rows.slice(at, end));
+                at = end;
+            }
+        };
+        const chained = this.#writes.then(write, write);
+        this.#pendingWrite = chained;
+        this.#writes = chained;
+        return chained;
+    }
+
+    /** One batch of rows to the thread, in order, as ONE record — retried as a row was (genie#1315). */
+    async #writeBatch(rows: ReadonlyArray<{ event: StreamEvent; whole: string | null }>): Promise<void> {
+        const store = this.#options.store;
+        for (const { event, whole } of rows) {
             if (whole !== null && event.kind === 'tool' && store instanceof ThreadStore) {
                 // Before the row that names it. A sidecar that cannot be written leaves the row and its preview: the
                 // whole is then "not kept" when a person opens it, and the conversation is still saved.
                 try { await store.writeToolOutput(threadKeyFor(this.agentId), event.toolCallId, whole); } catch { /* the preview stands */ }
             }
-            for (let attempt = 0; ; attempt += 1) {
-                try {
-                    const thread = openAgentThread(this.#options.store, this.agentId);
-                    await thread.record([persistable(event, this.#options.runId)]);
-                    return;
-                } catch (error) {
-                    const wait = WRITE_RETRY_MS[attempt];
-                    if (wait !== undefined && clearsOnItsOwn(error)) {
-                        await new Promise((r) => setTimeout(r, wait));
-                        continue;
-                    }
-                    this.#unpersisted += 1;
-                    this.#sayNotSaved(error);
-                    return;
+        }
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                const thread = openAgentThread(store, this.agentId);
+                await thread.record(rows.map(({ event }) => persistable(event, this.#options.runId)));
+                return;
+            } catch (error) {
+                const wait = WRITE_RETRY_MS[attempt];
+                if (wait !== undefined && clearsOnItsOwn(error)) {
+                    await new Promise((r) => setTimeout(r, wait));
+                    continue;
                 }
+                this.#unpersisted += rows.length;
+                this.#sayNotSaved(error);
+                return;
             }
-        };
-        this.#writes = this.#writes.then(write, write);
-        return this.#writes;
+        }
     }
 
     /**
@@ -2589,6 +2620,9 @@ function promptRow(text: string, by: string | null, sent: { attachments: readonl
  * off mid-way is reclaimed by the second attempt. Bounded, so a store that never frees costs a row ~20 s, not forever.
  */
 const WRITE_RETRY_MS: readonly number[] = [250, 1000, 2000];
+/** The most rows, and about the most bytes, one thread write takes at once (Tynn #550). */
+const WRITE_BATCH_ROWS = 256;
+const WRITE_BATCH_BYTES = 2 * 1024 * 1024;
 
 /**
  * A thread write fault that CLEARS ON ITS OWN: the lock was held (`session_locked`, prism-harness), or Windows refused a

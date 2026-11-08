@@ -1,9 +1,10 @@
 import { deviceExpiryText, isExpiringSoon } from '../../core/device-expiry.js';
 import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
+import { PluginsPage } from './PluginsPage.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Callout, Icon, Input, Modal, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
@@ -1766,7 +1767,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'plugins' ? (
                                 <>
                                     <SetSection title="Developer mode" desc="Unsigned local plugins, labelled as such.">{rows('plugins')}</SetSection>
-                                    <Plugins plugins={data.plugins} onAction={onAction} />
+                                    <PluginsPage plugins={data.plugins} onAction={onAction} />
                                 </>
                             ) : null}
                             {active === 'remote' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
@@ -2166,101 +2167,6 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
         </form>
         </details>
         </div>
-    );
-}
-
-/**
- * PLUGINS (§6.7; ADF B5). Every folder in the plugins directory is listed with its state and label — signed by whom, or
- * Unverified while publisher checks are off — and a refused or invalid plugin shows its REASON rather than vanishing.
- * Enable/Disable only for installable ones. The folder path is shown so a person knows where plugins go.
- *
- * "Turn off publisher checks" (the owner: signed packages only, with a switch turned off at the person's own risk): turning
- * checks OFF asks first, the risk in words; while they are off a banner says so; turning them back on asks nothing. A
- * package running only because of it wears Unverified and has no network until the person allows it, from its row.
- */
-const PUBLISHER_RISK = 'Unsigned or unknown publishers can run code on this machine. You accept that risk.';
-
-function Plugins({ plugins, onAction }: { plugins: FeatureData['plugins']; onAction: SurfaceProps['onAction'] }) {
-    const [confirming, setConfirming] = useState(false);
-    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
-    const tone = (state: string) => (state === 'enabled' ? 'emerald' : state === 'disabled' ? undefined : 'amber') as 'emerald' | 'amber' | undefined;
-    const setChecksOff = (off: boolean) => onAction({ kind: 'settings.set', key: 'publisher_checks_off', value: off });
-    return (
-        <section data-plugins className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
-            <h2 className="text-sm font-semibold">Plugins</h2>
-            {plugins === null ? (
-                <Skeletons rows={3} />
-            ) : (
-                <>
-                    <p className="text-xs text-[var(--fg-3)]">
-                        Plugins live in <span className="font-mono">{plugins.dir}</span>. Signed by default: a plugin signed by a publisher key Genie holds is installed; anything else is listed with the reason.
-                    </p>
-                    <label data-publisher-checks className="flex items-center gap-3 text-sm">
-                        <Switch
-                            checked={plugins.publisherChecksOff}
-                            // Off → on is the risk: asked first. On → off is the safe way: done at once.
-                            onCheckedChange={(checked) => { if (checked) setConfirming(true); else setChecksOff(false); }}
-                            aria-label="Turn off publisher checks"
-                        />
-                        <span>Turn off publisher checks</span>
-                    </label>
-                    {plugins.publisherChecksOff ? (
-                        <Callout data-publisher-checks-banner color="amber">
-                            Publisher checks are off: unsigned plugins and plugins from publishers Genie does not know run here, labelled Unverified, each with no network until you allow it. A plugin changed after it was signed is still refused.
-                        </Callout>
-                    ) : null}
-                    {plugins.entries.length === 0 ? (
-                        <p className="text-sm text-[var(--fg-3)]">No plugins yet. Drop a folder with a genie-plugin.json into the plugins directory.</p>
-                    ) : (
-                        <ul className="divide-y divide-[var(--border-1)]">
-                            {plugins.entries.map((p) => {
-                                const colour = tone(p.state);
-                                const hosts = p.networkHosts ?? [];
-                                return (
-                                <li key={p.id} data-plugin={p.id} data-plugin-state={p.state} className="flex flex-wrap items-center gap-3 py-2 text-sm">
-                                    <span className="font-medium">{p.name}</span>
-                                    {p.version ? <span className="font-mono text-xs text-[var(--fg-4)]">{p.version}</span> : null}
-                                    <Badge variant="soft" size="sm" {...(colour ? { color: colour } : {})}>{p.state}</Badge>
-                                    {p.unverified ? (
-                                        <Badge data-plugin-unverified variant="soft" size="sm" color="amber">Unverified</Badge>
-                                    ) : p.label ? <span className="text-xs text-[var(--fg-3)]">{p.label}</span> : null}
-                                    {p.reason ? <span className="basis-full text-xs text-[var(--fg-3)]">{p.reason}</span> : null}
-                                    {p.unverified && hosts.length > 0 ? (
-                                        <span className="basis-full text-xs text-[var(--fg-3)]">
-                                            {p.networkAllowed ? `Network allowed: ${hosts.join(', ')}.` : `No network: it asks for ${hosts.join(', ')}.`}
-                                        </span>
-                                    ) : null}
-                                    {p.unverified && hosts.length > 0 ? (
-                                        p.networkAllowed ? (
-                                            <Button size="xs" type="button" data-action="plugin-block-network" data-plugin-id={p.id} className={button} onClick={() => onAction({ kind: 'plugins.setNetworkAllowed', id: p.id, allowed: false })}>Block network</Button>
-                                        ) : (
-                                            <Button size="xs" type="button" data-action="plugin-allow-network" data-plugin-id={p.id} className={button} onClick={() => onAction({ kind: 'plugins.setNetworkAllowed', id: p.id, allowed: true })}>Allow network</Button>
-                                        )
-                                    ) : null}
-                                    {p.state === 'enabled' ? (
-                                        <Button size="xs" type="button" data-action="plugin-disable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: false })}>Disable</Button>
-                                    ) : p.state === 'disabled' ? (
-                                        <Button size="xs" type="button" data-action="plugin-enable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: true })}>Enable</Button>
-                                    ) : null}
-                                </li>
-                                );
-                            })}
-                        </ul>
-                    )}
-                    <Modal open={confirming} onClose={() => setConfirming(false)} size="sm">
-                        <Modal.Header>Turn off publisher checks?</Modal.Header>
-                        <Modal.Body>
-                            <p data-publisher-checks-risk className="text-sm">{PUBLISHER_RISK}</p>
-                            <p className="mt-2 text-xs text-[var(--fg-3)]">Unsigned plugins then run, labelled Unverified, each with no network until you allow it. A plugin changed after it was signed is refused either way.</p>
-                        </Modal.Body>
-                        <Modal.Footer>
-                            <Button type="button" data-action="publisher-checks-cancel" className={button} onClick={() => setConfirming(false)}>Cancel</Button>
-                            <Button type="button" data-action="publisher-checks-off-confirm" className={button} onClick={() => { setConfirming(false); setChecksOff(true); }}>Turn off publisher checks</Button>
-                        </Modal.Footer>
-                    </Modal>
-                </>
-            )}
-        </section>
     );
 }
 

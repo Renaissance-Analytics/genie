@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,8 +70,37 @@ describe('an exit writes every line queued before it', () => {
     }, 60_000);
 });
 
-describe('a host killed outright leaves whole lines, in order', () => {
-    it('killed 12 times while logging in fast bursts: every time, only whole lines, a prefix of what it logged', async () => {
+/*
+ * A WRITE CUT BY A KILL (the coordinator, C3's CI run: kill 11 left a torn last line). A write to a file is NOT atomic
+ * against SIGKILL: the kernel copies it a page at a time and stops at a fatal signal, so a batch can be cut mid-line on any
+ * page boundary, whatever its size. What a kill can leave is mended where it can be: when the log is next opened (the next
+ * host start), a last line without its newline is the cut tail of a write that never finished, and it is dropped before
+ * anything is written after it. So the file the next start reads, and writes to, holds whole lines only.
+ */
+describe('a cut tail is mended when the log is next opened', () => {
+    it.each([true, false])('async=%s: a last line without its newline is dropped before the first new line; the rest is kept', async (async) => {
+        const dir = runtimeDir();
+        const whole = '2026-11-08T12:00:00.000Z seq=1 x\n2026-11-08T12:00:00.001Z seq=2 xx\n';
+        writeFileSync(join(dir, 'lifecycle.log'), `${whole}2026-11-08T12:00:00.002Z seq=3 xx`);
+        const log = openLifecycleLog(dir, { now: () => 0, ...(async ? { async: true } : {}) } as never) as unknown as AsyncLog;
+        log('host boot pid=2');
+        await log.flush?.();
+        expect(text(dir)).toBe(`${whole}1970-01-01T00:00:00.000Z host boot pid=2\n`);
+    });
+
+    it('CONTROL: a log that ends whole is not touched', async () => {
+        const dir = runtimeDir();
+        const whole = '2026-11-08T12:00:00.000Z seq=1 x\n';
+        writeFileSync(join(dir, 'lifecycle.log'), whole);
+        const log = open(dir);
+        log('host boot pid=2');
+        await log.flush();
+        expect(text(dir)).toBe(`${whole}1970-01-01T00:00:00.000Z host boot pid=2\n`);
+    });
+});
+
+describe('a host killed outright leaves whole lines, in order, once the next start opens the log', () => {
+    it('killed 12 times while logging in fast bursts: every time, after the next start, only whole lines, a prefix of what it logged', async () => {
         for (let i = 0; i < 12; i += 1) {
             const dir = runtimeDir();
             const child = run(dir, 'stream');
@@ -85,13 +114,18 @@ describe('a host killed outright leaves whole lines, in order', () => {
             const gone = new Promise((r) => child.once('exit', r));
             child.kill('SIGKILL');
             await gone;
+            // The next start opens the log and writes its first line.
+            const next = open(dir);
+            next('host boot pid=2');
+            await next.flush();
             // The rotated file (past 1 MiB) and the current one, read as one run.
             const rotated = text(dir, 'lifecycle.log.1');
             const body = text(dir);
-            // Whole lines only: each file ends with a newline, and every line is a stamped, numbered line.
-            expect(body.endsWith('\n'), `kill ${i + 1}: a torn last line`).toBe(true);
-            for (const line of `${rotated}${body}`.split('\n').filter(Boolean)) expect(line).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z seq=\d+ x*$/);
-            const got = [...seqs(rotated), ...seqs(body)];
+            // Whole lines only: the file ends with the next start's line, and every line before it is a stamped, numbered line.
+            expect(body.endsWith('1970-01-01T00:00:00.000Z host boot pid=2\n'), `kill ${i + 1}: the next start's line is not whole and last`).toBe(true);
+            const logged = `${rotated}${body}`.split('\n').filter(Boolean).slice(0, -1);
+            for (const line of logged) expect(line, `kill ${i + 1}`).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z seq=\d+ x*$/);
+            const got = logged.map((l) => Number(/ seq=(\d+)/.exec(l)?.[1] ?? NaN));
             // CONTROL: it got far enough to write lines at all.
             expect(got.length, `kill ${i + 1}: nothing written`).toBeGreaterThan(0);
             // In order, none missing: from 1 when nothing rotated away, else a run with no gap.
