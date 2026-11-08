@@ -58,6 +58,8 @@ export type StoresEvent =
     | { readonly store: 'inbox'; readonly kind: 'sent'; readonly to: string; readonly messageId: string }
     | { readonly store: 'inbox'; readonly kind: 'read'; readonly reader: string; readonly ids: readonly string[] | null }
     | { readonly store: 'attention'; readonly kind: 'data'; readonly data: AttentionData }
+    /** Only the parts that changed (Tynn #546): a question asked never sends the finished handoffs again. */
+    | { readonly store: 'attention'; readonly kind: 'parts'; readonly parts: Partial<AttentionData> }
     | { readonly store: 'attention'; readonly kind: 'left'; readonly questionId: string; readonly outcome: QuestionLeft }
     | { readonly store: 'approvals'; readonly kind: 'view'; readonly view: ApprovalsView }
     | { readonly store: 'settings'; readonly kind: 'changed'; readonly key: string; readonly value: SettingValue; readonly workspaceId: string | null; readonly data: SettingsData }
@@ -102,7 +104,16 @@ export class AgentStoresService {
         stores.inbox.onChanged(() => this.#mailChanged());
         stores.inbox.onSend((to, message) => this.#emit({ store: 'inbox', kind: 'sent', to, messageId: message.id }));
         stores.inbox.onRead((reader, ids) => this.#emit({ store: 'inbox', kind: 'read', reader, ids: ids ? [...ids] : null }));
-        stores.attention.onChange(() => this.#emit({ store: 'attention', kind: 'data', data: stores.attention.snapshot() }));
+        // Only what changed crosses (Tynn #546): on the owner's machine the whole was 8.6 MB per change, to every link.
+        let sent: Readonly<AttentionData> = { ...stores.attention.snapshot() };
+        stores.attention.onChange(() => {
+            const now = stores.attention.snapshot();
+            const parts: Partial<Record<keyof AttentionData, unknown>> = {};
+            for (const key of Object.keys(now) as (keyof AttentionData)[]) if (now[key] !== sent[key]) parts[key] = now[key];
+            for (const key of Object.keys(sent) as (keyof AttentionData)[]) if (!(key in now)) parts[key] = undefined;
+            sent = { ...now };
+            if (Object.keys(parts).length > 0) this.#emit({ store: 'attention', kind: 'parts', parts: parts as Partial<AttentionData> });
+        });
         stores.attention.onLeave((questionId, outcome) => this.#emit({ store: 'attention', kind: 'left', questionId, outcome }));
         stores.approvals.onChange(() => this.#emit({ store: 'approvals', kind: 'view', view: this.#approvalsView() }));
         // A setting changed, by whoever: every window's replica takes the data, then its listeners fire (hot-swap kept).
