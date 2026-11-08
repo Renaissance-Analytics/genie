@@ -38,7 +38,8 @@ import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { copyToClipboard } from './clipboard.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, tynnIssuesHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
-import { EMPTY_FEATURES, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
+import { useHostHome, withPickerStart } from './host-home.js';
+import { EMPTY_FEATURES, forgetHost, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
@@ -162,11 +163,7 @@ function useFeatures(bridge: GenieBridge | undefined): [FeatureData, Dispatch<Se
         const features = bridge?.features ?? NO_FEATURES;
         let live = true;
         // Another host numbers its snapshots from its own start: forget this one's, so its first is taken.
-        setData((cur) => {
-            if (cur.seq === undefined) return cur;
-            const { seq: _previousHost, ...rest } = cur;
-            return rest;
-        });
+        setData(forgetHost);
         // The NEWER snapshot wins, whichever lands last (genie#1393): pushes and a click's answer race.
         void features.snapshot().then((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); });
         const off = features.subscribe((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); });
@@ -1143,7 +1140,7 @@ function DesktopApp({ bridge }: AppProps) {
     // THE WINDOW'S ONE PICKER (Tynn #835): every file and folder is chosen over the HOST's disk — the remote machine's
     // when this window drives one — by promise; `null` when cancelled.
     const [pickerAsk, setPickerAsk] = useState<{ opts: Parameters<PickHostPath>[0]; resolve: (picked: string | string[] | null) => void } | null>(null);
-    const pickHostPath: PickHostPath | null = resolvedBridge?.host ? (opts) => new Promise((resolve) => setPickerAsk({ opts, resolve })) : null;
+    const pickHostPath: PickHostPath | null = resolvedBridge?.host ? (opts) => new Promise((resolve) => setPickerAsk({ opts: withPickerStart(opts, addStart), resolve })) : null;
     const pickFolder = (title: string, initialPath?: string): Promise<string | null> =>
         pickHostPath ? pickHostPath({ mode: 'directory', title, ...(initialPath ? { initialPath } : {}) }).then((p) => (typeof p === 'string' ? p : null)) : Promise.resolve(null);
     /*
@@ -1153,8 +1150,7 @@ function DesktopApp({ bridge }: AppProps) {
      * the host's home — never the bare drive list when anything better is known (core/add-workspace.ts `pickerStart`).
      */
     const [addOpen, setAddOpen] = useState(false);
-    const [hostHome, setHostHome] = useState<string | null>(null);
-    useEffect(() => { void resolvedBridge?.host?.home?.().then(setHostHome, () => {}); }, [resolvedBridge]);
+    const hostHome = useHostHome(resolvedBridge);
     const primaryWorkspace = typeof features.settings.values?.['primary_workspace'] === 'string' ? (features.settings.values['primary_workspace'] as string) : '';
     const addStart = pickerStart({ primaryWorkspace, home: hostHome });
     const hostSep = /\\/.test(primaryWorkspace || hostHome || '') ? '\\' : '/';
