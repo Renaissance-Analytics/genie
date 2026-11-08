@@ -7,7 +7,8 @@ name: CI
 #
 # No Docker. These suites need no service containers, which also keeps them clear of the
 # Docker Hub unauthenticated pull quota that made the old repo's `hosting` job unrunnable
-# (Renaissance-Analytics/genie#864).
+# (Renaissance-Analytics/genie#864). One job is the exception, by design: `mailpit measure`
+# runs the Mailpit image Genie runs, pulled from GHCR by digest, never from Docker Hub.
 
 on:
   push:
@@ -296,6 +297,27 @@ jobs:
 
       - run: npm run verify:zip64
         if: steps.changed.outputs.zip64 == 'true'
+
+  # GENIE MAIL G1 (Tynn #487): MEASURE MAILPIT BEFORE GENIE MAIL RELIES ON IT (`npm run verify:mailpit`,
+  # test/mailpit-measure/). A real axllent/mailpit v1.30 container (the same manifest from GHCR, by digest:
+  # test/mailpit-measure/mailpit-image.ts): SMTP auth with two users, the username on a message, the websocket,
+  # the HTML and link checks, the send API, and when the auth file is read. Each finding is printed as
+  # `MAILPIT_FINDING <name> <json>`. Not in `npm test`, which runs on people's machines too; always run here, so it
+  # always reports. test/mailpit-measure-ci.test.ts holds the rules.
+  mailpit:
+    name: mailpit measure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run verify:mailpit
 
   smoke:
     name: a real window
