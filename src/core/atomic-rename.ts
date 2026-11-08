@@ -50,7 +50,8 @@ export function renameOverSync(temp: string, file: string, ports: SyncPorts = {}
     const windows = (ports.platform ?? process.platform) === 'win32';
     const move = ports.rename ?? renameSync;
     const remove = ports.remove ?? ((path: string) => rmSync(path, { force: true }));
-    const sleep = ports.sleep ?? ((ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); });
+    // A bounded spin, only while Windows reports a lock (at most RENAME_RETRY_SYNC_DELAYS_MS in all).
+    const sleep = ports.sleep ?? ((ms: number) => { const end = Date.now() + ms; while (Date.now() < end) { /* the rename is what we wait for */ } });
     for (let attempt = 0; ; attempt += 1) {
         try {
             move(temp, file);
