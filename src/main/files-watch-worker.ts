@@ -57,14 +57,21 @@ export function workerWatchSource(options: WorkerWatchOptions = {}): WatchSource
     return (root, onPath) => {
         // As nodeWatchSource: on macOS only what changes after this moment counts (FSEvents replays earlier writes).
         const since = process.platform === 'darwin' ? Date.now() : Number.NEGATIVE_INFINITY;
+        const onThisThread = () => (options.fallback ?? nodeWatchSource)(root, onPath);
         let closed = false;
         let worker: Pick<Worker, 'on' | 'postMessage' | 'terminate'>;
-        let here: { close(): void } | null = null;
-        // A worker that cannot start, or fails, is replaced by the watch on this thread: a watch is never simply lost.
+        /*
+         * THE WATCH ON THIS THREAD, until the worker's own is up (it says `ready`): a watch starts when it is asked for,
+         * as nodeWatchSource's does, so a write the moment a view opens is never missed. Kept for good when the worker
+         * cannot start, fails, or ends on its own: a watch is never simply lost.
+         */
+        let here: { close(): void } | null = onThisThread();
+        let kept = false;
         const fallBack = (why: string) => {
-            if (closed || here) return;
+            if (closed || kept) return;
+            kept = true;
             options.log?.(`files watch: the watcher's own thread ${why}; watching on genie-host's thread`);
-            here = (options.fallback ?? nodeWatchSource)(root, onPath);
+            here ??= onThisThread();
         };
         try {
             const start = options.startWorker ?? ((source, workerData) => new Worker(source, { eval: true, workerData }));
@@ -74,7 +81,9 @@ export function workerWatchSource(options: WorkerWatchOptions = {}): WatchSource
             return { close: () => { closed = true; here?.close(); } };
         }
         worker.on('message', (batch: unknown) => {
-            if (closed || here || !Array.isArray(batch)) return;
+            if (closed || kept) return;
+            if (batch === 'ready') { here?.close(); here = null; return; }
+            if (!Array.isArray(batch)) return;
             for (const [name, mtimeMs, isDirectory] of batch as Array<[string, number | null, boolean]>) {
                 const rel = confine(root, name);
                 if (rel === null || rel === '') continue;
@@ -84,7 +93,7 @@ export function workerWatchSource(options: WorkerWatchOptions = {}): WatchSource
         worker.on('error', (error) => { fallBack(`failed (${error instanceof Error ? error.message : String(error)})`); });
         worker.on('exit', (code) => { if (!closed) fallBack(`ended (exit ${String(code)})`); });
         return { close: () => {
-            if (closed) return; closed = true; here?.close();
+            if (closed) return; closed = true; here?.close(); here = null;
             try { worker.postMessage('close'); } catch { /* already gone */ }
             setTimeout(() => { void worker.terminate(); }, 1_000).unref?.();
         } };
