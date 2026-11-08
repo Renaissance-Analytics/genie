@@ -68,6 +68,8 @@ beforeEach(async () => {
 /** Everything this file's host and windows leave behind, then its folder. */
 async function leave(): Promise<void> {
     for (const close of links.splice(0)) close();
+    // Its private writes first: on Windows each ends by restricting the file's ACL, which fails on a file already gone.
+    await access.close();
     await rm(home, { recursive: true, force: true });
 }
 afterEach(leave);
