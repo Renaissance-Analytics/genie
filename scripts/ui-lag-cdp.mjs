@@ -101,7 +101,9 @@ function installHostGauge(create) {
         const next = Array.isArray(options?.args) && typeof options.args[1] === 'string' ? options.args[1].split(/[\\/]/).pop().slice(0, 40) : '';
         // Genie's own executable started as the APP (not as Node): a window, the Genie browser or the updater, once each.
         const app = options?.file === process.execPath && Array.isArray(options?.envPairs) && !options.envPairs.includes('ELECTRON_RUN_AS_NODE=1');
-        if (s.spawns.length < 5000) s.spawns.push([performance.now(), app ? `app launch: ${file}` : next ? `${file} ${next}` : file]);
+        // An app launch is named by its first flag (`--genie-browser`, a window's, the updater's): which one it was.
+        const flag = app && Array.isArray(options?.args) ? (options.args.slice(1).find((a) => typeof a === 'string' && a.startsWith('--')) ?? '').split('=')[0].slice(0, 40) : '';
+        if (s.spawns.length < 5000) s.spawns.push([performance.now(), app ? `app launch: ${file}${flag ? ` ${flag}` : ''}` : next ? `${file} ${next}` : file]);
         return original.call(this, options);
     };
     s.stop = () => { clearInterval(s.timer); if (ChildProcess.prototype.spawn !== original) ChildProcess.prototype.spawn = original; };
