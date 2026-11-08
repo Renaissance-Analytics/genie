@@ -14,7 +14,7 @@ import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import type { GenieBridge } from '../src/renderer/bridge.js';
 import { HostPathPickerForm } from '../src/renderer/components/HostPathPicker.js';
 import { EMPTY_FEATURES, forgetHost } from '../src/renderer/features.js';
-import { useHostHome } from '../src/renderer/host-home.js';
+import { useHostHome, withPickerStart } from '../src/renderer/host-home.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 import { protocolContractDeps } from './support/protocol-contract-deps.js';
@@ -87,6 +87,15 @@ describe('the home a picker starts at is the home of the bridge this window driv
         await act(async () => { answerLocal('C:\\Users\\glenn'); await Promise.resolve(); });
         await flush();
         expect(shown()).toBe('/home/wish');
+    });
+});
+
+describe('a picker asked without a start opens where the window’s pickers open', () => {
+    it('an alert’s sound (no start given) opens at the host’s start — not `/`', () => {
+        expect(withPickerStart({ mode: 'file' as const, title: 'Choose a sound' }, '/home/wish')).toEqual({ mode: 'file', title: 'Choose a sound', initialPath: '/home/wish' });
+    });
+    it('CONTROL: a start that was given is kept', () => {
+        expect(withPickerStart({ mode: 'directory' as const, initialPath: '/w/tynn' }, '/home/wish')).toEqual({ mode: 'directory', initialPath: '/w/tynn' });
     });
 });
 

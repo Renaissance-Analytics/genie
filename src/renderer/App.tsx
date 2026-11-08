@@ -38,7 +38,7 @@ import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { copyToClipboard } from './clipboard.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
-import { useHostHome } from './host-home.js';
+import { useHostHome, withPickerStart } from './host-home.js';
 import { EMPTY_FEATURES, forgetHost, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { refusalReason } from './site-actions.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
@@ -1131,7 +1131,7 @@ function DesktopApp({ bridge }: AppProps) {
     // THE WINDOW'S ONE PICKER (Tynn #835): every file and folder is chosen over the HOST's disk — the remote machine's
     // when this window drives one — by promise; `null` when cancelled.
     const [pickerAsk, setPickerAsk] = useState<{ opts: Parameters<PickHostPath>[0]; resolve: (picked: string | string[] | null) => void } | null>(null);
-    const pickHostPath: PickHostPath | null = resolvedBridge?.host ? (opts) => new Promise((resolve) => setPickerAsk({ opts, resolve })) : null;
+    const pickHostPath: PickHostPath | null = resolvedBridge?.host ? (opts) => new Promise((resolve) => setPickerAsk({ opts: withPickerStart(opts, addStart), resolve })) : null;
     const pickFolder = (title: string, initialPath?: string): Promise<string | null> =>
         pickHostPath ? pickHostPath({ mode: 'directory', title, ...(initialPath ? { initialPath } : {}) }).then((p) => (typeof p === 'string' ? p : null)) : Promise.resolve(null);
     /*
