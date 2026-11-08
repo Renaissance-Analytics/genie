@@ -27,7 +27,8 @@ import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
-import { SpawnHostClient } from './spawn-host-client.js';
+import { routeExecThroughSpawnHost, SpawnHostClient } from './spawn-host-client.js';
+import { setGitExecRoute } from './git-exec.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import { SupervisorService } from './supervisor-host.js';
 import { LinkGate } from './linked-stream.js';
@@ -1033,13 +1034,22 @@ async function main(): Promise<void> {
             client.linkFrame(frame);
             if (frame.kind === 'event' && frame.channel === 'host.ready') {
                 void client.linkUp().then(() => {
-                    if (profile === 'supervised') supervisedLink.setUp(true);
+                    if (profile === 'supervised') {
+                        supervisedLink.setUp(true);
+                        /*
+                         * THIS HOST CREATES NO PROCESS ON ITS OWN THREAD (Tynn #532): Windows creates one synchronously on the
+                         * calling thread, and one git read held this host 295 ms. Its git and its commands (execFileRunner)
+                         * are created by this child while it is up; between its lives, here, as before.
+                         */
+                        setGitExecRoute(supervisedClient.gitExec);
+                        routeExecThroughSpawnHost(supervisedClient);
+                    }
                 }).catch((error: unknown) => lifecycleLog(`${profile} spawn host did not come up: ${error instanceof Error ? error.message : String(error)}`));
             }
         },
         // Between their lives, opens are refused in words (a crash the supervisor backs off from), never sent into nothing.
         onChildExit: (profile) => {
-            if (profile === 'supervised') supervisedLink.setUp(false);
+            if (profile === 'supervised') { supervisedLink.setUp(false); setGitExecRoute(null); routeExecThroughSpawnHost(null); }
             if (profile !== 'processes') ownChildren[profile].linkDown(`the ${profile} spawn host exited`);
         },
         log: (line) => { say(line); lifecycleLog(line); },
