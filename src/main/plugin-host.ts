@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { bridgeAccess, installDecision, parseManifest, verifyPluginSignature, type AccessDecision, type AccessRequest, type PluginManifest } from '../core/plugins.js';
+import { bridgeAccess, parseManifest, type AccessDecision, type AccessRequest, type PluginManifest } from '../core/plugins.js';
+import { checkPackage, currentDigest } from './plugin-package.js';
 import { editorBytesAccess, type ClaimingEditor, type EditorBytesDecision } from '../core/plugin-editors.js';
 import type { OfficialPlugin } from '../core/official-plugins.js';
 
@@ -34,6 +35,8 @@ export interface PluginEntry {
 
 interface Loaded extends PluginEntry {
     readonly manifest: PluginManifest | null;
+    /** ADF B4: the digest a SIGNED package was loaded with, re-checked before each run of its tools; null otherwise. */
+    readonly digest?: string | null;
 }
 
 export class PluginHost {
@@ -93,14 +96,13 @@ export class PluginHost {
                 entries.push({ id: `(${folder})`, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'invalid', label: null, reason: `${parsed.manifest.id} is an official plugin that ships with Genie; a folder cannot replace it`, manifest: null });
                 continue;
             }
-            let signature: string | null = null;
-            try { signature = await readFile(join(input.dir, folder, 'genie-plugin.sig'), 'utf8'); } catch { signature = null; }
-            const decision = installDecision(verifyPluginSignature({ bytes: Buffer.from(text), signature, keyId: parsed.manifest.publisher.keyId }, input.keys), { developerMode: input.developerMode });
+            // ADF B4: the signature covers EVERY file of the package (core/plugin-integrity.ts), not the manifest alone.
+            const { decision, digest } = await checkPackage(join(input.dir, folder), { keyId: parsed.manifest.publisher.keyId, keys: input.keys, developerMode: input.developerMode });
             if (!decision.install) {
                 entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: decision.reason, manifest: parsed.manifest });
                 continue;
             }
-            entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: decision.label, reason: null, manifest: parsed.manifest });
+            entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: decision.label, reason: null, manifest: parsed.manifest, digest });
         }
         // Installable first, then refused, then invalid — the person reads what works before what does not.
         const rank: Record<PluginState, number> = { enabled: 0, disabled: 0, refused: 1, invalid: 2 };
@@ -109,11 +111,30 @@ export class PluginHost {
     }
 
     /** The MCP tools of ENABLED plugins (§6.7), each with its folder and manifest — what the MCP surface offers agents. */
-    tools(): readonly { pluginId: string; dir: string; manifest: NonNullable<Loaded['manifest']>; tool: PluginTool; official: boolean }[] {
+    tools(): readonly { pluginId: string; dir: string; manifest: NonNullable<Loaded['manifest']>; tool: PluginTool; official: boolean; verify: () => Promise<string | null> }[] {
         // `official`: Genie's own tool, run in-process (main/official-tools.ts) — there is no plugin folder to launch from.
+        // `verify`: ADF B4, the package checked again before the run (null = run it; else why it is refused).
         return this.#entries.flatMap((e) =>
-            e.state === 'enabled' && e.manifest ? e.manifest.mcpTools.map((tool) => ({ pluginId: e.id, dir: join(this.#dir, e.folder), manifest: e.manifest!, tool, official: e.folder === OFFICIAL_FOLDER })) : [],
+            e.state === 'enabled' && e.manifest ? e.manifest.mcpTools.map((tool) => ({ pluginId: e.id, dir: join(this.#dir, e.folder), manifest: e.manifest!, tool, official: e.folder === OFFICIAL_FOLDER, verify: () => this.#verifyAtLoad(e.id) })) : [],
         );
+    }
+
+    /**
+     * Before a signed package's code is loaded to run (ADF B4): its files must still be the ones signed. Changed, the
+     * package is refused from now on, so nothing calls it again. An unsigned package (developer mode) and Genie's own
+     * have no signed digest to hold to.
+     */
+    async #verifyAtLoad(pluginId: string): Promise<string | null> {
+        const index = this.#entries.findIndex((e) => e.id === pluginId);
+        const entry = this.#entries[index];
+        if (!entry) return `${pluginId} is not a plugin Genie has`;
+        if (entry.state !== 'enabled') return entry.reason ?? `${pluginId} is not enabled`;
+        if (!entry.digest) return null;
+        const now = await currentDigest(join(this.#dir, entry.folder));
+        if (now.ok && now.digest === entry.digest) return null;
+        const reason = `refused as tampered: ${now.ok ? 'a file changed, was added or was removed since the package was loaded, after it was signed' : now.reason}. A package changed after it was signed never runs, with publisher checks on or off.`;
+        this.#entries[index] = { ...entry, state: 'refused', label: null, reason, digest: null };
+        return reason;
     }
 
     /** The panels ENABLED plugins contribute (§6.7), each with its plugin's id and name — what the Workspace surface offers as `+plugin`. */
