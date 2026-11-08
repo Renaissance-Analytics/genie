@@ -167,9 +167,24 @@ describe('invoke', () => {
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {
         const api = buildHostApi(fakes().deps);
         await expect(api.invoke('addWorkspace', [])).rejects.toThrow(/folder picker/);
-        await expect(api.invoke('takeOver', ['agent_a'])).rejects.toThrow(/window/);
         await expect(api.invoke('features.setBrowserBounds', [{}])).rejects.toThrow(/host/);
         await expect(api.invoke('workspaces.tynnProjects', [])).rejects.toThrow(/host/);
+    });
+
+    // Tynn #529 part A: Take over from another machine starts the TUI here with NO window here; the person's own machine
+    // opens the window. Without the Take Over host wired in, it still says where to do it.
+    it('takeOver starts the TUI through the Take Over host, with no window on this host, and answers its terminal; closing it ends only what it started', async () => {
+        const f = fakes();
+        const asked: string[] = [];
+        const ended: string[] = [];
+        Object.assign(f.deps, { takeOver: { start: (agentId: string) => { asked.push(agentId); return { ok: true, terminalId: 'term_9', started: true }; }, ended: (terminalId: string) => { ended.push(terminalId); } } });
+        const api = buildHostApi(f.deps) as ReturnType<typeof buildHostApi> & { takeOverEnded?: (terminalId: string) => void };
+        expect(await api.invoke('takeOver', ['agent_a'])).toEqual({ ok: true, terminalId: 'term_9', started: true });
+        expect(asked).toEqual(['agent_a']);
+        api.takeOverEnded?.('term_9');
+        expect(ended).toEqual(['term_9']);
+        // CONTROL: no Take Over host wired in — the old backstop's words.
+        await expect(buildHostApi(fakes().deps).invoke('takeOver', ['agent_a'])).rejects.toThrow(/window/);
     });
 
     it('the default agent reaches the registry with the agent; an empty choice is none (null)', async () => {

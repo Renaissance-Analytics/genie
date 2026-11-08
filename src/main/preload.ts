@@ -198,6 +198,9 @@ const bridge: PreloadBridge = {
     // A known remote host in its own window (Tynn #819).
     remoteWindows: {
         open: (url, name) => ipcRenderer.invoke('genie:remote-open-window', url, name) as Promise<void>,
+        // Take over from another machine (Tynn #529 part A): this machine's Take Over window on that host's terminal.
+        openTakeOver: (url, terminalId, ticket, name) => ipcRenderer.invoke('genie:remote-takeover-open', url, terminalId, ticket, name) as Promise<{ ok: true } | { ok: false; reason: string }>,
+        takeOverTicket: () => ipcRenderer.invoke('genie:takeover-ticket') as Promise<string | null>,
         // Main asks THIS remote window to reconnect (its connection dropped and the person pressed Open; M0 finding 2).
         onReconnectAsked: (listener) => {
             const handler = () => listener();

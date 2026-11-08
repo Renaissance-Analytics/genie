@@ -154,6 +154,9 @@ export type ControlMethod = (typeof CONTROL_METHODS)[number];
  * took it (`null` when it was released or lost). `mine`: whether this window holds it.
  */
 export const BATON_EVENT = 'remote-baton';
+/** A Take Over window's connection is told when its ticket stops letting it type, and why (Tynn #529 part A). */
+export const COMPANION_EVENT = 'remote-companion';
+export interface CompanionEvent { readonly revoked: string }
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
 
 export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
@@ -285,7 +288,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
     ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
     addWorkspace: 'host-only',
-    takeOver: 'host-only',
+    // Tynn #529 part A: from another machine, the TUI starts here and its window opens THERE — a write, on the baton.
+    takeOver: 'write',
     // A provider's login opens a window on the host, for the person at it: like Take Over.
     providerLogin: 'host-only',
     'features.setBrowserBounds': 'host-only',
@@ -330,7 +334,11 @@ export interface PreAuth {
 export type ClientProfile = 'mobile';
 
 export type WireMessage =
-    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile }
+    /**
+     * `companion` (Tynn #529 part A): the ticket a driving window's Take over was answered with — this connection is that
+     * window's Take Over window, for that one terminal. Beside `auth`, never in it: a saved hello's auth is rewritten.
+     */
+    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string }
     | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
     /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
@@ -378,6 +386,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, relay or local' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
             if (raw.profile !== undefined && raw.profile !== 'mobile') return { ok: false, reason: 'hello profile must be "mobile" when given' };
+            if (raw.companion !== undefined && typeof raw.companion !== 'string') return { ok: false, reason: 'hello companion must be a string when given' };
             return { ok: true, message: raw as unknown as Frame<M> };
         }
         case 'call': {
