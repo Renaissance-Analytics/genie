@@ -592,7 +592,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         on(LOCAL_EVENTS.features, () => { if (featureListeners.size > 0) void reread(); });
         Object.assign(bridge.features, {
             snapshot: snapshotNow,
-            subscribe: (listener: (data: FeatureData) => void) => { featureListeners.add(listener); return () => { featureListeners.delete(listener); }; },
+            // Reads at once: a subscribe is also a window coming back, and a revision sent while it was away is not sent again.
+            subscribe: (listener: (data: FeatureData) => void) => { featureListeners.add(listener); void reread(); return () => { featureListeners.delete(listener); }; },
             soundData: (key: string) => decodeJson<string | null>(() => read('features.soundData', key)),
         });
         terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });
