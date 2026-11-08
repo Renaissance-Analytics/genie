@@ -33,7 +33,7 @@ export class SafeMode {
         this.#view = view;
     }
 
-    static open(runtimeDir: string, options: { readonly now?: () => number; readonly pid?: number; readonly log?: (line: string) => void; readonly cause?: () => string } = {}): SafeMode {
+    static open(runtimeDir: string, options: { readonly now?: () => number; readonly pid?: number; readonly log?: (line: string) => void; readonly cause?: () => string; readonly asyncBeat?: boolean } = {}): SafeMode {
         const now = options.now ?? Date.now;
         const log = options.log ?? (() => {});
         mkdirSync(runtimeDir, { recursive: true });
@@ -113,6 +113,9 @@ export class SafeMode {
         this.#lastAlive = now;
     }
     #lastAlive: { at: number; pid: number; agents: string[] } | null = null;
+
+    /** Resolves once every beat so far is written. */
+    flush(): Promise<void> { return Promise.resolve(); }
 
     /** The LAST step of the host's own end. Synchronous: the process exits right after it. */
     writeCleanExit(reason: string): void {
