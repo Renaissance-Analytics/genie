@@ -1699,10 +1699,11 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await githubAccountOf(ports).signOut();
             break;
         case 'plugins.setEnabled':
-            await services.plugins.setEnabled(action.id, action.enabled);
+            // ADF B8: a change the host refuses is a failure the page shows, with Retry; never dropped.
+            if (!(await services.plugins.setEnabled(action.id, action.enabled))) throw new Error(`${action.id} could not be ${action.enabled ? 'enabled' : 'disabled'}: it is not an installable plugin here`);
             break;
         case 'plugins.setNetworkAllowed':
-            await services.plugins.setNetworkAllowed(action.id, action.allowed);
+            if (!(await services.plugins.setNetworkAllowed(action.id, action.allowed))) throw new Error(`${action.id}: its network can only be allowed or blocked while it is an Unverified plugin here`);
             break;
         case 'workspace.syncAgentFiles':
             // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.
