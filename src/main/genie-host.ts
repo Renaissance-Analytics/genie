@@ -127,6 +127,7 @@ import { startHostMcp, type HostMcp } from './host-mcp.js';
 import { hostPluginTools } from './plugins-host.js';
 import { MARKETPLACE_PAGE_BYTES, openMarketplacePlugins } from './marketplace-client.js';
 import { CatalogService } from './catalog-host.js';
+import { GAppBook } from './gapps-host.js';
 import { setOfferedFlowKinds } from '../core/flow-canvas.js';
 import { catalogFlowKinds } from '../core/catalog-projections.js';
 import { hostCatalog } from './genie-catalog.js';
@@ -728,13 +729,28 @@ async function main(): Promise<void> {
      * THE CATALOG (ADF A4, Tynn #448): Genie's own elements and every ENABLED installed plugin's, revisioned. Built again
      * whenever the plugins change; every window follows it over the engine connection (catalog.snapshot, catalog.changed).
      */
-    const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins()));
+    /*
+     * THE GAPP BOOK (GApps v2, V3, Tynn #568): installed apps, their grants and storage, under <home>/gapps. Its installed,
+     * turned-on apps are in the catalog beside the plugins'; a change rebuilds it.
+     */
+    let gappBook: GAppBook | null = null;
+    const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins(), gappBook ?? undefined));
     pluginsService.onEvent(() => catalogService.rebuild());
     // A package installed, updated, disabled or removed reaches agents now, not at the next restart (ADF A6).
     catalogService.onEvent(() => mcp?.refreshTools());
     // The flow palette's door and the runner here offer what the catalog holds, as it changes (ADF A5).
     setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions));
     catalogService.onEvent(() => setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions)));
+    try {
+        gappBook = await GAppBook.open({
+            dir: join(home, 'gapps'), keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true,
+            catalog: () => hostCatalog(pluginsService.plugins(), gappBook ?? undefined),
+        });
+        gappBook.onChange(() => catalogService.rebuild());
+        catalogService.rebuild();
+    } catch (error) {
+        say(`The GApp book could not open: ${error instanceof Error ? error.message : String(error)}`);
+    }
     /*
      * REMOTE ACCESS'S HOST SIDE (Tynn #409, host split P5d.1): the tailnet listener, the remote host, the paired devices,
      * the PIN, the pair prompts, the baton and the lock are HERE, so a paired phone reaches this machine with every window
