@@ -78,7 +78,6 @@ import type { GithubAccountReplica } from './github-account-replica.js';
 import type { RepoListing } from '../core/github.js';
 import { readGenie1Identity, workstationKeyStore, workstationSealedSources } from './workstation-identity.js';
 import { WorkstationService, type WorkstationPort } from './workstation-service.js';
-import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn, unlockKeyringBeforeStores } from './linux-keyring.js';
@@ -2584,13 +2583,6 @@ async function boot(): Promise<void> {
         },
         registry: { workspace: (id) => registry?.workspace(id) ?? null },
     };
-    // The folder is picked IN THE WINDOW (Tynn #835: a FileBrowser over the host's disk) — no native dialog.
-    ipcMain.handle('genie:host-list-dir', (_event, path: unknown) => listHostDir(typeof path === 'string' ? path : '/'));
-    // The folder picker's New folder: made on this machine, inside the folder the picker is in (host-fs.ts makeHostDir).
-    ipcMain.handle('genie:host-mkdir', (_event, parent: unknown, name: unknown) =>
-        (typeof parent === 'string' && typeof name === 'string' ? makeHostDir(parent, name) : { ok: false, reason: 'name a folder and where to make it' }));
-    // Where a folder picker starts when nothing better is known (core/add-workspace.ts `pickerStart`): the host's home.
-    ipcMain.handle('genie:host-home', () => homedir());
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
     // The parent is picked in the window over the host's disk (Tynn #835).
     const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
@@ -2650,10 +2642,6 @@ async function boot(): Promise<void> {
             return sacredNameOf(await tynnAccount.projects(), projectId);
         },
     };
-    ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
-        typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
-    ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
-    ipcMain.handle('genie:workspace-remove', (_event, raw: unknown) => (typeof raw === 'string' ? removeWorkspace(workspaceOps, raw) : { ok: false, reason: 'remove names a workspace' }));
 
     ipcMain.handle('genie:add-workspace', async () => {
         if (!window || !registry) return { ok: false };
@@ -3062,7 +3050,8 @@ async function boot(): Promise<void> {
                 discardStaged: (path) => discardStaged(envelopePorts, path),
                 githubRepos: () => githubRepos(),
                 confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
-                hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
+                // The rail redraws the sleeping workspace (the IPC handler's touch, kept when it moved: P4 family 10).
+                hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()),
                 wake: (id) => wakeWorkspace(workspaceOps, id),
                 remove: (id) => removeWorkspace(workspaceOps, id),
                 listRepos: (id) => listReposOf(repoOps, id),
