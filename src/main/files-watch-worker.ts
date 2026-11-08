@@ -29,7 +29,7 @@ export const WATCH_WORKER_SOURCE = [
     'const { root, ignored } = workerData;',
     'const skip = new Set(ignored);',
     'let batch = [], timer = null;',
-    'const flush = () => { timer = null; const out = batch; batch = []; if (out.length) parentPort.postMessage(out); };',
+    'const flush = () => { timer = null; const out = batch; batch = []; void out; };',
     'const watcher = watch(root, { recursive: true }, (_type, filename) => {',
     "    if (typeof filename !== 'string') return;",
     "    const rel = filename.split(sep).join('/');",
