@@ -35,6 +35,21 @@ import {
     HOME_SECTIONS,
     HOME_STATES,
     HOME_WRITE_GUARD,
+} from '../src/core/tynn-pages.js';
+import {
+    FEATURES_ANSWER,
+    FEATURES_API,
+    FEATURES_DATA_API,
+    FEATURES_ENVELOPE,
+    FEATURES_FIELDS,
+    FEATURES_FORMS,
+    FEATURES_LIVE,
+    FEATURES_MANAGE_GUARD,
+    FEATURES_SCOPE,
+    FEATURES_STATES,
+    FEATURES_TABS,
+} from '../src/core/tynn-features.js';
+import {
     WIP_ACTIONS,
     WIP_ANSWER,
     WIP_COUNTS,
@@ -121,14 +136,14 @@ const publishedInSharedSchemas = (v: string) => compareVersions(v, LAST_SHARED_S
 const board = contract.surfaces.find((s) => s.id === 'board')!;
 
 describe('the contract file', () => {
-    it('pins Home, Releases, Issues and WIP to the 0.9.0 contract published by tynn.ai #390', () => {
+    it('pins Features, Home, Releases, Issues and WIP to the 0.10.0 contract published by tynn.ai #387', () => {
         expect(pin).toEqual({
             repository: 'Renaissance-Analytics/tynn.ai',
             contract: 'workspace-ux',
-            version: '0.9.0',
-            commit: '7cd8ef3fc83f365f02bdbf58683d90f930d88ca7',
-            path: 'contracts/workspace-ux/0.9.0/workspace-ux.json',
-            sha256: '26bccc3973925f1359f4d9e4e88a748e2b225089e62c754c03c75500ba918d2d',
+            version: '0.10.0',
+            commit: '9772e4e9f7d884f6b3dc066ffbcedeae4d7defa0',
+            path: 'contracts/workspace-ux/0.10.0/workspace-ux.json',
+            sha256: '8f9d773647761dd0f979e4212582cd1f2a988f0d769937a3f2716bec797da3df',
         });
     });
 
@@ -405,5 +420,49 @@ describe('the Tynn tab\'s Home, against the contract (0.9.0)', () => {
         expect(HOME_LIVE).toEqual(shape);
         expect(HOME_LIVE.channel).toBe(BOARD_LIVE.channel);
         expect([...HOME_STATES].sort()).toEqual(home!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s Features, against the contract (0.10.0)', () => {
+    type Features = {
+        scope: string;
+        data: {
+            api: { method: string; path: string }; tabs: string[]; answer: string[]; fields: Record<string, string[]>;
+            forms: Record<string, { fields: string[]; required: string[]; max?: Record<string, number> }>;
+            manage: { guard: string }; envelope: { field: string; values: string[] }; live: Record<string, unknown>;
+        };
+        states: Array<{ id: string }>;
+        actions: Action[];
+    };
+    const features = contract.surfaces.find((s) => s.id === 'features') as unknown as Features | undefined;
+
+    it('is in the contract, on its own pairing scope', () => {
+        expect(features).toBeDefined();
+        expect(FEATURES_SCOPE).toBe(features!.scope);
+    });
+
+    it('reads the page where the contract says, with its tabs, answer and every row\'s fields', () => {
+        expect(FEATURES_DATA_API).toEqual(features!.data.api);
+        expect(FEATURES_TABS).toEqual(features!.data.tabs);
+        expect(FEATURES_ANSWER).toEqual(features!.data.answer);
+        expect(FEATURES_FIELDS).toEqual(features!.data.fields);
+        expect(FEATURES_ENVELOPE).toEqual({ field: features!.data.envelope.field, values: features!.data.envelope.values });
+        expect(FEATURES_MANAGE_GUARD).toBe(features!.data.manage.guard);
+    });
+
+    it('writes with exactly the web forms\' fields, requirements and limits', () => {
+        const forms = Object.fromEntries(Object.entries(features!.data.forms).map(([k, f]) => [k, { fields: f.fields, required: f.required, max: f.max ?? {} }]));
+        expect(FEATURES_FORMS).toEqual(forms);
+    });
+
+    it('calls exactly the contract\'s API for every action, and offers no other', () => {
+        expect(Object.keys(FEATURES_API).sort()).toEqual(features!.actions.map((a) => a.id).sort());
+        for (const action of features!.actions) expect({ id: action.id, ...FEATURES_API[action.id] }).toEqual({ id: action.id, ...action.api });
+    });
+
+    it('goes live on the page\'s own channel as the contract says, with a view for every state', () => {
+        const { about: _about, web: _web, ...shape } = features!.data.live;
+        expect(FEATURES_LIVE).toEqual(shape);
+        expect([...FEATURES_STATES].sort()).toEqual(features!.states.map((s) => s.id).sort());
     });
 });
