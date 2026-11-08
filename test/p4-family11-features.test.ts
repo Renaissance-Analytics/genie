@@ -131,6 +131,16 @@ describe('a feature snapshot over the door', () => {
 });
 
 describe('the push is a revision; the window re-reads', () => {
+    it('a window that just subscribed reads at once: a connection that was down missed revisions nobody will send again', async () => {
+        const host = featureHost(big(10, 7));
+        vi.stubGlobal('window', { genieLocalProtocol: serve(host.api).framePort().port });
+        const bridge = pageBridge(preloadWith({}));
+        const heard: FeatureData[] = [];
+        bridge.features.subscribe((d) => heard.push(d));
+        // No change is pushed: what it hears is the read a (re)subscribe makes.
+        await vi.waitFor(() => expect(heard).toEqual([big(10, 7)]));
+    });
+
     it('a change with a snapshot over 1 MiB: only small frames cross, the listener gets the whole snapshot, the connection stays up', async () => {
         const host = featureHost(big(10));
         const door = serve(host.api).framePort();
@@ -140,6 +150,7 @@ describe('the push is a revision; the window re-reads', () => {
         const heard: FeatureData[] = [];
         bridge.features.subscribe((d) => heard.push(d));
         await settle();
+        heard.length = 0;
         door.frames.length = 0;
         host.change(big(1_500_000, 2));
         await vi.waitFor(() => expect(heard).toHaveLength(1));
