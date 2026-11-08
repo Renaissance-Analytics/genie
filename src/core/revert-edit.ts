@@ -41,6 +41,16 @@ export function revertEdit(text: string, rawInput: unknown): RevertResult {
     return { ok: true, text: out };
 }
 
+/** Red-first placeholder (Tynn #440 part C): the tool call's own revert, as today. */
+export function revertToolEdit(text: string, event: { rawInput: unknown }): RevertResult {
+    return revertEdit(text, event.rawInput);
+}
+
+/** Red-first placeholder (Tynn #440 part C): the tool call's file, as today. */
+export function toolEditPathIn(event: { rawInput: unknown }, root: string): string | null {
+    return editPathIn(event.rawInput, root);
+}
+
 /** The edited file, relative to the workspace root; `null` when the call named none or one outside it (rawInput is untrusted). */
 export function editPathIn(rawInput: unknown, root: string): string | null {
     if (typeof rawInput !== 'object' || rawInput === null) return null;

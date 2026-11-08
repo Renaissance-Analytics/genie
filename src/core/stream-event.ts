@@ -37,6 +37,16 @@ export interface NoticeMail {
     readonly sentAt: string;
 }
 
+/** One file of a native edit (`StreamEvent` tool `edits`). `diff` is ABSENT when it was too large to keep in the row. */
+export interface FileEditFact {
+    readonly path: string;
+    readonly movePath?: string;
+    readonly kind: 'add' | 'delete' | 'update';
+    readonly diff?: string;
+    readonly plus: number;
+    readonly minus: number;
+}
+
 export type StreamEvent =
     | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[]; mail?: readonly NoticeMail[]; pending?: { id: string; content: readonly PromptBlock[] | null } }
     /**
@@ -111,6 +121,14 @@ export type StreamEvent =
            * unmarked, so a reader can trust a row without following its call.
            */
           parentToolCallId?: string;
+          /**
+           * What a NATIVE edit changed, file by file (prism-acp 0.39.0's `_meta['particle.academy/file_edits']`, Codex):
+           * workspace-relative path, a rename's destination, and the unified diff with its counts. ABSENT when the
+           * provider sent none, or only Claude's fragments, whose own input (`file_path`, `old_string` …) stays the source.
+           */
+          edits?: readonly FileEditFact[];
+          /** The provider left the edit list out for its size (`particle.academy/omitted.file_edits`): "diff unavailable (too large)". */
+          editsOmitted?: true;
       }
     | {
           kind: 'usage';
