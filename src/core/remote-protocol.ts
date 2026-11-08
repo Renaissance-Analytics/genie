@@ -144,10 +144,18 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
+/**
+ * Who drives, pushed to a remote window that asked (`baton.watch`, Tynn #529) whenever it changes by something that window
+ * did not do itself: another window took control, the driver released it or left, the owner locked the host. `by`: who
+ * took it (`null` when it was released or lost). `mine`: whether this window holds it.
+ */
+export const BATON_EVENT = 'remote-baton';
+export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
+
 export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';

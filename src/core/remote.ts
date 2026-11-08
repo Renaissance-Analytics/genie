@@ -13,15 +13,25 @@
 
 export type Capability = 'read' | 'write' | 'upgrade';
 
+/** The words a write is refused with for lack of the baton end with this; the window offers Take control beside them. */
+export const BATON_REFUSAL = 'take the baton to make changes';
+
 export class Baton {
-    #holder: { connectionId: string; label: string } | null = null;
+    #holder: { connectionId: string; label: string; isOwner: boolean } | null = null;
     #locked = false;
 
-    take(connectionId: string, label: string): { ok: true; driver: string } | { ok: false; driver: string; driverLabel: string } {
+    /**
+     * A plain take never takes the baton from someone driving: it says who is. `force` is Take control (Tynn #529): the
+     * owner takes control from anyone; anyone else from anyone but the owner. A read-only grant is refused before here.
+     */
+    take(connectionId: string, label: string, options: { force?: boolean; isOwner?: boolean } = {}): { ok: true; driver: string } | { ok: false; driver: string; driverLabel: string; ownerHolds?: true } {
+        const isOwner = options.isOwner === true;
         if (this.#holder && this.#holder.connectionId !== connectionId) {
-            return { ok: false, driver: this.#holder.connectionId, driverLabel: this.#holder.label };
+            const refused = { ok: false as const, driver: this.#holder.connectionId, driverLabel: this.#holder.label };
+            if (options.force !== true) return refused;
+            if (this.#holder.isOwner && !isOwner) return { ...refused, ownerHolds: true };
         }
-        this.#holder = { connectionId, label };
+        this.#holder = { connectionId, label, isOwner };
         return { ok: true, driver: connectionId };
     }
 
@@ -32,11 +42,14 @@ export class Baton {
     }
 
     holder(): { connectionId: string; label: string } | null {
-        return this.#holder;
+        return this.#holder ? { connectionId: this.#holder.connectionId, label: this.#holder.label } : null;
     }
 
-    connectionLost(connectionId: string): void {
-        if (this.#holder?.connectionId === connectionId) this.#holder = null;
+    /** The connection is gone: if it held the baton, nobody does now (true). */
+    connectionLost(connectionId: string): boolean {
+        if (this.#holder?.connectionId !== connectionId) return false;
+        this.#holder = null;
+        return true;
     }
 
     lock(): void {
@@ -54,7 +67,7 @@ export class Baton {
             return context.isOwner === true ? { ok: true } : { ok: false, reason: 'only the host owner may upgrade this Genie' };
         }
         if (this.#holder && this.#holder.connectionId !== connectionId) {
-            return { ok: false, reason: `${this.#holder.label} is driving; take the baton to make changes` };
+            return { ok: false, reason: `${this.#holder.label} is driving; ${BATON_REFUSAL}` };
         }
         return { ok: true };
     }
