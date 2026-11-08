@@ -389,6 +389,20 @@ try {
             }
             if (pageIdx && Number.isFinite(pageOffset)) {
                 row.pageProfile = windowProfile(pageIdx, ph.pageMs + pageOffset, ph.end.pageMs + pageOffset, { top: 5, isOwn });
+                if (ph.slices && row.slices) {
+                    // THE TERMINAL ON SCREEN AGAINST OFF, SLICE BY SLICE (Tynn #537): each slice's page time and its top frames, and
+                    // the frames summed over each condition, so a cost only some "on" slices pay shows where it is.
+                    const perSlice = ph.slices.map((sl, k) => ({ cond: sl.cond, p95: row.slices[k]?.p95, count: row.slices[k]?.count, ...windowProfile(pageIdx, sl.from + pageOffset, sl.to + pageOffset, { top: 3, depth: 14, isOwn }) }));
+                    const sum = (cond) => {
+                        const own = new Map(), ms = { js: 0, program: 0, gc: 0, idle: 0 };
+                        for (const x of perSlice.filter((y) => y.cond === cond)) {
+                            for (const k of Object.keys(ms)) ms[k] += x.ms[k];
+                            for (const f of x.ownFrames) own.set(f.frame, (own.get(f.frame) ?? 0) + f.ms);
+                        }
+                        return { ms: Object.fromEntries(Object.entries(ms).map(([k, v]) => [k, Math.round(v)])), own: [...own].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([frame, v]) => ({ frame, ms: Math.round(v) })) };
+                    };
+                    row.sliceProfiles = { perSlice: perSlice.map((x) => ({ cond: x.cond, p95: x.p95, count: x.count, ms: x.ms, top: x.stacks[0]?.stack?.slice(0, 300) ?? null })), on: sum('on'), off: sum('off') };
+                }
                 const worstPage = [...longtasks].sort((a, b) => b.ms - a.ms).slice(0, 5);
                 row.pageLongtaskStacks = worstPage.map((l) => ({ longtaskMs: Math.round(l.ms), ...windowProfile(pageIdx, l.startedMs + pageOffset, l.endedMs + pageOffset, { top: 3, isOwn }) }));
             }
@@ -461,6 +475,11 @@ finally {
     for (const p of out.passes) for (const r of p.rows ?? []) {
         console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${r.host.worstMs} over50=${r.host.over50} spawns=${r.host.spawns.count} ${JSON.stringify(r.host.spawns.by)} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
         if (r.slices) console.log(`UI_LAG_SLICES ${p.label}/${r.phase} ${JSON.stringify(r.slices.map((x) => [x.cond, x.count, x.p95, x.worstGapMs]))}`);
+        if (r.sliceProfiles) {
+            console.log(`UI_LAG_SLICE_PROFILE on ${JSON.stringify(r.sliceProfiles.on)}`.slice(0, 3000));
+            console.log(`UI_LAG_SLICE_PROFILE off ${JSON.stringify(r.sliceProfiles.off)}`.slice(0, 3000));
+            for (const x of r.sliceProfiles.perSlice) console.log(`UI_LAG_SLICE_PROFILE slice ${JSON.stringify(x)}`.slice(0, 1200));
+        }
         if (r.mainProfile) console.log(`UI_LAG_PROFILE main ${r.phase} ${JSON.stringify(r.mainProfile.ms)} own=${JSON.stringify(r.mainProfile.ownFrames)}`);
         for (const g of r.mainGapStacks ?? []) console.log(`UI_LAG_STACK main ${r.phase} gap=${g.gapMs}ms ${JSON.stringify(g)}`.slice(0, 4000));
         if (r.hostProfile) console.log(`UI_LAG_PROFILE host ${r.phase} ${JSON.stringify(r.hostProfile.ms)} own=${JSON.stringify(r.hostProfile.ownFrames)}`);
