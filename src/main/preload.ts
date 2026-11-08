@@ -127,6 +127,7 @@ const bridge: PreloadBridge = {
         tynnBoard: (workspaceId, scope) => ipcRenderer.invoke('genie:workspace-tynn-board', workspaceId, scope) as never,
         tynnBoardAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-board-action', workspaceId, input) as never,
         tynnPage: (workspaceId, page, query) => ipcRenderer.invoke('genie:workspace-tynn-page', workspaceId, page, query) as never,
+        tynnPageAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-page-action', workspaceId, input) as never,
         tynnBoardChanges: (workspaceId, scope, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-board-changes', workspaceId, scope, cursor, [...ids]) as never,
         // Follow a workspace's board: main holds one socket for every open tab; this window hears its workspace's signals.
         tynnBoardWatch: (workspaceId, listener) => {
@@ -148,6 +149,22 @@ const bridge: PreloadBridge = {
         tynnIssues: (workspaceId, filters) => ipcRenderer.invoke('genie:workspace-tynn-issues', workspaceId, filters) as never,
         tynnIssueAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-issue-action', workspaceId, input) as never,
         tynnIssueChanges: (workspaceId, filters, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-issues-changes', workspaceId, filters, cursor, [...ids]) as never,
+        // Row F1: follow the Features page; the host holds one socket for every open tab.
+        tynnFeaturesWatch: (workspaceId, listener) => {
+            const handler = (_e: unknown, id: string, signal: Parameters<typeof listener>[0]) => { if (id === workspaceId) listener(signal); };
+            ipcRenderer.on('genie:workspace-tynn-features-live', handler);
+            let watchId: number | null = null;
+            let stopped = false;
+            void (ipcRenderer.invoke('genie:workspace-tynn-features-watch', workspaceId) as Promise<number | null>).then((id) => {
+                watchId = id;
+                if (stopped && id !== null) void ipcRenderer.invoke('genie:workspace-tynn-features-unwatch', id);
+            });
+            return () => {
+                stopped = true;
+                ipcRenderer.removeListener('genie:workspace-tynn-features-live', handler);
+                if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-features-unwatch', watchId);
+            };
+        },
         tynnIssuesWatch: (workspaceId, listener) => {
             const handler = (_e: unknown, id: string, signal: Parameters<typeof listener>[0]) => { if (id === workspaceId) listener(signal); };
             ipcRenderer.on('genie:workspace-tynn-issues-live', handler);
@@ -192,6 +209,9 @@ const bridge: PreloadBridge = {
     // A known remote host in its own window (Tynn #819).
     remoteWindows: {
         open: (url, name) => ipcRenderer.invoke('genie:remote-open-window', url, name) as Promise<void>,
+        // Take over from another machine (Tynn #529 part A): this machine's Take Over window on that host's terminal.
+        openTakeOver: (url, terminalId, ticket, name) => ipcRenderer.invoke('genie:remote-takeover-open', url, terminalId, ticket, name) as Promise<{ ok: true } | { ok: false; reason: string }>,
+        takeOverTicket: () => ipcRenderer.invoke('genie:takeover-ticket') as Promise<string | null>,
         // Main asks THIS remote window to reconnect (its connection dropped and the person pressed Open; M0 finding 2).
         onReconnectAsked: (listener) => {
             const handler = () => listener();

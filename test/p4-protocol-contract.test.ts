@@ -16,7 +16,6 @@ import type { LocalUploads } from '../src/main/local-uploads.js';
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
     addWorkspace: 'addWorkspace opens a folder picker on the host; do it there',
-    takeOver: 'takeOver opens a window on the host; do it there',
     providerLogin: 'providerLogin opens the provider login in a window on the host; do it there',
     'features.setBrowserBounds': "features.setBrowserBounds places a view on the host's own window; nothing to do remotely",
 };
@@ -36,7 +35,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'agents.restart': ['agent_a', 'graceful'], 'agents.previewDelete': ['agent_a', 'unmount', []],
     'agents.delete': ['agent_a', 'unmount', [], false], 'agents.switchDriver': ['agent_a', 'codex'],
     'agents.setBudget': ['agent_a', null], 'agents.setMode': ['agent_a', 'manual'],
-    'agents.setAccessScope': ['agent_a', 'self'], 'agents.setAutoApprove': ['agent_a', false],
+    'agents.setAccessScope': ['agent_a', 'self'], 'agents.setAccessAgents': ['agent_a', null], 'agents.setAutoApprove': ['agent_a', false],
     'agents.setManageTabs': ['agent_a', false], 'agents.setDrivePages': ['agent_a', false],
     activity: ['work'], 'agents.setIssueWatch': ['agent_a', null], 'agents.setPermissions': ['agent_a', 'ask'],
     'agents.setModel': ['agent_a', null], 'agents.models': ['agent_a', false], 'agents.diagnose': ['agent_a'], 'agents.toolOutput': ['agent_a', 'call_1'],
@@ -54,6 +53,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.tynnPage': ['work', 'wip', { view: 'attention' }],
     'workspaces.tynnIssues': ['work', { status: 'open' }],
     'workspaces.tynnIssueAction': ['work', { action: 'issue.resolve', issueId: 'i1', body: { reason: 'Done' } }],
+    'workspaces.tynnPageAction': ['work', { action: 'details.update', body: { vision: 'Ship it' } }],
     'workspaces.addRepo': ['work', { name: 'repo', path: 'repos/repo' }], 'workspaces.removeRepo': ['work', 'repo'],
     'workspaces.removeRepoLock': ['work', 'repo'], 'workspaces.locateRepo': ['work', 'repo', ROOT],
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],
@@ -64,7 +64,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'terminals.resize': ['term_1', 80, 24], 'terminals.close': ['term_1'],
     'terminals.attach': ['work', 'missing'], 'terminals.list': ['work'],
     'features.snapshot': [], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
-    'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'],
+    'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'], 'host.home': [],
     'updates.check': [], 'updates.download': [], 'updates.install': [], 'updates.notes': [],
     headroom: [], accountRetry: ['agent_a'],
     'inbox.sendFile': ['agent_a', 'hello', 'sample.txt', 'b2s='],

@@ -195,6 +195,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setBudget: (id, usd) => requestAgent((agents) => agents.setBudget(id, usd)),
             setMode: (id, mode) => requestAgent((agents) => agents.setMode(id, mode)),
             setAccessScope: (id, scope) => requestAgent((agents) => agents.setAccessScope(id, scope)),
+            setAccessAgents: (id, ids) => requestAgent((agents) => agents.setAccessAgents(id, ids)),
             setAutoApprove: (id, on) => requestAgent((agents) => agents.setAutoApprove(id, on)),
             setManageTabs: (id, on) => requestAgent((agents) => agents.setManageTabs(id, on)),
             setDrivePages: (id, on) => requestAgent((agents) => agents.setDrivePages(id, on)),

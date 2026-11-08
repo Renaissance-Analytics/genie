@@ -1,4 +1,5 @@
 import { permissionDecisionFor } from '../core/agent-ops.js';
+import { isOsAgent } from '../core/os-agent.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseAgentManifest } from '../core/agent-manifest.js';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
@@ -35,6 +36,7 @@ export interface AgentOpsPorts {
         setBudget(id: AgentRecord['id'], usd: number | null): Promise<AgentRecord | null>;
         setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
+        setAccessAgents(id: AgentRecord['id'], ids: readonly string[] | null): Promise<AgentRecord | null>;
         setAutoApprove(id: AgentRecord['id'], autoApprove: boolean): Promise<AgentRecord | null>;
         setManageTabs(id: AgentRecord['id'], manageTabs: boolean): Promise<AgentRecord | null>;
         setDrivePages(id: AgentRecord['id'], drivePages: boolean): Promise<AgentRecord | null>;
@@ -516,6 +518,31 @@ export async function setAccessScope(ports: AgentOpsPorts, agentId: string, scop
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const updated = await ports.registry.setAccessScope(record.id, scope);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/** Chosen agents who may message this one (Tynn #526); `null` = none chosen, the choice off. */
+export async function setAccessAgents(ports: AgentOpsPorts, agentId: string, ids: readonly string[] | null): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    let list: string[] | null = null;
+    if (ids !== null) {
+        list = [];
+        for (const id of ids) {
+            if (list.includes(id)) continue;
+            if (id === record.id) return { ok: false, reason: `${record.name} always reaches itself; it is not one of its chosen agents` };
+            const chosen = ports.registry.find(id);
+            // One already on the list stays though it cannot be found now: a hibernated agent keeps its place.
+            if (!chosen) {
+                if (record.accessAgents?.includes(id)) { list.push(id); continue; }
+                return { ok: false, reason: `no agent ${id} on this workstation` };
+            }
+            // genie@system reaches every agent already: nothing to choose.
+            if (isOsAgent(chosen)) continue;
+            list.push(id);
+        }
+    }
+    const updated = await ports.registry.setAccessAgents(record.id, list);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

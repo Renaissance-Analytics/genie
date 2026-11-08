@@ -52,6 +52,9 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:provider-login', 'window-port'],
     ['genie:restart-with-handoff', 'protocol:restartWithHandoff'],
     ['genie:take-over', 'window-port'],
+    // Take over from another machine (Tynn #529 part A): this machine's Take Over window, and its ticket read once.
+    ['genie:remote-takeover-open', 'window-port'],
+    ['genie:takeover-ticket', 'window-port'],
     // The safe-mode banner's crash report (Tynn #386 part 4): built and sent from this window, with the host's proof.
     ['genie:crash-report-draft', 'window-port'],
     ['genie:crash-report-send', 'window-port'],
@@ -82,9 +85,12 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:workspace-tynn-page', 'protocol:workspaces.tynnPage'],
     ['genie:workspace-tynn-issues', 'protocol:workspaces.tynnIssues'],
     ['genie:workspace-tynn-issue-action', 'protocol:workspaces.tynnIssueAction'],
+    ['genie:workspace-tynn-page-action', 'protocol:workspaces.tynnPageAction'],
     ['genie:workspace-tynn-issues-changes', 'protocol:workspaces.tynnIssueChanges'],
     ['genie:workspace-tynn-issues-watch', 'protocol:workspaces.tynnIssuesWatch'],
     ['genie:workspace-tynn-issues-unwatch', 'protocol:workspaces.tynnIssuesUnwatch'],
+    ['genie:workspace-tynn-features-watch', 'protocol:workspaces.tynnFeaturesWatch'],
+    ['genie:workspace-tynn-features-unwatch', 'protocol:workspaces.tynnFeaturesUnwatch'],
     ['genie:workspace-hibernate', 'protocol:workspaces.hibernate'],
     ['genie:workspace-wake', 'protocol:workspaces.wake'],
     ['genie:workspace-remove', 'protocol:workspaces.remove'],

@@ -19,6 +19,9 @@ afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await 
 
 const RELEASES = { project_id: 'host-project', releases: [{ id: 'v1', number: '1.0.0', title: 'First', description: null, why: null, released_at: '2026-10-01T00:00:00+00:00', pr_id: null, repository_id: null, story_count: 1, story_done_count: 1, top_stories: [{ id: 's1', story_number: 1, title: 'One', status: 'done' }] }] };
 
+const FEATURES = { project_id: 'host-project', features: [{ id: 'f1', title: 'Board', task_count: 2, task_done: 1 }], domains: [], repositories: [], models: [], envelope_status: 'present', can_manage: false };
+const HOME = { project_id: 'host-project', section: 'dashboard', details: null, dashboard: { range: 7, metrics: {}, taskBreakdown: {}, storyBreakdown: {}, sparkline: [], charts: {}, availableVersions: [], version: null, versionComparison: [], attention: [], recentActivity: [] } };
+
 async function window(local: boolean, service = true) {
     const dir = await mkdtemp(join(tmpdir(), 'genie-tynn-page-host-'));
     const requests: Array<{ path: string; method: string }> = [];
@@ -27,7 +30,7 @@ async function window(local: boolean, service = true) {
         projectFor: id => id === 'work' ? 'host-project' : null,
         request: async (path, init) => {
             requests.push({ path, method: init.method });
-            return { ok: true, status: 200, json: async () => (path.includes('/releases') ? RELEASES : WIP) };
+            return { ok: true, status: 200, json: async () => (path.includes('/releases') ? RELEASES : path.includes('/home') ? HOME : path.includes('/features') ? FEATURES : WIP) };
         },
     };
     const tynnPages = { read: (id: string, page: unknown, query: unknown) => readTynnPage(ports, id, page as TynnPage, query as TynnPageQuery) };
@@ -96,6 +99,40 @@ describe('Releases is read on genie-host, through the same page door', () => {
         expect(w.requests).toEqual([{ path: '/api/v1/projects/host-project/releases', method: 'GET' }]);
         const remote = await window(false);
         expect(await remote.read('work', 'releases', {})).toMatchObject({ ok: false, reason: expect.stringContaining('local window only') });
+        expect(remote.requests).toEqual([]);
+    });
+});
+
+describe('the Home is read on genie-host, through the same page door', () => {
+    it('a local window gets the Home for the host registry project, with only the contract\'s section, range and version', async () => {
+        const w = await window(true);
+        expect(await w.read('work', 'home', { section: 'dashboard', range: '7', version: 'v1', project_id: 'other', path: 'https://elsewhere.test' })).toMatchObject({ ok: true, value: { ok: true, page: 'home', view: { section: 'dashboard', dashboard: { range: 7 } } } });
+        expect(w.requests).toEqual([{ path: '/api/v1/projects/host-project/home?section=dashboard&range=7&version=v1', method: 'GET' }]);
+    });
+
+    it('a non-local link and an unlinked workspace ask Tynn nothing (control: the local read above)', async () => {
+        const w = await window(true);
+        expect(await w.read('other', 'home', {})).toMatchObject({ ok: true, value: { ok: false, state: 'not-linked' } });
+        expect(w.requests).toEqual([]);
+        const remote = await window(false);
+        expect(await remote.read('work', 'home', {})).toMatchObject({ ok: false, reason: expect.stringContaining('local window only') });
+        expect(remote.requests).toEqual([]);
+    });
+});
+
+describe('Features is read on genie-host, through the same page door', () => {
+    it('a local window gets the page for the host registry project, whole, with no query passed on', async () => {
+        const w = await window(true);
+        expect(await w.read('work', 'features', { tab: 'domains', project_id: 'other', path: 'https://elsewhere.test' })).toMatchObject({ ok: true, value: { ok: true, page: 'features', view: { canManage: false, features: [{ id: 'f1', tasks: 2, done: 1 }] } } });
+        expect(w.requests).toEqual([{ path: '/api/v1/projects/host-project/features', method: 'GET' }]);
+    });
+
+    it('a non-local link and an unlinked workspace ask Tynn nothing (control: the local read above)', async () => {
+        const w = await window(true);
+        expect(await w.read('other', 'features', {})).toMatchObject({ ok: true, value: { ok: false, state: 'not-linked' } });
+        expect(w.requests).toEqual([]);
+        const remote = await window(false);
+        expect(await remote.read('work', 'features', {})).toMatchObject({ ok: false, reason: expect.stringContaining('local window only') });
         expect(remote.requests).toEqual([]);
     });
 });

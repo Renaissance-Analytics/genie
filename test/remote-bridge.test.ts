@@ -34,6 +34,8 @@ function fakeApi() {
             if (method === 'terminals.list') return [{ id: 'term_9', pid: 9, shell: 'sh' }];
             if (method === 'updates.state') return { phase: 'idle', version: null, percent: null, error: null, checkedAt: null };
             if (method === 'restartWithHandoff') return { ok: false, reason: 'no handoff fin_1 for atlas' };
+            // Tynn #529 part A: the host's Take Over host started the TUI, with no window there.
+            if (method === 'takeOver') return { ok: true, terminalId: 'term_9', started: true };
             return { ok: true };
         },
         onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
@@ -137,7 +139,7 @@ describe('the bridge over the wire', () => {
         expect(await bridge.restartWithHandoff('agent_a', 'fin_1')).toEqual({ ok: false, reason: 'no handoff fin_1 for atlas' });
         expect(await bridge.resolvePrompt('agent_a', 'draft1', 'send')).toEqual({ ok: true });
         expect(api.calls).toContainEqual({ method: 'resolvePrompt', args: ['agent_a', 'draft1', 'send'] });
-        expect(await bridge.takeOver('agent_a')).toEqual({ ok: false, reason: 'takeOver opens a window on alphar; do it there' });
+        expect(await bridge.takeOver('agent_a')).toEqual({ ok: true, terminalId: 'term_9', started: true, ticket: expect.any(String) });
         bridge.addWorkspace();
         await tick();
         expect(remote.state().lastRefusal).toBe('addWorkspace opens a folder picker on alphar; do it there');
@@ -194,5 +196,98 @@ describe('the host’s sites in Genie’s browser (browser rebuild step 4)', () 
         const remote = dial({ kind: 'pin', code: '482913' });
         await remote.ready;
         expect((remote.bridge as { browserWindow?: unknown }).browserWindow).toBeUndefined();
+    });
+});
+
+/**
+ * A WINDOW DRIVING ANOTHER MACHINE (Tynn #529). The owner connected a Pilot's window to a drone and nothing answered:
+ * the desktop window never asked for the baton (only the phone did), and had no way to. A window that drives (`drive`)
+ * takes the baton the moment the host welcomes it — unless another window holds it, which it is told by name — hears
+ * who takes control from it, at once, and keeps every refusal it was given for the person to see, with what to do.
+ */
+describe('driving: two windows on one host (Tynn #529)', () => {
+    const settle = async () => { for (let i = 0; i < 5; i++) await tick(); };
+
+    it('the first window drives at once; the second is told who drives, takes control, and the first is told by whom; a disconnect releases', async () => {
+        host.issuePin();
+        const a = dial({ kind: 'pin', code: '482913', label: 'laptop' }, 'laptop', { drive: true });
+        expect(await a.ready).toEqual({ ok: true });
+        await settle();
+        expect(a.state()).toMatchObject({ driving: true, driver: 'laptop' });
+        // Full control with no extra step: a write goes straight through.
+        a.bridge.openAgent('agent_a');
+        await settle();
+        expect(api.calls.filter((c) => c.method === 'openAgent')).toEqual([{ method: 'openAgent', args: ['agent_a'] }]);
+        expect(a.state().lastRefusal).toBeNull();
+
+        // A second window: it does not take control silently; it sees who is driving.
+        const b = dial({ kind: 'token', token: 'tok', label: 'desk' }, 'desk', { drive: true });
+        expect(await b.ready).toEqual({ ok: true });
+        await settle();
+        expect(b.state()).toMatchObject({ driving: false, driver: 'laptop' });
+        expect(a.state()).toMatchObject({ driving: true, driver: 'laptop' });
+
+        // A write it cannot do yet says why, and that taking control is what it needs.
+        b.bridge.prompt('agent_a', 'hi');
+        await settle();
+        expect(b.state()).toMatchObject({ lastRefusal: 'laptop is driving; take the baton to make changes', needsBaton: true });
+
+        // Take control: the second drives, and the first is told at once, and by whom.
+        expect(await b.takeBaton({ force: true })).toEqual({ ok: true });
+        await settle();
+        expect(b.state()).toMatchObject({ driving: true, driver: 'desk', needsBaton: false, lastRefusal: null });
+        expect(a.state()).toMatchObject({ driving: false, driver: 'desk', batonLostTo: 'desk' });
+
+        // The driver leaves: the baton is released and the window left sees nobody driving.
+        b.close();
+        await settle();
+        expect(a.state()).toMatchObject({ driving: false, driver: null });
+        expect(await a.takeBaton()).toEqual({ ok: true });
+        await settle();
+        expect(a.state()).toMatchObject({ driving: true, driver: 'laptop', batonLostTo: null });
+    });
+
+    it('Take over without the baton is refused, and the refusal is kept with Take control beside it, never a dead click', async () => {
+        host.issuePin();
+        const a = dial({ kind: 'pin', code: '482913', label: 'laptop' }, 'laptop');
+        await a.ready;
+        await settle();
+        expect(await a.bridge.takeOver('agent_a')).toEqual({ ok: false, reason: 'nobody is driving alphar; take the baton to make changes' });
+        expect(a.state()).toMatchObject({ lastRefusal: 'nobody is driving alphar; take the baton to make changes', needsBaton: true });
+    });
+
+    // Tynn #529 part A: the person's own Take Over window is a COMPANION connection, opened with the ticket the driving
+    // window's Take over was answered with. It types into that terminal; when its window loses the baton it is told why.
+    it('a Take Over window on this machine: its companion connection types into the remote TUI, and is told why when that stops', async () => {
+        host.issuePin();
+        const a = dial({ kind: 'pin', code: '482913', label: 'laptop' }, 'laptop', { drive: true });
+        await a.ready;
+        await settle();
+        const r = await a.bridge.takeOver('agent_a') as { ok: true; terminalId: string; ticket?: string };
+        expect(r).toMatchObject({ ok: true, terminalId: 'term_9', ticket: expect.any(String) });
+        const tw = dial({ kind: 'token', token: 'tok', label: 'laptop' }, 'laptop', { companion: r.ticket });
+        expect(await tw.ready).toEqual({ ok: true });
+        tw.bridge.terminals.write('term_9', 'ls');
+        await settle();
+        expect(api.calls).toContainEqual({ method: 'terminals.write', args: ['term_9', 'ls'] });
+        expect(tw.state().lastRefusal).toBeNull();
+
+        const b = dial({ kind: 'token', token: 'tok', label: 'desk' }, 'desk', { drive: true });
+        await b.ready;
+        await settle();
+        expect(await b.takeBaton({ force: true })).toEqual({ ok: true });
+        await settle();
+        expect(tw.state().lastRefusal).toBe('desk took control of alphar');
+        tw.bridge.terminals.write('term_9', 'more');
+        await settle();
+        expect(api.calls.filter((c) => c.method === 'terminals.write')).toHaveLength(1);
+    });
+
+    it('CONTROL: a window that does not drive (no `drive`) holds no baton after the welcome, as before', async () => {
+        host.issuePin();
+        const a = dial({ kind: 'pin', code: '482913', label: 'laptop' }, 'laptop');
+        await a.ready;
+        await settle();
+        expect(a.state()).toMatchObject({ driving: false, driver: null });
     });
 });

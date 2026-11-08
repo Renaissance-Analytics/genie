@@ -222,7 +222,8 @@ function toolRow(
 
     // A title that only repeats the tool's name (`Grep Grep`) is said once — and then says nothing about the call
     // (Claude's titles ARE the name), so the call's own argument stands in: `Bash  php artisan test`, an edit's path.
-    const titleIsName = event.title === null || event.title === event.name;
+    // Codex names an MCP call `<server>.<tool>` and titles it `<tool>` (prism-acp 0.39.0): the title repeats the name too.
+    const titleIsName = event.title === null || event.title === event.name || (event.name !== null && event.name.endsWith(`.${event.title}`));
     const argument = titleIsName ? argumentSummary(event.rawInput) : null;
     const label = (isEdit ? argument : null) ?? event.title ?? event.name ?? '(tool call)';
     const main = isEdit ? label : [event.name, titleIsName ? argument : event.title].filter(Boolean).join('  ') || label;

@@ -37,12 +37,16 @@ function fakeApi() {
             if (method === 'features.snapshot') return { settings: { values: { theme: 'dark' } }, remote: { url: 'wss://alphar', pin: { code: '771122', expiresAt: 9 }, devices: [{ id: 'd1', label: 'owner phone' }], connections: [{ id: 'c1', label: 'laptop' }], enabled: true } };
             if (method === 'openAgent') return { ok: true };
             if (method === 'updates.install') return { report: 'stopped 2 processes' };
+            // Tynn #529 part A: the host's Take Over host started (or reused) the TUI, with no window here.
+            if (method === 'takeOver') return { ok: true, terminalId: 'term_t', started: takeOverStarts };
             return { ok: true };
         },
         onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
         workspaceOfAgent: (id) => snapshot.agents.find((a) => a.id === id)?.workspaceId ?? null,
         workspaceOfTerminal: (id) => ({ term_t: 'tynn', term_f: 'fancy' } as Record<string, string>)[id] ?? null,
     };
+    // The Take Over window on the other machine closed: the host ends the TUI it started for it (Tynn #529 part A).
+    Object.assign(api, { takeOverEnded: (terminalId: string) => { ended.push(terminalId); } });
     return { api, calls, listening: () => listeners.size, emit: (channel: string, payload: unknown) => { for (const l of listeners) l(channel, payload); } };
 }
 
@@ -54,7 +58,7 @@ function client(t: ClientTransport) {
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let id = 0;
     return {
-        hello: async (auth: unknown, label = 'phone') => { t.send(JSON.stringify({ kind: 'hello', auth, label })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
+        hello: async (auth: unknown, label = 'phone', extra: object = {}) => { t.send(JSON.stringify({ kind: 'hello', auth, label, ...extra })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
         call: async (method: string, ...args: unknown[]) => { t.send(JSON.stringify({ kind: 'call', id: ++id, method, args })); return next(); },
         next,
         close: () => t.close(),
@@ -78,6 +82,14 @@ async function tynnLinkGuest(workspaceId: string) {
 }
 /** How many "Pair this device?" prompts were raised on this screen. */
 let pairPrompts = 0;
+/** Whether the host's Take Over host STARTED the TUI (false: one was already open here). */
+let takeOverStarts = true;
+/** The TUIs the host was told to end. */
+let ended: string[] = [];
+/** The host's timers, run by hand. */
+let timers: Array<{ ms: number; fn: () => void; cancelled: boolean }> = [];
+const schedule = (ms: number, fn: () => void) => { const t = { ms, fn, cancelled: false }; timers.push(t); return () => { t.cancelled = true; }; };
+const runTimers = () => { for (const t of timers.splice(0)) if (!t.cancelled) t.fn(); };
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-remote-host-'));
@@ -86,7 +98,11 @@ beforeEach(async () => {
     devices = await DeviceStore.open(dir, { now: () => now, random: () => 'tok' + (devices?.list().length ?? 0) });
     const connections: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
     pairPrompts = 0;
-    host = new RemoteHost({ confirm: { ask: (input) => { pairPrompts += 1; return allowEveryPairing.ask(input); }, cancel: allowEveryPairing.cancel },
+    takeOverStarts = true;
+    ended = [];
+    timers = [];
+    host = new RemoteHost({
+        ...({ schedule } as object), now: () => now, confirm: { ask: (input) => { pairPrompts += 1; return allowEveryPairing.ask(input); }, cancel: allowEveryPairing.cancel },
         api: api.api,
         hostName: 'alphar',
         baton: new Baton(),
@@ -308,14 +324,14 @@ describe('reads, writes, the baton', () => {
     it('a workspace guest cannot use the owner pairing to read or triage Issues (CONTROL: the owner)', async () => {
         const guest = await tynnLinkGuest('tynn');
         expect(await guest.call('baton.take')).toMatchObject({ ok: true });
-        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction'] as const) {
+        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction'] as const) {
             expect(await guest.call(method, 'tynn', {})).toMatchObject({ ok: false, reason: expect.stringContaining('only its owner can') });
             expect(api.calls.map((c) => c.method)).not.toContain(method);
         }
         expect(await guest.call('baton.release')).toMatchObject({ ok: true });
         const o = await owner('laptop');
         expect(await o.call('baton.take')).toMatchObject({ ok: true });
-        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction'] as const) {
+        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction'] as const) {
             expect(await o.call(method, 'tynn', {})).toMatchObject({ ok: true });
             expect(api.calls.map((c) => c.method)).toContain(method);
         }
@@ -339,7 +355,6 @@ describe('reads, writes, the baton', () => {
         const a = await owner('laptop');
         await a.call('baton.take');
         expect(await a.call('addWorkspace')).toEqual({ kind: 'result', id: 2, ok: false, reason: 'addWorkspace opens a folder picker on alphar; do it there' });
-        expect(await a.call('takeOver', 'agent_a')).toEqual({ kind: 'result', id: 3, ok: false, reason: 'takeOver opens a window on alphar; do it there' });
         expect(await a.call('features.setBrowserBounds', { x: 0, y: 0, width: 1, height: 1 })).toMatchObject({ ok: false });
         expect(api.calls.map((c) => c.method)).not.toContain('addWorkspace');
     });
@@ -497,5 +512,208 @@ describe('a whole-workstation guest never receives the remote secrets in a push 
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-data' });
         api.emit('terminal-exit', { id: 'term_f', exitCode: 0 });
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-exit' });
+    });
+});
+
+/**
+ * TAKING CONTROL (Tynn #529). The owner, connected from a Pilot to a drone, saw "nobody is driving aion; take the baton
+ * to make changes" and had no way to take it. The host's baton is fine on its own; what a window needs from it is a way to
+ * take control from whoever holds it, and to be TOLD, at once and by whom, when it loses control. The rules: the owner may
+ * take control from anyone; a guest never from the owner; a read-only grant never. A window that asked (`baton.watch`)
+ * hears every change it did not cause itself.
+ */
+describe('taking control (Tynn #529)', () => {
+    async function owner(label: string) {
+        host.issuePin();
+        const c = connect();
+        await c.hello({ kind: 'pin', code: '482913', label });
+        return c;
+    }
+    const BATON = 'remote-baton';
+
+    it('two windows: one takes; the other is told who; the other takes control from it; the first is told at once, by whom; a disconnect releases and is told', async () => {
+        const a = await owner('laptop');
+        const b = await owner('desk');
+        expect(await a.call('baton.watch')).toMatchObject({ kind: 'result', ok: true });
+        expect(await b.call('baton.watch')).toMatchObject({ kind: 'result', ok: true });
+
+        expect(await a.call('baton.take')).toMatchObject({ kind: 'result', ok: true, value: { driver: 'laptop', mine: true } });
+        expect(await b.next()).toEqual({ kind: 'event', channel: BATON, payload: { driver: 'laptop', mine: false, locked: false, by: 'laptop' } });
+
+        // A plain take never takes control from someone driving: it says who is.
+        expect(await b.call('baton.take')).toMatchObject({ kind: 'result', ok: false, reason: 'laptop is driving alphar' });
+        // Take control does.
+        expect(await b.call('baton.take', { force: true })).toMatchObject({ kind: 'result', ok: true, value: { driver: 'desk', mine: true } });
+        expect(await a.next()).toEqual({ kind: 'event', channel: BATON, payload: { driver: 'desk', mine: false, locked: false, by: 'desk' } });
+        expect(await a.call('prompt', 'agent_a', 'hi')).toMatchObject({ kind: 'result', ok: false, reason: 'desk is driving; take the baton to make changes' });
+        expect(await b.call('prompt', 'agent_a', 'hi')).toMatchObject({ kind: 'result', ok: true });
+
+        // The driver leaves: the baton is released, and the window left is told.
+        b.close();
+        expect(await a.next()).toEqual({ kind: 'event', channel: BATON, payload: { driver: null, mine: false, locked: false, by: null } });
+        expect(await a.call('baton.take')).toMatchObject({ kind: 'result', ok: true });
+    });
+
+    it('a guest never takes control from the owner, and says so; the owner takes control from a guest (CONTROL)', async () => {
+        const o = await owner('laptop');
+        expect(await o.call('baton.take')).toMatchObject({ ok: true });
+        const guest = await tynnLinkGuest('tynn');
+        expect(await guest.call('baton.take', { force: true })).toMatchObject({ kind: 'result', ok: false, reason: 'laptop is driving alphar, and only the owner can take control from the owner' });
+        expect(await o.call('prompt', 'agent_a', 'still mine')).toMatchObject({ ok: true });
+
+        // The control: the guest drives; the owner takes control from it.
+        expect(await o.call('baton.release')).toMatchObject({ ok: true });
+        expect(await guest.call('baton.take')).toMatchObject({ ok: true });
+        expect(await o.call('baton.take', { force: true })).toMatchObject({ ok: true, value: { driver: 'laptop', mine: true } });
+        expect(await guest.call('prompt', 'agent_a', 'x')).toMatchObject({ ok: false, reason: 'laptop is driving; take the baton to make changes' });
+    });
+
+    it('a read-only grant never takes control, not even from nobody', async () => {
+        const o = await owner('laptop');
+        expect(await o.call('baton.take')).toMatchObject({ ok: true });
+        const ro = connectRelay({ label: 'Pat', isOwner: false, workspaceId: null, readonly: true });
+        await ro.hello({ kind: 'relay' }, 'Pat');
+        expect(await ro.call('baton.take', { force: true })).toMatchObject({ ok: false, reason: 'Pat has read-only access to alphar' });
+        expect(await o.call('baton.status')).toMatchObject({ ok: true, value: { driver: 'laptop', mine: true } });
+    });
+
+    it('a window that never asked to watch is sent no baton events (old clients read the wire as before)', async () => {
+        const a = await owner('laptop');
+        const b = await owner('desk');
+        expect(await a.call('baton.take')).toMatchObject({ ok: true });
+        // b's next frame is the answer to its own call, not an event it never asked for.
+        expect(await b.call('baton.status')).toMatchObject({ kind: 'result', ok: true, value: { driver: 'laptop', mine: false } });
+    });
+});
+
+/**
+ * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A). The owner pressed Take over on aion's agent from a Pilot and nothing
+ * happened: the host refused it as host-only, and the window dropped the answer. Now the window that DRIVES asks, the host
+ * starts the TUI with no window of its own and answers its terminal and a TICKET; the person's machine opens its own Take
+ * Over window, whose connection presents the ticket and becomes that window's COMPANION. The ticket's rules: single use;
+ * gone ~30 s after it was issued if unused; bound to the window that asked and that terminal; never a guest's, never
+ * another device's; it lets the companion type into that one terminal only; revoked the moment the window that asked
+ * loses the baton or leaves. Closing the companion ends the TUI it started.
+ */
+describe('Take over from another machine (Tynn #529 part A)', () => {
+    const COMPANION = 'remote-companion';
+    async function owner(label: string) {
+        host.issuePin();
+        const c = connect();
+        const w = await c.hello({ kind: 'pin', code: '482913', label });
+        return { c, token: (w as { token?: string }).token! };
+    }
+    async function takeOver(driver: ReturnType<typeof client>) {
+        const r = await driver.call('takeOver', 'agent_a');
+        expect(r).toMatchObject({ kind: 'result', ok: true, value: { ok: true, terminalId: 'term_t', ticket: expect.any(String) } });
+        return (r as { value: { ticket: string } }).value.ticket;
+    }
+    async function companion(token: string, ticket: string) {
+        const c = connect();
+        return { c, hello: await c.hello({ kind: 'token', token }, 'laptop', { companion: ticket }) };
+    }
+
+    it('without the baton it is refused, and says so; with it the host starts the TUI and answers its terminal and a ticket', async () => {
+        const { c: a } = await owner('laptop');
+        expect(await a.call('takeOver', 'agent_a')).toMatchObject({ ok: false, reason: 'nobody is driving alphar; take the baton to make changes' });
+        expect(api.calls.map((x) => x.method)).not.toContain('takeOver');
+        expect(await a.call('baton.take')).toMatchObject({ ok: true });
+        await takeOver(a);
+        expect(api.calls.filter((x) => x.method === 'takeOver')).toEqual([{ method: 'takeOver', args: ['agent_a'] }]);
+    });
+
+    it('a guest never takes over from another machine', async () => {
+        const g = await tynnLinkGuest('tynn');
+        expect(await g.call('baton.take')).toMatchObject({ ok: true });
+        expect(await g.call('takeOver', 'agent_a')).toMatchObject({ ok: false, reason: 'only the owner of alphar can take over its agents from another machine' });
+        expect(api.calls.map((x) => x.method)).not.toContain('takeOver');
+    });
+
+    it('the ticket opens ONE companion from the same device: it types into that terminal and nothing else; a second use is refused', async () => {
+        const { c: a, token } = await owner('laptop');
+        await a.call('baton.take');
+        const ticket = await takeOver(a);
+        const { c, hello } = await companion(token, ticket);
+        expect(hello).toMatchObject({ kind: 'welcome' });
+        expect(await c.call('terminals.write', 'term_t', 'ls')).toMatchObject({ kind: 'result', ok: true });
+        expect(await c.call('terminals.resize', 'term_t', 120, 40)).toMatchObject({ kind: 'result', ok: true });
+        expect(api.calls.filter((x) => x.method.startsWith('terminals.'))).toEqual([{ method: 'terminals.write', args: ['term_t', 'ls'] }, { method: 'terminals.resize', args: ['term_t', 120, 40] }]);
+        expect(await c.call('terminals.write', 'term_f', 'x')).toMatchObject({ ok: false, reason: 'this Take Over window types only into its own terminal' });
+        expect(await c.call('openAgent', 'agent_a')).toMatchObject({ ok: false, reason: 'this Take Over window types only into its own terminal' });
+        expect(await c.call('baton.take')).toMatchObject({ ok: false, reason: 'a Take Over window does not drive; the window it was opened from does' });
+        expect(await c.call('takeOver', 'agent_a')).toMatchObject({ ok: false, reason: 'this Take Over window types only into its own terminal' });
+
+        const again = await companion(token, ticket);
+        expect(again.hello).toEqual({ kind: 'refused', reason: 'this Take Over ticket was used already, or has expired' });
+    });
+
+    it('an unused ticket is gone after 30 s, and the TUI it started with it', async () => {
+        const { c: a, token } = await owner('laptop');
+        await a.call('baton.take');
+        const ticket = await takeOver(a);
+        now += 30_001;
+        expect((await companion(token, ticket)).hello).toEqual({ kind: 'refused', reason: 'this Take Over ticket was used already, or has expired' });
+        expect(ended).toEqual([]);
+        runTimers();
+        expect(ended).toEqual(['term_t']);
+    });
+
+    it('bound to its window: a guest, or another device, presenting it is refused; the window’s own device still can (CONTROL)', async () => {
+        const { c: a, token } = await owner('laptop');
+        const { token: other } = await owner('desk');
+        await a.call('baton.take');
+        const ticket = await takeOver(a);
+        const g = connectRelay({ label: 'wren', isOwner: false, workspaceId: 'tynn', readonly: false });
+        expect(await g.hello({ kind: 'relay' }, 'wren', { companion: ticket })).toEqual({ kind: 'refused', reason: 'this Take Over ticket belongs to another window' });
+        expect((await companion(other, ticket)).hello).toEqual({ kind: 'refused', reason: 'this Take Over ticket belongs to another window' });
+        expect((await companion(token, ticket)).hello).toMatchObject({ kind: 'welcome' });
+    });
+
+    it('revoked the moment its window loses the baton: the companion is told why, and its typing is refused with it', async () => {
+        const { c: a, token } = await owner('laptop');
+        await a.call('baton.take');
+        const { c } = await companion(token, await takeOver(a));
+        const { c: desk } = await owner('desk');
+        expect(await desk.call('baton.take', { force: true })).toMatchObject({ ok: true });
+        expect(await c.next()).toEqual({ kind: 'event', channel: COMPANION, payload: { revoked: 'desk took control of alphar' } });
+        expect(await c.call('terminals.write', 'term_t', 'x')).toMatchObject({ ok: false, reason: 'desk took control of alphar' });
+        // Taking it back does not bring an old ticket back to life: Take over again.
+        expect(await a.call('baton.take', { force: true })).toMatchObject({ ok: true });
+        expect(await c.call('terminals.write', 'term_t', 'x')).toMatchObject({ ok: false, reason: 'desk took control of alphar' });
+    });
+
+    it('revoked when its window leaves; an unused ticket goes with it, and so does the TUI it started', async () => {
+        const { c: a, token } = await owner('laptop');
+        await a.call('baton.take');
+        const { c } = await companion(token, await takeOver(a));
+        a.close();
+        expect(await c.next()).toEqual({ kind: 'event', channel: COMPANION, payload: { revoked: 'the window this was taken over from closed' } });
+        expect(await c.call('terminals.write', 'term_t', 'x')).toMatchObject({ ok: false, reason: 'the window this was taken over from closed' });
+
+        const { c: b, token: bt } = await owner('laptop again');
+        await b.call('baton.take');
+        const unused = await takeOver(b);
+        ended = [];
+        b.close();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(ended).toEqual(['term_t']);
+        expect((await companion(bt, unused)).hello).toEqual({ kind: 'refused', reason: 'this Take Over ticket was used already, or has expired' });
+    });
+
+    it('closing the companion ends the TUI it started; one that was already open on the host is not its to end (CONTROL)', async () => {
+        const { c: a, token } = await owner('laptop');
+        await a.call('baton.take');
+        const { c } = await companion(token, await takeOver(a));
+        c.close();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(ended).toEqual(['term_t']);
+
+        takeOverStarts = false;
+        ended = [];
+        const { c: c2 } = await companion(token, await takeOver(a));
+        c2.close();
+        await new Promise((r) => setTimeout(r, 0));
+        runTimers();
+        expect(ended).toEqual([]);
     });
 });

@@ -86,6 +86,9 @@ export const ENGINE_METHODS = [
     // Issues uses its own host-owned feed and connection-owned views, under the same local-only boundary.
     'engine.tynnIssuesWatch',
     'engine.tynnIssuesUnwatch',
+    // The Features page follows its own feed too (row F1), the same way: connection-owned views, local windows only.
+    'engine.tynnFeaturesWatch',
+    'engine.tynnFeaturesUnwatch',
     // Other Tynn pages are read on this host's pairing and workspace registry, for local windows only.
     'engine.tynnPage',
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write

@@ -29,6 +29,7 @@ import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
 import { useShared } from './stable-view.js';
 import { TitleBar } from './components/TitleBar.js';
+import { RemoteRefusalBar } from './components/RemoteRefusalBar.js';
 import { UpdateWindow } from './components/UpdateWindow.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
 import { WorkspaceTabs } from './components/WorkspaceTabs.js';
@@ -298,7 +299,14 @@ function providerStatuses(features: FeatureData, agents: readonly { id: string; 
     });
 }
 
-export type ShellRemote = { host: string; driver: string | null; driving: boolean; locked: boolean } | null;
+/**
+ * Driving another machine (§6.8): the badge's reading, Take control, and the host's last refusal with it (Tynn #529).
+ */
+export type ShellRemote = {
+    host: string; driver: string | null; driving: boolean; locked: boolean;
+    lostTo?: string | null; onTakeControl?: () => void;
+    refusal?: string | null; needsBaton?: boolean; onDismissRefusal?: () => void;
+} | null;
 
 /** The dock's panels, as the notice names them (§4.4). */
 const PANEL_NAME: Record<DockPanel, string> = { chat: 'chat', files: 'file panel', lists: 'lists' };
@@ -524,6 +532,9 @@ export function Shell({
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh }}
             />
+            {remote?.onTakeControl ? (
+                <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />
+            ) : null}
             {/* WHAT IS IN THIS UPDATE (Genie 1's upgrade window; the owner, 2026-10-19), opened from the header's update button. */}
             {updateOpen && updateChip(updateState) ? (
                 <UpdateWindow

@@ -77,3 +77,24 @@ describe('prism-acp is the release whose Codex driver can steer a running turn',
         expect(typeof (prism as Record<string, unknown>)['SteerUnsupported']).toBe('function');
     });
 });
+
+// 0.39.0: Codex advertises its native commands (compact, review), runs them through `runCommand`, and names its tools
+// (shell, <server>.<tool>, edit) — Tynn #440 part B.
+describe('prism-acp is the release whose Codex driver advertises commands and names its tools', () => {
+    it('the installed prism-acp, package.json and the lockfile are 0.39.0 or later', () => {
+        const installed = JSON.parse(readFileSync(join(root, 'node_modules/@particle-academy/prism-acp/package.json'), 'utf8')).version as string;
+        const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
+        const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version: string }> };
+        expect(atLeast(versionOf(installed), [0, 39, 0]), `installed prism-acp is ${installed}`).toBe(true);
+        expect(atLeast(versionOf(pkg.dependencies['@particle-academy/prism-acp']!), [0, 39, 0])).toBe(true);
+        expect(atLeast(versionOf(lock.packages['node_modules/@particle-academy/prism-acp']!.version), [0, 39, 0])).toBe(true);
+    });
+
+    it('prism-acp exports CommandUnsupported, with the code Genie reads', () => {
+        const Ctor = (prism as Record<string, unknown>)['CommandUnsupported'] as (new (reason: string) => Error & { code: string; reason: string }) | undefined;
+        expect(typeof Ctor).toBe('function');
+        const error = new Ctor!('busy');
+        expect(error.code).toBe('command_unsupported');
+        expect(error.reason).toBe('busy');
+    });
+});

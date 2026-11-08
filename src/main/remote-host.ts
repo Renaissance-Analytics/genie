@@ -1,15 +1,21 @@
-import type { Baton, PairingPins } from '../core/remote.js';
+import { randomBytes } from 'node:crypto';
+import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
 import {
     AGENT_SCOPED_METHODS,
+    BATON_EVENT,
+    COMPANION_EVENT,
     WORKSPACE_SCOPED_METHODS,
     LOCAL_EVENTS as LOCAL_EVENT_CHANNELS,
     capabilityOf,
     filterSnapshotForWorkspace,
     parseMessage,
     REMOTE_PROTOCOL,
+    CONTROL_METHODS as CONTROL_METHOD_LIST,
+    type BatonEvent,
+    type CompanionEvent,
     type ControlMethod,
     type RemoteMethod,
     type ServerConnection,
@@ -62,11 +68,21 @@ export interface HostApi {
     workspaceOfTerminal?(terminalId: string): string | null;
     /** Each workspace's folder on this host — how far a guest may browse (Tynn #835). Absent = a guest browses nothing. */
     workspacePaths?(): Readonly<Record<string, string>>;
+    /** A TUI started for another machine's Take Over window is done with: its window closed, or never came (Tynn #529 A). */
+    takeOverEnded?(terminalId: string): void;
 }
+
+/** How long a Take over ticket waits for its window (Tynn #529 part A). */
+const TICKET_TTL_MS = 30_000;
+const TICKET_SPENT = 'this Take Over ticket was used already, or has expired';
+const TICKET_FOREIGN = 'this Take Over ticket belongs to another window';
+const COMPANION_ONLY = 'this Take Over window types only into its own terminal';
+const COMPANION_DOES_NOT_DRIVE = 'a Take Over window does not drive; the window it was opened from does';
+const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'terminals.resize', 'terminals.close'];
 
 // 'workspaces.create' too: New can create a repository under the host owner's GitHub and declare it on their Tynn (Add workspace parity 11).
 /** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
-const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'host.mkdir'];
+const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'host.mkdir'];
 
 /** `/`-separated, `..` resolved — so `/w/tynn/../fancy` is judged as `/w/fancy`. */
 function normalizedPath(p: string): string {
@@ -114,6 +130,13 @@ interface Connection {
     uploadOpening: Promise<LocalUploads> | null;
     pages: LocalPages | null;
     content: LocalFilesContent | null;
+    /** This window asked to be told who drives (`baton.watch`, Tynn #529). */
+    batonWatch: boolean;
+    /**
+     * A TAKE OVER WINDOW (Tynn #529 part A): the window it was opened from, its one terminal, whether its click started the
+     * TUI, and, once its window lost the baton or left, why it may type no more.
+     */
+    companion: { parentId: string; terminalId: string; started: boolean; revoked: string | null } | null;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
@@ -176,12 +199,15 @@ export class RemoteHost {
      * no one — main at 78–98 % of a core for seconds on the owner's machine with many agents.
      */
     #stopListening: (() => void) | null = null;
+    /** Take over tickets not yet presented (Tynn #529 part A): by ticket, the window that asked and its terminal. */
+    readonly #tickets = new Map<string, { parentId: string; terminalId: string; started: boolean; expiresAt: number; cancel: () => void }>();
+    readonly #schedule: (ms: number, fn: () => void) => () => void;
 
     /**
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads> }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; schedule?: (ms: number, fn: () => void) => () => void }) {
         this.#api = deps.api;
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
@@ -195,6 +221,7 @@ export class RemoteHost {
         this.#openPage = deps.openPage;
         this.#createLocalUploads = deps.createLocalUploads;
         this.#staging = new UploadStaging({ now: this.#now });
+        this.#schedule = deps.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); });
         deps.transport.onConnection((socket) => this.#accept(socket));
     }
 
@@ -288,7 +315,7 @@ export class RemoteHost {
         if (!this.#devices.revoke(id)) return false;
         for (const c of [...this.#connections.values()]) {
             if (c.deviceId !== id) continue;
-            this.#baton.connectionLost(c.id);
+            if (this.#baton.connectionLost(c.id)) this.#batonChanged(c.id, null);
             this.#refuse(c, `this device is not paired with ${this.#hostName} any more`, true);
         }
         this.#changed();
@@ -303,24 +330,93 @@ export class RemoteHost {
     }
 
     /** The owner's kill-switch: every write refused for everyone until unlocked; reads still answer. */
-    lock(): void {
+    lock(except: string | null = null): void {
         this.#locked = true;
         this.#baton.lock();
+        this.#batonChanged(except, null);
     }
 
-    unlock(): void {
+    unlock(except: string | null = null): void {
         this.#locked = false;
         this.#baton.unlock();
+        this.#batonChanged(except, null);
+    }
+
+    /** A window lost the baton or left: its unused tickets go (and the TUIs they started), its Take Over windows are told why. */
+    #companionsOf(parentId: string, reason: string): void {
+        for (const [ticket, t] of this.#tickets) {
+            if (t.parentId !== parentId) continue;
+            this.#tickets.delete(ticket);
+            t.cancel();
+            if (t.started) this.#api.takeOverEnded?.(t.terminalId);
+        }
+        for (const c of this.#connections.values()) {
+            if (c.companion?.parentId !== parentId || c.companion.revoked !== null) continue;
+            c.companion.revoked = reason;
+            const payload: CompanionEvent = { revoked: reason };
+            this.#send(c, { kind: 'event', channel: COMPANION_EVENT, payload });
+        }
+    }
+
+    /** Take over answered: a ticket for the window that asked, good once, for that terminal, for 30 s. */
+    #issueTicket(parentId: string, terminalId: string, started: boolean): string {
+        const ticket = randomBytes(24).toString('base64url');
+        const cancel = this.#schedule(TICKET_TTL_MS, () => {
+            if (!this.#tickets.delete(ticket)) return;
+            if (started) this.#api.takeOverEnded?.(terminalId);
+        });
+        this.#tickets.set(ticket, { parentId, terminalId, started, expiresAt: this.#now() + TICKET_TTL_MS, cancel });
+        return ticket;
+    }
+
+    /** A Take Over window's hello: the ticket must be live, its window's, and from the same device or Tynn identity. */
+    #redeem(connection: Connection, ticket: string): string | null {
+        const t = this.#tickets.get(ticket);
+        if (!t || this.#now() > t.expiresAt) return TICKET_SPENT;
+        const parent = this.#connections.get(t.parentId);
+        const auth = connection.auth!;
+        const same = parent?.auth != null && auth.isOwner && parent.auth.isOwner && !auth.readonly && auth.workspaceId === null
+            && (parent.deviceId !== null ? connection.deviceId === parent.deviceId : connection.deviceId === null && parent.auth.label === auth.label);
+        if (!same) return TICKET_FOREIGN;
+        this.#tickets.delete(ticket);
+        t.cancel();
+        connection.companion = { parentId: t.parentId, terminalId: t.terminalId, started: t.started, revoked: null };
+        return null;
+    }
+
+    /**
+     * Who drives changed by something `except` did not do itself: every OTHER remote window that asked is told at once,
+     * and by whom (`by`; `null` when it was released or lost). The window that did it learns from its own answer.
+     */
+    #batonChanged(except: string | null, by: string | null): void {
+        const holder = this.#baton.holder();
+        // Every ticket, and every Take Over window, of a window that no longer drives stops here (Tynn #529 part A).
+        const parents = new Set([...this.#tickets.values()].map((t) => t.parentId));
+        for (const c of this.#connections.values()) if (c.companion) parents.add(c.companion.parentId);
+        for (const parentId of parents) {
+            if (holder?.connectionId === parentId) continue;
+            this.#companionsOf(parentId, holder ? `${holder.label} took control of ${this.#hostName}` : `nobody is driving ${this.#hostName} now`);
+        }
+        for (const c of this.#connections.values()) {
+            if (c.auth === null || c.local || !c.batonWatch || c.id === except) continue;
+            const payload: BatonEvent = { driver: holder?.label ?? null, mine: holder?.connectionId === c.id, locked: this.#locked, by };
+            this.#send(c, { kind: 'event', channel: BATON_EVENT, payload });
+        }
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
-            this.#baton.connectionLost(connection.id);
+            const held = this.#baton.connectionLost(connection.id);
             this.#staging.dropOwner(connection.id);
             this.#drop(connection);
+            this.#companionsOf(connection.id, 'the window this was taken over from closed');
+            // A Take Over window closed: the TUI its click started goes with it, as a local one's does.
+            if (connection.companion?.started) this.#api.takeOverEnded?.(connection.companion.terminalId);
+            // The driver left: nobody drives now, and every window left is told (Tynn #529).
+            if (held) this.#batonChanged(null, null);
         });
     }
 
@@ -430,6 +526,10 @@ export class RemoteHost {
             connection.auth = { label: pre.label, isOwner: pre.isOwner, workspaceId: pre.workspaceId, readonly: pre.readonly };
         }
         if (!connection.local && message.profile === 'mobile') connection.profile = 'mobile';
+        if (typeof message.companion === 'string') {
+            const refused = connection.local ? TICKET_FOREIGN : this.#redeem(connection, message.companion);
+            if (refused !== null) { connection.auth = null; connection.deviceId = null; return this.#refuse(connection, refused, true); }
+        }
         this.#send(connection, {
             kind: 'welcome',
             connectionId: connection.id,
@@ -451,6 +551,23 @@ export class RemoteHost {
         const refuse = (reason: string): WireMessage => ({ kind: 'result', id, ok: false, reason });
 
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
+        // A local window takes over through its own window opener (genie:take-over), never this door.
+        if (connection.local && method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; this window does it itself`);
+
+        // A TAKE OVER WINDOW (Tynn #529 part A): reads as any window; types into its one terminal while its window drives.
+        const companion = connection.companion;
+        if (companion) {
+            if (method === 'baton.take' || method === 'baton.release' || method === 'host.lock' || method === 'host.unlock') return refuse(COMPANION_DOES_NOT_DRIVE);
+            if (COMPANION_TERMINAL_METHODS.includes(method)) {
+                if (String(args[0] ?? '') !== companion.terminalId) return refuse(COMPANION_ONLY);
+                if (companion.revoked !== null) return refuse(companion.revoked);
+                if (this.#locked) return refuse('this Genie is locked');
+                try { return ok(await this.#api.invoke(method as RemoteMethod, args)); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
+            const read = method === 'baton.status' || method === 'agent.watch' || method === 'agent.unwatch'
+                || (!(CONTROL_METHOD_LIST as readonly string[]).includes(method) && capabilityOf(method as RemoteMethod) === 'read');
+            if (!read) return refuse(COMPANION_ONLY);
+        }
 
         switch (method) {
             case 'files.watch':
@@ -509,22 +626,33 @@ export class RemoteHost {
             case 'baton.take': {
                 // Holding the baton would keep everyone who CAN change things from doing so.
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
-                const r = this.#baton.take(connection.id, auth.label);
-                return r.ok ? ok({ driver: auth.label, mine: true }) : refuse(`${r.driverLabel} is driving ${this.#hostName}`);
+                // `{ force: true }` is Take control (Tynn #529): the owner from anyone; anyone else from anyone but the owner.
+                const force = (args[0] as { force?: unknown } | undefined)?.force === true;
+                const before = this.#baton.holder()?.connectionId ?? null;
+                const r = this.#baton.take(connection.id, auth.label, { force, isOwner: auth.isOwner });
+                if (!r.ok) return refuse(r.ownerHolds ? `${r.driverLabel} is driving ${this.#hostName}, and only the owner can take control from the owner` : `${r.driverLabel} is driving ${this.#hostName}`);
+                if (before !== connection.id) this.#batonChanged(connection.id, auth.label);
+                return ok({ driver: auth.label, mine: true });
             }
-            case 'baton.release':
-                return ok({ released: this.#baton.release(connection.id) });
+            case 'baton.release': {
+                const released = this.#baton.release(connection.id);
+                if (released) this.#batonChanged(connection.id, null);
+                return ok({ released });
+            }
+            case 'baton.watch':
+                connection.batonWatch = true;
+                return ok({ watching: true });
             case 'baton.status': {
                 const holder = this.#baton.holder();
                 return ok({ driver: holder?.label ?? null, mine: holder?.connectionId === connection.id, locked: this.#locked });
             }
             case 'host.lock':
                 if (!auth.isOwner) return refuse(`only the host owner may lock ${this.#hostName}`);
-                this.lock();
+                this.lock(connection.id);
                 return ok({ locked: true });
             case 'host.unlock':
                 if (!auth.isOwner) return refuse(`only the host owner may unlock ${this.#hostName}`);
-                this.unlock();
+                this.unlock(connection.id);
                 return ok({ locked: false });
             case 'agent.watch':
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
@@ -568,6 +696,12 @@ export class RemoteHost {
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         // A guest browses inside what it was given; the owner, the whole disk (Genie 1's approved scope, Tynn #835).
+        // A guest's picker opens in what it was given, never at the host's home (Tynn #527): the host is not asked.
+        if (!auth.isOwner && method === 'host.home') {
+            const paths = this.#api.workspacePaths?.() ?? {};
+            const given = auth.workspaceId !== null ? paths[auth.workspaceId] : Object.values(paths)[0];
+            return ok(typeof given === 'string' ? given : '/');
+        }
         if (!auth.isOwner && method === 'host.listDir') {
             const paths = this.#api.workspacePaths?.() ?? {};
             const roots = auth.workspaceId !== null ? [paths[auth.workspaceId]].filter((p): p is string => typeof p === 'string') : Object.values(paths);
@@ -582,8 +716,10 @@ export class RemoteHost {
         if (!connection.local && (capability === 'write' || capability === 'upgrade')) {
             const may = this.#baton.may(connection.id, capability, { isOwner: auth.isOwner });
             if (!may.ok) return refuse(may.reason);
-            if (capability === 'write' && this.#baton.holder() === null) return refuse(`nobody is driving ${this.#hostName}; take the baton to make changes`);
+            if (capability === 'write' && this.#baton.holder() === null) return refuse(`nobody is driving ${this.#hostName}; ${BATON_REFUSAL}`);
         }
+        // Take over from another machine is the OWNER's: its window opens there, on the TUI started here (Tynn #529 A).
+        if (method === 'takeOver' && !auth.isOwner) return refuse(`only the owner of ${this.#hostName} can take over its agents from another machine`);
         if (auth.workspaceId !== null) {
             const scoped = this.#guestScope(auth.workspaceId, method, args);
             if (scoped) return refuse(scoped);
@@ -626,6 +762,11 @@ export class RemoteHost {
             // paired devices and the connections. Only an owner sees them.
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
+            // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).
+            if (method === 'takeOver') {
+                const started = value as { ok?: unknown; terminalId?: unknown; started?: unknown } | null;
+                if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true) });
+            }
             return ok(value);
         } catch (error) {
             if (response !== null) connection.content?.release(response);
