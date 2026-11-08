@@ -52,7 +52,7 @@ const REACH: ElementDefinition['reach'] = { scopes: ['workspace'], side: 'host',
 
 function step(id: string, name: string, description: string, payload: Record<string, unknown>): ElementDefinition {
     return {
-        id: `${FLOW_PACKAGE_ID}.${id}`, kind: 'flow-node', version: VERSION, packageId: FLOW_PACKAGE_ID, source: 'builtin', aliases: [],
+        id: `${FLOW_PACKAGE_ID}.${id}`, kind: 'flow-node', version: VERSION, packageId: FLOW_PACKAGE_ID, source: 'builtin',
         docs: { name, description }, reach: REACH, permissions: { capabilities: [], network: [] }, payload,
     };
 }

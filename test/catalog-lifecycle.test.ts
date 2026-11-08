@@ -108,7 +108,7 @@ describe('on the host: update and uninstall', () => {
 
     it('an update replaces the package’s elements at one new revision: never half the old and half the new', async () => {
         await writePlugin('1.0.0', ['lint', 'fix']);
-        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, developerMode: () => true });
+        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: () => true });
         const catalog = new CatalogService(() => hostCatalog(service.plugins()));
         const seen: Array<{ revision: number; versions: string[] }> = [];
         catalog.onEvent(() => {
@@ -126,7 +126,7 @@ describe('on the host: update and uninstall', () => {
 
     it('uninstall removes an installed plugin’s folder and its elements; Genie’s own cannot be uninstalled', async () => {
         await writePlugin('1.0.0', ['lint']);
-        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, developerMode: () => true });
+        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: () => true });
         expect(service.dump().entries.map((e) => e.id)).toContain('acme.lint');
         expect(await service.call('uninstall', ['acme.lint'])).toBe(true);
         expect(service.dump().entries.map((e) => e.id)).not.toContain('acme.lint');

@@ -14,6 +14,7 @@ import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
 import { forwardRendererConsole } from '../core/render-error.js';
 import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
+import { takeOverRouteOf } from '../core/take-over-route.js';
 import { transportHub } from '../core/remote-protocol.js';
 import { chatCommsOf } from '../core/chat-view.js';
 import { openRelayMember, PopKeypair, type RelayMemberTransport } from './relay-member.js';
@@ -910,7 +911,7 @@ const remoteTakeOverWindows = new Set<BrowserWindow>();
 function openRemoteTakeOverWindow(url: string, terminalId: string, ticket: string, name: string | null): void {
     const search = remoteWindowSearch(url, name);
     if (remoteFromSearch(search) === null) return;
-    const route = `genie://takeover/${encodeURIComponent(terminalId)}`;
+    const route = takeOverRouteOf(terminalId);
     const request = { activation: 'user-gesture' as const, reason: `remote take-over window ${route}`, ledger: activationLedger, label: 'takeover' };
     takeOverWindow(route, request, { search, ticket });
 }

@@ -31,14 +31,14 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-plugins-'));
     await mkdir(join(dir, 'plugins', 'local-dev'), { recursive: true });
     await writeFile(join(dir, 'plugins', 'local-dev', 'genie-plugin.json'), JSON.stringify({ id: 'com.example.localdev', name: 'Local Dev', version: '0.1.0', publisher: { name: 'Me', keyId: 'me' } }));
-    let developerMode = () => false;
-    host = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, developerMode: () => developerMode() });
+    let publisherChecksOff = () => false;
+    host = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: () => publisherChecksOff() });
     const replica = new PluginsReplica((method, args) => host.call(method, args));
     host.onEvent((dump) => replica.rebase(dump));
     replica.rebase(host.dump());
     // The host's catalog, as the window's replica of it reads (ADF A5: the editors and panels are the catalog's).
     services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, plugins: replica, catalog: { list: () => hostCatalog(host.plugins()).list() } });
-    developerMode = () => services.settings.snapshot().developer_mode === true;
+    publisherChecksOff = () => services.settings.snapshot().publisher_checks_off === true;
 });
 afterEach(async () => {
     await services.shutdown();
@@ -55,16 +55,16 @@ const local = <T extends { id: string }>(data: { plugins: { entries: readonly T[
 describe('plugins in the snapshot', () => {
     it('lists the folder with its state and reason; an unsigned local plugin is refused until developer mode is on, then enabled and labelled', async () => {
         const before = await featureSnapshot(services, state());
-        expect(before.plugins).toMatchObject({ dir: join(dir, 'plugins'), developerMode: false });
+        expect(before.plugins).toMatchObject({ dir: join(dir, 'plugins'), publisherChecksOff: false });
         expect(local(before)).toMatchObject({ state: 'refused', label: null });
         expect(local(before).reason).toMatch(/^unsigned plugins are not installed/);
 
         const refused = await handleFeatureAction(services, { kind: 'plugins.setEnabled', id: 'com.example.localdev', enabled: true }, state());
         expect(local(refused)).toMatchObject({ state: 'refused' });
 
-        const dev = await handleFeatureAction(services, { kind: 'settings.set', key: 'developer_mode', value: true }, state());
-        expect(dev.plugins).toMatchObject({ developerMode: true });
-        expect(local(dev)).toMatchObject({ state: 'enabled', label: 'UNSIGNED — developer mode' });
+        const dev = await handleFeatureAction(services, { kind: 'settings.set', key: 'publisher_checks_off', value: true }, state());
+        expect(dev.plugins).toMatchObject({ publisherChecksOff: true });
+        expect(local(dev)).toMatchObject({ state: 'enabled', label: 'Unverified' });
 
         const off = await handleFeatureAction(services, { kind: 'plugins.setEnabled', id: 'com.example.localdev', enabled: false }, state());
         expect(local(off)).toMatchObject({ state: 'disabled' });

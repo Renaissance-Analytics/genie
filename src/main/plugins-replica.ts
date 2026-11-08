@@ -15,7 +15,9 @@ export interface PluginsApi {
     editorBytes(pluginId: string, path: string): EditorBytesDecision;
     /** Asks the host; `false` for a plugin that is not installable or unknown. */
     setEnabled(pluginId: string, enabled: boolean): Promise<boolean>;
-    /** The host re-reads the plugins folder (developer mode flipped, a plugin was dropped in). */
+    /** ADF B5: allow or take back an Unverified package's network; `false` for any package that is not Unverified. */
+    setNetworkAllowed(pluginId: string, allowed: boolean): Promise<boolean>;
+    /** The host re-reads the plugins folder (publisher checks flipped, a plugin was dropped in). */
     refresh(): Promise<void>;
 }
 
@@ -49,6 +51,10 @@ export class PluginsReplica implements PluginsApi {
         return (await this.#call('setEnabled', [pluginId, enabled])) === true;
     }
 
+    async setNetworkAllowed(pluginId: string, allowed: boolean): Promise<boolean> {
+        return (await this.#call('setNetworkAllowed', [pluginId, allowed])) === true;
+    }
+
     async refresh(): Promise<void> {
         await this.#call('refresh', []);
     }
@@ -61,5 +67,6 @@ export const NO_PLUGINS: PluginsApi = {
     editors: () => [],
     editorBytes: (pluginId) => ({ allowed: false, reason: `${pluginId} is not available: Genie's host is not running` }),
     setEnabled: async () => false,
+    setNetworkAllowed: async () => false,
     refresh: async () => {},
 };

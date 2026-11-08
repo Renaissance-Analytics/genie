@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { budgetVerdict, capVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, capVerdict, createGapGauge, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -213,6 +213,15 @@ describe('the terminal past its output cap, against below it (Tynn #542)', () =>
         expect(behind.reasons).toEqual(['mouse events acknowledged past the output cap: 0.28 of the slices below it (bound 0.9; past 20, below 72)']);
         expect(capVerdict({ below: [slice(72), slice(73), slice(71)], past: [slice(72, 150), slice(70, 160), slice(73, 0)] }).reasons).toEqual(['worst frame gap past the output cap, median of 3 slices: 150 ms (bound 100)']);
         expect(capVerdict({ below: [slice(72), slice(73)], past: [slice(72), slice(70), slice(73)] }).reasons).toEqual(['too few slices: 2 below the cap and 3 past it (need 3 each)']);
+    });
+});
+
+describe('what a terminal view holds after a flood (Tynn #544)', () => {
+    it('passes a view that keeps its cap, fails one that keeps everything, and needs both readings', () => {
+        // 12 MB through a view that keeps 2,000,000 characters: within the cap and 4 MB besides.
+        expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: 3_100_000 }).ok).toBe(true);
+        expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: 12_400_000 }).reasons).toEqual(['the view held 12.4 MB more after a 12 MB flood (bound 6 MB: the 2 MB cap and 4 MB besides)']);
+        expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: Number.NaN }).reasons).toEqual(['the heap was not read before and after the flood']);
     });
 });
 

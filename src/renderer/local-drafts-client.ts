@@ -2,13 +2,15 @@ import { isDraftRef, readChatDraft } from '../core/chat-drafts.js';
 import type { ChatDraftsPort } from '../core/chat-draft-keeper.js';
 import type { BlobClient } from '../core/local-blobs.js';
 import { LOCAL_UPLOAD_MAX_BYTES, type LocalUploadClient, type PageClient } from '../core/local-content.js';
+import { unlimited, type HeldLimit } from './local-content-client.js';
 import { DRAFT_CALL_BYTES, DRAFT_INLINE_BYTES, validateDraftRanges, type DraftContentEnvelope, type DraftMetadata, type LocalDraftMethod } from '../core/local-drafts.js';
 
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 async function sha(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
     return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
 }
-export function localDraftsClient(port: { read<T>(method: LocalDraftMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient }): ChatDraftsPort {
+export function localDraftsClient(port: { read<T>(method: LocalDraftMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient; limit?: HeldLimit }): ChatDraftsPort {
+    const limit = port.limit ?? unlimited;
     const decode = async (value: unknown, list: boolean): Promise<unknown> => {
         if (!value || typeof value !== 'object' || !('draftsContent' in value)) return value;
         const body = (value as DraftContentEnvelope).draftsContent;
@@ -41,7 +43,7 @@ export function localDraftsClient(port: { read<T>(method: LocalDraftMethod, ...a
         finally { try { await port.uploads.abort(upload.id); } catch { console.warn('[genie] a draft stage could not be released'); } }
     };
     return {
-        load: async () => decode(await port.read('chatDrafts.load'), true),
+        load: () => limit(async () => decode(await port.read('chatDrafts.load'), true)),
         save: async (agentId, raw) => {
             if (typeof agentId !== 'string') return;
             const draft = raw === null ? null : readChatDraft(raw); if (raw !== null && !draft) return;
@@ -54,7 +56,7 @@ export function localDraftsClient(port: { read<T>(method: LocalDraftMethod, ...a
             await port.read('chatDrafts.save', agentId, draft);
         },
         putFile: bytes => !(bytes instanceof Uint8Array) || bytes.byteLength > LOCAL_UPLOAD_MAX_BYTES ? Promise.resolve(null) : staged('chatDrafts.putFile', [], 'attachment', bytes),
-        readFile: async ref => !isDraftRef(ref) ? null : await decode(await port.read('chatDrafts.readFile', ref), false) as Uint8Array | null,
+        readFile: async ref => !isDraftRef(ref) ? null : await limit(async () => decode(await port.read('chatDrafts.readFile', ref), false)) as Uint8Array | null,
         release: async refs => {
             const ours = Array.isArray(refs) ? refs.filter(isDraftRef) : [];
             for (let at = 0; at < ours.length; at += 128) await port.read('chatDrafts.release', ours.slice(at, at + 128));

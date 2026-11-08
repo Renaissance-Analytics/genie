@@ -4,7 +4,7 @@
 
 Status: **reserved**. Accepted and registered; nothing runs it yet.
 
-Side: set by each definition's `reach.side` (host or client).
+Side: set by each definition's `reach.side` (host, client or both).
 
 Reserved: accepted and registered, so a package that declares one loads, and nothing runs it yet. A later Genie release makes it run and adds its fields here.
 

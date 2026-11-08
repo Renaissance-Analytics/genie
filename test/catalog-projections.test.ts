@@ -70,8 +70,12 @@ describe('disabling a package takes its editor, its panel and its flow node away
             { id: 'com.example.bundle.pane', kind: 'panel', payload: { title: 'Pane', fancyComponent: 'Callout', props: {}, pluginName: 'Bundle' } },
             { id: 'com.example.bundle.step', kind: 'flow-node', payload: { executor: 'com.example/step' } },
         ].map((c) => ({
-            ...c, version: '1.0.0', packageId: 'com.example.bundle', source: 'plugin', aliases: [],
-            docs: { name: c.id, description: 'x' }, reach: { scopes: ['workspace'], side: 'client', requiresWindow: true, remote: 'allowed' },
+            ...c, version: '1.0.0', packageId: 'com.example.bundle', source: 'plugin',
+            docs: { name: c.id, description: 'x' },
+            // An editor runs on both sides, with its link (the owner's ruling q_d71981d6); the panel and the step on a client.
+            reach: c.kind === 'editor'
+                ? { scopes: ['workspace'], side: 'both', requiresWindow: true, remote: 'allowed', link: { calls: ['files.readBytes', 'files.writeBytes'], events: [] } }
+                : { scopes: ['workspace'], side: 'client', requiresWindow: true, remote: 'allowed' },
             permissions: { capabilities: [], network: [] },
         })),
     };
