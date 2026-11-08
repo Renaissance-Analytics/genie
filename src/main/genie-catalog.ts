@@ -146,3 +146,21 @@ export function genieCatalog(opts: { builtins?: readonly BuiltinTool[] } = {}): 
     }
     return catalog;
 }
+
+/**
+ * THE HOST'S CATALOG NOW (ADF A4): Genie's own, then every ENABLED installed plugin as its own package. One that does not
+ * register (it does not validate, or it poses as a package already there) is left out, as allGenieTools leaves it out.
+ */
+export function hostCatalog(plugins: { tools(): readonly { pluginId: string; manifest: PluginManifest; official?: boolean }[]; manifests?(): Readonly<Record<string, PluginManifest>>; list?(): readonly { id: string; state: string }[] }): Catalog {
+    const catalog = genieCatalog();
+    const enabled = new Map<string, PluginManifest>();
+    for (const ref of plugins.tools()) if (ref.official !== true) enabled.set(ref.pluginId, ref.manifest);
+    // A plugin with editors or panels but no tools is in the catalog too.
+    const manifests = plugins.manifests?.() ?? {};
+    for (const entry of plugins.list?.() ?? []) {
+        const m = manifests[entry.id];
+        if (entry.state === 'enabled' && m && !catalog.packages().some((p) => p.id === entry.id)) enabled.set(entry.id, m);
+    }
+    for (const manifest of enabled.values()) catalog.register(pluginPackage(manifest, 'plugin'));
+    return catalog;
+}

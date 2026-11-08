@@ -53,6 +53,8 @@ import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { PluginsDump } from './plugins-host.js';
 import { PluginsReplica } from './plugins-replica.js';
+import { CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../core/catalog-sync.js';
+import type { CatalogKind, ElementDefinition } from '../core/catalog.js';
 import type { BrowserEvent } from './browser-service.js';
 import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
@@ -180,6 +182,7 @@ export class SessionEngineClient {
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #plugins: PluginsReplica | null = null;
+    #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
     #tynn: TynnAccountReplica | null = null;
@@ -372,6 +375,12 @@ export class SessionEngineClient {
                 return;
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
+                return;
+            case 'catalog.snapshot':
+                this.catalog().rebase(payload as CatalogSnapshot);
+                return;
+            case 'catalog.changed':
+                void this.catalog().apply(payload as CatalogChange).catch(() => {});
                 return;
             case 'plugins.event':
                 this.plugins().rebase(payload as PluginsDump);
@@ -776,6 +785,23 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#flows;
+    }
+
+    /** genie-host's catalog, as this window follows it (ADF A4, Tynn #448): a missed change asks for the snapshot again. */
+    catalog(): CatalogReplica {
+        this.#catalog ??= new CatalogReplica(async () => {
+            const reply = await this.call('catalog.snapshot', []);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value as CatalogSnapshot;
+        });
+        return this.#catalog;
+    }
+
+    /** One element's definition from the host's catalog, by kind and id; `null` when it has none. */
+    async catalogDocs(kind: CatalogKind, id: string): Promise<ElementDefinition | null> {
+        const reply = await this.call('catalog.docs', [kind, id]);
+        if (!reply.ok) throw new Error(reply.reason);
+        return reply.value as ElementDefinition | null;
     }
 
     /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */
