@@ -50,3 +50,21 @@ export function catalogFlowKinds(defs: readonly ElementDefinition[]): string[] {
 export function catalogFlowTools(defs: readonly ElementDefinition[]): string[] {
     return defs.filter((d) => d.kind === 'flow-node' && typeof d.payload.tool === 'string').map((d) => d.payload.tool as string);
 }
+
+/**
+ * AN OPEN PANE, AS ITS PACKAGE IS NOW (ADF A6, Tynn #450): available while the catalog offers its panel; otherwise
+ * unavailable with the reason — the package turned off, not installed any more, or no longer offering this panel. A pane
+ * is never drawn from a panel its package does not offer.
+ */
+export function pluginPaneState(
+    panels: readonly { readonly pluginId: string; readonly id: string }[],
+    entries: readonly { readonly id: string; readonly name: string; readonly state: string }[],
+    pluginId: string,
+    panelId: string,
+): { available: true } | { available: false; reason: string } {
+    if (panels.some((p) => p.pluginId === pluginId && p.id === panelId)) return { available: true };
+    const entry = entries.find((e) => e.id === pluginId);
+    if (!entry) return { available: false, reason: `${pluginId} is not installed any more: close this pane.` };
+    if (entry.state !== 'enabled') return { available: false, reason: `${entry.name} is turned off: turn it on in Settings, Plugins, or close this pane.` };
+    return { available: false, reason: `${entry.name} no longer offers this panel (${panelId}): close this pane.` };
+}
