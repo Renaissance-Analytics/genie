@@ -151,6 +151,13 @@ describe('the login scratch and envelope staging come from the caller’s root',
 
 const IMPORT = /(?:^|\n)\s*(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]|(?:^|\n)\s*import\s+['"]([^'"]+)['"]/g;
 
+/**
+ * A whole-statement `import type` / `export type` is erased by TypeScript and loads nothing at run time: not followed.
+ * (Tynn #551: genie-host runs the window's host API, whose renderer imports are types only.) A value import — including
+ * `import { type X, y }` — is still followed.
+ */
+const typeOnly = (statement: string): boolean => /^\s*(?:import|export)\s+type\s/.test(statement);
+
 /** The static import graph from an entry (test/genie-host-no-electron.test.ts's walk). */
 function graph(entry: string): Set<string> {
     const seen = new Set<string>();
@@ -158,6 +165,7 @@ function graph(entry: string): Set<string> {
         if (seen.has(file) || !existsSync(file)) return;
         seen.add(file);
         for (const m of readFileSync(file, 'utf8').matchAll(IMPORT)) {
+            if (typeOnly(m[0])) continue;
             const spec = m[1] ?? m[2];
             if (spec && spec.startsWith('.')) walk(resolve(dirname(file), spec.replace(/\.js$/, '.ts')));
         }
@@ -212,6 +220,12 @@ const EXCEPTIONS: Record<string, { lines: string[]; why: string }> = {
     },
     // A provider CLI's model list is asked outside any project, from the person's home, where that CLI's own settings and
     // account live: the spec's "provider CLIs' own homes". A working folder for a short-lived ask, not a write of Genie's.
+    // The folder picker starts at the person's home (`host.home`): read, never written. genie-host runs the window's host
+    // API for a phone with every window closed (Tynn #551), so host-api.ts is host-side now; the phone never asks it.
+    'src/main/host-api.ts': {
+        lines: ["import { homedir } from 'node:os';", 'return homedir();'],
+        why: 'the folder picker starts at the person’s home: a place to look from, not a write of Genie’s data',
+    },
     'src/main/session-host.ts': {
         lines: ["import { homedir } from 'node:os';", 'return { ...providerLaunchOptions(providerBinary(provider, env), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };'],
         why: 'a provider’s model list is asked from its own home, outside any project',
