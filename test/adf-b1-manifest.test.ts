@@ -135,7 +135,7 @@ describe('Genie 1\'s optional fields', () => {
     it('editors keep their toolbarActions; panels their icon and placement — into the catalog', () => {
         const m = clone(HELLO);
         m.capabilities.genieApi = ['ui.panel'];
-        m.editors = [{ id: 'deck', title: 'Deck', extensions: ['.pptx'], fancyEditor: { package: '@particle-academy/fancy-slides', version: '1.0.0', export: 'SlidesEditor' }, toolbarActions: [{ id: 'present', title: 'Present', icon: 'play', mode: 'present' }] }];
+        m.editors = [{ id: 'deck', title: 'Deck', extensions: ['.pptx'], fancyEditor: { package: '@particle-academy/fancy-slides', version: '1.0.0', export: 'DeckEditor' }, toolbarActions: [{ id: 'present', title: 'Present', icon: 'play', mode: 'present' }] }];
         m.panels = [{ id: 'board', title: 'Board', icon: 'layout', placement: 'workspace', fancyComponent: { package: '@particle-academy/react-fancy', version: '1.0.0', export: 'Callout' } }];
         const r = parseManifest(m);
         if (!r.ok) throw new Error(r.reason);
