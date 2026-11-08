@@ -11,7 +11,7 @@ import { mobilePageUrl } from '../../core/mobile.js';
 import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
-import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
+import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, soundPickerList, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
@@ -1630,7 +1630,8 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
         const select = (
             // Custom file… opens the host's picker (Tynn #766 B2); the row becomes Custom file only once a file is chosen.
             // By name when the setting has names for its options (a sound is "Wind Down", not `winddown`).
-            <Select list={def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => { if (isAlertSoundKey(def.key) && v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }} aria-label={def.label} />
+            // An alert's sounds are grouped by family (Tynn #441): Genie's own, the library's five families, then Custom file and None.
+            <Select list={isAlertSoundKey(def.key) ? soundPickerList() : def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => { if (isAlertSoundKey(def.key) && v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }} aria-label={def.label} />
         );
         if (!isAlertSoundKey(def.key)) return select;
         // PREVIEW (Tynn #766; Genie 1's): the sound this alert would play, through the alert's own player. None has nothing to play.
