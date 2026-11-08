@@ -4,6 +4,17 @@ import { parseCron, timeZoneProblem } from './cron.js';
 import { canonicalFlowDocument, FLOW_SCHEMA_URL, type FlowDocument } from './flow-form.js';
 import { flowReach, stepLabel } from './flow-reach.js';
 import { SCHEDULE_PRESETS } from './flow-schedule.js';
+import { Catalog } from './catalog.js';
+import { builtinFlowPackage } from './builtin-flow-nodes.js';
+import { catalogFlowKinds } from './catalog-projections.js';
+
+/** Genie's flow steps, as the catalog holds them (ADF A5): what this module offers until told the host's catalog. */
+const FLOW_CATALOG = (() => {
+    const c = new Catalog();
+    const r = c.register(builtinFlowPackage());
+    if (!r.ok) throw new Error(`Genie's flow steps were refused by the catalog: ${r.problems.join('; ')}`);
+    return c;
+})();
 
 /**
  * THE CANVAS'S VOCABULARY AND ITS RULES (genie#1204 item 1) — pure, and free of Node imports, so the flow editor window
@@ -146,25 +157,17 @@ function localScheduleByDefault(): void {
  * data_store (no store decided), subflow / for_each (nested runs), fancy's terminal_* (no terminal host for flows — Run a
  * command runs in the workspace), lane (layout only).
  */
-export const SUPPORTED_KINDS: readonly string[] = [
-    '@particle-academy/manual_trigger',
-    '@particle-academy/schedule_trigger',
-    'genie/file_added',
-    'genie/agent_prompt',
-    'genie/terminal_run',
-    'genie/knowledge_add',
-    'genie/file_move',
-    '@particle-academy/branch',
-    '@particle-academy/switch_case',
-    '@particle-academy/merge',
-    '@particle-academy/transform',
-    '@particle-academy/variable',
-    '@particle-academy/wait',
-    '@particle-academy/log',
-    '@particle-academy/output',
-    '@particle-academy/note',
-];
-const SUPPORTED = new Set(SUPPORTED_KINDS);
+export const SUPPORTED_KINDS: readonly string[] = catalogFlowKinds(FLOW_CATALOG.list()).filter((k) => !k.startsWith('@genie/'));
+/**
+ * WHAT THE PALETTE OFFERS AND THE DOOR ACCEPTS: the catalog's flow-node elements (ADF A5, Tynn #449). Genie's own package
+ * until the process is told otherwise (`setOfferedFlowKinds`, from genie-host's catalog as it changes).
+ */
+let OFFERED = new Set(catalogFlowKinds(FLOW_CATALOG.list()));
+
+/** The catalog changed: the palette and the door follow it. */
+export function setOfferedFlowKinds(kinds: readonly string[]): void {
+    OFFERED = new Set(kinds);
+}
 
 /**
  * GENIE'S TOOLS AS STEPS (genie#1204): `@genie/<tool>` kinds, derived in main from the tools' own schemas
@@ -207,12 +210,12 @@ export function canonicalKind(kind: string): string {
 
 export function isSupportedKind(kind: string): boolean {
     const k = canonicalKind(kind);
-    return SUPPORTED.has(k) || TOOL_KINDS.has(k);
+    return OFFERED.has(k);
 }
 
 /** `<FlowEditor kindFilter>`: the palette offers exactly what the runner executes. Module scope so its identity is stable. */
 export function paletteKindFilter({ kind }: { kind: { name: string } }): boolean {
-    return SUPPORTED.has(kind.name) || TOOL_KINDS.has(kind.name);
+    return OFFERED.has(kind.name);
 }
 
 const TRIGGERS = new Set(['@particle-academy/manual_trigger', '@particle-academy/schedule_trigger', 'genie/file_added']);

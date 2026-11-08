@@ -111,6 +111,8 @@ export class LocalPlugins implements PluginsApi {
     /** The ENABLED plugins' tools and each one's guard, live across a refresh. */
     tools(): ReturnType<PluginHost['tools']> { return this.#host.tools(); }
     guard(pluginId: string): ReturnType<PluginHost['guard']> { return this.#host.guard(pluginId); }
+    /** Every installable plugin's manifest, for the catalog built from these plugins (ADF A5). */
+    manifests(): ReturnType<PluginHost['manifests']> { return this.#host.manifests(); }
 }
 
 export interface PluginToolsRunOptions {

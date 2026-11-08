@@ -2822,7 +2822,7 @@ async function boot(): Promise<void> {
         // them through the replica.
         ...(agentEngineLink ? { flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() } } : {}),
         // The plugins are genie-host's (ADF A3, Tynn #447): this window reads them through the replica.
-        ...(agentEngineLink ? { plugins: agentEngineLink.client.plugins() } : {}),
+        ...(agentEngineLink ? { plugins: agentEngineLink.client.plugins(), catalog: agentEngineLink.client.catalog() } : {}),
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),

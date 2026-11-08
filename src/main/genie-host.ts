@@ -103,6 +103,8 @@ import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-store
 import { startHostMcp, type HostMcp } from './host-mcp.js';
 import { hostPluginTools, PluginsService } from './plugins-host.js';
 import { CatalogService } from './catalog-host.js';
+import { setOfferedFlowKinds } from '../core/flow-canvas.js';
+import { catalogFlowKinds } from '../core/catalog-projections.js';
 import { hostCatalog } from './genie-catalog.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
@@ -682,6 +684,9 @@ async function main(): Promise<void> {
      */
     const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins()));
     pluginsService.onEvent(() => catalogService.rebuild());
+    // The flow palette's door and the runner here offer what the catalog holds, as it changes (ADF A5).
+    setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions));
+    catalogService.onEvent(() => setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions)));
     const engine = new SessionEngineServer({
         token,
         build,
