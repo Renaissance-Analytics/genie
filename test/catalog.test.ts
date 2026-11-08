@@ -28,7 +28,8 @@ const editor = (over: Record<string, unknown> = {}) => ({
     ...tool(),
     id: 'ai.genie.spreadsheet.editor',
     kind: 'editor',
-    reach: { scopes: ['workspace'], side: 'client', requiresWindow: true, remote: 'allowed' },
+    // An editor runs on BOTH sides (the owner's ruling q_d71981d6): drawn by a client, its file read and written on the host.
+    reach: { scopes: ['workspace'], side: 'both', requiresWindow: true, remote: 'allowed', link: { calls: ['files.readBytes', 'files.writeBytes'], events: [] } },
     payload: { extensions: ['.xlsx', '.csv'], fancyEditor: 'SheetWorkbook' },
     ...over,
 });
