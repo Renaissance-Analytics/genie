@@ -96,7 +96,7 @@ describe('allGenieTools offers what the catalog holds', () => {
 
     it('CONTROL: with the whole catalog every builtin part offered today is offered, in the catalog’s order', () => {
         const names = allGenieTools(deps()).map((r) => r.definition.name);
-        expect(names).toEqual(TODAY.slice(0, 14));
+        expect(names).toEqual(TODAY.slice(0, 15));
     });
 
     it('what goes out is what the catalog says: each offered tool’s description, title and schema are its definition’s', () => {

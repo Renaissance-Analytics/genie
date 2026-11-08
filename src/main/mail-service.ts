@@ -107,7 +107,7 @@ export class MailService {
     createInbox(workspaceId: string, name: string): Promise<{ inbox: Inbox; password: string }> {
         return this.#serial(async () => {
             if (!this.#ports.attachedWorkspaces().includes(workspaceId)) {
-                throw new Error("this workspace's mail is not Genie Mail: it has no shared Mailpit. Add one with `services add` (engine mailpit). Nothing was created");
+                throw new Error('this workspace has no Genie Mail: its mail is not the shared Mailpit. Add one with `services add` (engine mailpit). Nothing was created');
             }
             const made = await this.#book.create({ workspaceId, workspaceSlug: mailSlugOf(workspaceId), name }, { restart: false });
             await this.#sync(true);

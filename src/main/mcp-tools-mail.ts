@@ -77,7 +77,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim
 
 const ACTIONS = 'create, list, messages, read, delete, rotate';
 const NOT_HERE = 'this Genie has no Genie Mail (doctor mode runs none); nothing was done';
-const NO_MAIL = "this workspace's mail is not Genie Mail: it has no shared Mailpit. Add one with `services add` (engine mailpit), then call mail again. Nothing was done";
+const NO_MAIL = 'this workspace has no Genie Mail: its mail is not the shared Mailpit. Add one with `services add` (engine mailpit), then call mail again. Nothing was done';
 const NO_MAILPIT = "Genie's shared Mailpit is not there to read (`services list` shows it); nothing was read";
 const PAGE = 200;
 /** How far back a lookup reads: past every inbox's cap (500 each, decision 5), never the whole store unbounded. */
@@ -149,9 +149,11 @@ export function mailTools(deps: MailToolsDeps): Registration[] {
                     case 'create': {
                         const name = str(args.name);
                         if (!name) return err('create needs `name` (lower-case letters, digits and hyphens: signup). Nothing was done');
-                        const smtp = port.smtp(ws);
-                        if (!smtp) return err(NO_MAIL);
+                        if (!port.smtp(ws)) return err(NO_MAIL);
                         const made = await port.create(ws, name);
+                        // Read after the change: the env is what the workspace has now that Mailpit has restarted.
+                        const smtp = port.smtp(ws);
+                        if (!smtp) return err(`${made.inbox.address} was created, but this workspace's mail env is gone; \`mail list\` shows it`);
                         return ok({ ok: true, ...credentials(made, smtp), note: ONCE, ...pendingNote() });
                     }
                     case 'list':
@@ -220,9 +222,10 @@ export function mailTools(deps: MailToolsDeps): Registration[] {
                     case 'rotate': {
                         const one = inboxOf(str(args.inbox));
                         if (typeof one === 'string') return err(one);
-                        const smtp = port.smtp(ws);
-                        if (!smtp) return err(NO_MAIL);
+                        if (!port.smtp(ws)) return err(NO_MAIL);
                         const rotated = await port.rotate(ws, one.id);
+                        const smtp = port.smtp(ws);
+                        if (!smtp) return err(`${rotated.inbox.address} has a new password, but this workspace's mail env is gone; rotate it again once Mail is back`);
                         return ok({ ok: true, ...credentials(rotated, smtp), note: one.name === DEFAULT_INBOX ? `${ONCE} The workspace's sites and running processes were given it.` : ONCE, ...pendingNote() });
                     }
                     default:

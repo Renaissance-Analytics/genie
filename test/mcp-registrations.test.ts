@@ -55,8 +55,8 @@ describe('allGenieTools', () => {
         const manifest = { id: 'acme.lint', name: 'Acme Lint', version: '1.0.0', publisher: { name: 'Acme', keyId: 'k' }, mcpTools: [], capabilities: { network: { hosts: [] }, genieApi: [] }, panels: [] };
         const tool = { name: 'lint', description: 'Lint', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess' as const, gated: false };
         const names = allGenieTools(deps(() => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }])).map((r) => r.definition.name);
-        expect(names).toHaveLength(15);
-        expect(names[14]).toBe('acme.lint.lint');
+        expect(names).toHaveLength(16);
+        expect(names[15]).toBe('acme.lint.lint');
     });
 });
 
