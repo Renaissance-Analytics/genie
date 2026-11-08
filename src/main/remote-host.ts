@@ -1,15 +1,17 @@
-import type { Baton, PairingPins } from '../core/remote.js';
+import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
 import {
     AGENT_SCOPED_METHODS,
+    BATON_EVENT,
     WORKSPACE_SCOPED_METHODS,
     LOCAL_EVENTS as LOCAL_EVENT_CHANNELS,
     capabilityOf,
     filterSnapshotForWorkspace,
     parseMessage,
     REMOTE_PROTOCOL,
+    type BatonEvent,
     type ControlMethod,
     type RemoteMethod,
     type ServerConnection,
@@ -114,6 +116,8 @@ interface Connection {
     uploadOpening: Promise<LocalUploads> | null;
     pages: LocalPages | null;
     content: LocalFilesContent | null;
+    /** This window asked to be told who drives (`baton.watch`, Tynn #529). */
+    batonWatch: boolean;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
@@ -288,7 +292,7 @@ export class RemoteHost {
         if (!this.#devices.revoke(id)) return false;
         for (const c of [...this.#connections.values()]) {
             if (c.deviceId !== id) continue;
-            this.#baton.connectionLost(c.id);
+            if (this.#baton.connectionLost(c.id)) this.#batonChanged(c.id, null);
             this.#refuse(c, `this device is not paired with ${this.#hostName} any more`, true);
         }
         this.#changed();
@@ -303,24 +307,41 @@ export class RemoteHost {
     }
 
     /** The owner's kill-switch: every write refused for everyone until unlocked; reads still answer. */
-    lock(): void {
+    lock(except: string | null = null): void {
         this.#locked = true;
         this.#baton.lock();
+        this.#batonChanged(except, null);
     }
 
-    unlock(): void {
+    unlock(except: string | null = null): void {
         this.#locked = false;
         this.#baton.unlock();
+        this.#batonChanged(except, null);
+    }
+
+    /**
+     * Who drives changed by something `except` did not do itself: every OTHER remote window that asked is told at once,
+     * and by whom (`by`; `null` when it was released or lost). The window that did it learns from its own answer.
+     */
+    #batonChanged(except: string | null, by: string | null): void {
+        const holder = this.#baton.holder();
+        for (const c of this.#connections.values()) {
+            if (c.auth === null || c.local || !c.batonWatch || c.id === except) continue;
+            const payload: BatonEvent = { driver: holder?.label ?? null, mine: holder?.connectionId === c.id, locked: this.#locked, by };
+            this.#send(c, { kind: 'event', channel: BATON_EVENT, payload });
+        }
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
-            this.#baton.connectionLost(connection.id);
+            const held = this.#baton.connectionLost(connection.id);
             this.#staging.dropOwner(connection.id);
             this.#drop(connection);
+            // The driver left: nobody drives now, and every window left is told (Tynn #529).
+            if (held) this.#batonChanged(null, null);
         });
     }
 
@@ -509,22 +530,33 @@ export class RemoteHost {
             case 'baton.take': {
                 // Holding the baton would keep everyone who CAN change things from doing so.
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
-                const r = this.#baton.take(connection.id, auth.label);
-                return r.ok ? ok({ driver: auth.label, mine: true }) : refuse(`${r.driverLabel} is driving ${this.#hostName}`);
+                // `{ force: true }` is Take control (Tynn #529): the owner from anyone; anyone else from anyone but the owner.
+                const force = (args[0] as { force?: unknown } | undefined)?.force === true;
+                const before = this.#baton.holder()?.connectionId ?? null;
+                const r = this.#baton.take(connection.id, auth.label, { force, isOwner: auth.isOwner });
+                if (!r.ok) return refuse(r.ownerHolds ? `${r.driverLabel} is driving ${this.#hostName}, and only the owner can take control from the owner` : `${r.driverLabel} is driving ${this.#hostName}`);
+                if (before !== connection.id) this.#batonChanged(connection.id, auth.label);
+                return ok({ driver: auth.label, mine: true });
             }
-            case 'baton.release':
-                return ok({ released: this.#baton.release(connection.id) });
+            case 'baton.release': {
+                const released = this.#baton.release(connection.id);
+                if (released) this.#batonChanged(connection.id, null);
+                return ok({ released });
+            }
+            case 'baton.watch':
+                connection.batonWatch = true;
+                return ok({ watching: true });
             case 'baton.status': {
                 const holder = this.#baton.holder();
                 return ok({ driver: holder?.label ?? null, mine: holder?.connectionId === connection.id, locked: this.#locked });
             }
             case 'host.lock':
                 if (!auth.isOwner) return refuse(`only the host owner may lock ${this.#hostName}`);
-                this.lock();
+                this.lock(connection.id);
                 return ok({ locked: true });
             case 'host.unlock':
                 if (!auth.isOwner) return refuse(`only the host owner may unlock ${this.#hostName}`);
-                this.unlock();
+                this.unlock(connection.id);
                 return ok({ locked: false });
             case 'agent.watch':
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
@@ -588,7 +620,7 @@ export class RemoteHost {
         if (!connection.local && (capability === 'write' || capability === 'upgrade')) {
             const may = this.#baton.may(connection.id, capability, { isOwner: auth.isOwner });
             if (!may.ok) return refuse(may.reason);
-            if (capability === 'write' && this.#baton.holder() === null) return refuse(`nobody is driving ${this.#hostName}; take the baton to make changes`);
+            if (capability === 'write' && this.#baton.holder() === null) return refuse(`nobody is driving ${this.#hostName}; ${BATON_REFUSAL}`);
         }
         if (auth.workspaceId !== null) {
             const scoped = this.#guestScope(auth.workspaceId, method, args);
