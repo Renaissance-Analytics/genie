@@ -198,7 +198,8 @@ async function main(): Promise<void> {
      * flows, the scheduled tasks, the kept processes, the sites, the engines; and the window's boot restore, over the link.
      */
     // Its cause (cut 3): the newest crash record since the previous host started — its host.json is still here until this one writes its own.
-    const safeMode = SafeMode.open(runtime, { log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
+    // Its beat written off this host's thread (Tynn #538): a synchronous one held it 233 ms under a build's disk load.
+    const safeMode = SafeMode.open(runtime, { asyncBeat: true, log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
     const safeNow = () => safeMode.active();
     // THE CRASH STATE (Tynn #386): the previous run's newest record (its host.json is still the old one here) and, after a
     // hang, the reopened window's notice; local windows are told both (crash-state-host.ts).

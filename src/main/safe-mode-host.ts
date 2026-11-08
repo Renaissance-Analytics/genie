@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
     ALIVE_FILE, ALIVE_PREV_FILE, CLEAN_EXIT_FILE, NOT_SAFE, SAFE_MODE_FILE, UNKNOWN_CAUSE,
@@ -13,7 +14,9 @@ import {
  * flows' clocks, the scheduled tasks, the process book's restore, the sites, the engines — and the window's boot restore
  * asks it over the engine link. Leaving re-arms the clocks (the host's listener) and starts nothing.
  *
- * Every write is small and synchronous: at boot before anything starts, at the end as the very last step, and the beat.
+ * Every write is small and synchronous: at boot before anything starts, and at the end as the very last step. The beat is
+ * too, except in genie-host (`asyncBeat`, Tynn #538): there a synchronous write held the host's thread 233 ms under a
+ * build's disk load (the UI-lag row, Windows), so its beat is written off the thread, in order, each file atomically.
  */
 export class SafeMode {
     readonly #dir: string;
@@ -23,6 +26,7 @@ export class SafeMode {
     #record: SafeModeRecord;
     #view: SafeModeView;
     readonly #listeners = new Set<(view: SafeModeView) => void>();
+    #asyncBeat = false;
 
     private constructor(dir: string, now: () => number, pid: number, log: (line: string) => void, record: SafeModeRecord, view: SafeModeView) {
         this.#dir = dir;
@@ -55,6 +59,7 @@ export class SafeMode {
             ? { active: true, at: decision.at, cause, crashLoop: decision.crashLoop, agents: [...decision.agents], processes: [], sites: [] }
             : NOT_SAFE;
         const mode = new SafeMode(runtimeDir, now, options.pid ?? process.pid, log, decision.record, view);
+        mode.#asyncBeat = options.asyncBeat === true;
         mode.#writeRecord();
         if (view.active) log(`safe mode: the last run did not end cleanly${decision.crashLoop ? ' (a crash loop: kept until the person leaves it)' : ''}; nothing starts by itself`);
         return mode;
@@ -108,14 +113,53 @@ export class SafeMode {
      */
     beat(agents: readonly string[]): void {
         const now = { at: this.#now(), pid: this.#pid, agents: [...agents] };
+        if (this.#asyncBeat) {
+            // OFF THE THREAD (Tynn #538): the latest beat waits for the one being written; beats meanwhile fold into it.
+            this.#pendingBeat = now;
+            this.#draining ??= this.#drain();
+            return;
+        }
         if (this.#lastAlive !== null) this.#writeAtomic(ALIVE_PREV_FILE, this.#lastAlive);
         this.#writeAtomic(ALIVE_FILE, now);
         this.#lastAlive = now;
     }
     #lastAlive: { at: number; pid: number; agents: string[] } | null = null;
+    #pendingBeat: { at: number; pid: number; agents: string[] } | null = null;
+    #draining: Promise<void> | null = null;
+    #temp = 0;
 
     /** Resolves once every beat so far is written. */
-    flush(): Promise<void> { return Promise.resolve(); }
+    flush(): Promise<void> {
+        return this.#draining ?? Promise.resolve();
+    }
+
+    async #drain(): Promise<void> {
+        try {
+            while (this.#pendingBeat !== null) {
+                const next = this.#pendingBeat;
+                this.#pendingBeat = null;
+                // The previous record first, then this one: a kill between them leaves the previous whole in both.
+                if (this.#lastAlive !== null) await this.#writeAtomicAsync(ALIVE_PREV_FILE, this.#lastAlive);
+                await this.#writeAtomicAsync(ALIVE_FILE, next);
+                this.#lastAlive = next;
+            }
+        } finally {
+            this.#draining = null;
+        }
+    }
+
+    async #writeAtomicAsync(name: string, value: unknown): Promise<void> {
+        const file = join(this.#dir, name);
+        this.#temp += 1;
+        const temp = `${file}.${this.#pid}.${this.#temp}.tmp`;
+        try {
+            await writeFile(temp, JSON.stringify(value), 'utf8');
+            await rename(temp, file);
+        } catch (error) {
+            await rm(temp, { force: true }).catch(() => {});
+            this.#log(`safe mode: ${name} could not be written: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
 
     /** The LAST step of the host's own end. Synchronous: the process exits right after it. */
     writeCleanExit(reason: string): void {
