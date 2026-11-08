@@ -70,7 +70,7 @@ async function rig() {
     const client = new SessionEngineClient();
     expect(await client.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
     const replica = client.stores();
-    return { server, inbox, attention, knowledge, approvals, replica, client, windowSide, close: () => knowledge.close() };
+    return { server, stores, inbox, attention, knowledge, approvals, replica, client, windowSide, close: () => knowledge.close() };
 }
 
 describe('the inbox replica answers what the store answers', () => {
@@ -201,6 +201,51 @@ describe('approvals and knowledge', () => {
         const found = await r.replica.knowledge.search({ query: 'release script', scopes: 'all' } as never);
         expect(found.hits.map((h) => h.id)).toContain(added.id);
         expect((await r.replica.knowledge.list({ scopes: 'all', limit: 10 } as never)).nodes.map((n) => n.id)).toEqual(r.knowledge.list({ scopes: 'all', limit: 10 } as never).nodes.map((n) => n.id));
+        r.close();
+    });
+});
+
+/**
+ * AN ATTENTION CHANGE SENDS ONLY WHAT CHANGED (Tynn #546). Every change to the questions sent the WHOLE attention data
+ * to every link: on the owner's machine 8.6 MB of JSON per change (713 finished handoffs, up to 159 KB each, and 255
+ * answered questions), serialized by the host and parsed by the window and the browser — the host's loop stalled 1–7 s
+ * on beta.60. A question asked or updated touches the questions, nothing else; only what changed crosses.
+ */
+describe('an attention change sends only what changed (Tynn #546)', () => {
+    it('after a long history, an ask, an update and an answer each send no finished handoff; the replica still answers the same', async () => {
+        const r = await rig();
+        const long = 'x'.repeat(200_000);
+        for (let i = 0; i < 3; i += 1) await r.attention.imDone({ agentId: A, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: `${long}${i}` });
+        await tick();
+        const sent: string[] = [];
+        r.stores.onEvent((event) => { if (event.store === 'attention') sent.push(JSON.stringify(event)); });
+
+        const questions = [{ question: 'Ship it?', header: 'Ship', options: [{ label: 'Yes' }, { label: 'No' }], multiSelect: false }] as never;
+        const asked = await r.attention.ask({ agentId: A, agentName: 'atlas', workspaceId: 'ws', questions }, { userActive: true });
+        await r.attention.update({ agentId: A, workspaceId: 'ws', questionId: asked.questionId, questions: [{ question: 'Ship it now?', header: 'Ship', options: [{ label: 'Yes' }, { label: 'No' }], multiSelect: false }] as never });
+        await tick();
+        expect(r.replica.attention.pending()).toEqual(r.attention.pending());
+        await r.replica.attention.answer(asked.questionId, { selections: [['Yes']], notes: [''], note: '' } as never);
+        await tick();
+
+        expect(sent.length).toBeGreaterThanOrEqual(3);
+        for (const frame of sent) {
+            expect(frame.length).toBeLessThan(20_000);
+            expect(frame).not.toContain(long.slice(0, 1_000));
+        }
+        // The replica answers what the store answers, every part.
+        expect(r.replica.attention.pending()).toEqual(r.attention.pending());
+        expect(r.replica.attention.finished()).toEqual(r.attention.finished());
+        expect(r.replica.attention.asked(asked.questionId)).toEqual(r.attention.asked(asked.questionId));
+        r.close();
+    });
+
+    it('CONTROL: a finished handoff, when it IS the change, still reaches the window', async () => {
+        const r = await rig();
+        await r.attention.imDone({ agentId: A, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: 'Shipped it.' });
+        await tick();
+        expect(r.replica.attention.finished()).toEqual(r.attention.finished());
+        expect(r.replica.attention.lastHandoff(A)).toEqual(r.attention.lastHandoff(A));
         r.close();
     });
 });
