@@ -50,6 +50,7 @@ import type { FlowSchedulerApi, FlowsApi } from './flows-host.js';
 import { FlowStore } from './flow-store.js';
 import type { OwnAgentStores, WindowAgentStores } from './agent-stores-api.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
+import { attentionLimitsFrom } from './attention-store.js';
 import { runtimeDir } from './paths.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
@@ -377,7 +378,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
     stage?.begin('agent-stores');
     if (!input.agentStores) {
-        ownStores = await openAgentStores(input.userData, iso, input.inboxSession);
+        ownStores = await openAgentStores(input.userData, iso, input.inboxSession, () => attentionLimitsFrom(settings.snapshot()));
         stage?.end(); stage?.begin('agent-store-imports');
         importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
         await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
