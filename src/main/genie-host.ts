@@ -536,7 +536,23 @@ async function main(): Promise<void> {
     let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
-    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    /*
+     * GENIE'S OWN PROCESSES ARE NOT CREATED ON THIS HOST'S THREAD (Tynn #535): the Genie browser's start held this host 238 ms
+     * on the Linux runner, and the updater's is started here too (Windows creates a process synchronously on the calling
+     * thread). The supervised spawn-host child creates them, detached, while it is up; between its lives, here, as before.
+     */
+    const startOwnDetached = (what: string, launch: { readonly file: string; readonly args: readonly string[] }, env: NodeJS.ProcessEnv, logName: string, hide: boolean, here: () => void): void => {
+        if (!supervisedLink.up()) { here(); return; }
+        const vars = Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => typeof e[1] === 'string'));
+        supervisedClient.spawnDetached(launch.file, launch.args, vars, join(home, 'logs', logName), hide).catch((error: unknown) => {
+            lifecycleLog(`${what}: its spawn host could not start it (${error instanceof Error ? error.message : String(error)}); starting it here`);
+            here();
+        });
+    };
+    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => {
+        const here = () => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); };
+        startOwnDetached('genie browser', launch, process.env, 'genie-browser.log', false, here);
+    } });
     // A keyring unlocked while the Genie browser runs (Tynn story #388): that browser is restarted to use it, and the SCREEN says so.
     const keyringNotices: Array<(text: string | null) => void> = [];
     void keychainOpening.then(({ keyring }) => {
@@ -598,7 +614,7 @@ async function main(): Promise<void> {
             // P5a.3's order: the browser told to end, then sites, the front door and kept processes stopped; containers stay up.
             stopHosted: async () => { browserService.quit(); await stopHostedOnce(); },
         },
-        startHelper: (launch) => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); },
+        startHelper: (launch) => { startOwnDetached('updater', helperLaunch(launch), updaterHelperEnv(process.env, home), 'genie-updater.log', true, () => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); }); },
         defaultLaunch: updaterDefaultLaunch(process.env, process.execPath),
         windowConnected: () => engineRef?.windowConnected() ?? false,
         exit: () => { void shutdown('an update is installing'); },

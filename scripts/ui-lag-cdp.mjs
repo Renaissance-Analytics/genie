@@ -106,7 +106,9 @@ function installHostGauge(create) {
         const next = Array.isArray(options?.args) && typeof options.args[1] === 'string' ? options.args[1].split(/[\\/]/).pop().slice(0, 40) : '';
         // Genie's own executable started as the APP (not as Node): a window, the Genie browser or the updater, once each.
         const app = options?.file === process.execPath && Array.isArray(options?.envPairs) && !options.envPairs.includes('ELECTRON_RUN_AS_NODE=1');
-        if (s.spawns.length < 5000) s.spawns.push([performance.now(), app ? `app launch: ${file}` : next ? `${file} ${next}` : file]);
+        // An app launch is named by its first flag (`--genie-browser`, a window's, the updater's): which one it was.
+        const flag = app && Array.isArray(options?.args) ? (options.args.slice(1).find((a) => typeof a === 'string' && a.startsWith('--')) ?? '').split('=')[0].slice(0, 40) : '';
+        if (s.spawns.length < 5000) s.spawns.push([performance.now(), app ? `app launch: ${file}${flag ? ` ${flag}` : ''}` : next ? `${file} ${next}` : file]);
         return original.call(this, options);
     };
     s.stop = () => { clearInterval(s.timer); if (ChildProcess.prototype.spawn !== original) ChildProcess.prototype.spawn = original; };
@@ -512,7 +514,10 @@ try {
     // THE HOST SPAWN BUDGET (Tynn #532): genie-host creates NO process on its own thread during the build. Its git and
     // its helpers' processes are created by its spawn-host child (Windows creates a process synchronously on the calling
     // thread). Counted, not timed: a count does not depend on how slow the runner is that day.
-    const hostSpawns = passes.map((p) => ({ pass: p.label, ...p.rows.filter((r) => r.phase.startsWith('build')).reduce((a, r) => { for (const [f, n] of Object.entries(r.host.spawns.by)) { if (f.startsWith('app launch:')) a.apps[f] = (a.apps[f] ?? 0) + n; else { a.count += n; a.by[f] = (a.by[f] ?? 0) + n; } } return a; }, { count: 0, by: {}, apps: {} }) }));
+    // THE HOST SPAWN BUDGET, WHOLE (Tynn #535): in every phase after the control, NOTHING created on genie-host's thread,
+    // Genie's own app launches included: the Genie browser's start held genie-host 238 ms on the Linux runner (run
+    // 42445138112). They were listed apart in #532; they are counted now.
+    const hostSpawns = passes.map((p) => ({ pass: p.label, ...p.rows.filter((r) => r.phase !== 'control').reduce((a, r) => { for (const [f, n] of Object.entries(r.host.spawns.by)) { a.count += n; a.by[f] = (a.by[f] ?? 0) + n; } return a; }, { count: 0, by: {} }) }));
     const spawnsOk = hostSpawns.every((h) => h.count === 0);
     // THE HOST BUDGET (Tynn #524): genie-host late by no more than 100 ms during the build. It runs the agents, the
     // terminals and the watcher: a stall there is every window's, even when window main is idle.
@@ -525,7 +530,7 @@ try {
     const throughput = throughputVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
     result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread during the build (${JSON.stringify(h.by)})`)].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread (${JSON.stringify(h.by)})`)].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
