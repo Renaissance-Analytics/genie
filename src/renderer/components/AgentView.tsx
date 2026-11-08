@@ -13,6 +13,7 @@ import { FidelityDot } from './Dashboard.js';
 import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
+import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { Breadcrumbs, Button, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
@@ -164,6 +165,7 @@ export interface AgentOpsProps {
     readonly models?: ModelChoices | 'loading';
     /** Ask the provider again (its CLI starts once more). */
     readonly onRefreshModels?: () => void;
+    readonly onChooseProviderProgram?: (provider: string) => Promise<ProviderProgramChosen>;
     readonly onRestart: (kind: 'graceful' | 'fresh') => void;
     readonly onSwitchDriver: (to: string) => void;
     /** Where the Provider control's switch stands (genie#1569): drawn beside it — in flight, done, or refused with Retry. */
@@ -1256,6 +1258,7 @@ function AgentViewBody({
                                                                             <p data-model-list="failed" className="mb-1 text-[var(--fg-4)]">
                                                                                 Couldn’t get {agent.provider}’s list of models: {choices.reason}
                                                                                 {refresh}
+                                                                                {ops.onChooseProviderProgram ? <ProviderProgramChoice provider={agent.provider} reason={choices.reason} onChoose={() => ops.onChooseProviderProgram!(agent.provider)} /> : null}
                                                                             </p>
                                                                         ) : null}
                                                                         <label className="block" title={applies}>

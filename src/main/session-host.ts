@@ -11,7 +11,9 @@ import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-li
 import { resetsIn, type Headroom } from '../core/headroom.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Comms } from '../core/comms.js';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
+import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 
@@ -217,10 +219,29 @@ export function providerLaunchOptions(
 export function providerBinary(
     provider: string,
     env: Record<string, string | undefined> = process.env,
+    ports: ProviderProgramPorts = realProgramPorts(env),
 ): string | undefined {
     const configured = env[`GENIE2_${provider.toUpperCase()}_BINARY`];
     const trimmed = configured?.trim();
-    return trimmed ? trimmed : undefined;
+    if (trimmed) return trimmed;
+    // Behind a batch wrapper the driver would refuse: the real program, found once here for every start (Tynn #577).
+    const program = resolveProviderProgram(provider, ports);
+    return program.kind === 'found' ? program.path : undefined;
+}
+
+function realProgramPorts(env: Record<string, string | undefined>): ProviderProgramPorts {
+    return {
+        platform: process.platform, env,
+        isFile: (path) => { try { return statSync(path).isFile(); } catch { return false; } },
+        readText: (path) => { try { return statSync(path).size <= 65_536 ? readFileSync(path, 'utf8') : ''; } catch { return ''; } },
+        chosen: (provider) => readProviderChoice(providerChoiceFile(), provider),
+    };
+}
+
+/** The words for a provider whose wrapper hides its program, or `null`. An explicit `GENIE2_<PROVIDER>_BINARY` is the person's answer. */
+export function providerStartProblem(provider: string, env: Record<string, string | undefined> = process.env, ports: ProviderProgramPorts = realProgramPorts(env)): string | null {
+    if (env[`GENIE2_${provider.toUpperCase()}_BINARY`]?.trim()) return null;
+    return providerProgramProblem(provider, ports);
 }
 
 /**
@@ -350,13 +371,17 @@ export function listModelsOptionsFor(
     provider: string,
     env: Record<string, string | undefined>,
     runtime: { readonly execPath: string; readonly electron: boolean },
+    ports?: ProviderProgramPorts,
 ): ListModelsOptions {
-    return { ...providerLaunchOptions(providerBinary(provider, env), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
+    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
-export const realListModels: ListProviderModels = (provider) =>
-    listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }));
+export const realListModels: ListProviderModels = (provider) => {
+    const problem = providerStartProblem(provider);
+    if (problem !== null) return Promise.reject(new Error(problem));
+    return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }));
+};
 
 /** How often a held login is read again while it waits (genie#1195). */
 export const LIMIT_REREAD_MS = 15 * 60_000;
@@ -394,6 +419,9 @@ export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(rec
 }
 
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
+    // Said in Genie's words, naming the file, before the driver refuses in its own.
+    const problem = providerStartProblem(record.provider);
+    if (problem !== null) return () => { throw new Error(problem); };
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
     // Without an explicit private Tynn server, neither provider may recover one from user/project config.
