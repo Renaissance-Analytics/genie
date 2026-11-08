@@ -1,7 +1,8 @@
 import { mkdir, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { crc32 } from 'node:zlib';
-import { open as openZip, type Entry, type ZipFile } from 'yauzl';
+import yauzl from 'yauzl';
+import type { Entry, ZipFile } from 'yauzl';
 import { PACKAGE_LIMITS, PACKAGE_SIGNATURE_FILE, packagePathProblem } from '../core/plugin-integrity.js';
 
 export const MARKETPLACE_ARCHIVE_BYTES = 256 * 1024 * 1024;
@@ -18,7 +19,7 @@ function portablePath(name: string): string {
 }
 
 function zipFile(path: string): Promise<ZipFile> {
-    return new Promise((resolve, reject) => openZip(path, { lazyEntries: true, autoClose: false, strictFileNames: true, validateEntrySizes: true }, (error, zip) => error || !zip ? reject(error ?? new Error('Invalid ZIP archive')) : resolve(zip)));
+    return new Promise((resolve, reject) => yauzl.open(path, { lazyEntries: true, autoClose: false, strictFileNames: true, validateEntrySizes: true }, (error, zip) => error || !zip ? reject(error ?? new Error('Invalid ZIP archive')) : resolve(zip)));
 }
 
 /** Enumerate and validate the WHOLE directory before creating an extracted file. Never shell out to an archiver. */
