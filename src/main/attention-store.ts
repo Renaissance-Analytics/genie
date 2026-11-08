@@ -263,14 +263,15 @@ export class AttentionStore {
 
     async imDone(input: ImDoneInput): Promise<ImDoneResult> {
         const handoff = await this.#saveHandoff(input);
-        this.#data.finished.push({
+        // A NEW array, never a push (Tynn #546): genie-host sends a window only the parts whose array changed.
+        this.#data.finished = [...this.#data.finished, {
             id: `fin_${randomUUID()}`,
             agentId: input.agentId,
             agentName: input.agentName,
             handoff: input.handoff ?? null,
             at: this.#now(),
             seen: false,
-        });
+        }];
         await this.#flush();
 
         const checklist = this.#data.lists
@@ -330,7 +331,7 @@ export class AttentionStore {
             priority: input.priority ?? 'normal',
             askedAt: this.#now(),
         };
-        this.#data.questions.push(pending);
+        this.#data.questions = [...this.#data.questions, pending];
         await this.#flush();
         return { ok: true, questionId: pending.id, userActive: context.userActive, rejoined: false, dndReply };
     }
@@ -529,7 +530,10 @@ export class AttentionStore {
         return scopedListOf(this.#data, input);
     }
 
-    /** The data as it is (the host split, P3.1): what genie-host sends the window's replica. Read-only. */
+    /**
+     * The data as it is (the host split, P3.1): what genie-host sends the window's replica. Read-only. Every change gives
+     * the part it changes a NEW array (never a push in place), so a part that is the same array did not change (Tynn #546).
+     */
     snapshot(): Readonly<AttentionData> {
         return this.#data;
     }
@@ -540,7 +544,7 @@ export class AttentionStore {
         const result = addToList(input.list, current, item);
         if (result.kind === 'full') return { kind: 'full', limit: result.limit };
         if (result.kind === 'question') return { kind: 'question', reason: result.reason };
-        this.#data.lists.push({ list: input.list, workspaceId: input.workspaceId, item });
+        this.#data.lists = [...this.#data.lists, { list: input.list, workspaceId: input.workspaceId, item }];
         await this.#flush();
         return { kind: 'added', item };
     }

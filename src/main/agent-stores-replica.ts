@@ -156,6 +156,8 @@ export class AttentionReplica {
 
     apply(event: Extract<StoresEvent, { store: 'attention' }>): void {
         if (event.kind === 'data') { this.rebase(event.data); return; }
+        // Only the parts that changed (Tynn #546): the rest is what this replica already holds.
+        if (event.kind === 'parts') { this.rebase({ ...this.#data, ...event.parts } as AttentionData); return; }
         this.#recentlyLeft.set(event.questionId, event.outcome);
         if (this.#recentlyLeft.size > 200) this.#recentlyLeft.delete(this.#recentlyLeft.keys().next().value as string);
         for (const l of [...this.#leaveListeners]) l(event.questionId, event.outcome);
