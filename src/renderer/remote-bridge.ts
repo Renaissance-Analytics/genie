@@ -443,7 +443,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             soundData: async () => null,
         },
         // The REMOTE host's disk, for every picker in this window (Tynn #835).
-        host: { listDir: (path: string) => answer('host.listDir', path) as never, mkdir: (parent: string, name: string) => answer('host.mkdir', parent, name) as never },
+        // Its home too (Tynn #527): a picker that opened at THIS machine's home asked the remote for a path it does not have.
+        host: { listDir: (path: string) => answer('host.listDir', path) as never, mkdir: (parent: string, name: string) => answer('host.mkdir', parent, name) as never, home: () => read<string>('host.home') },
         // The HOST's sites in Genie's browser: its site names read from the host, the window opened by main for this connection.
         ...(options.browse ? {
             browserWindow: {

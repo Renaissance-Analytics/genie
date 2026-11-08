@@ -56,7 +56,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'terminals.resize': ['term_1', 80, 24], 'terminals.close': ['term_1'],
     'terminals.attach': ['work', 'missing'], 'terminals.list': ['work'],
     'features.snapshot': [], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
-    'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'],
+    'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'], 'host.home': [],
     'updates.check': [], 'updates.download': [], 'updates.install': [], 'updates.notes': [],
     headroom: [], accountRetry: ['agent_a'],
     'inbox.sendFile': ['agent_a', 'hello', 'sample.txt', 'b2s='],
