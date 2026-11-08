@@ -33,3 +33,7 @@ export interface PagingPass { pass: string; states: number; pageNext: number }
 export function pagingVerdict(passes: PagingPass[], options?: { maxPerState?: number; growth?: number; slack?: number }): {
     ok: boolean; maxPerState: number; rows: Array<PagingPass & { perState: number | null }>; reasons: string[];
 };
+export function pushVerdict(passes: Array<{ pass: string; sizes: number[] }>, options?: { p95Bytes?: number; meanBytes?: number }): {
+    ok: boolean; p95Bytes: number; meanBytes: number;
+    rows: Array<{ pass: string; count: number; meanBytes: number | null; p95Bytes: number | null; maxBytes: number | null }>; reasons: string[];
+};

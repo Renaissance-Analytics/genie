@@ -1,8 +1,9 @@
-import type { FilesWatchMethod, FilesWatchPush, FilesWatchState } from '../core/local-files-watch.js';
+import { applyTreeChanges, type FilesWatchMethod, type FilesWatchPush, type FilesWatchState } from '../core/local-files-watch.js';
 import type { FilesViewEvent, FilesViewWant, GenieBridge } from './bridge.js';
 
 interface View { id: string; listener: (event: FilesViewEvent) => void }
-interface Group { views: Set<View>; revision: number; paths: number; git: number; wanted: number; fetching: boolean }
+/** `tree`: the git tree of revision `git` as this window holds it (Tynn #523: pushes carry only its changes). */
+interface Group { views: Set<View>; revision: number; paths: number; git: number; wanted: number; fetching: boolean; tree: NonNullable<FilesViewEvent['git']>['tree'] | null }
 /** One client and one refetch per workspace, however many visible views need the batch. */
 export function localFilesWatchClient(port: {
     read<T>(method: FilesWatchMethod, ...args: unknown[]): Promise<T>;
@@ -17,8 +18,15 @@ export function localFilesWatchClient(port: {
     const deliver = (id: string, group: Group, state: FilesWatchState) => {
         if (!active(id, group) || !state || !Number.isSafeInteger(state.revision) || state.revision < group.revision || !Number.isSafeInteger(state.pathsRevision) || !Number.isSafeInteger(state.gitRevision) || !state.event) return;
         const event: { paths?: readonly string[]; git?: NonNullable<FilesViewEvent['git']> } = {};
+        const git = state.gitRevision > group.git ? state.event.git : undefined;
+        // Changes to a tree this window does not hold are never applied: the whole state is read instead.
+        if (git?.treeChanges && (!group.tree || git.treeChanges.base !== group.git)) { group.wanted = Math.max(group.wanted, state.revision); void refetch(id, group); return; }
         if (state.pathsRevision > group.paths && state.event.paths) { event.paths = state.event.paths; group.paths = state.pathsRevision; }
-        if (state.gitRevision > group.git && state.event.git) { event.git = state.event.git; group.git = state.gitRevision; }
+        if (git) {
+            const tree = git.treeChanges ? applyTreeChanges(group.tree!, git.treeChanges) : git.tree;
+            event.git = { ...(tree ? { tree } : {}), ...(git.repos ? { repos: git.repos } : {}) };
+            group.git = state.gitRevision; group.tree = tree ?? null;
+        }
         group.revision = state.revision;
         if (event.paths) for (const listener of changes) listener(id, event.paths);
         if (event.paths || event.git) for (const view of group.views) view.listener(event);
@@ -57,7 +65,7 @@ export function localFilesWatchClient(port: {
             const repos = Array.isArray(w.repos) ? w.repos.filter((r): r is string => typeof r === 'string') : [];
             const want: FilesViewWant = { ...(w.git === true ? { git: true } : {}), ...(repos.length ? { repos } : {}) };
             let group = groups.get(workspaceId);
-            if (!group) { group = { views: new Set(), revision: 0, paths: 0, git: 0, wanted: 0, fetching: false }; groups.set(workspaceId, group); }
+            if (!group) { group = { views: new Set(), revision: 0, paths: 0, git: 0, wanted: 0, fetching: false, tree: null }; groups.set(workspaceId, group); }
             const view: View = { id: `files-${++sequence}`, listener }; group.views.add(view);
             let live = true;
             void port.read<boolean>('files.watch', view.id, workspaceId, want).then(ok => { if (live && !ok) failed('This Files view could not watch the workspace.'); }, error => { if (live) failed(error); });
