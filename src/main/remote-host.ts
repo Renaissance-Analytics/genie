@@ -579,7 +579,7 @@ export class RemoteHost {
                 try {
                     if (method === 'files.watch') return ok(await views.watch(args[0], args[1], args[2]));
                     if (method === 'files.unwatch') return ok(views.unwatch(args[0]));
-                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree'));
+                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree', false, method));
                 } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
             }
             case 'content.release': {
@@ -741,14 +741,14 @@ export class RemoteHost {
 
         let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, artboard: Awaited<ReturnType<typeof localArtboardArguments>> | null = null, response: string | null = null;
         try {
-            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(); }
+            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(method); }
             if (isLocalDraftMethod(method)) {
                 drafts = await localDraftArguments(method, materialized.args, connection.uploads);
-                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin();
+                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin(method);
             }
             if (isLocalArtboardMethod(method)) {
                 artboard = await localArtboardArguments(method, materialized.args, connection.uploads);
-                if (method === 'artboard.read') response = this.#content(connection).begin();
+                if (method === 'artboard.read') response = this.#content(connection).begin(method);
             }
             const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args);
             if (files) { await files.close(); files = null; }
