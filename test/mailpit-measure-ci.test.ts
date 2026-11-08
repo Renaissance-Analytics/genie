@@ -28,7 +28,8 @@ describe('the Mailpit measurement', () => {
         expect(job).toMatch(/- run: npm ci\n\s+- run: npm run verify:mailpit/);
         // Not path-filtered: a required check that is filtered out never reports.
         expect(job).not.toMatch(/\bif:/);
-        expect(ci.match(/npm run verify:mailpit/g)).toHaveLength(1);
+        // Run by exactly one step (a comment naming the command is not a run).
+        expect(ci.match(/^\s*- run: npm run verify:mailpit\s*$/gm)).toHaveLength(1);
     });
 
     it('measures the image Genie runs: axllent/mailpit v1.30, by its digest, from GHCR', () => {
