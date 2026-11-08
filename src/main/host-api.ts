@@ -10,7 +10,7 @@ import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-o
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { cancelIntent, type CancelIntent, type CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
-import { LOCAL_EVENTS, type RemoteMethod } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { Finished } from './attention-store.js';
@@ -254,7 +254,7 @@ export interface HostApiDeps {
     retryPausedAccount?(provider: string): void;
     features: {
         snapshot(): Promise<FeatureData>;
-        act(action: FeatureAction): Promise<FeatureData>;
+        act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
         onChange(listener: (data: FeatureData) => void): () => void;
     };
     updates: {
@@ -280,7 +280,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         return deps.localOwner;
     };
 
-    const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+    const invoke = async (method: RemoteMethod, args: unknown[], context: CallContext = RESTRICTED_CALL_CONTEXT): Promise<unknown> => {
         if (isMarketplaceMethod(method)) throw new Error('Marketplace actions require their authenticated local window connection.');
         if (isLocalTerminalMethod(method)) {
             if (!deps.localTerminals) throw new Error('the local terminal service is not available');
@@ -641,7 +641,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'features.snapshot':
                 return deps.features.snapshot();
             case 'features.act':
-                return deps.features.act(args[0] as FeatureAction);
+                return deps.features.act(args[0] as FeatureAction, context);
             case 'host.listDir':
                 return listHostDir(typeof args[0] === 'string' ? args[0] : '/');
             case 'host.mkdir':

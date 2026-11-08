@@ -15,6 +15,7 @@ import {
     REMOTE_PROTOCOL,
     CONTROL_METHODS as CONTROL_METHOD_LIST,
     type BatonEvent,
+    type CallContext,
     type CompanionEvent,
     type ControlMethod,
     type RemoteMethod,
@@ -63,7 +64,7 @@ export interface HostApi {
     readonly tynnWatch?: TynnWatchPort;
     readonly localTerminals?: NativeTerminalPort;
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
-    invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
+    invoke(method: RemoteMethod, args: unknown[], context?: CallContext): Promise<unknown>;
     /**
      * Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`.
      * `wantsAgent`: whether anyone listening wants an agent's detail now — one nobody wants is not built (genie#1346).
@@ -577,7 +578,7 @@ export class RemoteHost {
                 if (String(args[0] ?? '') !== companion.terminalId) return refuse(COMPANION_ONLY);
                 if (companion.revoked !== null) return refuse(companion.revoked);
                 if (this.#locked) return refuse('this Genie is locked');
-                try { return ok(await this.#api.invoke(method as RemoteMethod, args)); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+                try { return ok(await this.#api.invoke(method as RemoteMethod, args, this.#callContext(connection))); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
             }
             const read = method === 'baton.status' || method === 'agent.watch' || method === 'agent.unwatch'
                 || (!(CONTROL_METHOD_LIST as readonly string[]).includes(method) && capabilityOf(method as RemoteMethod) === 'read');
@@ -795,7 +796,7 @@ export class RemoteHost {
                 artboard = await localArtboardArguments(method, materialized.args, connection.uploads);
                 if (method === 'artboard.read') response = this.#content(connection).begin(method);
             }
-            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args);
+            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args, this.#callContext(connection));
             if (files) { await files.close(); files = null; }
             if (drafts) { await drafts.close(); drafts = null; }
             if (artboard) { await artboard.close(); artboard = null; }
@@ -821,6 +822,13 @@ export class RemoteHost {
             if (drafts) { try { await drafts.close(); } catch { console.warn('[genie] a consumed draft stage could not be released'); } }
             if (artboard) { try { await artboard.close(); } catch { console.warn('[genie] a consumed ArtBoard stage could not be released'); } }
         }
+    }
+
+    /** Who this call came from (Tynn #578): what this host admitted, the door's or the relay's proof, never the hello's say-so. */
+    #callContext(connection: Connection): CallContext {
+        const auth = connection.auth!, pre = connection.socket.preAuth;
+        const origin = connection.local ? (pre?.window === 'main' ? 'local-window' : 'remote-window') : pre ? 'relay' : 'device';
+        return { connectionId: connection.id, origin, profile: connection.profile ?? 'desktop', isOwner: auth.isOwner, workspaceId: auth.workspaceId, readonly: auth.readonly, label: auth.label };
     }
 
     #content(connection: Connection): LocalFilesContent {
@@ -860,7 +868,7 @@ export class RemoteHost {
     async #watch(connection: Connection, agentId: string, options: WatchOptions): Promise<{ seq: number; detail: unknown; rows: unknown }> {
         const auth = connection.auth!;
         if (auth.workspaceId !== null && this.#api.workspaceOfAgent(agentId) !== auth.workspaceId) throw new Error(`${agentId} is not in the workspace this link shares`);
-        const detail = (await this.#api.invoke('agentDetail', [agentId])) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
+        const detail = (await this.#api.invoke('agentDetail', [agentId], this.#callContext(connection))) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
         if (!this.#connections.has(connection.id)) throw new Error('the connection closed before its agent watch was ready');
         if (detail === null || detail === undefined) {
             connection.watching.delete(agentId);

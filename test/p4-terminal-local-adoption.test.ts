@@ -137,7 +137,7 @@ it.each(methods)('a paired remote owner cannot call local %s or trigger any nati
 it('remote terminal methods still use their existing route rather than the local native port', async () => {
     const native = nativeStub(), f = await resourceDoor(cleanups, {}, { localTerminals: native }), raw = await f.raw('tailnet');
     resultValue(await raw.call('terminals.list', ['work'])); expect(native.calls).toEqual([]);
-    expect(f.invoke).toHaveBeenCalledWith('terminals.list', ['work']);
+    expect(f.invoke).toHaveBeenCalledWith('terminals.list', ['work'], expect.anything());
 });
 it('the local renderer bridge dispatches open through its native-local alias', async () => {
     const native = nativeStub(), f = await resourceDoor(cleanups, {}, { localTerminals: native }), c = await f.client();

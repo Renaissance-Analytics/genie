@@ -110,7 +110,7 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const invoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         expect(await call(client.bridge.workspaces, row)).toEqual(await call(oldWizard(invoke), row));
         expect(invoke).toHaveBeenCalledExactlyOnceWith(row.channel, ...row.args);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
     });
     it.each(rows)('pageBridge routes $name through the real local client without calling the old preload', async (row) => {
@@ -124,7 +124,7 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const bridge = pageBridge(preload);
         expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge.workspaces, row)).toEqual(row.result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
         expect(oldInvoke).not.toHaveBeenCalled();
         expect(await bridge.snapshot()).toEqual({ workspaces: null });
@@ -144,7 +144,7 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         const deps = protocolContractDeps(dir); Object.assign(deps.workspaceOps, { [row.name]: vi.fn(async () => null) });
         const source = serve(deps), client = await source.connect();
         expect(await call(client.bridge.workspaces, row)).toBeNull();
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
     });
     it('the page shows a domain refusal from the wizard unchanged', async () => {
         const deps = protocolContractDeps(dir), refusal = { ok: false, reason: 'the source already is a workspace' };

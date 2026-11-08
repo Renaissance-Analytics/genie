@@ -792,7 +792,7 @@ async function main(): Promise<void> {
             own: { 'updates.state': async () => updatesService.dump() },
             window: {
                 connected: () => (engineRef?.newestLocalWindow() ?? null) !== null,
-                invoke: (method, args) => (engineRef ? engineRef.remoteInvoke(method, args) : Promise.reject(new Error('no Genie window is connected'))),
+                invoke: (method, args, context) => (engineRef ? engineRef.remoteInvoke(method, args, context) : Promise.reject(new Error('no Genie window is connected'))),
             },
             onEvent: (listener) => { remoteWindowEvents.add(listener); return () => { remoteWindowEvents.delete(listener); }; },
             // The phone's methods and events with every window closed (host-alone-api.ts).
