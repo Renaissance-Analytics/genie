@@ -46,26 +46,40 @@ export interface GenieMcpServer {
     /** `null` until started and after stopped — config sync and terminals read this, never a stale URL. */
     endpoint(): { url: string; token: string } | null;
     verify(): Promise<Verification>;
-    /** RED-RUN STUB (ADF A6): replaced in the next commit. */
+    /**
+     * Serve these tools from the next request on (ADF A6, Tynn #450): the same door, the same URL and token. A call
+     * already running finishes on what it started on.
+     */
     setRegistrations(registrations: readonly Registration[]): void;
 }
 
 const NOT_LISTENING = 'the MCP server is not listening';
+/** A tool set's Server answers through `handle`; only the one door below ever listens. */
+const NEVER_LISTENS: ServerTransport = { listen: async () => { throw new Error('this Server is answered through its door'); }, close: async () => {} };
 
 export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
-    const build = (options: { port: number; token?: string }): Server => {
-        // `abortOnDisconnect` (genie#1360): a client that goes away fires its call's signal, so the wait behind it — an
-        // approval, `services exec`, `agentinbox receive wait` — is withdrawn instead of running on for nobody.
-        const s = new Server({ server: 'genie', transport: input.transport ?? new LoopbackHttpTransport({ ...options, abortOnDisconnect: true }) });
-        for (const r of input.registrations) {
+    /*
+     * ONE DOOR, A REPLACEABLE TOOL SET (ADF A6, Tynn #450). prism's Server registers tools once and has no unregister, so
+     * the transport is bound here, once, and answers from whichever Server holds the tools now. A package installed,
+     * updated, disabled or removed builds a new one and swaps it in whole: there is no moment with half of each, the URL
+     * and token do not move, and a call already running finishes on the Server it started on.
+     */
+    const serving = (registrations: readonly Registration[]): Server => {
+        const s = new Server({ server: 'genie', transport: NEVER_LISTENS });
+        for (const r of registrations) {
             const visible = r.visible;
             if (visible) s.register(r.definition, r.handler as never, { visible: (context: { headers: Record<string, string> }) => visible(context) });
             else s.register(r.definition, r.handler as never);
         }
         return s;
     };
+    // `abortOnDisconnect` (genie#1360): a client that goes away fires its call's signal, so the wait behind it — an
+    // approval, `services exec`, `agentinbox receive wait` — is withdrawn instead of running on for nobody.
+    const door = (options: { port: number; token?: string }): ServerTransport => input.transport ?? new LoopbackHttpTransport({ ...options, abortOnDisconnect: true });
+    let current = serving(input.registrations);
+    const answer = (request: Parameters<Server['handle']>[0]) => current.handle(request);
     const remembered = input.remember?.read() ?? null;
-    let server = build(remembered ? { port: remembered.port, token: remembered.token } : { port: input.port ?? 0 });
+    let transport = door(remembered ? { port: remembered.port, token: remembered.token } : { port: input.port ?? 0 });
     let endpoint: { url: string; token: string } | null = null;
 
     const discover = async (): Promise<unknown> => {
@@ -88,12 +102,12 @@ export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
         start: async () => {
             let listening: { url: string; token?: string | null };
             try {
-                listening = await server.listen();
+                listening = await transport.listen(answer);
             } catch (error) {
                 // The remembered port is taken: a new one, the SAME token (so only the port in synced files changes).
                 if (!remembered || input.transport) throw error;
-                server = build({ port: 0, token: remembered.token });
-                listening = await server.listen();
+                transport = door({ port: 0, token: remembered.token });
+                listening = await transport.listen(answer);
             }
             endpoint = { url: listening.url, token: listening.token ?? '' };
             const bound = Number(new URL(endpoint.url).port);
@@ -102,10 +116,11 @@ export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
         },
         stop: async () => {
             endpoint = null;
-            await server.close();
+            await transport.close();
+            await current.close();
         },
         endpoint: () => endpoint,
-        setRegistrations: () => {},
+        setRegistrations: (registrations) => { current = serving(registrations); },
         verify: async () => {
             try {
                 const result = (await discover()) as { supportedVersions?: unknown };

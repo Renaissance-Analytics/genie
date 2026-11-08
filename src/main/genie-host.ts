@@ -719,6 +719,8 @@ async function main(): Promise<void> {
      */
     const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins()));
     pluginsService.onEvent(() => catalogService.rebuild());
+    // A package installed, updated, disabled or removed reaches agents now, not at the next restart (ADF A6).
+    catalogService.onEvent(() => mcp?.refreshTools());
     // The flow palette's door and the runner here offer what the catalog holds, as it changes (ADF A5).
     setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions));
     catalogService.onEvent(() => setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions)));
