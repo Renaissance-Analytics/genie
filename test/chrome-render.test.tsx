@@ -270,3 +270,15 @@ describe('the rail', () => {
         expect(order).toEqual(['tynn', 'fancy', 'cold']);
     });
 });
+
+// A stale question is never invisible (2026-11-08): beside the Deck's count, a small second badge says how many from
+// earlier runs are still unanswered. It is not in the count waiting on you.
+describe('the Deck rail badge for earlier runs', () => {
+    it('shows how many earlier-run questions are unanswered, apart from the waiting count; none at zero (CONTROL)', () => {
+        const html = rail({ deckCount: 2, deckStaleCount: 7 } as never);
+        expect(html).toContain('data-deck-badge="2"');
+        expect(html).toMatch(/data-deck-stale-badge="7"[^>]*>7</);
+        expect(rail({ deckCount: 2, deckStaleCount: 0 } as never)).not.toContain('data-deck-stale-badge');
+        expect(rail({ deckCount: 0, deckStaleCount: 3 } as never)).toContain('data-deck-stale-badge="3"');
+    });
+});
