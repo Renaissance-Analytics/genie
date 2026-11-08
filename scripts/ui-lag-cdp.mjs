@@ -267,10 +267,10 @@ try {
     async function runPass(label, profiled) {
         const phases = [];
         const mark = async (name) => ({ name, mainMs: (await main.evaluate('performance.now()')), pageMs: await page.evaluate('performance.now()'), hostMs: await hostCdp.evaluate('performance.now()'), wallMs: Date.now() });
-        if (profiled) {
-            for (const c of [main, page, hostCdp]) { await c.request('Profiler.enable', {}); await c.request('Profiler.setSamplingInterval', { interval: 1000 }); await c.request('Profiler.start', {}); }
-            await sleep(1500);
-        }
+        // genie-host is profiled in BOTH passes (Tynn #536): every host gap, the budget pass's included, comes with its stack.
+        // Window main and the page only in the second (their gauges decide the main and page budgets in the first).
+        for (const c of profiled ? [main, page, hostCdp] : [hostCdp]) { await c.request('Profiler.enable', {}); await c.request('Profiler.setSamplingInterval', { interval: 1000 }); await c.request('Profiler.start', {}); }
+        await sleep(1500);
         // CONTROL: one deliberate block on each thread. Every gauge must see it, and each profile must name it.
         await focusField();
         const c0 = await mark('control');
@@ -328,11 +328,8 @@ try {
         demand(build?.run === run && build.writes > 0, `the ${label} build ran to its end (${JSON.stringify(build)})`);
         await toggleFiles(false);
         await until('the terminal again', () => page.evaluate(`Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-pane] .xterm-rows'))`), 30000);
-        let profiles = null;
-        if (profiled) {
-            profiles = {};
-            for (const [name, c] of [['main', main], ['page', page], ['host', hostCdp]]) { profiles[name] = (await c.request('Profiler.stop', {})).profile; await c.request('Profiler.disable', {}); }
-        }
+        const profiles = {};
+        for (const [name, c] of profiled ? [['main', main], ['page', page], ['host', hostCdp]] : [['host', hostCdp]]) { profiles[name] = (await c.request('Profiler.stop', {})).profile; await c.request('Profiler.disable', {}); }
         return { label, profiled, run, build, phases, profiles };
     }
 
@@ -349,7 +346,7 @@ try {
     hostLaunch = await main.evaluate('globalThis.__uiLagHostLaunch?.snapshot()');
     const mapper = sourceMapper();
     for (const pass of passes) {
-        const hostIdx = pass.profiles ? indexProfile(pass.profiles.host, mapper) : null, mainIdx = pass.profiles ? indexProfile(pass.profiles.main, mapper) : null, pageIdx = pass.profiles ? indexProfile(pass.profiles.page, mapper) : null;
+        const hostIdx = pass.profiles?.host ? indexProfile(pass.profiles.host, mapper) : null, mainIdx = pass.profiles?.main ? indexProfile(pass.profiles.main, mapper) : null, pageIdx = pass.profiles?.page ? indexProfile(pass.profiles.page, mapper) : null;
         const ctl = pass.phases[0];
         // Profile clock = gauge clock + offset, from the control block each profile must contain.
         const mainOffset = mainIdx ? (firstSampleWith(mainIdx, 'uiLagControlBusyMain') ?? NaN) - ctl.mainCtl.start : null;
@@ -418,6 +415,7 @@ try {
             demand(Number.isFinite(pass.alignment.mainOffsetMs) && Number.isFinite(pass.alignment.pageOffsetMs) && Number.isFinite(pass.alignment.hostOffsetMs), `${pass.label}: each profile holds its control block (alignment ${JSON.stringify(pass.alignment)})`);
             demand(/uiLagControlBusyMain/.test(ctl.mainGapStacks?.[0]?.stacks?.[0]?.stack ?? ''), `${pass.label}: main's worst control gap is attributed to the control block`);
         }
+        else demand(Number.isFinite(pass.alignment.hostOffsetMs), `${pass.label}: genie-host's profile holds its control block (alignment ${JSON.stringify(pass.alignment)})`);
         result.controls[pass.label] = 'passed';
     }
     demand(hostLaunch?.pids?.length > 0, 'genie-host was started with the row\'s inspector');
@@ -466,7 +464,7 @@ finally {
         if (r.mainProfile) console.log(`UI_LAG_PROFILE main ${r.phase} ${JSON.stringify(r.mainProfile.ms)} own=${JSON.stringify(r.mainProfile.ownFrames)}`);
         for (const g of r.mainGapStacks ?? []) console.log(`UI_LAG_STACK main ${r.phase} gap=${g.gapMs}ms ${JSON.stringify(g)}`.slice(0, 4000));
         if (r.hostProfile) console.log(`UI_LAG_PROFILE host ${r.phase} ${JSON.stringify(r.hostProfile.ms)} own=${JSON.stringify(r.hostProfile.ownFrames)}`);
-        for (const g of r.hostGapStacks ?? []) console.log(`UI_LAG_STACK host ${r.phase} gap=${g.gapMs}ms ${JSON.stringify(g)}`.slice(0, 4000));
+        for (const g of r.hostGapStacks ?? []) console.log(`UI_LAG_STACK host ${p.label}/${r.phase} gap=${g.gapMs}ms ${JSON.stringify(g)}`.slice(0, 4000));
         if (r.pageProfile) console.log(`UI_LAG_PROFILE page ${r.phase} ${JSON.stringify(r.pageProfile.ms)} own=${JSON.stringify(r.pageProfile.ownFrames)}`);
         for (const l of r.pageLongtaskStacks ?? []) console.log(`UI_LAG_STACK page ${r.phase} longtask=${l.longtaskMs}ms ${JSON.stringify(l)}`.slice(0, 4000));
     }
