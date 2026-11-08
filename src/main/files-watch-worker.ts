@@ -69,10 +69,11 @@ export const WATCH_WORKER_SOURCE = [
 
 /**
  * How far before the watch was asked for the catch-up looks: Linux stamps a file's time from a coarse clock that can lag
- * Date.now() (a write just after the ask could carry an earlier time), so it looks a little further back. A file written
- * just before the view opened may be reported as changed: it was, while Genie was starting to look.
+ * Date.now() by a tick (4-10 ms), so a write just after the ask could carry an earlier time. Only that far, never seconds:
+ * at 2 s the catch-up reported again an edit made 700 ms before the ask, one the views had already been told about, as a
+ * change of its own — an extra batch, git run and push (files-watch-cdp, red on both OSes until this was 50).
  */
-export const CATCH_UP_SLACK_MS = 2_000;
+export const CATCH_UP_SLACK_MS = 50;
 /** At most this many entries walked by one catch-up: a bound, never reached by a workspace whose build output is ignored. */
 export const CATCH_UP_LIMIT = 100_000;
 
