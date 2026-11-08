@@ -137,3 +137,22 @@ export function pagingVerdict(passes, { maxPerState = 16, growth = 1.5, slack = 
     for (const r of rows.slice(1)) if (first !== null && r.perState !== null && r.perState > first * growth + slack) reasons.push(`${r.pass}: ${r.perState} pages per files.state grew from ${first}`);
     return { ok: reasons.length === 0, maxPerState, rows, reasons };
 }
+
+/**
+ * THE FILES PUSH BUDGET (Tynn #523, L3): bytes per Files push to the page during each pass's build, with the Files panel
+ * open. The p95 within `p95Bytes` and the mean within `meanBytes`: a view's first push may carry a whole git tree, every
+ * one after it only what changed. A pass with no push fails: nothing reached the page, nothing measured.
+ */
+export function pushVerdict(passes, { p95Bytes = 32 * 1024, meanBytes = 24 * 1024 } = {}) {
+    const rows = passes.map((p) => {
+        const sizes = p.sizes.filter((n) => Number.isFinite(n));
+        return { pass: p.pass, count: sizes.length, meanBytes: sizes.length ? Math.round(sizes.reduce((a, n) => a + n, 0) / sizes.length) : null, p95Bytes: sizes.length ? summarize(sizes).p95 : null, maxBytes: sizes.length ? Math.max(...sizes) : null };
+    });
+    const reasons = [];
+    for (const r of rows) {
+        if (r.count === 0) { reasons.push(`${r.pass}: no Files push during the build`); continue; }
+        if (r.p95Bytes > p95Bytes) reasons.push(`${r.pass}: p95 ${r.p95Bytes} bytes per Files push (bound ${p95Bytes})`);
+        if (r.meanBytes > meanBytes) reasons.push(`${r.pass}: mean ${r.meanBytes} bytes per Files push (bound ${meanBytes})`);
+    }
+    return { ok: reasons.length === 0, p95Bytes, meanBytes, rows, reasons };
+}

@@ -308,14 +308,14 @@ describe('reads, writes, the baton', () => {
     it('a workspace guest cannot use the owner pairing to read or triage Issues (CONTROL: the owner)', async () => {
         const guest = await tynnLinkGuest('tynn');
         expect(await guest.call('baton.take')).toMatchObject({ ok: true });
-        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction'] as const) {
+        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction'] as const) {
             expect(await guest.call(method, 'tynn', {})).toMatchObject({ ok: false, reason: expect.stringContaining('only its owner can') });
             expect(api.calls.map((c) => c.method)).not.toContain(method);
         }
         expect(await guest.call('baton.release')).toMatchObject({ ok: true });
         const o = await owner('laptop');
         expect(await o.call('baton.take')).toMatchObject({ ok: true });
-        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction'] as const) {
+        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction'] as const) {
             expect(await o.call(method, 'tynn', {})).toMatchObject({ ok: true });
             expect(api.calls.map((c) => c.method)).toContain(method);
         }
@@ -497,5 +497,76 @@ describe('a whole-workstation guest never receives the remote secrets in a push 
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-data' });
         api.emit('terminal-exit', { id: 'term_f', exitCode: 0 });
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-exit' });
+    });
+});
+
+/**
+ * TAKING CONTROL (Tynn #529). The owner, connected from a Pilot to a drone, saw "nobody is driving aion; take the baton
+ * to make changes" and had no way to take it. The host's baton is fine on its own; what a window needs from it is a way to
+ * take control from whoever holds it, and to be TOLD, at once and by whom, when it loses control. The rules: the owner may
+ * take control from anyone; a guest never from the owner; a read-only grant never. A window that asked (`baton.watch`)
+ * hears every change it did not cause itself.
+ */
+describe('taking control (Tynn #529)', () => {
+    async function owner(label: string) {
+        host.issuePin();
+        const c = connect();
+        await c.hello({ kind: 'pin', code: '482913', label });
+        return c;
+    }
+    const BATON = 'remote-baton';
+
+    it('two windows: one takes; the other is told who; the other takes control from it; the first is told at once, by whom; a disconnect releases and is told', async () => {
+        const a = await owner('laptop');
+        const b = await owner('desk');
+        expect(await a.call('baton.watch')).toMatchObject({ kind: 'result', ok: true });
+        expect(await b.call('baton.watch')).toMatchObject({ kind: 'result', ok: true });
+
+        expect(await a.call('baton.take')).toMatchObject({ kind: 'result', ok: true, value: { driver: 'laptop', mine: true } });
+        expect(await b.next()).toEqual({ kind: 'event', channel: BATON, payload: { driver: 'laptop', mine: false, locked: false, by: 'laptop' } });
+
+        // A plain take never takes control from someone driving: it says who is.
+        expect(await b.call('baton.take')).toMatchObject({ kind: 'result', ok: false, reason: 'laptop is driving alphar' });
+        // Take control does.
+        expect(await b.call('baton.take', { force: true })).toMatchObject({ kind: 'result', ok: true, value: { driver: 'desk', mine: true } });
+        expect(await a.next()).toEqual({ kind: 'event', channel: BATON, payload: { driver: 'desk', mine: false, locked: false, by: 'desk' } });
+        expect(await a.call('prompt', 'agent_a', 'hi')).toMatchObject({ kind: 'result', ok: false, reason: 'desk is driving; take the baton to make changes' });
+        expect(await b.call('prompt', 'agent_a', 'hi')).toMatchObject({ kind: 'result', ok: true });
+
+        // The driver leaves: the baton is released, and the window left is told.
+        b.close();
+        expect(await a.next()).toEqual({ kind: 'event', channel: BATON, payload: { driver: null, mine: false, locked: false, by: null } });
+        expect(await a.call('baton.take')).toMatchObject({ kind: 'result', ok: true });
+    });
+
+    it('a guest never takes control from the owner, and says so; the owner takes control from a guest (CONTROL)', async () => {
+        const o = await owner('laptop');
+        expect(await o.call('baton.take')).toMatchObject({ ok: true });
+        const guest = await tynnLinkGuest('tynn');
+        expect(await guest.call('baton.take', { force: true })).toMatchObject({ kind: 'result', ok: false, reason: 'laptop is driving alphar, and only the owner can take control from the owner' });
+        expect(await o.call('prompt', 'agent_a', 'still mine')).toMatchObject({ ok: true });
+
+        // The control: the guest drives; the owner takes control from it.
+        expect(await o.call('baton.release')).toMatchObject({ ok: true });
+        expect(await guest.call('baton.take')).toMatchObject({ ok: true });
+        expect(await o.call('baton.take', { force: true })).toMatchObject({ ok: true, value: { driver: 'laptop', mine: true } });
+        expect(await guest.call('prompt', 'agent_a', 'x')).toMatchObject({ ok: false, reason: 'laptop is driving; take the baton to make changes' });
+    });
+
+    it('a read-only grant never takes control, not even from nobody', async () => {
+        const o = await owner('laptop');
+        expect(await o.call('baton.take')).toMatchObject({ ok: true });
+        const ro = connectRelay({ label: 'Pat', isOwner: false, workspaceId: null, readonly: true });
+        await ro.hello({ kind: 'relay' }, 'Pat');
+        expect(await ro.call('baton.take', { force: true })).toMatchObject({ ok: false, reason: 'Pat has read-only access to alphar' });
+        expect(await o.call('baton.status')).toMatchObject({ ok: true, value: { driver: 'laptop', mine: true } });
+    });
+
+    it('a window that never asked to watch is sent no baton events (old clients read the wire as before)', async () => {
+        const a = await owner('laptop');
+        const b = await owner('desk');
+        expect(await a.call('baton.take')).toMatchObject({ ok: true });
+        // b's next frame is the answer to its own call, not an event it never asked for.
+        expect(await b.call('baton.status')).toMatchObject({ kind: 'result', ok: true, value: { driver: 'laptop', mine: false } });
     });
 });

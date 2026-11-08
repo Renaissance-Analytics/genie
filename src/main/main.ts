@@ -3,7 +3,7 @@ import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { cancelIntent } from '../core/session.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
-import { readTynnPage } from './tynn-page-client.js';
+import { readTynnPage, runTynnPageAction } from './tynn-page-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { readTynnIssueChanges, readTynnIssues, runTynnIssueAction } from './tynn-issues-client.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
@@ -57,7 +57,7 @@ import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
 import { TrustVerdicts } from './trust-verdict.js';
-import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessAgents, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
@@ -693,6 +693,22 @@ async function watchTynnIssues(workspaceId: string, onGone: (stop: () => void) =
     onGone(stop);
     return id;
 }
+/** Features subscriptions (row F1) belong to the host connection, like the Issues queue's; no host, no live page. */
+let tynnFeaturesDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
+const tynnFeaturesWatches = new Map<number, () => void>();
+let tynnFeaturesWatchSeq = 0;
+/** Start following a workspace's Features page for a window; answers the watch's id, or null when not linked or no host. */
+async function watchTynnFeatures(workspaceId: string, onGone: (stop: () => void) => void): Promise<number | null> {
+    const door = tynnFeaturesDoor;
+    if (door === null) return null;
+    const id = ++tynnFeaturesWatchSeq;
+    const viewId = `tynn-features-${id}`;
+    if (!(await door.watch(viewId, workspaceId))) return null;
+    const stop = () => { if (tynnFeaturesWatches.delete(id)) door.unwatch(viewId); };
+    tynnFeaturesWatches.set(id, stop);
+    onGone(stop);
+    return id;
+}
 function tynnProjectFor(workspaceId: string): string | null {
     const workspace = (registry?.snapshot().workspaces ?? []).find((w) => w.id === workspaceId);
     let manifest: string | null = null;
@@ -1243,6 +1259,8 @@ function detailFor(agentId: AgentId): AgentDetail | null {
             dailyBudgetUsd: record.dailyBudgetUsd ?? null,
             mode: record.mode,
             accessScope: record.accessScope,
+            // Chosen agents (Tynn #526): only when the choice is on.
+            ...(Array.isArray(record.accessAgents) ? { accessAgents: record.accessAgents } : {}),
             autoApprove: record.autoApprove === true,
             manageTabs: record.manageTabs === true,
             drivePages: record.drivePages === true,
@@ -2073,6 +2091,7 @@ async function boot(): Promise<void> {
             setBudget: (id, usd) => registry!.setBudget(id, usd),
             setMode: (id, mode) => registry!.setMode(id, mode),
             setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
+            setAccessAgents: (id, ids) => registry!.setAccessAgents(id, ids),
             setAutoApprove: (id, on) => registry!.setAutoApprove(id, on),
             setManageTabs: (id, on) => registry!.setManageTabs(id, on),
             setDrivePages: (id, on) => registry!.setDrivePages(id, on),
@@ -2544,6 +2563,9 @@ async function boot(): Promise<void> {
         readWorkspaceTynnIssues(rawId, rawFilters ?? {}));
     ipcMain.handle('genie:workspace-tynn-issue-action', (_event, rawId: unknown, rawInput: unknown) =>
         (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnIssueAction(tynnBoardPorts(), rawId, rawInput as { action: string; issueId: string | null; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
+    // Row H1, the Home's Details save: a write on the workspace's own project, through the person's pairing.
+    ipcMain.handle('genie:workspace-tynn-page-action', (_event, rawId: unknown, rawInput: unknown) =>
+        (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnPageAction(tynnBoardPorts(), rawId, rawInput as { action: string; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
     ipcMain.handle('genie:workspace-tynn-issues-changes', (_event, rawId: unknown, rawFilters: unknown, rawCursor: unknown, rawIds: unknown) =>
         (typeof rawId === 'string' && typeof rawCursor === 'string'
             ? readTynnIssueChanges(tynnBoardPorts(), rawId, rawFilters ?? {}, rawCursor, Array.isArray(rawIds) ? rawIds.filter((x): x is string => typeof x === 'string') : [])
@@ -2552,6 +2574,12 @@ async function boot(): Promise<void> {
         (typeof rawId === 'string' ? watchTynnIssues(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
     ipcMain.handle('genie:workspace-tynn-issues-unwatch', (_event, rawWatch: unknown) => {
         if (typeof rawWatch === 'number') tynnIssuesWatches.get(rawWatch)?.();
+    });
+    // Row F1: follow the Features page (the host holds one socket for every open tab).
+    ipcMain.handle('genie:workspace-tynn-features-watch', (event, rawId: unknown) =>
+        (typeof rawId === 'string' ? watchTynnFeatures(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
+    ipcMain.handle('genie:workspace-tynn-features-unwatch', (_event, rawWatch: unknown) => {
+        if (typeof rawWatch === 'number') tynnFeaturesWatches.get(rawWatch)?.();
     });
     // "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt): the `.agents/*` a workspace
     // brought and has not registered, and adopting one — read from its AGENT.md, never rewritten. The sacred grant is the
@@ -2956,6 +2984,7 @@ async function boot(): Promise<void> {
                 tynnBoardAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnBoardAction(tynnBoardPorts(), id, input as { action: string; ids: BoardIds; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
                 tynnIssues: (id, filters) => readWorkspaceTynnIssues(id, filters ?? {}),
                 tynnIssueAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnIssueAction(tynnBoardPorts(), id, input as { action: string; issueId: string | null; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
+                tynnPageAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnPageAction(tynnBoardPorts(), id, input as { action: string; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name a workspace and an action' })),
                 tynnOwnerOptions: () => listTynnOwners(workspaceOps),
                 createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },
                 importedAgents: (id) => readImportedAgents(adoptionPorts, id),
@@ -2996,6 +3025,7 @@ async function boot(): Promise<void> {
                 setBudget: (id, usd) => setBudget(agentOps, id, usd).finally(() => registry?.touch()),
                 setMode: (id, mode) => setMode(agentOps, id, mode).finally(() => registry?.touch()),
                 setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope).finally(() => registry?.touch()),
+                setAccessAgents: (id, ids) => setAccessAgents(agentOps, id, ids).finally(() => registry?.touch()),
                 setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on).finally(() => registry?.touch()),
                 setManageTabs: (id, on) => setManageTabs(agentOps, id, on).finally(() => registry?.touch()),
                 setDrivePages: (id, on) => setDrivePages(agentOps, id, on).finally(() => registry?.touch()),
@@ -3497,6 +3527,13 @@ async function boot(): Promise<void> {
             };
             syncNew();
             registry?.subscribe(() => syncNew());
+            tynnAccount?.onChange(() => {
+                // THE WORK MODEL (Tynn story #402): signing in to Tynn, or out, changes what the protocol tells every agent
+                // about where its work is planned, so every workspace's protocol is written again (only a changed file is).
+                for (const w of registry?.listWorkspaces() ?? []) {
+                    void composed.syncAgentDocs(w.path).catch((error: unknown) => { console.error(`[workspace-files] ${w.id} protocol: ${(error as Error).message}`); });
+                }
+            });
             // SIGNING IN TO TYNN LATER (Genie 1 provisioned on the next activation): every workspace linked to a Tynn
             // project is synced again, so one with no token yet gets it now. One already carrying a token is not minted again.
             tynnAccount?.onChange(() => {
@@ -3671,6 +3708,8 @@ async function boot(): Promise<void> {
         engineClient.onTynnBoardEvent((event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); });
         tynnIssuesDoor = { watch: (viewId, workspaceId) => engineClient.tynnIssuesWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnIssuesUnwatch(viewId); } };
         engineClient.onTynnIssuesEvent((event) => { broadcast('genie:workspace-tynn-issues-live', event.workspaceId, event.signal); });
+        tynnFeaturesDoor = { watch: (viewId, workspaceId) => engineClient.tynnFeaturesWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnFeaturesUnwatch(viewId); } };
+        engineClient.onTynnFeaturesEvent((event) => { broadcast('genie:workspace-tynn-features-live', event.workspaceId, event.signal); });
     } else if (windowIssueWatch) {
         const own = windowIssueWatch;
         const replica = new IssueWatchReplica(async (method, args) => (await own).issueWatch.call(method, args));

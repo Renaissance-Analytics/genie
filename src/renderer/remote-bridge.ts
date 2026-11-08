@@ -2,10 +2,11 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import { localTerminalClient } from './local-terminal-client.js';
 import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
-import { LOCAL_EVENTS, parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
+import { BATON_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
+import { BATON_REFUSAL } from '../core/remote.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
@@ -35,6 +36,10 @@ export interface RemoteState {
     readonly driving: boolean;
     readonly locked: boolean;
     readonly lastRefusal: string | null;
+    /** The last refusal was for lack of the baton: the window offers Take control beside it (Tynn #529). */
+    readonly needsBaton?: boolean;
+    /** Who took control from this window, until it drives again (Tynn #529); `null` otherwise. */
+    readonly batonLostTo?: string | null;
     /** Minted on a PIN pairing — the client keeps it for next time. */
     readonly token: string | null;
     /** The PIN was right and the host's screen asks "Pair this device?" until `expiresAt` (q_8c07b142); `null` otherwise. */
@@ -52,8 +57,11 @@ export interface RemoteClient {
     readonly ready: Promise<{ ok: true } | { ok: false; reason: string }>;
     state(): RemoteState;
     onState(listener: (state: RemoteState) => void): () => void;
-    takeBaton(): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** `force`: Take control from whoever drives (Tynn #529); without it, a take never takes control from someone driving. */
+    takeBaton(options?: { force?: boolean }): Promise<{ ok: true } | { ok: false; reason: string }>;
     releaseBaton(): Promise<void>;
+    /** The person has read the last refusal. */
+    clearRefusal(): void;
     refreshBaton(): Promise<void>;
     lock(): Promise<{ ok: true } | { ok: false; reason: string }>;
     unlock(): Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -77,6 +85,11 @@ export interface RemoteOptions {
     readonly profile?: 'mobile';
     /** The phone's agent windows, kept ACROSS connections so the next one resumes from a cursor (`AgentWindows`). */
     readonly windows?: AgentWindows;
+    /**
+     * A WINDOW THAT DRIVES (Tynn #529): take the baton the moment the host welcomes it, so a Pilot connecting to its drone
+     * has full control with no extra step. Someone else driving is never taken from silently: the window is told who.
+     */
+    readonly drive?: boolean;
 }
 
 /**
@@ -113,7 +126,7 @@ interface PhonePush {
 export function connectRemote(transport: ClientTransport, auth: AuthRequest, label: string, options: RemoteOptions = {}): RemoteClient {
     let terminalClient: ReturnType<typeof localTerminalClient> | undefined;
     let filesWatches: ReturnType<typeof localFilesWatchClient> | undefined;
-    let state: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null, pairing: null };
+    let state: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, needsBaton: false, batonLostTo: null, token: null, pairing: null };
     const stateListeners = new Set<(s: RemoteState) => void>();
     const setState = (patch: Partial<RemoteState>) => {
         state = { ...state, ...patch };
@@ -141,6 +154,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             case 'welcome':
                 setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null });
                 resolveReady({ ok: true });
+                // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
+                if (options.drive === true && auth.kind !== 'local') {
+                    void call('baton.watch');
+                    void control('baton.take');
+                }
                 return;
             case 'pairing':
                 setState({ pairing: { expiresAt: m.expiresAt } });
@@ -175,11 +193,17 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
 
     transport.send(JSON.stringify({ kind: 'hello', auth, label, ...(options.profile ? { profile: options.profile } : {}) }));
 
+    /** A refusal for the person to see; one for lack of the baton says Take control is what it needs. */
+    const refused = (reason: string): void => setState({ lastRefusal: reason, needsBaton: reason.endsWith(BATON_REFUSAL) });
     const call = (method: RemoteMethod | ControlMethod, ...args: unknown[]): Promise<Result> =>
-        new Promise((resolve) => {
+        new Promise<Result>((resolve) => {
             const id = ++nextId;
             pending.set(id, resolve);
             transport.send(JSON.stringify({ kind: 'call', id, method, args }));
+        }).then((r) => {
+            // Every write refused for lack of the baton is kept, whatever path asked: no dead click (Tynn #529).
+            if (!r.ok && r.reason.endsWith(BATON_REFUSAL)) refused(r.reason);
+            return r;
         });
 
     /** A read: the host's value, or a rejection with its reason. */
@@ -190,7 +214,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
     /** A void write: a refusal has nowhere to go but the state. */
     const fire = (method: RemoteMethod, ...args: unknown[]): void => {
-        void call(method, ...args).then((r) => { if (!r.ok) setState({ lastRefusal: r.reason }); });
+        void call(method, ...args).then((r) => { if (!r.ok) refused(r.reason); });
     };
     /** A write whose answer is itself an ok/reason shape: the host's refusal takes that shape. */
     const answer = async <T extends { ok: boolean }>(method: RemoteMethod, ...args: unknown[]): Promise<T | { ok: false; reason: string }> => {
@@ -202,7 +226,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         const r = await call('baton.status');
         if (r.ok) {
             const s = r.value as { driver: string | null; mine: boolean; locked: boolean };
-            setState({ driver: s.driver, driving: s.mine, locked: s.locked });
+            setState({ driver: s.driver, driving: s.mine, locked: s.locked, ...(s.mine ? { batonLostTo: null } : {}) });
         }
     };
 
@@ -348,7 +372,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         restartWithHandoff: (agentId, finishedId) => answer<{ ok: true }>('restartWithHandoff', agentId, finishedId),
         addAgent: (workspaceId, input) => answer<{ ok: true; id: string }>('addAgent', workspaceId, input),
         addWorkspace: () => fire('addWorkspace'),
-        takeOver: (agentId) => answer<{ ok: true; terminalId: string }>('takeOver', agentId),
+        // A Take over the host refused is said to the person, never dropped (Tynn #529).
+        takeOver: async (agentId) => {
+            const r = await answer<{ ok: true; terminalId: string }>('takeOver', agentId);
+            if (!r.ok) refused(r.reason);
+            return r;
+        },
         workspaces: {
             previewAdd: (path) => answer('workspaces.previewAdd', path),
             confirmAdd: (path) => answer('workspaces.confirmAdd', path),
@@ -398,6 +427,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             },
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),
             setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
+            setAccessAgents: (agentId, ids) => answer('agents.setAccessAgents', agentId, ids),
             setAutoApprove: (agentId, on) => answer('agents.setAutoApprove', agentId, on),
             setManageTabs: (agentId, on) => answer('agents.setManageTabs', agentId, on),
             setDrivePages: (agentId, on) => answer('agents.setDrivePages', agentId, on),
@@ -446,7 +476,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             soundData: async () => null,
         },
         // The REMOTE host's disk, for every picker in this window (Tynn #835).
-        host: { listDir: (path: string) => answer('host.listDir', path) as never, mkdir: (parent: string, name: string) => answer('host.mkdir', parent, name) as never },
+        // Its home too (Tynn #527): a picker that opened at THIS machine's home asked the remote for a path it does not have.
+        host: { listDir: (path: string) => answer('host.listDir', path) as never, mkdir: (parent: string, name: string) => answer('host.mkdir', parent, name) as never, home: () => read<string>('host.home') },
         // The HOST's sites in Genie's browser: its site names read from the host, the window opened by main for this connection.
         ...(options.browse ? {
             browserWindow: {
@@ -484,11 +515,19 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         return v?.ok === true ? { ok: true } : { ok: false, ...(v?.reason ? { reason: v.reason } : {}) };
     }
 
-    const control = async (method: ControlMethod): Promise<{ ok: true } | { ok: false; reason: string }> => {
-        const r = await call(method);
+    const control = async (method: ControlMethod, ...args: unknown[]): Promise<{ ok: true } | { ok: false; reason: string }> => {
+        const r = await call(method, ...args);
         await refreshBaton();
+        // Driving now: the refusal that asked for the baton is answered.
+        if (r.ok && method === 'baton.take' && state.needsBaton) setState({ lastRefusal: null, needsBaton: false });
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
     };
+    // Who drives, pushed by the host when something this window did not do changed it (Tynn #529).
+    on(BATON_EVENT, (payload) => {
+        const e = payload as BatonEvent;
+        const lostTo = state.driving && !e.mine && e.by !== null ? e.by : e.mine ? null : (state.batonLostTo ?? null);
+        setState({ driver: e.driver, driving: e.mine, locked: e.locked, batonLostTo: lostTo });
+    });
 
     const blobRead = async <T>(method: ControlMethod | RemoteMethod, ...args: unknown[]): Promise<T> => {
         const started = await ready;
@@ -532,9 +571,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         ready,
         state: () => state,
         onState: (l) => { stateListeners.add(l); return () => { stateListeners.delete(l); }; },
-        takeBaton: () => control('baton.take'),
+        takeBaton: (opts) => (opts?.force === true ? control('baton.take', { force: true }) : control('baton.take')),
         releaseBaton: async () => { await control('baton.release'); },
         refreshBaton,
+        clearRefusal: () => setState({ lastRefusal: null, needsBaton: false }),
         lock: () => control('host.lock'),
         unlock: () => control('host.unlock'),
         close: () => transport.close(),

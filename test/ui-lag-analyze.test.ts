@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -126,5 +126,17 @@ describe('the Files state paging budget (Tynn #522)', () => {
         expect(pagingVerdict([{ pass: 'a', states: 10, pageNext: 20 }, { pass: 'b', states: 10, pageNext: 150 }]).reasons).toEqual(['b: 15 pages per files.state grew from 2']);
         // Nothing read: nothing measured, never a pass.
         expect(pagingVerdict([{ pass: 'a', states: 0, pageNext: 0 }]).reasons).toEqual(['a: no files.state call during the build']);
+    });
+});
+
+describe('the Files push budget (Tynn #523)', () => {
+    it('passes small pushes with one whole tree among them, and names each way it fails', () => {
+        const small = Array.from({ length: 40 }, () => 10_000);
+        expect(pushVerdict([{ pass: 'a', sizes: [150_000, ...small] }]).ok).toBe(true);
+        // The measured pushes before: every one carried the whole tree.
+        const before = pushVerdict([{ pass: 'a', sizes: Array.from({ length: 40 }, () => 140_000) }]);
+        expect(before.reasons).toEqual(['a: p95 140000 bytes per Files push (bound 32768)', 'a: mean 140000 bytes per Files push (bound 24576)']);
+        expect(pushVerdict([{ pass: 'a', sizes: [30_000, 30_000, 30_000] }]).reasons).toEqual(['a: mean 30000 bytes per Files push (bound 24576)']);
+        expect(pushVerdict([{ pass: 'a', sizes: [] }]).reasons).toEqual(['a: no Files push during the build']);
     });
 });

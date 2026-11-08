@@ -2,6 +2,7 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
 import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import type { Headroom } from '../core/headroom.js';
+import { homedir } from 'node:os';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
@@ -183,6 +184,8 @@ export interface HostApiDeps {
         /** The Tynn tab's Issues (genie#1295 I1): the workspace's issue queue under filters, and one action on it. */
         tynnIssues?(workspaceId: string, filters: unknown): Promise<unknown>;
         tynnIssueAction?(workspaceId: string, input: unknown): Promise<unknown>;
+        /** One write on a page of the tab (the Home's Details save, genie#1295 H1). Optional: refused where absent. */
+        tynnPageAction?(workspaceId: string, input: unknown): Promise<unknown>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<unknown>;
         removeRepo(workspaceId: string, slug: string): Promise<unknown>;
         /** Optional: a host without it answers the call with a refusal rather than failing to build its deps. */
@@ -208,6 +211,8 @@ export interface HostApiDeps {
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
+        /** Chosen agents who may message it (Tynn #526); `null` turns the choice off. */
+        setAccessAgents(agentId: string, ids: readonly string[] | null): Promise<unknown>;
         setAutoApprove(agentId: string, on: boolean): Promise<unknown>;
         setManageTabs(agentId: string, on: boolean): Promise<unknown>;
         setDrivePages(agentId: string, on: boolean): Promise<unknown>;
@@ -426,6 +431,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setAccessScope':
                 if (typeof args[0] !== 'string' || (args[1] !== 'none' && args[1] !== 'self' && args[1] !== 'all')) return { ok: false, reason: 'scope is none, self or all' };
                 return deps.agentOps.setAccessScope(args[0], args[1]);
+            case 'agents.setAccessAgents':
+                if (typeof args[0] !== 'string' || !(args[1] === null || (Array.isArray(args[1]) && args[1].length <= 500 && args[1].every((id) => typeof id === 'string')))) return { ok: false, reason: 'chosen agents are a list of agent ids, or null to turn the choice off' };
+                return deps.agentOps.setAccessAgents(args[0], args[1] as readonly string[] | null);
             case 'agents.setPermissions':
                 if (typeof args[0] !== 'string' || (args[1] !== 'all' && args[1] !== 'edits' && args[1] !== 'ask')) return { ok: false, reason: 'permissions are all, ask or edits' };
                 return deps.agentOps.setPermissions(args[0], args[1]);
@@ -531,6 +539,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.tynnIssueAction':
                 if (!deps.workspaceOps.tynnIssueAction) throw new Error('this host has no Tynn tab');
                 return deps.workspaceOps.tynnIssueAction(str(args[0]), args[1]);
+            case 'workspaces.tynnPageAction':
+                if (!deps.workspaceOps.tynnPageAction) throw new Error('this host has no Tynn tab');
+                return deps.workspaceOps.tynnPageAction(str(args[0]), args[1]);
             case 'workspaces.listRepos':
                 return deps.workspaceOps.listRepos(str(args[0]));
             case 'workspaces.addRepo': {
@@ -599,6 +610,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return listHostDir(str(args[0]));
             case 'host.mkdir':
                 return makeHostDir(str(args[0]), str(args[1]));
+            case 'host.home':
+                return homedir();
             case 'updates.state':
                 return deps.updates?.state() ?? null;
             case 'updates.check':

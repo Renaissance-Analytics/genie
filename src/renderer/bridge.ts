@@ -3,7 +3,7 @@ import type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js
 export type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
 import { localSession, type LocalProtocolControl, type WorkspaceProtocolKey } from './local-session.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
-import type { TynnPage, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
+import type { TynnPage, TynnPageActionInput, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
 import type { IssueActionInput, IssueFilters, TynnIssuesHost } from '../core/tynn-issues.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
@@ -117,7 +117,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -187,7 +187,7 @@ export interface GenieBridge {
     /** `hosts`: the `.gen` names of the workstation a remote window is driving (main decides which browser by the window). */
     browserWindow?: { open(address?: string, hosts?: readonly string[]): Promise<{ ok: true } | { ok: false; error: string }> };
     /** One folder of the HOST this window drives (Tynn #835) — what every file and folder picker reads. */
-    host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The folder picker's New folder: `name` made inside `parent` on the host. */ mkdir?(parent: string, name: string): Promise<import('../main/host-fs.js').HostMade>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
+    host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The folder picker's New folder: `name` made inside `parent` on the host. */ mkdir?(parent: string, name: string): Promise<import('../main/host-fs.js').HostMade>; /** The host's home folder: a picker's last-resort start — the REMOTE's on a remote host (Tynn #527). */ home?(): Promise<string> };
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
     /** Other machines, dialled by the host (P3.4 cut e). A window holds a channel and addresses, and never a token. */
     deviceLink?: DeviceLinkBridge;
@@ -360,6 +360,8 @@ export interface GenieBridge {
         tynnBoardAction?(workspaceId: string, input: BoardActionInput): ReturnType<TynnBoardHost['act']>;
         /** The tab's other pages (WIP, …), read whole, of the same project. Optional: an older host has none. */
         tynnPage?(workspaceId: string, page: TynnPage, query: TynnPageQuery): ReturnType<NonNullable<TynnTabHost['page']>>;
+        /** One write on a page of the tab (row H1: the Home's Details save). Optional: an older host has none. */
+        tynnPageAction?(workspaceId: string, input: TynnPageActionInput): ReturnType<NonNullable<TynnTabHost['pageAct']>>;
         /** Row B4: what changed on that board since a cursor. Optional: an older host (and a remote one) has none. */
         tynnBoardChanges?(workspaceId: string, scope: BoardScope, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnBoardHost['changes']>>;
         /** Row B4: follow that board (its live state and rings) until the answer is called. */
@@ -372,6 +374,8 @@ export interface GenieBridge {
         tynnIssueChanges?(workspaceId: string, filters: Partial<IssueFilters>, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnIssuesHost['changes']>>;
         /** Follow that queue (its live state and rings) until the answer is called. */
         tynnIssuesWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
+        /** Row F1: follow the workspace's Features page (its own channel) until the answer is called. Optional: an older or remote host has none. */
+        tynnFeaturesWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
@@ -414,6 +418,8 @@ export interface GenieBridge {
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** Chosen agents who may message it (Tynn #526); `null` turns the choice off. */
+        setAccessAgents(agentId: string, ids: readonly string[] | null): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** Autonomous (its services/processes/sites/terminals actions run without asking, recorded) or asked (Tynn #801). */
         setAutoApprove(agentId: string, on: boolean): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** May manage the workspace's tabs (beta.35 item 36). */
@@ -661,10 +667,14 @@ export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnTabHost | 
     const changes = ws.tynnBoardChanges;
     const watch = ws.tynnBoardWatch;
     const page = ws.tynnPage;
+    const pageAct = ws.tynnPageAction;
+    const featuresWatch = ws.tynnFeaturesWatch;
     return {
         read: (id, scope) => read(id, scope),
         act: (id, input) => act(id, input),
         ...(page ? { page: (id: string, p: TynnPage, query: TynnPageQuery) => page(id, p, query) } : {}),
+        ...(page && pageAct ? { pageAct: (id: string, input: TynnPageActionInput) => pageAct(id, input) } : {}),
+        ...(page && featuresWatch ? { featuresWatch: (id: string, listener: (signal: BoardLiveSignal) => void) => featuresWatch(id, listener) } : {}),
         ...(changes && watch ? {
             changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => changes(id, scope, cursor, ids),
             watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),

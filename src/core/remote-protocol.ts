@@ -43,6 +43,7 @@ export const REMOTE_METHODS = [
     'agents.setBudget',
     'agents.setMode',
     'agents.setAccessScope',
+    'agents.setAccessAgents',
     'agents.setAutoApprove',
     'agents.setManageTabs',
     'agents.setDrivePages',
@@ -83,6 +84,7 @@ export const REMOTE_METHODS = [
     'workspaces.tynnPage',
     'workspaces.tynnIssues',
     'workspaces.tynnIssueAction',
+    'workspaces.tynnPageAction',
     'workspaces.addRepo',
     'workspaces.removeRepo',
     'workspaces.removeRepoLock',
@@ -108,6 +110,7 @@ export const REMOTE_METHODS = [
     'updates.state',
     'host.listDir',
     'host.mkdir',
+    'host.home',
     'updates.check',
     'updates.download',
     'updates.install',
@@ -148,10 +151,18 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
+/**
+ * Who drives, pushed to a remote window that asked (`baton.watch`, Tynn #529) whenever it changes by something that window
+ * did not do itself: another window took control, the driver released it or left, the owner locked the host. `by`: who
+ * took it (`null` when it was released or lost). `mine`: whether this window holds it.
+ */
+export const BATON_EVENT = 'remote-baton';
+export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
+
 export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
@@ -181,6 +192,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.setBudget': 'write',
     'agents.setMode': 'write',
     'agents.setAccessScope': 'write',
+    'agents.setAccessAgents': 'write',
     // Autonomy (Tynn #801): what an agent may do without asking — a write, agent-scoped like the other settings.
     'agents.setAutoApprove': 'write',
     'agents.setManageTabs': 'write',
@@ -202,6 +214,9 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'host.listDir': 'read',
     // The folder picker's New folder (2026-10-22): a folder made on the host's disk — a write, and owner-only on a host.
     'host.mkdir': 'write',
+    // The host's home folder, where a picker opens when nothing better is known (Tynn #527): a read; a guest is answered
+    // the folder it was given (main/remote-host.ts).
+    'host.home': 'read',
     'workspaces.confirmAdd': 'write',
     'workspaces.create': 'write',
     'workspaces.previewAddFromGit': 'read',
@@ -236,6 +251,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // The Tynn tab's Issues (genie#1295 I1): reading the queue is a read; filing, editing, converting or closing writes.
     'workspaces.tynnIssues': 'read',
     'workspaces.tynnIssueAction': 'write',
+    // The Home's Details save (genie#1295 H1) writes on Tynn.
+    'workspaces.tynnPageAction': 'write',
     'workspaces.addRepo': 'write',
     'workspaces.removeRepo': 'write',
     'workspaces.removeRepoLock': 'write',
@@ -294,9 +311,9 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.toolOutput', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.toolOutput', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }

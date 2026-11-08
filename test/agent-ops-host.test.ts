@@ -30,6 +30,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
             setBudget: async (id, usd) => { if (!current || current.id !== id) return null; current = { ...current, dailyBudgetUsd: usd } as AgentRecord; calls.push(`setBudget:${id}:${usd}`); return current; },
             setMode: async (id, mode) => { if (!current || current.id !== id) return null; current = { ...current, mode }; return current; },
             setAccessScope: async (id, accessScope) => { if (!current || current.id !== id) return null; current = { ...current, accessScope }; return current; },
+            setAccessAgents: async (id, ids) => { if (!current || current.id !== id) return null; const { accessAgents: _old, ...rest } = current; current = ids === null ? rest : { ...rest, accessAgents: [...ids] }; return current; },
             setAutoApprove: async (id, autoApprove) => { if (!current || current.id !== id) return null; current = { ...current, autoApprove }; return current; },
             setManageTabs: async (id, manageTabs) => { if (!current || current.id !== id) return null; current = { ...current, manageTabs }; return current; },
             setDrivePages: async (id, drivePages) => { if (!current || current.id !== id) return null; current = { ...current, drivePages }; return current; },

@@ -1,6 +1,7 @@
 import type { AgentId, AgentRecord } from './identity.js';
 import type { LiveSession } from './roster.js';
 import { isOsAgent } from './os-agent.js';
+import { isChosen } from './agent-access.js';
 
 /** Metadata-only ownership cache. Its stable set is also the version for a filtered mail view. */
 export class WorkspaceMailVisibility {
@@ -197,6 +198,8 @@ export function reachable(
     // The OS agent is the person's coordinator: every agent may reach it, and its own access is unrestricted.
     if (isOsAgent(from) || isOsAgent(to)) return true;
     if (options.wroteTo?.(to.id, from.id) === true) return true;
+    // Chosen agents (Tynn #526): named on the recipient, let in whatever its scope says.
+    if (isChosen(to, from.id)) return true;
     if (to.accessScope === 'none') return false;
 
     // A governor (§6.1) stands where the child's own workspace stands; the reverse is not implied.

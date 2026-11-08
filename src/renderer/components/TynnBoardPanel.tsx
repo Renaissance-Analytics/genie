@@ -138,6 +138,18 @@ const VERB_WORDS: Record<string, { running: string; done: string }> = {
     'task.ready': { running: 'Moving to QA…', done: 'Ready for QA' },
     'task.done': { running: 'Finishing…', done: 'Done' },
     'task.restart': { running: 'Restarting…', done: 'Restarted' },
+    // The Home's Details save (row H1).
+    'details.update': { running: 'Saving…', done: 'Saved' },
+    // The Features page's writes (row F1).
+    'feature.create': { running: 'Creating feature…', done: 'Feature created' },
+    'feature.update': { running: 'Saving…', done: 'Saved' },
+    'feature.delete': { running: 'Deleting feature…', done: 'Feature deleted' },
+    'domain.create': { running: 'Creating domain…', done: 'Domain created' },
+    'domain.update': { running: 'Saving…', done: 'Saved' },
+    'domain.delete': { running: 'Deleting domain…', done: 'Domain deleted' },
+    'repository.create': { running: 'Adding repository…', done: 'Repository added' },
+    'repository.update': { running: 'Saving…', done: 'Saved' },
+    'repository.delete': { running: 'Removing repository…', done: 'Repository removed' },
 };
 
 /** The claim actions: their progress is said on the board's own line, not in a form. */
