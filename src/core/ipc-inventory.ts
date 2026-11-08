@@ -82,6 +82,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:workspace-tynn-page', 'protocol:workspaces.tynnPage'],
     ['genie:workspace-tynn-issues', 'protocol:workspaces.tynnIssues'],
     ['genie:workspace-tynn-issue-action', 'protocol:workspaces.tynnIssueAction'],
+    ['genie:workspace-tynn-page-action', 'protocol:workspaces.tynnPageAction'],
     ['genie:workspace-tynn-issues-changes', 'protocol:workspaces.tynnIssueChanges'],
     ['genie:workspace-tynn-issues-watch', 'protocol:workspaces.tynnIssuesWatch'],
     ['genie:workspace-tynn-issues-unwatch', 'protocol:workspaces.tynnIssuesUnwatch'],
