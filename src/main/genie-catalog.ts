@@ -98,6 +98,23 @@ export const RELAY_MEMBER_ELEMENT: ElementDefinition = {
     payload: { start: 'deviceLink.openRelay', stop: 'deviceLink.close', health: 'deviceLink.relayHealth', settingsSection: 'workstation' },
 };
 
+/**
+ * THIS MACHINE ON THE TYNN RELAY, AS A HOST (Tynn #410, host split P5d.3). A host-service on BOTH sides: genie-host registers
+ * the machine with Tynn, reads its role and runs the relay link, window or not; this machine's window shows them in
+ * Settings → Workstation and hands over Genie 1's record. `engine.relayHost` and its event are the only channel between them.
+ */
+export const RELAY_HOST_ELEMENT: ElementDefinition = {
+    id: 'genie.relay-host',
+    kind: 'host-service',
+    version: BUILTIN_VERSION,
+    packageId: BUILTIN_PACKAGE_ID,
+    source: 'builtin',
+    docs: { name: 'Reachable through Tynn', description: 'While remote access is on, this machine stays reachable over the Tynn relay for its owner\'s other workstations and for share links, with every Genie window closed.' },
+    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.relayHost'], events: ['relayHost.event'] } },
+    permissions: { capabilities: [], network: [] },
+    payload: { start: 'relayHost.start', stop: 'relayHost.stop', health: 'relayHost.health', settingsSection: 'workstation' },
+};
+
 export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclaration {
     return {
         id: BUILTIN_PACKAGE_ID,
@@ -117,7 +134,7 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
                 // GApps v2 decision 3: a tool that acts as the person, or waits on their approval, is never granted to an app.
                 ...(PERSON_ONLY_TOOLS.has(t.name) ? { grantable: false } : {}),
             },
-        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT, RELAY_MEMBER_ELEMENT]),
+        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT, RELAY_MEMBER_ELEMENT, RELAY_HOST_ELEMENT]),
     };
 }
 

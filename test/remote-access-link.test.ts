@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
 import { inMemoryPair, parseMessage, type ClientTransport, type ServerConnection, type WireMessage } from '../src/core/remote-protocol.js';
-import { hostRemoteApi, RelayBridgeHost, RemoteAccessHost, RemoteAccessService } from '../src/main/remote-access-host.js';
+import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from '../src/main/remote-access-host.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
@@ -46,17 +46,16 @@ beforeEach(async () => {
     token = before.pair('glenn’s phone').token;
     await before.flushed();
     tailnet.length = 0;
-    const bridge = new RelayBridgeHost((owner, event) => server.remoteAccessEvent(owner, { kind: 'bridge', event }));
     const access = await RemoteAccessHost.open({
         home, hostName: 'alphar', now,
-        transport: { onConnection: (cb) => { tailnet.push(cb); const off = bridge.onConnection(cb); return off; } },
+        transport: { onConnection: (cb) => { tailnet.push(cb); return () => {}; } },
         api: hostRemoteApi({
             hostName: 'alphar',
             own: { 'updates.state': async () => ({ phase: 'idle' }) },
             window: { connected: () => server.newestLocalWindow() !== null, invoke: (m, a) => server.remoteInvoke(m, a) },
         }),
     });
-    const service = new RemoteAccessService(access, bridge, {
+    const service = new RemoteAccessService(access, {
         switch: { apply: async () => {}, restart: async () => {}, stop: async () => {} },
         newestWindow: () => server.newestLocalWindow(),
         windowEvent: () => {},
@@ -110,31 +109,13 @@ describe('remote access over the engine link', () => {
         expect(replica.activePin()?.code).toMatch(/^\d{6}$/);
         expect(changed).toBeGreaterThan(0);
     });
-
-    it('the window\'s relay host bridges a Pilot into the host\'s remote host, scoped as its grant says; the window leaving ends it', async () => {
-        const snapshot = { agents: [{ id: 'agent_a', workspaceId: 'tynn' }, { id: 'agent_b', workspaceId: 'fancy' }], workspaces: [{ id: 'tynn' }, { id: 'fancy' }], deckItems: [], signals: {} };
-        const local = await windowOn(true, async (method) => (method === 'snapshot' ? snapshot : null));
-        const relay: Array<(c: ServerConnection) => void> = [];
-        local.client.remoteAccess().bridge({ onConnection: (cb) => { relay.push(cb); return () => {}; } });
-        const pair = inMemoryPair();
-        for (const cb of relay) cb({ ...pair.server, remoteAddress: 'relay:wren', preAuth: { label: 'wren', isOwner: false, workspaceId: 'tynn', readonly: false } });
-        const pilot = wire(pair.client);
-        expect(await pilot.hello({ kind: 'relay' }, 'wren')).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn' });
-        // Through the bridge, the host and the window: the guest sees its own workspace only.
-        const seen = await pilot.call('snapshot');
-        expect(seen).toMatchObject({ kind: 'result', ok: true });
-        expect((seen as { value: { agents: Array<{ id: string }> } }).value.agents.map((a) => a.id)).toEqual(['agent_a']);
-        local.close();
-        expect(await pilot.next()).toBe('closed');
-    });
 });
 
 describe('with genie-host linked, the window starts no listener and opens no device store (source guards)', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     const compose = readFileSync(new URL('../src/main/compose.ts', import.meta.url), 'utf8');
-    it('main.ts builds the tailnet listener only without genie-host, and bridges relay connections to it with', () => {
+    it('main.ts builds the tailnet listener only without genie-host', () => {
         expect(main).toMatch(/const remoteSocket = linkedRemote \? null : remoteListener\(/);
-        expect(main).toMatch(/attach: \(transport\) => \(linkedRemote \? linkedRemote\.bridge\(transport\) : remoteHub\.add\(transport\)\)/);
     });
     it('compose.ts opens the device file only without genie-host', () => {
         expect(compose).toMatch(/input\.remoteAccess\s*\?\s*DeviceStore\.memory\(/);

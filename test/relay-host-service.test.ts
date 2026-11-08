@@ -99,9 +99,9 @@ describe('the relay host, in genie-host, with no window', () => {
         const r = rig();
         await r.service.register();
         const before = r.changes();
-        r.starts[0]!.onStatus({ state: 'connected' } as RelayHostStatus);
+        r.starts[0]!.onStatus({ state: 'connecting' } as RelayHostStatus);
         expect(r.changes()).toBeGreaterThan(before);
-        expect(r.service.status().relay).toEqual({ state: 'connected' });
+        expect(r.service.status().relay).toEqual({ state: 'connecting' });
         await r.service.call('revalidate', []);
         expect(r.calls).toContain('revalidate');
     });

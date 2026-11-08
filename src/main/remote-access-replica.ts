@@ -1,5 +1,4 @@
 import type { PairRequest } from '../core/pair-confirm.js';
-import type { ServerConnection, ServerTransport } from '../core/remote-protocol.js';
 import type { RemoteAccessEvent, RemoteAccessStatus } from './remote-access-host.js';
 import type { Device } from './remote-devices.js';
 import type { RemoteHost } from './remote-host.js';
@@ -8,7 +7,6 @@ import type { RemoteHost } from './remote-host.js';
  * REMOTE ACCESS, READ AND DRIVEN FROM A WINDOW (Tynn #409, host split P5d.1): the client side of `genie.remote-access`.
  * The listener, the paired devices, the PIN, the pair prompts, the baton and the lock are genie-host's
  * (remote-access-host.ts); Settings → Workstation reads them here and drives them through `engine.remoteAccess`. The
- * window's relay host (until P5d.3) hands each relay connection it admits to genie-host through `bridge`, and the
  * window's own events reach remote connections through `forwardEvents`.
  */
 
@@ -42,7 +40,6 @@ export class RemoteAccessReplica implements RemoteAccessView {
     readonly pairing: PairingView;
     readonly #call: Call;
     readonly #listeners = new Set<() => void>();
-    readonly #bridged = new Map<string, ServerConnection>();
     #status: RemoteAccessStatus;
 
     constructor(hostName: string, call: Call) {
@@ -82,46 +79,9 @@ export class RemoteAccessReplica implements RemoteAccessView {
         return () => { this.#listeners.delete(listener); };
     }
 
-    /** genie-host said something: the status, or a frame (or the end) of a relay connection this window bridged. */
+    /** genie-host said the status changed. */
     deliver(event: RemoteAccessEvent): void {
-        if (event.kind === 'status') { this.#rebase(event.status); return; }
-        const connection = this.#bridged.get(event.event.id);
-        if (!connection) return;
-        if ('closed' in event.event) { this.#bridged.delete(event.event.id); connection.close(); return; }
-        connection.send(event.event.frame);
-    }
-
-    /**
-     * THE RELAY BRIDGE, WINDOW END: each connection the window's relay host admits goes to genie-host with its relay proof,
-     * and only then carries frames (those before are held, in order). A refusal, or genie-host gone, closes it.
-     */
-    bridge(transport: ServerTransport): () => void {
-        return transport.onConnection((connection) => {
-            let id: string | null = null;
-            let closed = false;
-            const held: string[] = [];
-            const forward = (bridgedId: string, text: string) => {
-                void this.#call('bridge.frame', [bridgedId, text]).then((r) => { if ((r as { ok?: unknown } | null)?.ok !== true) connection.close(); }, () => connection.close());
-            };
-            connection.onMessage((text) => { if (id !== null) forward(id, text); else held.push(text); });
-            connection.onClose(() => {
-                closed = true;
-                if (id !== null) { this.#bridged.delete(id); void this.#call('bridge.close', [id]).catch(() => {}); }
-            });
-            void this.#call('bridge.open', [connection.preAuth ?? null]).then((r) => {
-                const opened = r as { ok?: unknown; id?: unknown } | null;
-                if (opened?.ok !== true || typeof opened.id !== 'string') { connection.close(); return; }
-                if (closed) { void this.#call('bridge.close', [opened.id]).catch(() => {}); return; }
-                id = opened.id;
-                this.#bridged.set(id, connection);
-                for (const text of held.splice(0)) forward(id, text);
-            }, () => connection.close());
-        });
-    }
-
-    /** The link to genie-host is gone: the relay connections bridged into it end (genie-host ended its side too). */
-    lost(): void {
-        for (const [id, connection] of [...this.#bridged]) { this.#bridged.delete(id); connection.close(); }
+        this.#rebase(event.status);
     }
 
     /** The window's own events (the snapshot, features…) reach remote connections through genie-host. */

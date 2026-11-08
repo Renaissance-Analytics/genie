@@ -84,7 +84,11 @@ import { resolveProgram } from '../core/program-lookup.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
-import { hostRemoteApi, RelayBridgeHost, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
+import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
+import { RelayHostService } from './relay-host-service.js';
+import { droneRefusal } from '../core/workstation-role.js';
+import { readWorkstationRole } from './workstation-role-reader.js';
+import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
 import { Registry } from './registry.js';
@@ -103,7 +107,7 @@ import { setWin32ProcessReader } from '../core/process-tree.js';
 import { sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
-import { mintConnectGrant } from './tynn-network.js';
+import { mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
 import { RemoteBrowsers } from './remote-browsers.js';
 import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
@@ -758,9 +762,50 @@ async function main(): Promise<void> {
             }
         },
     });
-    const relayBridge = new RelayBridgeHost((owner, event) => engineRef?.remoteAccessEvent(owner, { kind: 'bridge', event }));
     const remoteHub = transportHub(remoteListen.transport);
-    remoteHub.add(relayBridge);
+    // THIS MACHINE'S KEY IS HERE (P3.4), and the relay that signs with it (Tynn #410).
+    const workstationService = new WorkstationService({
+        store: workstationKeyStore(join(home, 'workstation.json'), keychain),
+        request: async (path, init) => (await tynnOpening).request(path, init),
+        host: () => TYNN_HOST,
+        hostname,
+        machineKey: () => readMachineId({
+            platform: process.platform,
+            readFile: (path) => readFileText(path, 'utf8'),
+            exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
+        }).then((id) => (id ? machineKeyOf(id) : null)),
+    });
+    /*
+     * THIS MACHINE ON THE TYNN RELAY, AS A HOST (Tynn #410, host split P5d.3): registered with Tynn, its role read, and the
+     * link run here, so a Pilot or a share link reaches this machine with every window closed.
+     */
+    const relayFetch = async (url: string, init?: RequestInit): Promise<Response> => {
+        const memory = await proxyMemory;
+        return hostHttpsFetch({ proxyRoutes: (target) => memory.routesFor(target), log: say })(url, init as never) as unknown as Response;
+    };
+    const relayHostService: RelayHostService = new RelayHostService({
+        account: () => tynnAccountNow,
+        workstation: workstationService,
+        enabled: () => settings.snapshot().remote_access === true,
+        readRole: (request) => readWorkstationRole(request),
+        start: ({ host, workstationId, fingerprint, onStatus }) => startRelayHost({
+            ports: relayHostPorts({ tynnHost: host, workstationId, authHeader: () => workstationService.authHeader(host), fetch: relayFetch }),
+            socket: (url) => deviceSocket(url),
+            workstationId,
+            fingerprint,
+            sign: (data) => workstationService.sign(host, data),
+            attach: (transport) => remoteHub.add(transport),
+            onStatus,
+            log: (message) => say(`tynn relay: ${message}`),
+            ...(hostingStack ? { site: { dial: (name: string) => dialFrontDoor(hostingStack.frontDoorPort, name), ca: () => hostingStack.browserTrust().caPem } } : {}),
+        }),
+        onChange: () => engineRef?.relayHostEvent(relayHostService.status()),
+    });
+    void tynnOpening.then((account) => {
+        account.onChange(() => { void relayHostService.register(); });
+        void relayHostService.register();
+    }, () => {});
+    setInterval(() => { void relayHostService.readRole(); }, 5 * 60_000).unref();
     /** genie-host's own answers to a phone (Tynn #551): built once its session host is up, below. */
     let phoneApi: HostApi | null = null;
     const remoteAccessHost = await RemoteAccessHost.open({
@@ -784,8 +829,8 @@ async function main(): Promise<void> {
     });
     // OFF BY DEFAULT (Tynn #820): the listener runs only while `remote_access` is on, applied at boot and on every change.
     let remoteAccessService: RemoteAccessService | null = null;
-    const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => remoteAccessService?.pushStatus() });
-    remoteAccessService = new RemoteAccessService(remoteAccessHost, relayBridge, {
+    const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => { remoteAccessService?.pushStatus(); void relayHostService.apply(); } });
+    remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
         newestWindow: () => engineRef?.newestLocalWindow() ?? null,
         windowEvent: (channel, payload) => { for (const l of [...remoteWindowEvents]) l(channel, payload); },
@@ -845,6 +890,7 @@ async function main(): Promise<void> {
              */
             relay: {
                 signedIn: () => tynnAccountNow?.status().signedIn === true,
+                refusal: () => droneRefusal(relayHostService.role()),
                 keypair: () => PopKeypair.generate(),
                 mint: (workstationId, jwk) => (tynnAccountNow
                     ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
@@ -854,17 +900,8 @@ async function main(): Promise<void> {
             },
             browsers: new RemoteBrowsers(siteDoor),
         }),
-        workstation: new WorkstationService({
-            store: workstationKeyStore(join(home, 'workstation.json'), keychain),
-            request: async (path, init) => (await tynnOpening).request(path, init),
-            host: () => TYNN_HOST,
-            hostname,
-            machineKey: () => readMachineId({
-                platform: process.platform,
-                readFile: (path) => readFileText(path, 'utf8'),
-                exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
-            }).then((id) => (id ? machineKeyOf(id) : null)),
-        }),
+        workstation: workstationService,
+        relayHost: relayHostService,
         // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
         keyring: ((service: KeyringService) => { keyringNotices.push((text) => service.setNotice(text)); return service; })(new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
             onReady: () => {

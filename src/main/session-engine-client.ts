@@ -5,6 +5,8 @@ import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import { hostname } from 'node:os';
 import { RemoteAccessReplica } from './remote-access-replica.js';
+import { RelayHostReplica } from './relay-host-replica.js';
+import type { RelayHostView } from './relay-host-service.js';
 import type { RemoteAccessEvent } from './remote-access-host.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
@@ -191,6 +193,7 @@ export class SessionEngineClient {
     #workstation: WorkstationReplica | null = null;
     #deviceLink: DeviceLinkReplica | null = null;
     #remoteAccess: RemoteAccessReplica | null = null;
+    #relayHost: RelayHostReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -277,7 +280,6 @@ export class SessionEngineClient {
                 this.#hosting?.linkDown();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
                 this.#deviceLink?.lost('the host closed the connection');
-                this.#remoteAccess?.lost();
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
             transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: this.#options.label ?? WINDOW_LINK_LABEL }));
@@ -435,6 +437,9 @@ export class SessionEngineClient {
                 return;
             case 'tynn.event':
                 this.tynn().rebase(payload as TynnAccountDump);
+                return;
+            case 'relayHost.event':
+                this.relayHost().deliver(payload as RelayHostView);
                 return;
             case 'remoteAccess.event':
                 this.remoteAccess().deliver(payload as RemoteAccessEvent);
@@ -711,6 +716,16 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#remoteAccess;
+    }
+
+    /** This machine on the Tynn relay, as a host (Tynn #410): genie-host registers it and runs the link. */
+    relayHost(): RelayHostReplica {
+        this.#relayHost ??= new RelayHostReplica(async (method, args) => {
+            const reply = await this.call('engine.relayHost', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#relayHost;
     }
 
     /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */
