@@ -1,0 +1,71 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agentRecord, mintAgentId } from '../src/core/identity.js';
+import type { ProcessTree } from '../src/core/process-tree.js';
+import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
+import { ThreadStore, readWholeHistory, openDurableStore } from '../src/core/thread-store.js';
+import { sessionsDir } from '../src/main/paths.js';
+import { SessionHost, type DriverFor } from '../src/main/session-host.js';
+
+/*
+ * Tynn #550. On Windows `host.settled()` after 120 turns of an 8 KB reply took about 5 s, and one run in four never
+ * ended (carry-over-over-the-link). Every row was its own `thread.record`: a lock file created and deleted, the log's
+ * tail read, a write, a sync — some 600 times. On Windows a lock file just deleted stays delete-pending while another
+ * handle (Defender, the indexer) has it open, and creating it again is refused (EPERM, read as "held") for up to the
+ * lock's 5 s wait. Rows queued together go to the thread together, in order, as one record.
+ */
+let dir: string;
+const hosts: SessionHost[] = [];
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-batched-')); });
+afterEach(async () => { vi.restoreAllMocks(); await Promise.all(hosts.splice(0).map((h) => h.settled())); await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
+const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+
+function rig() {
+    let events: DriverEvents = {};
+    const driverFor: DriverFor = () => ((o: { events: DriverEvents }) => {
+        events = o.events;
+        return { start: () => {}, prompt: () => {}, kill: () => {}, get running() { return true; }, get cliSessionId() { return null; } };
+    }) as unknown as SessionDriverFactory;
+    const host = new SessionHost({ userData: dir, driverFor, processTree: tree });
+    hosts.push(host);
+    return { host, events: () => events };
+}
+
+describe("a turn's rows reach the thread together", () => {
+    it('120 turns of an 8 KB reply settle in a few appends, in order, and within a bound', async () => {
+        const appends = vi.spyOn(ThreadStore.prototype, 'appendLog');
+        const r = rig();
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'w', provider: 'claude', name: 'atlas' });
+        r.host.start(record, dir);
+        for (let n = 1; n <= 120; n += 1) {
+            r.host.prompt(record.id, `question ${n}`, 'you');
+            r.events().onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `answer ${n} ${'x'.repeat(8000)}` } } as never);
+            r.events().onTurnEnd?.({ stopReason: 'end_turn' } as never);
+        }
+        const started = performance.now();
+        await r.host.settled();
+        const ms = performance.now() - started;
+        const history = await readWholeHistory(openDurableStore(sessionsDir(dir)), record.id);
+        const texts = history.rows.flatMap((row) => (row.event.kind === 'message' ? [String((row.event as { text: string }).text).split(' ').slice(0, 2).join(' ')] : []));
+        // Every question and answer, in order.
+        expect(texts).toEqual(Array.from({ length: 120 }, (_, i) => [`question ${i + 1}`, `answer ${i + 1}`]).flat());
+        expect(history.rows.map((row) => row.position)).toEqual(Array.from({ length: history.rows.length }, (_, i) => i + 1));
+        expect(history.rows.length).toBeGreaterThan(360);
+        expect({ appends: appends.mock.calls.length <= 20, settledUnder2s: ms < 2000 }).toEqual({ appends: true, settledUnder2s: true });
+    }, 60_000);
+
+    it('CONTROL: one row emitted alone is written alone, at once', async () => {
+        const r = rig();
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'w', provider: 'claude', name: 'wren' });
+        r.host.start(record, dir);
+        await r.host.settled();
+        const appends = vi.spyOn(ThreadStore.prototype, 'appendLog');
+        r.host.prompt(record.id, 'just this', 'you');
+        await r.host.settled();
+        expect(appends.mock.calls.length).toBeGreaterThanOrEqual(1);
+        const history = await readWholeHistory(openDurableStore(sessionsDir(dir)), record.id);
+        expect(history.rows.some((row) => row.event.kind === 'message' && (row.event as { text: string }).text === 'just this')).toBe(true);
+    });
+});

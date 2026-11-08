@@ -39,6 +39,7 @@ import { localDraftArguments } from './local-drafts-api.js';
 import { isLocalArtboardMethod } from '../core/local-artboard.js';
 import { localArtboardArguments } from './local-artboard-api.js';
 import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
+import { isTynnWatchKind, type TynnWatchEvent, type TynnWatchKind, type TynnWatchPort } from '../core/local-tynn-watch.js';
 import type { FilesHubEvent } from './files-watch-hub.js';
 
 /**
@@ -55,6 +56,8 @@ import type { FilesHubEvent } from './files-watch-hub.js';
 
 export interface HostApi {
     readonly filesWatch?: FilesWatchPort;
+    /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
+    readonly tynnWatch?: TynnWatchPort;
     readonly localTerminals?: NativeTerminalPort;
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
     invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
@@ -125,6 +128,8 @@ interface Connection {
     /** Independent activity views belonging to this admitted local window. */
     readonly activityViews: Set<string>;
     filesViews: LocalFilesWatches | null;
+    /** This local window's Tynn-tab watches (P4 family 12): by watch id, its kind, workspace and the host's view id. */
+    readonly tynnWatches: Map<number, { kind: TynnWatchKind; workspaceId: string; viewId: string }>;
     blobs: LocalBlobs | null;
     uploads: LocalUploads | null;
     uploadOpening: Promise<LocalUploads> | null;
@@ -192,6 +197,7 @@ export class RemoteHost {
     readonly #staging: UploadStaging;
     #pin: { code: string; expiresAt: number } | null = null;
     #next = 0;
+    #tynnWatchSeq = 0;
     #locked = false;
     /**
      * The host API's events, listened to ONLY while an authenticated connection exists (genie#1200). Listening builds an
@@ -250,6 +256,9 @@ export class RemoteHost {
         // Disposal marks the connection closed synchronously, then drains any pending disk operation.
         if (connection.uploads) void connection.uploads.dispose().catch(() => console.warn('[genie] a local upload area could not be released'));
         connection.activityViews.clear();
+        // Its Tynn-tab watches go with it (P4 family 12).
+        for (const w of connection.tynnWatches.values()) this.#api.tynnWatch?.unwatch(w.kind, w.viewId);
+        connection.tynnWatches.clear();
         if (connection.pendingPair !== null) {
             this.#confirm.cancel(connection.pendingPair);
             connection.pendingPair = null;
@@ -405,7 +414,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -570,6 +579,29 @@ export class RemoteHost {
         }
 
         switch (method) {
+            // FOLLOWING THE TYNN TAB (P4 family 12, Tynn #561): the local window's own, by subscription.
+            case 'tynn.watch': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                const port = this.#api.tynnWatch;
+                const [kind, workspaceId] = args;
+                if (!port) return ok(null);
+                if (!isTynnWatchKind(kind) || typeof workspaceId !== 'string' || workspaceId === '') return refuse('tynn.watch names board, issues or features, and a workspace');
+                const id = ++this.#tynnWatchSeq;
+                const viewId = `${connection.id}:tynn-${kind}-${id}`;
+                if (!(await port.watch(kind, viewId, workspaceId))) return ok(null);
+                // The window left while its watch was being opened: nothing is kept for it.
+                if (!this.#connections.has(connection.id)) { port.unwatch(kind, viewId); return ok(null); }
+                connection.tynnWatches.set(id, { kind, workspaceId, viewId });
+                return ok(id);
+            }
+            case 'tynn.unwatch': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                const watch = typeof args[0] === 'number' ? connection.tynnWatches.get(args[0]) : undefined;
+                if (!watch) return ok({ unwatched: false });
+                connection.tynnWatches.delete(args[0] as number);
+                this.#api.tynnWatch?.unwatch(watch.kind, watch.viewId);
+                return ok({ unwatched: true });
+            }
             case 'files.watch':
             case 'files.unwatch':
             case 'files.watchState': {
@@ -866,6 +898,11 @@ export class RemoteHost {
                 continue;
             }
             if (channel === LOCAL_EVENT_CHANNELS.activity && c.activityViews.size === 0) continue;
+            // A Tynn-tab signal goes to the window that watches that kind and workspace, and to no other (P4 family 12).
+            if (channel === LOCAL_EVENT_CHANNELS.tynn) {
+                const e = payload as TynnWatchEvent;
+                if (![...c.tynnWatches.values()].some((w) => w.kind === e.kind && w.workspaceId === e.workspaceId)) continue;
+            }
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
             if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);

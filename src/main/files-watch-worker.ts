@@ -42,9 +42,14 @@ export const WATCH_WORKER_SOURCE = [
     '});',
     "watcher.on('error', () => {});",
     "parentPort.on('message', (m) => { if (m === 'close') { watcher.close(); if (timer) clearTimeout(timer); flush(); process.exit(0); } });",
+    // WHERE THE CATCH-UP STOPS (Tynn #576): this watch is up now, so anything stamped later is the watch's to report. Without
+    // it a walk that reaches a file late (6,000 entries sorted before it, run 42527142658) reported an edit the watch already
+    // had, as a second batch. The +1: Date.now() is whole milliseconds and a file's time is not, so a write just before this
+    // line, in this same millisecond, is still the catch-up's. Nothing is missed: a write before this line is stamped before it.
+    'const until = Date.now() + 1;',
     "parentPort.postMessage('ready');",
     // THE CATCH-UP (Tynn #539): what was written between the watch being asked for and this watch being up, found here,
-    // off genie-host's thread: every file (ignored folders skipped) changed since then, as the watch would have said it.
+    // off genie-host's thread: every file (ignored folders skipped) changed in that window, as the watch would have said it.
     'const catchUp = async () => {',
     "    const dirs = [''];",
     '    let entries = 0;',
@@ -59,7 +64,7 @@ export const WATCH_WORKER_SOURCE = [
     '            if (e.isDirectory()) { dirs.push(rel); continue; }',
     '            try {',
     '                const info = await statAsync(join(root, rel));',
-    '                if (info.mtimeMs >= since) { batch.push([rel, info.mtimeMs, false]); if (timer === null) timer = setTimeout(flush, 20); }',
+    '                if (info.mtimeMs >= since && info.mtimeMs < until) { batch.push([rel, info.mtimeMs, false]); if (timer === null) timer = setTimeout(flush, 20); }',
     '            } catch { /* gone again: its own event says so */ }',
     '        }',
     '    }',

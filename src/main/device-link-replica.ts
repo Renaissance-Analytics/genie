@@ -1,4 +1,5 @@
-import type { DeviceLinkEvent, DeviceLinkOpened } from './device-link-service.js';
+import type { DeviceLinkEvent, DeviceLinkOpened, RelayOpened } from './device-link-service.js';
+import type { RemoteVia } from './remote-browsers.js';
 
 /** The host's sockets to other machines, as a window's main sees them: channels and addresses, never a token. With no host: nothing opens, and nothing is lost. */
 export class DeviceLinkReplica {
@@ -6,6 +7,9 @@ export class DeviceLinkReplica {
     readonly #frames = new Set<(channel: string, text: string) => void>();
     readonly #closes = new Set<(channel: string, reason: string | null) => void>();
     readonly #open = new Set<string>();
+    readonly #steps = new Set<(workstationId: string, step: 'relay') => void>();
+    /** Each relay channel's browser door, as genie-host last said it (Tynn #552). */
+    readonly #vias = new Map<string, { port: number; ca: string | null }>();
 
     constructor(call: (method: string, args: readonly unknown[]) => Promise<unknown>) { this.#call = call; }
 
@@ -18,6 +22,32 @@ export class DeviceLinkReplica {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }
     }
+
+    /** A relay connection to a Tynn workstation, opened by genie-host (Tynn #552): a channel, never the grant. */
+    async openRelay(workstationId: string): Promise<RelayOpened> {
+        try {
+            const opened = await this.#call('openRelay', [workstationId]) as RelayOpened;
+            if (opened.ok) this.#open.add(opened.channel);
+            return opened;
+        } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
+    }
+
+    /** The browser's door to a relay channel's workstation: its port and CA read live, as genie-host says they move. */
+    async browserVia(channel: string): Promise<RemoteVia | null> {
+        try {
+            const via = await this.#call('browserVia', [channel]) as { ok: true; port: number; ca: string | null } | { ok: false };
+            if (!via.ok) return null;
+            const kept = { port: via.port, ca: via.ca };
+            this.#vias.set(channel, kept);
+            return { port: () => (this.#vias.get(channel) ?? kept).port, ca: () => (this.#vias.get(channel) ?? kept).ca };
+        } catch {
+            return null;
+        }
+    }
+
+    onStep(listener: (workstationId: string, step: 'relay') => void): () => void { this.#steps.add(listener); return () => { this.#steps.delete(listener); }; }
 
     send(channel: string, text: string): void { void this.#call('send', [channel, text]).catch(() => {}); }
     close(channel: string): void { void this.#call('close', [channel]).catch(() => {}); }
@@ -44,11 +74,14 @@ export class DeviceLinkReplica {
     }
 
     deliver(event: DeviceLinkEvent): void {
+        if (event.type === 'step') { for (const listener of [...this.#steps]) listener(event.workstationId, event.step); return; }
+        if (event.type === 'via') { this.#vias.set(event.channel, { port: event.port, ca: event.ca }); return; }
         if (event.type === 'frame') {
             for (const listener of [...this.#frames]) listener(event.channel, event.text);
             return;
         }
         this.#open.delete(event.channel);
+        this.#vias.delete(event.channel);
         for (const listener of [...this.#closes]) listener(event.channel, event.reason);
     }
 
