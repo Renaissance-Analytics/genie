@@ -94,6 +94,12 @@ jobs:
           grep -q "280px" "$css"
           grep -q "30px" "$css"
 
+      # EVERY ALERT SOUND IS IN THE BUILT RENDERER (Tynn #441; test/alert-sound-library.test.ts): each sound file under
+      # src/renderer/sounds/ was emitted under dist/renderer/assets/, which electron-builder packs whole (dist/**). The unit
+      # test holds every choice to a file in that folder; this holds the folder to what the build shipped.
+      - name: every alert sound is in the built renderer
+        run: node scripts/sound-assets-check.mjs dist/renderer src/renderer/sounds
+
   # GENIE-HOST ON PLAIN NODE (the host split, P10.1b). genie-cloud runs `node dist/main/host.js` in a container with
   # Node 22 and no Electron (P10.3), so the host bundle has to boot and serve there. Node 22.16.0 exactly: the oldest
   # Node whose `node:sqlite` has FTS5, which the knowledge store needs (measured: 22.13.1, 22.14.0 and 22.15.0 answer

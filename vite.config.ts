@@ -26,6 +26,9 @@ export default defineConfig({
         // A desktop app ships its own sources for its own debugging. Nothing here is served
         // to a third party, so there is nothing to withhold.
         sourcemap: true,
+        // Alert sounds are always files of their own (Tynn #441), never inlined as data: URLs however small, so CI's
+        // sound-assets-check can see each one in what was built. Everything else keeps Vite's default.
+        assetsInlineLimit: (file: string) => (/\.(wav|ogg|mp3|flac|m4a|aac|opus)$/i.test(file) ? false : undefined),
         // Two pages: Genie, and the doctor window (`genie --doctor`), which loads only the doctor renderer.
         rollupOptions: { input: { index: 'index.html', doctor: 'doctor.html', question: 'question.html', browser: 'browser.html' } },
     },
