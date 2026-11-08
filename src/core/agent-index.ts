@@ -1,7 +1,8 @@
 import { confine } from './files-panel.js';
 import type { LiveSession } from './roster.js';
 import type { StreamEvent } from './stream-event.js';
-import { editLineCounts, type TimedEvent } from './stream-view.js';
+import { editCountsFor, type TimedEvent } from './stream-view.js';
+import { editedPaths } from './file-edits.js';
 
 /**
  * THE INDEX COLUMN (the board's `Agent View`, 216px at the left of the Stream): **Turns** and **Files touched**.
@@ -79,6 +80,12 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
 const thousands = (n: number): string => (n >= 1000 ? `${Math.round(n / 100) / 10}k` : String(n));
 
 function pathOf(event: Extract<StreamEvent, { kind: 'tool' }>, root: string): string | null {
+    // A native edit (Codex): its file as it is now, when it changed one.
+    if (event.edits !== undefined) {
+        const paths = editedPaths(event.edits);
+        const confined = paths.length === 1 ? confine(root, paths[0]!) : null;
+        return confined === null || confined === '' ? null : confined;
+    }
     const input = event.rawInput;
     if (typeof input !== 'object' || input === null) return null;
     const raw = (input as { file_path?: unknown }).file_path;
@@ -118,7 +125,7 @@ export function turnsOf(rows: readonly TimedEvent[], root: string | null): Turns
                 if (root !== null) {
                     const path = pathOf(e, root);
                     if (path !== null) {
-                        const counts = editLineCounts(e.rawInput);
+                        const counts = editCountsFor(e);
                         const bump = (map: Map<string, FileTouched>) => {
                             const entry = map.get(path) ?? { edits: 0, plus: 0, minus: 0, counted: false, rowId: row.id };
                             entry.edits += 1;

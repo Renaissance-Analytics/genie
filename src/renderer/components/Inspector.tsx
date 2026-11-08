@@ -50,7 +50,7 @@ export function Inspector({ content, onClose, embedded = false, header = null, f
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--fg-3)]">
                     {'path' in content && content.path ? content.path : ''}
                 </span>
-                {header && content.kind === 'diff' ? (
+                {header && (content.kind === 'diff' || content.kind === 'unified') ? (
                     <span data-diff-header="" className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-[var(--fg-4)]">
                         {header.plus !== null && header.plus > 0 ? <span className="text-[var(--success)]">+{header.plus}</span> : null}
                         {header.minus !== null && header.minus > 0 ? <span className="text-[var(--danger)]">−{header.minus}</span> : null}
@@ -71,6 +71,10 @@ export function Inspector({ content, onClose, embedded = false, header = null, f
             <div className="min-h-0 flex-1 overflow-auto">
                 {content.kind === 'diff' ? (
                     <FancyDiff source={{ before: content.before, after: content.after }} variant="compare" mode="inline" />
+                ) : null}
+                {/* A native edit's own unified diff (Codex, Tynn #440 part C): only its hunks, as the provider sent them. */}
+                {content.kind === 'unified' ? (
+                    <FancyDiff source={{ unified: content.unified }} variant="compare" mode="inline" />
                 ) : null}
 
                 {/*
@@ -102,7 +106,7 @@ export function Inspector({ content, onClose, embedded = false, header = null, f
 
             {/* THE FOOTER (the board): the door to the file where it lives, and `Revert this edit` — the call's own before-text
                 put back through the file panel's write, only where the file still holds exactly what the edit wrote. */}
-            {content.kind === 'diff' && (filesRoute || onRevert) ? (
+            {(content.kind === 'diff' || content.kind === 'unified') && (filesRoute || onRevert) ? (
                 <div className="flex h-8 shrink-0 items-center gap-3 border-t border-[var(--border-1)] px-3">
                     {filesRoute ? <Button size="xs" type="button" data-action="open-in-files" data-nav={filesRoute} onClick={() => onNavigate?.(filesRoute)} className="text-[11px] text-[var(--fg-2)]">Open in workspace files</Button> : null}
                     {onRevert ? <Button size="xs" type="button" data-action="revert-edit" onClick={onRevert} className="text-[11px] text-[var(--fg-2)]">Revert this edit</Button> : null}

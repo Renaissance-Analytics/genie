@@ -383,6 +383,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                     const sent = await deps.host.promptWith(r.id, text, attachments, 'you');
                     return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
                 }
+                // Text alone goes the composer's way too when the host has it, so a refusal (a slash command the agent
+                // does not offer, Tynn #440) comes back with its reason rather than a bare `false`.
+                if (r !== null && text.length > 0 && deps.host.promptWith) {
+                    const sent = await deps.host.promptWith(r.id, text, [], 'you');
+                    return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
+                }
                 return { ok: r !== null && text.length > 0 && (await deps.host.prompt(r.id, text, 'you')) };
             }
             case 'resolvePrompt': {
