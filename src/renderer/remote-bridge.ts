@@ -2,7 +2,7 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import { localTerminalClient } from './local-terminal-client.js';
 import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
-import { BATON_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
+import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
@@ -90,6 +90,11 @@ export interface RemoteOptions {
      * has full control with no extra step. Someone else driving is never taken from silently: the window is told who.
      */
     readonly drive?: boolean;
+    /**
+     * A TAKE OVER WINDOW (Tynn #529 part A): the ticket the driving window's Take over was answered with. This connection
+     * types into that one terminal while that window drives, and is told why when it may not any more. Never `drive`.
+     */
+    readonly companion?: string;
 }
 
 /**
@@ -155,7 +160,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null });
                 resolveReady({ ok: true });
                 // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
-                if (options.drive === true && auth.kind !== 'local') {
+                if (options.drive === true && options.companion === undefined && auth.kind !== 'local') {
                     void call('baton.watch');
                     void control('baton.take');
                 }
@@ -191,7 +196,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         pending.clear();
     });
 
-    transport.send(JSON.stringify({ kind: 'hello', auth, label, ...(options.profile ? { profile: options.profile } : {}) }));
+    transport.send(JSON.stringify({ kind: 'hello', auth, label, ...(options.profile ? { profile: options.profile } : {}), ...(options.companion ? { companion: options.companion } : {}) }));
 
     /** A refusal for the person to see; one for lack of the baton says Take control is what it needs. */
     const refused = (reason: string): void => setState({ lastRefusal: reason, needsBaton: reason.endsWith(BATON_REFUSAL) });
@@ -522,6 +527,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         if (r.ok && method === 'baton.take' && state.needsBaton) setState({ lastRefusal: null, needsBaton: false });
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
     };
+    // A Take Over window's ticket stopped letting it type: why, for the person to see (Tynn #529 part A).
+    on(COMPANION_EVENT, (payload) => { refused((payload as CompanionEvent).revoked); });
     // Who drives, pushed by the host when something this window did not do changed it (Tynn #529).
     on(BATON_EVENT, (payload) => {
         const e = payload as BatonEvent;

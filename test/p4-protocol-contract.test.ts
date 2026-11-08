@@ -16,7 +16,6 @@ import type { LocalUploads } from '../src/main/local-uploads.js';
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
     addWorkspace: 'addWorkspace opens a folder picker on the host; do it there',
-    takeOver: 'takeOver opens a window on the host; do it there',
     providerLogin: 'providerLogin opens the provider login in a window on the host; do it there',
     'features.setBrowserBounds': "features.setBrowserBounds places a view on the host's own window; nothing to do remotely",
 };
