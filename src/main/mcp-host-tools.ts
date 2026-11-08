@@ -7,16 +7,34 @@ import { NO_PAGES_HERE, notAvailableHere, type HostCapabilities } from '../core/
  * WHICH OF GENIE'S TOOLS RUN IN GENIE-HOST, AND WHAT THE REST DO (the host split, P3.1: plan §11d).
  *
  * Genie's MCP server lives in genie-host, so an agent keeps its tools when the window closes. The tools whose world is
- * the host's own — the stores agents write to and the sessions — run here. The others (sites, services, processes,
- * terminals, pages, workspace tabs, createAgent, checkIssues, the plugins' tools) still need what only the window has in
- * this phase, so their calls are FORWARDED to it whole, with the caller the host resolved; the window runs today's
- * handler. With no window the agent is told at once, in words; a window that closes mid-call answers the same way.
+ * the host's own — the stores agents write to, the sessions, the processes, flows, terminals, sites and services — run
+ * here. The others (pages, workspace tabs, createAgent, checkIssues, openFileForUser, the plugins' tools) still need
+ * what only the window has, so their calls are FORWARDED to it whole, with the caller the host resolved; the window runs
+ * today's handler. So are `sites open` and `services exec` (WINDOW_ACTIONS). With no window the agent is told at once,
+ * in words; a window that closes mid-call answers the same way.
  */
 
 /** The tools the host answers itself. Everything else is the window's (forwarded). */
 // `processes` since P3.3c (the book, its scheduler and the supervisor are the host's), `flows` since P3.3d,
-// `manageTerminals` since P3.3e (the terminals are the host's).
-export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals']);
+// `manageTerminals` since P3.3e (the terminals are the host's), `sites` and `services` since Tynn #444 (P5a moved the sites,
+// the supervisor and the service engines here; until then every call went to the window, and on beta.60 none arrived).
+export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals', 'sites', 'services']);
+
+/**
+ * The actions of a host tool that still need the WINDOW: forwarded to it like a window tool, the rest answered here.
+ * `sites open` shows the site in Genie's browser in front of the person; `services exec` runs its command in the window.
+ */
+export const WINDOW_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+    sites: new Set(['open']),
+    services: new Set(['exec']),
+};
+
+/** Whether this call runs in the window: every window tool's, and a host tool's window action. */
+export function runsInWindow(name: string, args: JsonObject): boolean {
+    if (!HOST_NATIVE_TOOLS.has(name)) return true;
+    const actions = WINDOW_ACTIONS[name];
+    return actions !== undefined && typeof args.action === 'string' && actions.has(args.action);
+}
 
 /** What the window is handed: the tool, its arguments and headers as the agent sent them, and who the host says is calling. */
 export interface ForwardedToolCall {
@@ -55,14 +73,17 @@ function windowLostRefusal(name: string, why: string): string {
     return `${name}: Genie's window closed before it answered (${why}), so it may or may not have been done — check before calling it again.`;
 }
 
-/** Every registration as the host serves it: the host's own tools as they are, every other one forwarded to the window. */
+/**
+ * Every registration as the host serves it: the host's own tools as they are, every other one forwarded to the window —
+ * and a host tool's window actions (`WINDOW_ACTIONS`) forwarded, its other actions run here.
+ */
 export function hostRegistrations(all: readonly Registration[], options: HostToolsOptions): Registration[] {
     let seq = 0;
     const can = options.capabilities ?? { window: true, browser: true };
     return all.map((r) => {
         const name = r.definition.name;
-        if (HOST_NATIVE_TOOLS.has(name)) return r;
-        const handler = async (args: JsonObject, context: ToolContext): Promise<McpToolResult> => {
+        if (HOST_NATIVE_TOOLS.has(name) && WINDOW_ACTIONS[name] === undefined) return r;
+        const forward = async (args: JsonObject, context: ToolContext): Promise<McpToolResult> => {
             const resolved = callerFrom(args, context.headers, options.resolveCaller);
             const call: ForwardedToolCall = { name, args, headers: { ...context.headers }, caller: typeof resolved === 'string' ? null : resolved };
             // Never on this host (P10.1d): nothing is forwarded, run or kept, and never "open Genie" — there is none to open.
@@ -85,6 +106,9 @@ export function hostRegistrations(all: readonly Registration[], options: HostToo
                 options.forwardedCalls?.delete(callId);
             }
         };
+        const handler = HOST_NATIVE_TOOLS.has(name)
+            ? (args: JsonObject, context: ToolContext) => (runsInWindow(name, args) ? forward(args, context) : r.handler(args, context))
+            : forward;
         return { ...r, handler };
     });
 }

@@ -1,6 +1,6 @@
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { callerFrom } from './mcp-callers.js';
-import { HOST_NATIVE_TOOLS, type ForwardedToolCall } from './mcp-host-tools.js';
+import { HOST_NATIVE_TOOLS, runsInWindow, type ForwardedToolCall } from './mcp-host-tools.js';
 import type { Caller, Registration, ToolContext } from './mcp-tools.js';
 
 /**
@@ -22,11 +22,15 @@ export function hostOnly<T extends object>(what: string): T {
     }) as T;
 }
 
-/** The registrations with the host's own tools replaced by calls to the host, carrying the caller resolved here. */
+/**
+ * The registrations with the host's own tools replaced by calls to the host, carrying the caller resolved here. A host
+ * tool's window action (`sites open`, `services exec`) runs here: the host would only forward it back.
+ */
 export function withHostTools(all: readonly Registration[], host: { runHostTool(call: ForwardedToolCall): Promise<McpToolResult> }, resolveCaller: (id: string) => Caller | null): Registration[] {
     return all.map((r) => {
         if (!HOST_NATIVE_TOOLS.has(r.definition.name)) return r;
         const handler = async (args: JsonObject, context: ToolContext): Promise<McpToolResult> => {
+            if (runsInWindow(r.definition.name, args)) return r.handler(args, context);
             const resolved = callerFrom(args, context.headers, resolveCaller);
             if (typeof resolved === 'string') return { text: resolved, isError: true };
             return host.runHostTool({ name: r.definition.name, args, headers: { ...context.headers }, caller: resolved });
@@ -37,11 +41,12 @@ export function withHostTools(all: readonly Registration[], host: { runHostTool(
 
 /**
  * A forwarded call, run here: the caller the host resolved is vouched for under the id the call names (its session key
- * or terminal id), so today's handler finds it the way it always has. Only tools this window has; a host tool is refused.
+ * or terminal id), so today's handler finds it the way it always has. Only tools this window has; a host tool is refused,
+ * except its window actions.
  */
 export function windowToolRunner(registrations: () => readonly Registration[], vouched: Map<string, Caller>): (call: ForwardedToolCall) => Promise<McpToolResult> {
     return async (call) => {
-        if (HOST_NATIVE_TOOLS.has(call.name)) return { text: `${call.name} is genie-host's own tool, not the window's`, isError: true };
+        if (!runsInWindow(call.name, call.args)) return { text: `${call.name} is genie-host's own tool, not the window's`, isError: true };
         const r = registrations().find((x) => x.definition.name === call.name);
         if (!r) return { text: `${call.name} is not a tool this Genie window has`, isError: true };
         const id = call.headers['genie-session'] ?? (typeof call.args.terminalId === 'string' ? call.args.terminalId : call.headers.terminalid);
