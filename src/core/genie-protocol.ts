@@ -12,7 +12,36 @@ export interface ProtocolTool {
 
 const HEADER = '<!-- Written by Genie 2 and replaced on every sync. Put your own rules in RULES.md. -->';
 
-export function sharedProtocol(tools: readonly ProtocolTool[]): string {
+/**
+ * WHERE THE WORK IS PLANNED AND MOVED (Tynn story #402; the owner, 2026-11-07: "file based PM is a fallback, not the
+ * goto"). `tynn`: Genie is signed in to tynn.ai, so every agent is told Tynn's work model and sent to the Tynn tools. The
+ * model's canonical text is Tynn's own (tynn.ai#441, served to every agent's Tynn MCP connection as its `tynn-guidelines`
+ * resource, its initialization and its tool descriptions): this names that source and carries the model's five rules in
+ * short, so an agent that has not read it yet still works the Tynn way. `files`: no Tynn here, so the plan lives in local
+ * plan files, and the protocol says that is the fallback.
+ */
+export type WorkTracking = 'tynn' | 'files';
+
+function workSection(tracking: WorkTracking): string {
+    if (tracking === 'tynn') {
+        return `## Planning and progress: Tynn
+
+Genie is signed in to Tynn (tynn.ai), so the work here is planned and tracked in Tynn, with the \`tynn\` MCP tools: \`next\` before choosing work, \`find\`, \`create\` and \`update\` to plan it, and \`workflow\` to move it. Tynn's own rules are in its \`tynn-guidelines\` resource; read them there. In short:
+
+- A release is a version: the active version is the release in flight.
+- A story is one PR, and its tasks are that PR's plan.
+- Items move through \`workflow\` as work happens: start when you pick it up, test when the PR is green, finish when it is merged or shipped.
+- A release go request lists what is NOT in the build, beside what is in it.
+- Local plan files are only a fallback, for when Tynn cannot be reached; say so, and bring the plan back into Tynn when it can.
+`;
+    }
+    return `## Planning and progress: plan files
+
+Genie is not signed in to Tynn here, so there is no Tynn work tracker. Keep the plan and its progress in local plan files in this workspace (\`.ai/plans/\`). This is the fallback: signed in to tynn.ai, the work is planned and moved in Tynn instead.
+`;
+}
+
+export function sharedProtocol(tools: readonly ProtocolTool[], tracking: WorkTracking = 'files'): string {
     // NAMES ONLY (the owner, 2026-10-18: no duplicate info in the system prompt chain): each tool's description already
     // reaches the agent through the MCP tool list; this file is read into every agent's instructions on top of it.
     const list = tools.length > 0
@@ -51,6 +80,7 @@ Genie's chat renders Markdown plus these (as a session; a terminal's replies are
 - To point at something, write \`[file:path/in/this/workspace.ts:12|label]\`, \`[agent:name|label]\` or \`[workspace:name|label]\` (or \`[go:agent:name]\`, which Genie labels): Genie makes them links. Never a URL; anything else shows as plain words.
 - Never write buttons, forms or approval cards: they are removed.
 
+${workSection(tracking)}
 Workspace rules are in \`RULES.md\`. Your own persona is \`.agents/<your name>/AGENT.md\`.
 `;
 }

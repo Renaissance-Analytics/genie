@@ -3527,6 +3527,13 @@ async function boot(): Promise<void> {
             };
             syncNew();
             registry?.subscribe(() => syncNew());
+            tynnAccount?.onChange(() => {
+                // THE WORK MODEL (Tynn story #402): signing in to Tynn, or out, changes what the protocol tells every agent
+                // about where its work is planned, so every workspace's protocol is written again (only a changed file is).
+                for (const w of registry?.listWorkspaces() ?? []) {
+                    void composed.syncAgentDocs(w.path).catch((error: unknown) => { console.error(`[workspace-files] ${w.id} protocol: ${(error as Error).message}`); });
+                }
+            });
             // SIGNING IN TO TYNN LATER (Genie 1 provisioned on the next activation): every workspace linked to a Tynn
             // project is synced again, so one with no token yet gets it now. One already carrying a token is not minted again.
             tynnAccount?.onChange(() => {

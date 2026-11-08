@@ -757,7 +757,7 @@ async function main(): Promise<void> {
             const view = hostingStack ? await hostingStack.trust.refresh(workspace.id).catch(() => null) : null;
             if (view !== null && view.trusted) return null;
             const tools = (mcp?.registrations() ?? []).map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
-            return writeGenieInstructions(join(runtime, 'untrusted-agent'), tools);
+            return writeGenieInstructions(join(runtime, 'untrusted-agent'), tools, hostTynn?.status().signedIn === true ? 'tynn' : 'files');
         },
         untrustedNow: (record) => hostUntrustedNow(record),
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
