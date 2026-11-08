@@ -374,6 +374,8 @@ export interface GenieBridge {
         tynnIssueChanges?(workspaceId: string, filters: Partial<IssueFilters>, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnIssuesHost['changes']>>;
         /** Follow that queue (its live state and rings) until the answer is called. */
         tynnIssuesWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
+        /** Row F1: follow the workspace's Features page (its own channel) until the answer is called. Optional: an older or remote host has none. */
+        tynnFeaturesWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
@@ -666,11 +668,13 @@ export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnTabHost | 
     const watch = ws.tynnBoardWatch;
     const page = ws.tynnPage;
     const pageAct = ws.tynnPageAction;
+    const featuresWatch = ws.tynnFeaturesWatch;
     return {
         read: (id, scope) => read(id, scope),
         act: (id, input) => act(id, input),
         ...(page ? { page: (id: string, p: TynnPage, query: TynnPageQuery) => page(id, p, query) } : {}),
         ...(page && pageAct ? { pageAct: (id: string, input: TynnPageActionInput) => pageAct(id, input) } : {}),
+        ...(page && featuresWatch ? { featuresWatch: (id: string, listener: (signal: BoardLiveSignal) => void) => featuresWatch(id, listener) } : {}),
         ...(changes && watch ? {
             changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => changes(id, scope, cursor, ids),
             watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),

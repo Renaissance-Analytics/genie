@@ -693,6 +693,22 @@ async function watchTynnIssues(workspaceId: string, onGone: (stop: () => void) =
     onGone(stop);
     return id;
 }
+/** Features subscriptions (row F1) belong to the host connection, like the Issues queue's; no host, no live page. */
+let tynnFeaturesDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
+const tynnFeaturesWatches = new Map<number, () => void>();
+let tynnFeaturesWatchSeq = 0;
+/** Start following a workspace's Features page for a window; answers the watch's id, or null when not linked or no host. */
+async function watchTynnFeatures(workspaceId: string, onGone: (stop: () => void) => void): Promise<number | null> {
+    const door = tynnFeaturesDoor;
+    if (door === null) return null;
+    const id = ++tynnFeaturesWatchSeq;
+    const viewId = `tynn-features-${id}`;
+    if (!(await door.watch(viewId, workspaceId))) return null;
+    const stop = () => { if (tynnFeaturesWatches.delete(id)) door.unwatch(viewId); };
+    tynnFeaturesWatches.set(id, stop);
+    onGone(stop);
+    return id;
+}
 function tynnProjectFor(workspaceId: string): string | null {
     const workspace = (registry?.snapshot().workspaces ?? []).find((w) => w.id === workspaceId);
     let manifest: string | null = null;
@@ -2559,6 +2575,12 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-tynn-issues-unwatch', (_event, rawWatch: unknown) => {
         if (typeof rawWatch === 'number') tynnIssuesWatches.get(rawWatch)?.();
     });
+    // Row F1: follow the Features page (the host holds one socket for every open tab).
+    ipcMain.handle('genie:workspace-tynn-features-watch', (event, rawId: unknown) =>
+        (typeof rawId === 'string' ? watchTynnFeatures(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
+    ipcMain.handle('genie:workspace-tynn-features-unwatch', (_event, rawWatch: unknown) => {
+        if (typeof rawWatch === 'number') tynnFeaturesWatches.get(rawWatch)?.();
+    });
     // "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt): the `.agents/*` a workspace
     // brought and has not registered, and adopting one — read from its AGENT.md, never rewritten. The sacred grant is the
     // linked Tynn project's `sacred_agent_name`; signed out or unlinked grants nothing.
@@ -3679,6 +3701,8 @@ async function boot(): Promise<void> {
         engineClient.onTynnBoardEvent((event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); });
         tynnIssuesDoor = { watch: (viewId, workspaceId) => engineClient.tynnIssuesWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnIssuesUnwatch(viewId); } };
         engineClient.onTynnIssuesEvent((event) => { broadcast('genie:workspace-tynn-issues-live', event.workspaceId, event.signal); });
+        tynnFeaturesDoor = { watch: (viewId, workspaceId) => engineClient.tynnFeaturesWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnFeaturesUnwatch(viewId); } };
+        engineClient.onTynnFeaturesEvent((event) => { broadcast('genie:workspace-tynn-features-live', event.workspaceId, event.signal); });
     } else if (windowIssueWatch) {
         const own = windowIssueWatch;
         const replica = new IssueWatchReplica(async (method, args) => (await own).issueWatch.call(method, args));

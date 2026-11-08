@@ -3,7 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
 import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type HomeView, type ReleasesView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
+import { TynnFeaturesPanel } from './TynnFeaturesPanel.js';
 import { TynnHomePanel } from './TynnHomePanel.js';
+import type { FeaturesView } from '../../core/tynn-features.js';
 import { TynnReleasesPanel } from './TynnReleasesPanel.js';
 import { TynnWipPanel } from './TynnWipPanel.js';
 import { TynnIssuesTab } from './TynnIssuesPanel.js';
@@ -152,6 +154,49 @@ export function TynnHomeTab({ workspaceId, host }: { workspaceId: string; host: 
     );
 }
 
+/**
+ * Features (row F1): the page read whole through the host's page door, live on the page's own channel (one read per
+ * burst), and its writes through the page-write door. A write answers its row, so the page is read again after it; it
+ * says running, then done, or Tynn's reason with Retry.
+ */
+export function TynnFeaturesTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
+    const [state, setState] = useState<TynnPageState<FeaturesView>>({ state: 'loading' });
+    const [op, setOp] = useState<BoardOp | null>(null);
+    const [lastInput, setLastInput] = useState<TynnPageActionInput | null>(null);
+    const [live, setLive] = useState<LiveState | undefined>(undefined);
+    const read = useCallback(async () => {
+        if (!host.page) { setState({ state: 'error', reason: 'This Genie cannot read Tynn\'s Features page.' }); return; }
+        const r = await host.page(workspaceId, 'features', {});
+        if (r.ok && r.page === 'features') setState({ state: 'ready', view: r.view });
+        else if (r.ok) setState({ state: 'error', reason: 'Tynn answered with a different workspace page.' });
+        else setState(r.state === 'not-linked' ? { state: 'not-linked' } : r.state === 'signed-out' ? { state: 'signed-out', reason: r.reason } : { state: 'error', reason: r.reason });
+    }, [host, workspaceId]);
+    useEffect(() => { void read(); }, [read]);
+    useEffect(() => {
+        const { featuresWatch } = host;
+        if (!featuresWatch) return undefined;
+        const follower = new PageFollower({ read, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } });
+        const stop = featuresWatch(workspaceId, (signal) => {
+            if ('state' in signal) setLive(signal.state);
+            else follower.ring();
+        });
+        return () => { stop(); follower.stop(); setLive(undefined); };
+    }, [host, workspaceId, read]);
+    const act = async (input: TynnPageActionInput) => {
+        setLastInput(input);
+        if (!host.pageAct) { setOp({ action: input.action, phase: 'failed', reason: 'This Genie cannot write to Tynn here.' }); return; }
+        setOp({ action: input.action, phase: 'running' });
+        const r = await host.pageAct(workspaceId, input);
+        if (r.ok) {
+            await read();
+            setOp({ action: input.action, phase: 'done' });
+        } else if (r.state === 'not-linked' || r.state === 'signed-out') { setOp(null); setState(r.state === 'not-linked' ? { state: 'not-linked' } : { state: 'signed-out', reason: r.reason }); }
+        else setOp({ action: input.action, phase: 'failed', reason: r.reason });
+    };
+    const shown: TynnPageState<FeaturesView> = state.state === 'ready' ? { ...state, op } : state;
+    return <TynnFeaturesPanel state={shown} onAct={(input) => { void act(input); }} onRetry={lastInput ? () => { void act(lastInput); } : undefined} live={live} />;
+}
+
 export function TynnReleasesTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
     const [state, setState] = useState<TynnPageState<ReleasesView>>({ state: 'loading' });
     const [live, setLive] = useState<LiveState | undefined>(undefined);
@@ -190,6 +235,7 @@ export function TynnTab({ workspaceId, host, issues, initialSection }: { workspa
                     : section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} />
                     : section === 'releases' && host.page ? <TynnReleasesTab workspaceId={workspaceId} host={host} />
                     : section === 'home' && host.page ? <TynnHomeTab workspaceId={workspaceId} host={host} />
+                    : section === 'features' && host.page ? <TynnFeaturesTab workspaceId={workspaceId} host={host} />
                         : <TynnBoardTab workspaceId={workspaceId} host={host} />}
             </div>
         </div>
