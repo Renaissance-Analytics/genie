@@ -84,6 +84,8 @@ export const NEW_PROJECT_DEFAULTS: readonly string[] = ['default_env_file'];
 const PLACE: Readonly<Record<string, SectionId>> = {
     update_channel: 'general', launch_at_login: 'general', start_minimized: 'general', rate_limit_refresh: 'general',
     do_not_disturb: 'general', dnd_reply: 'general', dnd_question_sound: 'general',
+    // How much finished history genie-host keeps (Tynn #549): the owner changes the three numbers here.
+    finished_kept_per_agent: 'general', finished_seen_days: 'general', handoff_kept_kb: 'general',
     notification_sounds: 'notifications',
     command_window_hotkey: 'keyboard', ftq_nudge_hotkey: 'keyboard',
     // Drawn as its own row (a folder + Browse) on General, not a generic one.
