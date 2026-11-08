@@ -1,10 +1,13 @@
 // @vitest-environment happy-dom
 import { act } from 'react';
+import { readFileSync } from 'node:fs';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PluginCapabilities } from '../src/core/plugins.js';
 import type { MarketplaceApi, MarketplaceRow as PackageRow, MarketplaceReview as Review } from '../src/core/marketplace.js';
 import { MarketplacePane } from '../src/renderer/components/MarketplacePane.js';
+import { SettingsSurface } from '../src/renderer/components/FeatureSurfaces.js';
+import { EMPTY_FEATURES } from '../src/renderer/features.js';
 
 const id = 'org.example.plugin';
 const capabilities: PluginCapabilities = { network: { hosts: ['api.example.org'] }, genieApi: ['knowledge'] };
@@ -43,7 +46,20 @@ const click = async (action: string) => {
     await act(async () => target!.click());
 };
 
-describe('C4 Marketplace pane (independent of the pending B8 tab hookup)', () => {
+describe('C4 Marketplace pane', () => {
+    it('opens the actual Settings Marketplace tab and reviews installation through its host API', async () => {
+        const props = { data: { ...EMPTY_FEATURES, settings: { values: {} }, plugins: { dir: '/plugins', entries: [], panels: [], publisherChecksOff: false } }, onAction: vi.fn(), onNavigate: vi.fn(), section: 'plugins' as const, marketplace: api };
+        await act(async () => { root.render(<SettingsSurface {...props} />); });
+        const tab = [...document.querySelectorAll('[role="tab"]')].find(node => node.textContent === 'Marketplace') as HTMLElement;
+        expect(tab).toBeDefined(); await act(async () => tab.click());
+        expect(document.querySelector('[data-marketplace-search]'), 'Settings must fill B8’s Marketplace slot with the C4 pane').not.toBeNull();
+        await click('install'); expect(document.querySelector('[data-marketplace-review]')?.textContent).toContain('tools.cjs');
+        expect(api.install).not.toHaveBeenCalled(); await click('confirm');
+        expect(api.install).toHaveBeenCalledWith('review-opaque-token', true);
+    });
+    it('passes the actual local bridge API from App into Settings', () => {
+        expect(readFileSync('src/renderer/App.tsx', 'utf8')).toMatch(/marketplace=\{resolvedBridge\?\.marketplace\}/);
+    });
     it('shows registry name, verified publisher, version and declared permissions', async () => {
         await draw();
         expect(api.search).toHaveBeenCalledWith('');

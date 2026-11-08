@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Baton, PairingPins } from '../src/core/remote.js';
-import { capabilityOf, inMemoryPair, isRemoteMethod, type ServerConnection } from '../src/core/remote-protocol.js';
-import type { LocalFramePort } from '../src/core/local-frame.js';
+import { capabilityOf, inMemoryPair, REMOTE_METHODS, type RemoteMethod, type ServerConnection } from '../src/core/remote-protocol.js';
+import { LOCAL_FRAME_LIMIT_BYTES, type LocalFramePort } from '../src/core/local-frame.js';
 import type { MarketplaceApi, MarketplaceReview } from '../src/core/marketplace.js';
 import { buildHostApi } from '../src/main/host-api.js';
 import { RemoteHost } from '../src/main/remote-host.js';
@@ -17,6 +17,7 @@ import { protocolContractDeps } from './support/protocol-contract-deps.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 const methods = ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const;
+const registered = (method: string): method is RemoteMethod => (REMOTE_METHODS as readonly string[]).includes(method);
 const review: MarketplaceReview = {
     token: 'opaque-window-owned-review-token', installedVersion: null, needsConsent: true,
     package: { id: 'org.example.plugin', name: 'Example', publisher: { id: '01ARZ3NDEKTSV4RRFFQ69G5FAV', name: 'Example', verification: { method: 'domain', identity: 'example.org' } }, version: { version: '1.0.0', digest: 'a'.repeat(64), key_id: `sha256:${'b'.repeat(64)}`, permissions: { network: { hosts: [] }, genieApi: [] }, file_count: 1, uncompressed_size: 10, published_at: '2026-11-08T12:00:00Z', download_url: 'https://tynn.ai/archive' } },
@@ -51,7 +52,7 @@ function rig(marketplace = api()) {
         expect(await client.ready).toMatchObject({ ok: true });
         let next = 100_000;
         const raw = async (method: string, args: unknown[]) => {
-            expect(isRemoteMethod(method), 'Marketplace methods are missing from the local protocol table').toBe(true);
+            expect(registered(method), 'Marketplace methods are missing from the local protocol table').toBe(true);
             const id = next++;
             return new Promise<{ ok: boolean; reason?: string; value?: unknown }>(resolve => {
                 const off = wire.client.onMessage(text => { const value = JSON.parse(text) as { kind: string; id?: number; ok: boolean; reason?: string; value?: unknown }; if (value.kind === 'result' && value.id === id) { off(); resolve(value); } });
@@ -72,7 +73,7 @@ function rig(marketplace = api()) {
 
 describe('C4 Marketplace over the existing admitted local frame protocol', () => {
     it('declares exactly the four operations as local-only capabilities', () => {
-        for (const method of methods) { expect(isRemoteMethod(method)).toBe(true); if (isRemoteMethod(method)) expect(capabilityOf(method)).toBe('local'); }
+        for (const method of methods) { expect(registered(method)).toBe(true); if (registered(method)) expect(capabilityOf(method)).toBe('local'); }
     });
     it('carries the typed API through a real local connection, including current host failures', async () => {
         const f = rig(), w = await f.connect(), marketplace = futureApi(w.client.bridge);
@@ -108,6 +109,13 @@ describe('C4 Marketplace over the existing admitted local frame protocol', () =>
         const f = rig(), w = await f.connect();
         for (const [method, args] of [['marketplace.search', [{}]], ['marketplace.prepare', [{}, '1.0.0']], ['marketplace.install', ['token', 'true']], ['marketplace.discard', [{}]]] as const) expect(await w.raw(method, [...args])).toMatchObject({ ok: false });
         expect(f.marketplace.search).not.toHaveBeenCalled(); expect(f.marketplace.prepare).not.toHaveBeenCalled(); expect(f.marketplace.install).not.toHaveBeenCalled(); expect(f.marketplace.discard).not.toHaveBeenCalled();
+    });
+    it('refuses an oversized review and releases its token without closing the local connection', async () => {
+        const f = rig(), w = await f.connect(), marketplace = futureApi(w.client.bridge);
+        f.marketplace.prepare.mockResolvedValueOnce({ ...review, manifest: { ...review.manifest, mcpTools: [{ name: 'hello', description: 'Hello', inputSchema: { description: 'x'.repeat(LOCAL_FRAME_LIMIT_BYTES - 512) }, run: 'tools.cjs', process: 'subprocess', gated: true }] } });
+        await expect(marketplace.prepare('org.example.plugin', '1.0.0')).rejects.toThrow(/review.*(?:size|large|limit)|(?:size|large|limit).*review/i);
+        expect(f.marketplace.discard).toHaveBeenCalledWith(review.token);
+        await marketplace.search('still connected'); expect(f.marketplace.search).toHaveBeenCalledWith('still connected', undefined);
     });
     it('projects the API into pageBridge through its actual local frame port', async () => {
         const f = rig(); Object.defineProperty(window, 'genieLocalProtocol', { configurable: true, value: f.framePort() });
