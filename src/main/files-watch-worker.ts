@@ -74,7 +74,7 @@ export const WATCH_WORKER_SOURCE = [
  */
 export const CATCH_UP_SLACK_MS = 2_000;
 /** At most this many entries walked by one catch-up: a bound, never reached by a workspace whose build output is ignored. */
-export const CATCH_UP_LIMIT = 200_000;
+export const CATCH_UP_LIMIT = 100_000;
 
 export interface WorkerWatchOptions {
     /** Told once when the worker could not start and the watch runs on this thread instead. */
