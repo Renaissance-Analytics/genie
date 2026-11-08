@@ -18,7 +18,7 @@ import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
 import { Deck } from './components/Deck.js';
 import { ApprovalToasts } from './components/ApprovalToasts.js';
-import { needsYouCount, type DeckItem } from '../core/deck.js';
+import { earlierRuns, needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { turnStopOffered } from '../core/agent-view.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
@@ -601,6 +601,7 @@ export function Shell({
                     route={route}
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
                     deckCount={snapshot.deckItems === null ? null : needsYouCount(snapshot.deckItems)}
+                    deckStaleCount={snapshot.deckItems === null ? null : earlierRuns(snapshot.deckItems).length}
                     // Genie 1's row: the pulse from the agents' sessions, and the process / site indicators from Hosting.
                     workspaces={[...railWorkspaces(snapshot.workspaces ?? [], snapshot.agents, { processes: features.hosting?.processes ?? [], sites: features.hosting?.sites ?? [] }), ...(snapshot.hibernatedWorkspaces ?? []).map((workspace) => ({ ...workspace, count: null, alert: null }))]}
                     onWakeWorkspace={onWakeWorkspace}

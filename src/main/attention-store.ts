@@ -459,7 +459,9 @@ export class AttentionStore {
         const twin = this.#data.questions.find((x) => x.key === key && x.id !== q.id);
         if (twin) throw new Error(`that is the same as your pending question ${twin.id}; cancel one of them instead`);
         const revision = (q.revision ?? 0) + 1;
-        const next: PendingQuestion = { ...q, key, questions: input.questions, priority: input.priority ?? q.priority, revision };
+        // The asking agent changed it, so it waits for it NOW (2026-11-08): judged from this, not the first ask. Without it a
+        // question an earlier run asked stayed "earlier run" after its update: stale, out of the window and the count.
+        const next: PendingQuestion = { ...q, key, questions: input.questions, priority: input.priority ?? q.priority, revision, reaskedAt: this.#now() };
         this.#data.questions = this.#data.questions.map((x) => (x.id === q.id ? next : x));
         await this.#flush();
         return { ok: true, questionId: q.id, revision };
