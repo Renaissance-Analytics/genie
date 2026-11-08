@@ -11,7 +11,6 @@ import { tynnGate, type SyncResult } from '../core/integrations.js';
 import { unreachableThroughMessage, type TynnAccountPort } from './tynn-account.js';
 import type { GithubAccountPort } from './github-account.js';
 import { signedOutGithubView } from '../core/github.js';
-import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { dismissableStale, isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
@@ -23,7 +22,7 @@ import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateF
 import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import { inboxThreads, pairOf, searchThread, threadKeyOfMessage, threadWindow, uncollected } from '../core/inbox-threads.js';
-import { approvalNoteText } from '../core/approval-note.js';
+import { answerDeck } from './deck-answer.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
@@ -1457,64 +1456,17 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'deck.answer':
         case 'deck.answerForm': {
-            const command = action.kind === 'deck.answer' ? resolveDeckAnswer(action.item, action.optionId, action.note ?? '') : resolveDeckForm(action.item, action.selections, Array.isArray(action.notes) ? action.notes : [], action.note);
-            switch (command.kind) {
-                case 'refused':
-                    throw new Error(command.reason);
-                case 'answer-question':
-                    await services.attention.answer(command.questionId, { selections: command.selections, notes: command.notes, note: command.note });
-                    break;
-                case 'resolve-approval': {
-                    // THE NOTE REACHES THE AGENT (beta.33 item 16): the tool call gets its verdict; the note follows as your
-                    // message. Checked BEFORE the answer, so a note that could not be delivered never leaves a silent verdict.
-                    const text = action.kind === 'deck.answer' && action.item.agentId
-                        ? approvalNoteText({ what: `“${action.item.title}”`, outcome: command.choice === 'allow' ? 'allowed' : 'denied', option: command.choice, note: command.note })
-                        : null;
-                    if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
-                    if (!services.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
-                    if (text !== null && !(await ports.deliverToAgent!(action.item.agentId!, text))) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
-                    break;
-                }
-                case 'list-done':
-                    // The PERSON's Done: the store mails the agent that put the item on their list (attention-store.ts).
-                    if (!(await services.attention.lists.done({ workspaceId: command.workspaceId, id: command.itemId, by: HUMAN }))) throw new Error(`no list item ${command.itemId}`);
-                    break;
-                case 'mark-read': {
-                    const unread = services.inbox.unread(HUMAN);
-                    const target = unread.find((m) => m.id === command.messageId);
-                    if (!target) throw new Error(`no unread message ${command.messageId}`);
-                    await services.inbox.receive({ participant: HUMAN, limit: unread.filter((m) => m.seq < target.seq).length + 1 });
-                    break;
-                }
-                case 'mark-seen':
-                    services.attention.markSeen(command.finishedId);
-                    break;
-                case 'trust-certificate': {
-                    // The same Trust as Hosting's line: one elevation, and a failure comes back with its reason.
-                    const r = await services.trustCertificate();
-                    if (!r.ok) throw new Error(r.reason);
-                    break;
-                }
-                case 'defer-trust-certificate':
-                    services.deferTrustCertificate();
-                    break;
-                case 'sync-hosts': {
-                    // What genie-host held for a window: the person approves it here, so the prompt is raised by this window.
-                    const r = await services.syncHosts();
-                    if ('error' in r) throw new Error(r.error);
-                    break;
-                }
-                case 'dismiss-main-error':
-                    // Read, and put aside. Refused with its reason when nothing is wired or the item is already gone.
-                    if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
-                    if (!ports.mainErrors.dismiss(command.id)) throw new Error(`no recorded error ${command.id}`);
-                    break;
-                case 'answer-provider-approval':
-                case 'restart-with-handoff':
-                case 'navigate':
-                    // Session-layer and renderer concerns: main.ts routes these to the session host and the window.
-                    throw new Error(`${command.kind} is handled by the session host, not the feature IPC`);
-            }
+            // One answer for the window and genie-host (deck-answer.ts, Tynn #551).
+            await answerDeck(action, {
+                attention: services.attention,
+                approvals: services.approvals,
+                inbox: services.inbox,
+                deliverToAgent: ports.deliverToAgent,
+                trustCertificate: () => services.trustCertificate(),
+                deferTrustCertificate: () => services.deferTrustCertificate(),
+                syncHosts: () => services.syncHosts(),
+                ...(ports.mainErrors ? { mainErrors: ports.mainErrors } : {}),
+            });
             break;
         }
         case 'deck.dismiss':
@@ -1658,22 +1610,22 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'remote.issuePin':
             // `replaces`: Re-pair on a device's row — the device that pairs (and is allowed) takes that one's place.
-            services.remote.issuePin(action.replaces ? { replaces: action.replaces } : {});
+            await services.remote.issuePin(action.replaces ? { replaces: action.replaces } : {});
             break;
         case 'remote.answerPair': {
             // Allow or Deny on "Pair this device?", from this machine's own window (a remote connection is refused upstream).
-            const r = services.pairing.answer(action.id, action.allow);
+            const r = await services.pairing.answer(action.id, action.allow);
             if (!r.ok) throw new Error(r.reason);
             break;
         }
         case 'remote.revokeDevice':
-            if (!services.remote.revokeDevice(action.deviceId)) throw new Error(`no device ${action.deviceId}`);
+            if (!(await services.remote.revokeDevice(action.deviceId))) throw new Error(`no device ${action.deviceId}`);
             break;
         case 'remote.lock':
-            services.remote.lock();
+            await services.remote.lock();
             break;
         case 'remote.unlock':
-            services.remote.unlock();
+            await services.remote.unlock();
             break;
         case 'remote.restart':
             await ports.remoteAccess?.restart();

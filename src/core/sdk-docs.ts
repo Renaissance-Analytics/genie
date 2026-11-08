@@ -1,4 +1,4 @@
-import { CATALOG_SCHEMA_VERSION, ENVELOPE_FIELDS, KIND_SPECS, type EnvelopeField, type FieldSpec, type KindSpec } from './catalog.js';
+import { CATALOG_SCHEMA_VERSION, COMMON_PAYLOAD_FIELDS, ENVELOPE_FIELDS, KIND_SPECS, type EnvelopeField, type FieldSpec, type KindSpec } from './catalog.js';
 import { PACKAGE_FORMAT, PACKAGE_FORMAT_DOC } from './plugin-integrity.js';
 
 /**
@@ -95,13 +95,17 @@ function kindPage(spec: KindSpec): string {
             ? 'Side: set by each definition\'s `reach.side` (host, client or both).'
             : `Side: ${spec.sides.map((s) => `**${s}**`).join(' or ')}: ${spec.sides.map((s) => SIDE_WORDS[s]).join('; or ')}. A definition on any other side is refused.${spec.sides.includes('both') ? ' On both, it declares `reach.link`.' : ''}`,
         '',
+        ...(spec.link ? [
+            `Its \`reach.link\` is exactly its bridge, no more and no fewer: calls ${spec.link.calls.map((c) => `\`${c}\``).join(', ')}; events ${spec.link.events.map((e) => `\`${e}\``).join(', ')}. A definition that names anything else, or leaves one out, is refused.`,
+            '',
+        ] : []),
         spec.summary,
         '',
         '## Payload fields',
         '',
-        ...(spec.fields.length === 0
-            ? ['This family has no fixed payload fields yet: its payload is any JSON object.']
-            : fieldRows(spec.fields)),
+        ...(spec.fields.length === 0 ? ['This family has no fixed payload fields of its own yet: its payload is any JSON object. Like every element, it may say:', ''] : []),
+        // GApps v2 decision 3: the fields every element may carry (`grantable`), on every family's page.
+        ...fieldRows([...spec.fields, ...COMMON_PAYLOAD_FIELDS]),
         '',
         '## Example payload',
         '',

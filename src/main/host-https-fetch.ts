@@ -35,6 +35,8 @@ export interface HostHttpsOptions {
     readonly log?: (line: string) => void;
     /** Follow this many redirects on the same origin. Absent: every redirect is refused. */
     readonly followSameOrigin?: number;
+    /** Optional protocol-specific cap, enforced while receiving bytes, including chunked responses. */
+    readonly maxResponseBytes?: number;
 }
 
 /** Each of these is cached by Node for the process; so is this. A root added to the OS store is read at the next host start. */
@@ -114,7 +116,17 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
             }
             const chunks: Buffer[] = [];
             const body = new Promise<string>((done, failed) => {
-                res.on('data', (chunk: Buffer) => chunks.push(chunk));
+                let bytes = 0;
+                res.on('data', (chunk: Buffer) => {
+                    bytes += chunk.length;
+                    if (options.maxResponseBytes !== undefined && bytes > options.maxResponseBytes) {
+                        const error = new Error('The response exceeds its size limit.');
+                        failed(error);
+                        res.destroy(error);
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
                 res.on('end', () => done(Buffer.concat(chunks).toString('utf8')));
                 res.on('error', failed);
                 res.on('close', () => { if (!res.complete) failed(new Error('The connection closed before the answer finished.')); });

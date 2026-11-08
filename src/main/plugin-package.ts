@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { PACKAGE_SIGNATURE_FILE, packageDigest, packageLimitProblem, packagePathProblem, packageSigningBytes, type PackageFile } from '../core/plugin-integrity.js';
+import { PACKAGE_LIMITS, PACKAGE_SIGNATURE_FILE, packageDigest, packageLimitProblem, packagePathProblem, packageSigningBytes, type PackageFile } from '../core/plugin-integrity.js';
 import { installDecision, verifyPluginSignature, type InstallDecision } from '../core/plugins.js';
 
 /**
@@ -28,8 +28,9 @@ export async function readPackageFiles(dir: string, options: { onRead?: (path: s
             }
             if (!stat.isFile()) return `${path} is not a regular file; a package holds plain files only`;
             entries.push({ path, size: stat.size });
-            // Stop walking a package already past the file limit: the count alone refuses it.
-            if (entries.length > 10_000) return packageLimitProblem(entries);
+            // Stop walking a package already past the file limit: the count alone refuses it. The count is of the SIGNED
+            // files: the root signature file is not one (packageLimitProblem).
+            if (path !== PACKAGE_SIGNATURE_FILE && entries.length > PACKAGE_LIMITS.files + 1) return packageLimitProblem(entries);
         }
         return null;
     };

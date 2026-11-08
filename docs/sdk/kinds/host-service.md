@@ -16,6 +16,7 @@ A service genie-host runs and keeps running with no window open (remote access, 
 | `stop` | string | yes | — | The host handler that stops it. |
 | `health` | string | yes | — | The host handler that answers whether it is healthy, and why not. |
 | `settingsSection` | string | yes | — | The settings section it owns: its switches live there and nowhere else. |
+| `grantable` | boolean | no | `true` | Whether a GApp may be granted it. `false` for what only the person may do: an app that lists it is refused at install. |
 
 ## Example payload
 

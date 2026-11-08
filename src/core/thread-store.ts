@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, stat, writeFile, type FileHandle } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, stat, truncate, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
-import { FileSessionStore, Thread, type SessionStore } from '@particle-academy/prism-harness';
+import { FileSessionStore, Thread, type JsonObject, type SessionStore } from '@particle-academy/prism-harness';
 import { threadKeyFor, type AgentId } from './identity.js';
 import type { StreamEvent } from './stream-event.js';
 import { boundToolEvent, toolOutputFileName, utf8Bytes } from './tool-row-bound.js';
@@ -69,10 +69,133 @@ export class ThreadStore extends FileSessionStore {
     readonly #directory: string;
     /** Per log: the size counted at, the newlines before it, and whether its last byte was one (no torn tail). */
     readonly #counts = new Map<string, { size: number; count: number; clean: boolean }>();
+    readonly #rotateBytes: number;
+    readonly #slowMs: number;
+    readonly #onSlow: ((line: string) => void) | null;
+    /** Per key: its rotated segments, oldest first, as the index on disk says (Tynn #557). */
+    readonly #segments = new Map<string, Segment[]>();
+    /** Per key: the summary pass over its segments not yet indexed, while it runs. */
+    readonly #indexingRuns = new Map<string, Promise<void>>();
 
-    constructor(directory: string) {
+    constructor(directory: string, options: ThreadStoreOptions = {}) {
         super(directory);
         this.#directory = directory;
+        this.#rotateBytes = options.rotateBytes ?? THREAD_ROTATE_BYTES;
+        this.#slowMs = options.slowMs ?? STORE_SLOW_MS;
+        this.#onSlow = options.onSlow ?? null;
+    }
+
+    /** One IO step, timed: past the threshold it is logged by name, so the next stall says which step it was. */
+    async #timed<T>(step: string, key: string, run: () => Promise<T>): Promise<T> {
+        const started = performance.now();
+        try {
+            return await run();
+        } finally {
+            const ms = performance.now() - started;
+            const log = this.#onSlow ?? slowLog;
+            if (log !== null && ms >= this.#slowMs) {
+                try { log(`thread-store slow step=${step} ms=${Math.round(ms)} log=${ledgerName(key)}`); } catch { /* a log that throws costs nothing */ }
+            }
+        }
+    }
+
+    #indexFile(key: string): string { return join(this.#directory, `${ledgerName(key)}.segments.json`); }
+
+    /** The key's rotated segments, oldest first; none when it never rotated. */
+    async #index(key: string): Promise<Segment[]> {
+        const known = this.#segments.get(key);
+        if (known) return known;
+        let list: Segment[] = [];
+        try {
+            const parsed = JSON.parse(await readFile(this.#indexFile(key), 'utf8')) as { v?: unknown; segments?: unknown };
+            if (parsed.v === 1 && Array.isArray(parsed.segments)) list = parsed.segments as Segment[];
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        this.#segments.set(key, list);
+        return list;
+    }
+
+    async #saveIndex(key: string, list: readonly Segment[]): Promise<void> {
+        const file = this.#indexFile(key), temp = `${file}.${process.pid}.tmp`;
+        await writeFile(temp, JSON.stringify({ v: 1, segments: list }), 'utf8');
+        await rename(temp, file);
+    }
+
+    /** The key's segments, NEWEST first, each with its path: what a reader pages into once the active log is read. */
+    async segmentsNewestFirst(key: string): Promise<Array<Segment & { path: string }>> {
+        return [...(await this.#index(key))].reverse().map((seg) => ({ ...seg, path: join(this.#directory, seg.file) }));
+    }
+
+    /** Resolves when every segment of the key is summarised (a rotated log's one async, chunked pass). */
+    indexing(key: string): Promise<void> {
+        return this.#indexingRuns.get(key) ?? Promise.resolve();
+    }
+
+    /**
+     * ROTATE (Tynn #557): the active log at or past the bound becomes the next segment — renamed, never copied — and a
+     * new active log starts. Its line count goes in the index at once (positions run on); its summary follows in the
+     * background, one chunked pass. Runs inside `appendLog`, under the thread's lock.
+     */
+    async #rotate(key: string, path: string): Promise<void> {
+        const size = await this.#repairTail(key, path);
+        if (size === 0) return;
+        const known = this.#counts.get(key);
+        const lines = known !== undefined && known.size === size && known.clean ? known.count : await countLines(path, size);
+        const list = [...(await this.#index(key))];
+        const seq = list.reduce((m, seg) => Math.max(m, seg.seq), 0) + 1;
+        const file = `${ledgerName(key)}.${String(seq).padStart(6, '0')}.jsonl`;
+        await this.#timed('rotate', key, () => rename(path, join(this.#directory, file)));
+        // The harness's line-count sidecar (prism-harness >= 0.10.2, `<log>.index.json`) matched the file by size, times,
+        // inode and device; the rename changed its ctime, so it is removed, never moved.
+        await unlink(`${path}${LOG_SIDECAR}`).catch(() => undefined);
+        list.push({ seq, file, lines, bytes: size, summary: null });
+        this.#segments.set(key, list);
+        await this.#saveIndex(key, list);
+        this.#counts.set(key, { size: 0, count: 0, clean: true });
+        this.#summarise(key);
+    }
+
+    /** Summarise every segment of the key that has none, once, in the background. */
+    #summarise(key: string): void {
+        if (this.#indexingRuns.has(key)) return;
+        const run = (async () => {
+            const list = await this.#index(key);
+            for (const seg of list) {
+                if (seg.summary !== null) continue;
+                const summary = await this.#timed('index', key, () => summariseSegment(join(this.#directory, seg.file))).catch(() => null);
+                if (summary === null) continue;
+                seg.summary = summary;
+                await this.#saveIndex(key, list).catch(() => undefined);
+            }
+        })().finally(() => { this.#indexingRuns.delete(key); });
+        this.#indexingRuns.set(key, run);
+    }
+
+    /** Cut a torn tail back to the last newline (as the harness does); returns the size after. */
+    async #repairTail(key: string, path: string): Promise<number> {
+        const size = await sizeOf(path);
+        if (size === null || size === 0) return 0;
+        const handle = await open(path, 'r');
+        let cut: number | null = null;
+        try {
+            if (await endsLine(handle, size)) return size;
+            const chunk = Buffer.alloc(64 * 1024);
+            let end = size;
+            cut = 0;
+            while (end > 0) {
+                const start = Math.max(0, end - chunk.length);
+                const { bytesRead } = await handle.read(chunk, 0, end - start, start);
+                const newline = chunk.subarray(0, bytesRead).lastIndexOf(0x0a);
+                if (newline !== -1) { cut = start + newline + 1; break; }
+                end = start;
+            }
+        } finally {
+            await handle.close();
+        }
+        await this.#timed('repair', key, () => truncate(path, cut!));
+        this.#counts.delete(key);
+        return cut!;
     }
 
     /** The key's log file: see {@link threadLogFile}. */
@@ -121,6 +244,15 @@ export class ThreadStore extends FileSessionStore {
     }
 
     override async logLength(key: string): Promise<number | null> {
+        const segments = await this.#index(key);
+        const before = segments.reduce((n, seg) => n + seg.lines, 0);
+        const active = await this.#activeLength(key);
+        if (active === null) return segments.length > 0 ? before : null;
+        return before + active;
+    }
+
+    /** The ACTIVE log's line count (the segments' are in the index). */
+    async #activeLength(key: string): Promise<number | null> {
         const size = await sizeOf(this.logFile(key));
         if (size === null) return null;
         const known = this.#counts.get(key);
@@ -146,18 +278,58 @@ export class ThreadStore extends FileSessionStore {
         }
     }
 
+    /**
+     * The harness's append — one write of whole lines, then synced, a torn tail cut first — with each step timed, and the
+     * log ROTATED first when it has reached the bound (Tynn #557). A log left by an older Genie rotates on its next append.
+     */
     override async appendLog(key: string, entries: Parameters<FileSessionStore['appendLog']>[1]): Promise<void> {
-        const known = this.#counts.get(key);
-        const before = known === undefined ? null : await sizeOf(this.logFile(key));
+        const path = this.logFile(key);
         try {
-            await super.appendLog(key, entries);
+            await mkdir(this.#directory, { recursive: true });
+            const current = await sizeOf(path);
+            if (current !== null && current >= this.#rotateBytes) await this.#rotate(key, path);
+            else if ((await this.#index(key)).some((seg) => seg.summary === null)) this.#summarise(key);
+            const known = this.#counts.get(key);
+            const before = await this.#repairTail(key, path);
+            const data = entries.map((entry) => `${JSON.stringify(entry)}\n`).join('');
+            const handle = await this.#timed('open', key, () => open(path, 'a'));
+            try {
+                if (data !== '') await this.#timed('write', key, () => handle.write(data));
+                await this.#timed('sync', key, () => handle.sync());
+            } finally {
+                await this.#timed('close', key, () => handle.close());
+            }
+            const after = this.#counts.get(key);
+            if (after !== undefined && after === known && after.clean && after.size === before) this.#counts.set(key, { size: before + Buffer.byteLength(data), count: after.count + entries.length, clean: true });
+            else this.#counts.delete(key);
         } catch (error) {
             this.#counts.delete(key);
             throw error;
         }
-        const after = known !== undefined && known.clean && before === known.size ? await sizeOf(this.logFile(key)) : null;
-        if (known !== undefined && after !== null) this.#counts.set(key, { size: after, count: known.count + entries.length, clean: true });
-        else this.#counts.delete(key);
+    }
+
+    /** Every line, oldest first, across the segments and the active log: the WHOLE read (`Thread.messages`). */
+    override async readLog(key: string): Promise<JsonObject[] | null> {
+        const segments = await this.#index(key);
+        const active = await this.#timed('readLog', key, () => super.readLog(key));
+        if (segments.length === 0) return active;
+        const out: JsonObject[] = [];
+        for (const seg of segments) out.push(...(await readEntries(join(this.#directory, seg.file), key)));
+        if (active !== null) out.push(...active);
+        return out;
+    }
+
+    /** Cleared: the segments and their index go too. */
+    override async clearLog(key: string): Promise<void> {
+        for (const seg of await this.#index(key)) {
+            await unlink(join(this.#directory, seg.file)).catch(() => undefined);
+            await unlink(join(this.#directory, `${seg.file}${LOG_SIDECAR}`)).catch(() => undefined);
+        }
+        await unlink(this.#indexFile(key)).catch(() => undefined);
+        await unlink(`${this.logFile(key)}${LOG_SIDECAR}`).catch(() => undefined);
+        this.#segments.set(key, []);
+        this.#counts.delete(key);
+        await super.clearLog(key);
     }
 
     /**
@@ -165,9 +337,22 @@ export class ThreadStore extends FileSessionStore {
      * write a crash cut short — is not a line, as in the harness's own read. Nothing when there is no log.
      */
     async *linesFromEnd(key: string): AsyncGenerator<Buffer[]> {
+        yield* linesFromEndOf(this.logFile(key));
+        for (const seg of await this.segmentsNewestFirst(key)) yield* linesFromEndOf(seg.path);
+    }
+
+    /** The ACTIVE log's lines, newest first (its segments are paged separately: `segmentsNewestFirst`). */
+    activeLinesFromEnd(key: string): AsyncGenerator<Buffer[]> {
+        return linesFromEndOf(this.logFile(key));
+    }
+}
+
+/** A file's complete lines, NEWEST FIRST, a chunk at a time. A torn last line is not a line. Nothing when there is no file. */
+export async function* linesFromEndOf(path: string): AsyncGenerator<Buffer[]> {
+    {
         let handle: FileHandle;
         try {
-            handle = await open(this.logFile(key), 'r');
+            handle = await open(path, 'r');
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
             throw error;
@@ -206,6 +391,84 @@ export class ThreadStore extends FileSessionStore {
         } finally {
             await handle.close();
         }
+    }
+}
+
+/** prism-harness's line-count sidecar beside a log (0.10.2+): `<log>.index.json`. */
+const LOG_SIDECAR = '.index.json';
+/** How big a thread log grows before it rotates (Tynn #557). */
+export const THREAD_ROTATE_BYTES = 64 * 1024 * 1024;
+/** A store step this slow is logged by name. */
+export const STORE_SLOW_MS = 200;
+export type ThreadStoreOptions = { rotateBytes?: number; slowMs?: number; onSlow?: (line: string) => void };
+let slowLog: ((line: string) => void) | null = null;
+/** Where every store's slow steps are logged (genie-host: its lifecycle log). */
+export function setThreadStoreSlowLog(log: ((line: string) => void) | null): void { slowLog = log; }
+
+/** What the index keeps of a segment, so a reader never opens it unless a page needs its rows (Tynn #557). */
+export type SegmentSummary = {
+    /** Rows a history read keeps with no options, and the turns among them, and the highest turn. */
+    rows: number; turns: number; lastTurn: number;
+    /** The runs whose rows it holds, and the newest time of a row that names no run (the `before` rule's only rows). */
+    runs: string[]; unstampedNewestAt: number | null;
+    /** Its prompt rows (run, a pending message, prompt_delivery), as stored lines, oldest first. */
+    prompt: string[];
+};
+export type Segment = { seq: number; file: string; lines: number; bytes: number; summary: SegmentSummary | null };
+
+/** One pass over a segment, newest first, a chunk at a time: what its summary says. */
+async function summariseSegment(path: string): Promise<SegmentSummary> {
+    let rows = 0, turns = 0, lastTurn = 0, unstampedNewestAt: number | null = null;
+    const runs = new Set<string>();
+    const prompt: string[] = [];
+    for await (const lines of linesFromEndOf(path)) {
+        for (const line of lines) {
+            const entry = JSON.parse(line.toString('utf8')) as Record<string, unknown>;
+            const message = entry.message as Record<string, unknown> | null;
+            if (typeof message !== 'object' || message === null || Array.isArray(message)) throw new Error('a stored thread entry has no message object');
+            const writtenBy = message[RUN_FIELD];
+            if (typeof writtenBy === 'string') runs.add(writtenBy);
+            else {
+                const at = Date.parse(typeof entry.recorded_at === 'string' ? entry.recorded_at : '');
+                if (Number.isFinite(at) && (unstampedNewestAt === null || at > unstampedNewestAt)) unstampedNewestAt = at;
+            }
+            const row = historyRow({ position: typeof entry.position === 'number' ? entry.position : 0, message, recordedAt: typeof entry.recorded_at === 'string' ? entry.recorded_at : '' }, {});
+            if (row === null) continue;
+            rows += 1;
+            if (row.event.kind === 'turn') { turns += 1; if (row.event.n > lastTurn) lastTurn = row.event.n; }
+            if (PROMPT_KINDS.has(row.event.kind) && (row.event.kind !== 'message' || Boolean((row.event as { pending?: unknown }).pending))) prompt.push(line.toString('utf8'));
+        }
+    }
+    return { rows, turns, lastTurn, runs: [...runs], unstampedNewestAt, prompt: prompt.reverse() };
+}
+
+/** A segment's entries, oldest first (the whole read). */
+async function readEntries(path: string, key: string): Promise<JsonObject[]> {
+    const raw = await readFile(path, 'utf8');
+    const lines = raw.split('\n');
+    lines.pop();
+    return lines.map((line, index) => {
+        const entry: unknown = JSON.parse(line);
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error(`line ${index + 1} of a thread log segment for [${key}] is not an object`);
+        return entry as JsonObject;
+    });
+}
+
+/** The newlines in a file, counted in chunks. */
+async function countLines(path: string, size: number): Promise<number> {
+    const handle = await open(path, 'r');
+    try {
+        let count = 0;
+        const buf = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, Math.max(1, size)));
+        for (let at = 0; at < size;) {
+            const { bytesRead } = await handle.read(buf, 0, Math.min(buf.length, size - at), at);
+            if (bytesRead === 0) break;
+            for (let i = buf.indexOf(0x0a); i !== -1 && i < bytesRead; i = buf.indexOf(0x0a, i + 1)) count += 1;
+            at += bytesRead;
+        }
+        return count;
+    } finally {
+        await handle.close();
     }
 }
 
@@ -358,29 +621,59 @@ export async function readHistory(store: SessionStore, agentId: AgentId, options
         if (typeof e.message !== 'object' || e.message === null || Array.isArray(e.message)) throw new Error(`a stored thread entry for ${agentId} has no message object`);
         return historyRow({ position: typeof e.position === 'number' ? e.position : 0, message: e.message, recordedAt: typeof e.recorded_at === 'string' ? e.recorded_at : '' }, options);
     };
-    for await (const lines of store.linesFromEnd(threadKeyFor(agentId))) {
-        for (const line of lines) {
-            if (!full || mayMatter(line, runToken, options.before)) {
-                const row = rowOf(line);
-                if (row === null) continue;
-                if (row.event.kind === 'turn' && row.event.n > lastTurn) lastTurn = row.event.n;
-                if (!full) {
-                    const size = rowBytes(row);
-                    if (bytes + size <= maxBytes) {
-                        bytes += size;
-                        newestFirst.push(row);
-                        if (newestFirst.length >= limit) full = true;
-                        continue;
-                    }
-                    full = true;
+    /** One stored line, newest first; what it adds to the window or the count. Returns whether it was a row, and a turn. */
+    const take = (line: Buffer): { row: boolean; turn: boolean } => {
+        if (!full || mayMatter(line, runToken, options.before)) {
+            const row = rowOf(line);
+            if (row === null) return { row: false, turn: false };
+            const turn = row.event.kind === 'turn';
+            if (row.event.kind === 'turn' && row.event.n > lastTurn) lastTurn = row.event.n;
+            if (!full) {
+                const size = rowBytes(row);
+                if (bytes + size <= maxBytes) {
+                    bytes += size;
+                    newestFirst.push(row);
+                    if (newestFirst.length >= limit) full = true;
+                    return { row: true, turn };
                 }
-                earlier += 1;
-                if (row.event.kind === 'turn') earlierTurns += 1;
-            } else {
-                // A plain row of an earlier run: in the record, before the window, and not a turn.
-                earlier += 1;
+                full = true;
+            }
+            earlier += 1;
+            if (turn) earlierTurns += 1;
+            return { row: true, turn };
+        }
+        // A plain row of an earlier run: in the record, before the window, and not a turn.
+        earlier += 1;
+        return { row: true, turn: false };
+    };
+    const key = threadKeyFor(agentId);
+    for await (const lines of store.activeLinesFromEnd(key)) for (const line of lines) take(line);
+    /*
+     * THE SEGMENTS (Tynn #557), newest first. One whose summary answers for this read — no row of the run kept out, no
+     * unnamed row at or after `before` — is read only while the window still needs rows; the rest of it is counted from
+     * its summary. Any other segment is read as the active log is.
+     */
+    for (const seg of await store.segmentsNewestFirst(key)) {
+        const summary = seg.summary;
+        const answers = summary !== null && (options.run === undefined || !summary.runs.includes(options.run)) && (options.before === undefined || summary.unstampedNewestAt === null || summary.unstampedNewestAt < options.before);
+        if (!answers) {
+            for await (const lines of linesFromEndOf(seg.path)) for (const line of lines) take(line);
+            continue;
+        }
+        let rowsHere = 0, turnsHere = 0;
+        if (!full) {
+            outer: for await (const lines of linesFromEndOf(seg.path)) {
+                for (const line of lines) {
+                    const taken = take(line);
+                    if (taken.row) rowsHere += 1;
+                    if (taken.turn) turnsHere += 1;
+                    if (full) break outer;
+                }
             }
         }
+        earlier += summary.rows - rowsHere;
+        earlierTurns += summary.turns - turnsHere;
+        if (summary.lastTurn > lastTurn) lastTurn = summary.lastTurn;
     }
     return { rows: newestFirst.reverse(), earlier, earlierTurns, lastTurn };
 }
@@ -403,7 +696,14 @@ export async function readPromptRows(store: SessionStore, agentId: AgentId): Pro
         return { rows: whole.rows.filter((r) => PROMPT_KINDS.has(r.event.kind) && (r.event.kind !== 'message' || Boolean((r.event as { pending?: unknown }).pending))) };
     }
     const newestFirst: HistoryRow[] = [];
-    for await (const lines of store.linesFromEnd(threadKeyFor(agentId))) {
+    const key = threadKeyFor(agentId);
+    // The active log is read; a summarised segment answers from its index (Tynn #557), any other is read.
+    const sources: Array<AsyncIterable<Buffer[]>> = [store.activeLinesFromEnd(key)];
+    for (const seg of await store.segmentsNewestFirst(key)) {
+        const summary = seg.summary;
+        sources.push(summary !== null ? (async function* () { yield [...summary.prompt].reverse().map((l) => Buffer.from(l, 'utf8')); })() : linesFromEndOf(seg.path));
+    }
+    for (const source of sources) for await (const lines of source) {
         for (const line of lines) {
             if (opensWithKind(line) && !line.includes(PENDING) && !line.includes(KIND_RUN) && !line.includes(KIND_DELIVERY)) continue;
             const entry: unknown = JSON.parse(line.toString('utf8'));

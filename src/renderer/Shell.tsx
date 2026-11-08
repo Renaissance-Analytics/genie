@@ -64,6 +64,10 @@ import { HangNoticeBar } from './components/HangNoticeBar.js';
 import { RendererNoticeBar } from './components/RendererNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
+import type { GAppListing } from '../core/gapps.js';
+
+/** No GApps until the install book (GApps D2) supplies them: one list, so the store's view never changes for nothing. */
+const NO_GAPPS: readonly GAppListing[] = [];
 
 /**
  * The updater's state, pushed by the main process. Starts as `null` — "no updater has said
@@ -531,6 +535,9 @@ export function Shell({
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh }}
+                // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it. No app is listed until the install book (D2)
+                // supplies them, so the store says it has none yet rather than routing to a surface nobody serves.
+                gapps={{ apps: NO_GAPPS }}
             />
             {remote?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />

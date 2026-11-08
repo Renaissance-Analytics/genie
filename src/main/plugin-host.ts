@@ -4,6 +4,13 @@ import { bridgeAccess, parseManifest, UNVERIFIED_LABEL, type AccessDecision, typ
 import { checkPackage, currentDigest } from './plugin-package.js';
 import { editorBytesAccess, type ClaimingEditor, type EditorBytesDecision } from '../core/plugin-editors.js';
 import type { OfficialPlugin } from '../core/official-plugins.js';
+import type { PublisherKeyState } from './marketplace-client.js';
+
+function publisherRefusal(state: PublisherKeyState | undefined, signed: boolean): string | null {
+    if (state === 'withdrawn') return 'The publisher key was withdrawn from the registry; its packages are refused with publisher checks on or off.';
+    if (signed && state === 'unknown') return 'The publisher registry key is no longer fresh; refresh publisher keys before running this signed package.';
+    return null;
+}
 
 /**
  * THE PLUGIN HOST (§6.7). Scans a plugins directory: every folder with a `genie-plugin.json` is listed
@@ -53,21 +60,23 @@ export class PluginHost {
     /** ADF B5: the Unverified packages the person allowed network, by id; kept beside the plugins. */
     readonly #networkFile: string;
     readonly #networkAllowed: Set<string>;
+    readonly #keyState: ((id: string) => PublisherKeyState) | undefined;
 
-    private constructor(entries: Loaded[], dir: string, stateFile: string, disabled: Set<string>, networkFile: string, networkAllowed: Set<string>) {
+    private constructor(entries: Loaded[], dir: string, stateFile: string, disabled: Set<string>, networkFile: string, networkAllowed: Set<string>, keyState?: (id: string) => PublisherKeyState) {
         this.#entries = entries;
         this.#dir = dir;
         this.#stateFile = stateFile;
         this.#disabled = disabled;
         this.#networkFile = networkFile;
         this.#networkAllowed = networkAllowed;
+        this.#keyState = keyState;
     }
 
     /**
      * `official` = the plugins that ship IN Genie (core/official-plugins.ts): trusted by construction, so they need no
      * publisher key and no developer mode; listed first; a folder claiming one of their ids is refused, not admitted.
      */
-    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; publisherChecksOff: boolean; official?: readonly OfficialPlugin[] }): Promise<PluginHost> {
+    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; publisherChecksOff: boolean; official?: readonly OfficialPlugin[]; keyState?: (id: string) => PublisherKeyState }): Promise<PluginHost> {
         const stateFile = join(input.dir, 'plugins-state.json');
         const readIds = async (file: string): Promise<Set<string>> => {
             try {
@@ -113,9 +122,15 @@ export class PluginHost {
                 continue;
             }
             // ADF B4: the signature covers EVERY file of the package (core/plugin-integrity.ts), not the manifest alone.
+            const withdrawn = publisherRefusal(input.keyState?.(parsed.manifest.publisher.keyId), false);
+            if (withdrawn) {
+                entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: withdrawn, manifest: parsed.manifest });
+                continue;
+            }
             const { decision, digest } = await checkPackage(join(input.dir, folder), { keyId: parsed.manifest.publisher.keyId, keys: input.keys, publisherChecksOff: input.publisherChecksOff });
-            if (!decision.install) {
-                entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: decision.reason, manifest: parsed.manifest });
+            const registryReason = publisherRefusal(input.keyState?.(parsed.manifest.publisher.keyId), !!digest);
+            if (!decision.install || registryReason) {
+                entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: registryReason ?? (!decision.install ? decision.reason : null), manifest: parsed.manifest });
                 continue;
             }
             const unverified = decision.label === UNVERIFIED_LABEL;
@@ -127,7 +142,7 @@ export class PluginHost {
         // Installable first, then refused, then invalid — the person reads what works before what does not.
         const rank: Record<PluginState, number> = { enabled: 0, disabled: 0, refused: 1, invalid: 2 };
         entries.sort((a, b) => rank[a.state] - rank[b.state]);
-        return new PluginHost(entries, input.dir, stateFile, disabled, networkFile, networkAllowed);
+        return new PluginHost(entries, input.dir, stateFile, disabled, networkFile, networkAllowed, input.keyState);
     }
 
     /** The MCP tools of ENABLED plugins (§6.7), each with its folder and manifest — what the MCP surface offers agents. */
@@ -149,12 +164,20 @@ export class PluginHost {
         const entry = this.#entries[index];
         if (!entry) return `${pluginId} is not a plugin Genie has`;
         if (entry.state !== 'enabled') return entry.reason ?? `${pluginId} is not enabled`;
+        const registryReason = (): string | null => entry.folder === OFFICIAL_FOLDER ? null : publisherRefusal(this.#keyState?.(entry.manifest!.publisher.keyId), !!entry.digest);
+        const refuse = (reason: string): string => {
+            this.#entries[index] = { ...entry, state: 'refused', label: null, reason, digest: null };
+            return reason;
+        };
+        const before = registryReason();
+        if (before) return refuse(before);
         if (!entry.digest) return null;
         const now = await currentDigest(join(this.#dir, entry.folder));
+        const after = registryReason();
+        if (after) return refuse(after);
         if (now.ok && now.digest === entry.digest) return null;
         const reason = `refused as tampered: ${now.ok ? 'a file changed, was added or was removed since the package was loaded, after it was signed' : now.reason}. A package changed after it was signed never runs, with publisher checks on or off.`;
-        this.#entries[index] = { ...entry, state: 'refused', label: null, reason, digest: null };
-        return reason;
+        return refuse(reason);
     }
 
     /** The panels ENABLED plugins contribute (§6.7), each with its plugin's id and name — what the Workspace surface offers as `+plugin`. */
