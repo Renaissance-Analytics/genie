@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, rmdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { compareMarketplaceVersions, needsMarketplaceConsent, type MarketplaceApi, type MarketplacePackage, type MarketplaceReview, type MarketplaceRow, type MarketplaceVersion } from '../core/marketplace.js';
@@ -25,6 +25,7 @@ export interface MarketplaceHostOptions {
     readonly reviewMaxAgeMs?: number;
     readonly maxArchiveBytes?: number;
     readonly timeoutMs?: number;
+    readonly log?: (line: string) => void;
 }
 interface Grant { id: string; version: string; digest: string; keyId: string; publisherId: string; capabilities: PluginCapabilities }
 interface Baseline { folder: string | null; version: string | null; digest: string | null; capabilities: PluginCapabilities | null }
@@ -34,6 +35,7 @@ const ULID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/i;
 const KEY = /^sha256:[0-9a-f]{64}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
 const BOOK_BYTES = 16 * 1024 * 1024;
+const JOURNAL_BYTES = BOOK_BYTES + 4096;
 const record = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 const invalid = (what: string): never => { throw new Error(`Invalid Marketplace ${what}`); };
 const idOf = (value: unknown): string => typeof value === 'string' && value.length <= 200 && ID.test(value) ? value : invalid('package id');
@@ -74,6 +76,41 @@ function packageData(raw: unknown, origin: string): MarketplacePackage {
     if (!record(raw)) return invalid('package metadata');
     const id = idOf(raw.id);
     return { id, name: textOf(raw.name), publisher: publisherOf(raw.publisher), version: versionData(raw.version, id, origin) };
+}
+function grantsOf(raw: unknown): Map<string, Grant> {
+    if (!Array.isArray(raw) || raw.length > 10_000) return invalid('consent records');
+    const grants = new Map<string, Grant>();
+    for (const row of raw) {
+        if (!record(row) || typeof row.digest !== 'string' || !DIGEST.test(row.digest) || typeof row.keyId !== 'string' || !KEY.test(row.keyId) || typeof row.publisherId !== 'string' || !ULID.test(row.publisherId)) return invalid('consent record');
+        const id = idOf(row.id); if (grants.has(id)) return invalid('duplicate consent');
+        grants.set(id, { id, version: versionOf(row.version), digest: row.digest, keyId: row.keyId, publisherId: row.publisherId, capabilities: permissionsOf(row.capabilities) });
+    }
+    return grants;
+}
+async function readJson(file: string, limit: number): Promise<unknown> {
+    const stat = await lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > limit) throw new Error('Invalid Marketplace storage file or size');
+    const input = await open(file, 'r'); const chunks: Buffer[] = []; let size = 0;
+    try {
+        for (;;) {
+            const chunk = Buffer.alloc(64 * 1024); const result = await input.read(chunk);
+            if (!result.bytesRead) break; size += result.bytesRead;
+            if (size > limit) throw new Error('Marketplace storage file exceeds its size limit');
+            chunks.push(chunk.subarray(0, result.bytesRead));
+        }
+        return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+    } finally { await input.close(); }
+}
+async function writeJson(file: string, value: unknown, limit: number): Promise<void> {
+    const text = JSON.stringify(value);
+    if (Buffer.byteLength(text) > limit) throw new Error('Marketplace storage file exceeds its size limit');
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    await mkdir(dirname(file), { recursive: true });
+    try {
+        const output = await open(tmp, 'wx', 0o600);
+        try { await output.writeFile(text, 'utf8'); await output.sync(); } finally { await output.close(); }
+        await rename(tmp, file);
+    } finally { await rm(tmp, { force: true }); }
 }
 async function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
     if (signal.aborted) { void pending.catch(() => {}); signal.throwIfAborted(); }
@@ -118,6 +155,8 @@ export class MarketplaceHost implements MarketplaceApi {
     #busy = false;
     #sweep: ReturnType<typeof setInterval> | null = null;
     #closing: Promise<void> | null = null;
+    #needsRecovery = false;
+    readonly #cleanup = new Set<string>();
 
     private constructor(options: MarketplaceHostOptions) {
         this.#options = options;
@@ -130,15 +169,19 @@ export class MarketplaceHost implements MarketplaceApi {
     }
     static async open(options: MarketplaceHostOptions): Promise<MarketplaceHost> {
         const host = new MarketplaceHost(options);
-        await host.#readGrants();
         await mkdir(options.stagingDir, { recursive: true, mode: 0o700 });
         if (!(await lstat(options.stagingDir)).isDirectory() || (await lstat(options.stagingDir)).isSymbolicLink()) throw new Error('Marketplace staging must be a plain directory');
+        await host.#recover();
+        await host.#readGrants();
         host.#session = await mkdtemp(join(options.stagingDir, 'reviews-'));
         host.#sweep = setInterval(() => { void host.#expire().catch(() => {}); }, Math.min(host.#maxAge, 60_000));
         host.#sweep.unref?.();
         return host;
     }
-    #assertOpen(): void { if (this.#closed) throw new Error('Marketplace host is closed'); }
+    #assertOpen(): void {
+        if (this.#closed) throw new Error('Marketplace host is closed');
+        if (this.#needsRecovery) throw new Error('Marketplace recovery needs attention before another installation can begin.');
+    }
     async #operation<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
         this.#assertOpen();
         if (this.#controllers.size >= 4) throw new Error('Marketplace request limit reached; try again when the current request finishes');
@@ -220,7 +263,7 @@ export class MarketplaceHost implements MarketplaceApi {
             let dir: string | null = null;
             try {
                 await this.#expire();
-                if (this.#reviews.size >= 4) throw new Error('Marketplace review limit reached; cancel an existing review first');
+                if (this.#reviews.size + this.#cleanup.size >= 4) throw new Error('Marketplace review/staging limit reached; cancel a review or resolve the staging cleanup error first');
                 const pkg = packageData(await this.#json(`/api/v1/marketplace/packages/${id}/versions/${encodeURIComponent(version)}`, signal), this.#origin);
                 if (pkg.id !== id || pkg.version.version !== version) return invalid('requested package identity');
                 await abortable(this.#options.registry.refresh(), signal);
@@ -245,7 +288,7 @@ export class MarketplaceHost implements MarketplaceApi {
                 // Keep an independent host copy: neither an in-process caller nor a renderer may rewrite reviewed authority.
                 this.#reviews.set(token, { review: structuredClone(review), dir, baseline, expires: this.#now() + this.#maxAge }); dir = null;
                 return review;
-            } finally { this.#busy = false; if (dir) await rm(dir, { recursive: true, force: true }); }
+            } finally { this.#busy = false; if (dir) await this.#removeStaged(dir); }
         });
     }
     install(token: string, consent: boolean): Promise<{ id: string; version: string }> {
@@ -258,13 +301,20 @@ export class MarketplaceHost implements MarketplaceApi {
             const pkg = staged.review.package, extracted = join(staged.dir, 'contents');
             const previousGrants = new Map(this.#grants);
             const target = staged.baseline.folder ?? join(this.#options.pluginsDir, pkg.id), backup = join(staged.dir, 'previous');
-            let movedOld = false, movedNew = false, wroteGrants = false, preserve = false;
+            let movedOld = false, movedNew = false, wroteGrants = false, preserve = false, journaled = false;
             try {
                 await abortable(this.#options.registry.refresh(), signal);
                 const manifest = await this.#verify(extracted, pkg);
                 const baseline = await this.#baseline(pkg);
                 if (!isDeepStrictEqual(baseline, staged.baseline)) throw new Error('Installed package changed after review; prepare a new review');
                 signal.throwIfAborted();
+                // A durable recovery record precedes BOTH the grant change and directory renames.
+                await writeJson(join(this.#options.stagingDir, 'activation.json'), {
+                    version: 1, origin: this.#origin, id: pkg.id, folder: relative(this.#options.pluginsDir, target),
+                    transaction: relative(this.#options.stagingDir, staged.dir).split(sep).join('/'),
+                    previousDigest: baseline.digest, nextDigest: pkg.version.digest, previousGrants: [...previousGrants.values()],
+                }, JOURNAL_BYTES);
+                journaled = true;
                 // Persist before activation. A crash before activation cannot make a different digest count as consented.
                 const next = new Map(this.#grants);
                 next.set(pkg.id, { id: pkg.id, version: manifest.version, digest: pkg.version.digest, keyId: manifest.publisher.keyId, publisherId: pkg.publisher.id, capabilities: manifest.capabilities });
@@ -279,6 +329,7 @@ export class MarketplaceHost implements MarketplaceApi {
                 await this.#options.plugins.reload();
                 const entry = this.#options.plugins.dump().entries.find(item => item.id === pkg.id);
                 if (!entry || entry.version !== manifest.version || !['enabled', 'disabled'].includes(entry.state) || entry.unverified !== false) throw new Error(`Installed package could not be loaded: ${entry?.reason ?? 'unavailable'}`);
+                await rm(join(this.#options.stagingDir, 'activation.json'));
                 this.#grants = next;
                 return { id: pkg.id, version: manifest.version };
             } catch (error) {
@@ -287,33 +338,68 @@ export class MarketplaceHost implements MarketplaceApi {
                     if (movedOld) await rename(backup, target);
                     if (wroteGrants) await this.#writeGrants(previousGrants);
                     await this.#options.plugins.reload();
-                } catch (rollback) { preserve = true; throw new AggregateError([error, rollback], `Marketplace install failed and recovery needs attention; previous files retained at ${staged.dir}`); }
+                    if (journaled) await rm(join(this.#options.stagingDir, 'activation.json'));
+                } catch (rollback) { preserve = true; this.#needsRecovery = true; throw new AggregateError([error, rollback], `Marketplace install failed and recovery needs attention; previous files retained at ${staged.dir}`); }
                 throw error;
-            } finally { this.#busy = false; if (!preserve) await rm(staged.dir, { recursive: true, force: true }); }
+            } finally { this.#busy = false; if (!preserve) await this.#removeStaged(staged.dir); }
         });
     }
-    async discard(token: string): Promise<void> { const staged = this.#reviews.get(token); if (!staged) return; this.#reviews.delete(token); await rm(staged.dir, { recursive: true, force: true }); }
-    async #expire(): Promise<void> { for (const [token, staged] of this.#reviews) if (this.#now() >= staged.expires) await this.discard(token); }
+    async #removeStaged(dir: string): Promise<void> {
+        try { await rm(dir, { recursive: true, force: true }); this.#cleanup.delete(dir); }
+        catch (error) { this.#cleanup.add(dir); this.#options.log?.(`Marketplace staging cleanup failed: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    async discard(token: string): Promise<void> { const staged = this.#reviews.get(token); if (!staged) return; this.#reviews.delete(token); await this.#removeStaged(staged.dir); }
+    async #expire(): Promise<void> {
+        for (const dir of [...this.#cleanup]) await this.#removeStaged(dir);
+        for (const [token, staged] of this.#reviews) if (this.#now() >= staged.expires) await this.discard(token);
+    }
+    async #recover(): Promise<void> {
+        const journal = join(this.#options.stagingDir, 'activation.json');
+        let raw: unknown;
+        try { raw = await readJson(journal, JOURNAL_BYTES); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw new Error('Marketplace recovery journal cannot be read; retained files need attention.', { cause: error }); }
+        if (!record(raw) || raw.version !== 1 || raw.origin !== this.#origin || typeof raw.id !== 'string' || !ID.test(raw.id)
+            || typeof raw.folder !== 'string' || !raw.folder || raw.folder === '.' || raw.folder === '..' || /[\\/:\u0000-\u001f]/.test(raw.folder)
+            || typeof raw.transaction !== 'string' || !/^reviews-[A-Za-z0-9]+\/package-[A-Za-z0-9]+$/.test(raw.transaction)
+            || (raw.previousDigest !== null && (typeof raw.previousDigest !== 'string' || !DIGEST.test(raw.previousDigest)))
+            || typeof raw.nextDigest !== 'string' || !DIGEST.test(raw.nextDigest)) throw new Error('Invalid Marketplace recovery journal paths or digest');
+        const previousGrants = grantsOf(raw.previousGrants);
+        const transaction = join(this.#options.stagingDir, raw.transaction), target = join(this.#options.pluginsDir, raw.folder), backup = join(transaction, 'previous');
+        const plain = async (path: string): Promise<boolean> => {
+            try { const stat = await lstat(path); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Marketplace recovery path is not a plain directory'); return true; }
+            catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+        };
+        if (!inside(this.#options.stagingDir, transaction) || !inside(this.#options.pluginsDir, target) || !await plain(dirname(transaction)) || !await plain(transaction)) throw new Error('Invalid Marketplace recovery journal transaction path');
+        const digest = async (folder: string): Promise<string | null> => {
+            if (!await plain(folder)) return null;
+            const current = await currentDigest(folder);
+            const manifest = JSON.parse(await readFile(join(folder, 'genie-plugin.json'), 'utf8')) as { id?: unknown };
+            if (!current.ok || manifest.id !== raw.id) throw new Error('Marketplace recovery package identity or digest cannot be verified; files retained.');
+            return current.digest;
+        };
+        const old = await digest(backup), current = await digest(target);
+        if ((old !== null && old !== raw.previousDigest) || (current !== null && current !== raw.previousDigest && current !== raw.nextDigest) || (raw.previousDigest !== null && old === null && current !== raw.previousDigest)) throw new Error('Marketplace recovery digest changed; files retained for review.');
+        const movedCurrent = current === raw.nextDigest && (old !== null || raw.previousDigest === null);
+        if (movedCurrent) await rename(target, join(transaction, 'interrupted'));
+        if (old !== null) {
+            if (current === raw.previousDigest && !movedCurrent) throw new Error('Marketplace recovery found two previous directories; files retained.');
+            await rename(backup, target);
+        }
+        await this.#writeGrants(previousGrants);
+        await this.#options.plugins.reload();
+        await rm(journal);
+        await rm(transaction, { recursive: true, force: true });
+        await rmdir(dirname(transaction)).catch(error => { if (!['ENOTEMPTY', 'EEXIST', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; });
+    }
     async #readGrants(): Promise<void> {
         try {
-            const stat = await lstat(this.#options.grantsFile);
-            if (!stat.isFile() || stat.isSymbolicLink() || stat.size > BOOK_BYTES) throw new Error('Invalid Marketplace consent file');
-            const raw: unknown = JSON.parse(await readFile(this.#options.grantsFile, 'utf8'));
-            if (!record(raw) || raw.version !== 1 || raw.origin !== this.#origin || !Array.isArray(raw.grants) || raw.grants.length > 10_000) return invalid('consent book');
-            for (const row of raw.grants) {
-                if (!record(row) || typeof row.digest !== 'string' || !DIGEST.test(row.digest) || typeof row.keyId !== 'string' || !KEY.test(row.keyId) || typeof row.publisherId !== 'string' || !ULID.test(row.publisherId)) return invalid('consent record');
-                const id = idOf(row.id); if (this.#grants.has(id)) return invalid('duplicate consent');
-                this.#grants.set(id, { id, version: versionOf(row.version), digest: row.digest, keyId: row.keyId, publisherId: row.publisherId, capabilities: permissionsOf(row.capabilities) });
-            }
+            const raw = await readJson(this.#options.grantsFile, BOOK_BYTES);
+            if (!record(raw) || raw.version !== 1 || raw.origin !== this.#origin) return invalid('consent book');
+            this.#grants = grantsOf(raw.grants);
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
     async #writeGrants(grants: Map<string, Grant>): Promise<void> {
-        const text = JSON.stringify({ version: 1, origin: this.#origin, grants: [...grants.values()] });
-        if (Buffer.byteLength(text) > BOOK_BYTES) throw new Error('Marketplace consent file exceeds its size limit');
-        const tmp = `${this.#options.grantsFile}.${randomUUID()}.tmp`;
-        await mkdir(dirname(this.#options.grantsFile), { recursive: true });
-        try { await writeFile(tmp, text, { mode: 0o600, flag: 'wx' }); await rename(tmp, this.#options.grantsFile); }
-        finally { await rm(tmp, { force: true }); }
+        await writeJson(this.#options.grantsFile, { version: 1, origin: this.#origin, grants: [...grants.values()] }, BOOK_BYTES);
     }
     close(): Promise<void> {
         if (this.#closing) return this.#closing;
@@ -323,6 +409,7 @@ export class MarketplaceHost implements MarketplaceApi {
         this.#closing = (async () => {
             await Promise.allSettled([...this.#pending]);
             for (const token of [...this.#reviews.keys()]) await this.discard(token);
+            for (const dir of [...this.#cleanup]) await this.#removeStaged(dir);
             // Only remove an empty owned session: a failed rollback's retained backup must survive shutdown.
             await rmdir(this.#session).catch(error => { if (!['ENOTEMPTY', 'EEXIST', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; });
         })();

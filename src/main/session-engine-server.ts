@@ -43,6 +43,7 @@ import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView } from '../core/crash-record.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -171,6 +172,7 @@ export interface EngineServerOptions {
     readonly catalog?: Pick<import('./catalog-host.js').CatalogService, 'snapshot' | 'docs' | 'onEvent'>;
     /** The host's plugins (ADF A3: plugins-host.ts). Absent = `engine.plugins` is refused and no window is told of any. */
     readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
+    readonly marketplace?: MarketplaceApi | undefined;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -251,6 +253,7 @@ interface Connection {
 export class SessionEngineServer {
     readonly #options: EngineServerOptions;
     #host: SessionHost | null = null;
+    readonly #marketplaceReviews = new WeakMap<Connection, Set<string>>();
     readonly #records = new Map<string, AgentRecord>();
     readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
@@ -431,6 +434,11 @@ export class SessionEngineServer {
             }
             const was = conn.authed;
             this.#connections.delete(conn);
+            const reviews = this.#marketplaceReviews.get(conn);
+            if (reviews) {
+                this.#marketplaceReviews.delete(conn);
+                for (const token of reviews) void this.#options.marketplace?.discard(token).catch(() => this.#options.log?.('Marketplace review cleanup failed after a window disconnected.'));
+            }
             for (const p of conn.pending.values()) p.reject(new Error('The window closed before it answered.'));
             conn.pending.clear();
             if (was) this.#options.onClients?.(this.clients);
@@ -548,9 +556,46 @@ export class SessionEngineServer {
         conn.transport.send(JSON.stringify(reply.ok ? { kind: 'result', id, ok: true, value: reply.value ?? null } : { kind: 'result', id, ok: false, reason: reply.reason }));
     }
 
+    async #marketplace(conn: Connection, args: unknown[]): Promise<unknown> {
+        if (!conn.local || !conn.window) throw new Error('Marketplace actions require a local window.');
+        const api = this.#options.marketplace;
+        if (!api) throw new Error('Marketplace is not available on this host.');
+        const [operation, values] = args;
+        if (args.length !== 2 || !Array.isArray(values)) throw new Error('Invalid Marketplace operation arguments.');
+        const invalid = (): never => { throw new Error('Invalid Marketplace operation arguments.'); };
+        let reviews = this.#marketplaceReviews.get(conn);
+        if (!reviews) { reviews = new Set(); this.#marketplaceReviews.set(conn, reviews); }
+        switch (operation) {
+            case 'search':
+                if (values.length < 1 || values.length > 2 || typeof values[0] !== 'string' || (values[1] !== undefined && typeof values[1] !== 'string')) return invalid();
+                return api.search(values[0], values[1]);
+            case 'prepare': {
+                if (values.length !== 2 || typeof values[0] !== 'string' || typeof values[1] !== 'string') return invalid();
+                if (reviews.size >= 4) throw new Error('Cancel an existing Marketplace review before preparing another.');
+                const review = await api.prepare(values[0], values[1]);
+                if (!this.#connections.has(conn)) { await api.discard(review.token); throw new Error('The preparing window closed; its Marketplace review was discarded.'); }
+                reviews.add(review.token);
+                return review;
+            }
+            case 'install': {
+                if (values.length !== 2 || typeof values[0] !== 'string' || typeof values[1] !== 'boolean') return invalid();
+                if (!reviews.has(values[0])) throw new Error('This Marketplace review does not belong to this window.');
+                const result = await api.install(values[0], values[1]);
+                reviews.delete(values[0]);
+                return result;
+            }
+            case 'discard':
+                if (values.length !== 1 || typeof values[0] !== 'string') return invalid();
+                if (!reviews.has(values[0])) throw new Error('This Marketplace review does not belong to this window.');
+                await api.discard(values[0]); reviews.delete(values[0]); return null;
+            default: throw new Error('Unknown Marketplace operation.');
+        }
+    }
+
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
         // The updater helper's link calls its own method and nothing else (P5b).
         if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
+        if (method === 'engine.marketplace') return this.#marketplace(conn, args);
         // The crash state is the host's own, ready before any agent engine is: answered here.
         if (method === 'engine.crash') {
             if (!this.#options.crash || !conn.local) throw new Error('This window is not told about crashes here.');

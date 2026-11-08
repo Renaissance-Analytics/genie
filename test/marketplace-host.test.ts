@@ -234,6 +234,7 @@ describe('C4 host-owned Marketplace review and installation', () => {
         if (activated) await rename(join(folder, 'contents'), join(pluginsDir, id));
         await writeFile(grantsFile, JSON.stringify({ version: 1, origin: 'https://tynn.ai', grants: [] }));
         const recovered = await open();
+        expect(JSON.parse(await readFile(join(pluginsDir, id, 'genie-plugin.json'), 'utf8'))).toMatchObject({ version: '1.0.0' });
         expect(installed()).toMatchObject({ version: '1.0.0', state: 'enabled' });
         expect(JSON.parse(await readFile(grantsFile, 'utf8'))).toMatchObject({ grants: previous.grants });
         expect(await readdir(stagingDir)).not.toContain('activation.json');

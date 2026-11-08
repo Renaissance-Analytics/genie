@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BROWSER_LINK_LABEL, isEngineMethod, type EngineMethod } from '../src/core/engine-protocol.js';
+import { BROWSER_LINK_LABEL, isEngineMethod } from '../src/core/engine-protocol.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { MarketplaceApi, MarketplaceReview } from '../src/core/marketplace.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
@@ -34,10 +34,10 @@ async function window(server: SessionEngineServer, local = true, browser = false
 async function call(client: SessionEngineClient, operation: string, args: unknown[]) {
     // Fail immediately at the absent allowlist entry rather than wait for an unanswered malformed frame.
     expect(isEngineMethod('engine.marketplace'), 'Marketplace protocol allowlist entry is missing').toBe(true);
-    return client.call('engine.marketplace' as EngineMethod, [operation, args]);
+    return client.call('engine.marketplace', [operation, args]);
 }
 
-describe('C4 local-window Marketplace protocol (RED before wiring)', () => {
+describe('C4 local-window Marketplace protocol', () => {
     it('forwards only the four explicit operations with their original typed arguments', async () => {
         const marketplace = api(), options = { token, build: 'test', marketplace };
         const server = new SessionEngineServer(options), w = await window(server);
@@ -88,7 +88,7 @@ describe('C4 local-window Marketplace protocol (RED before wiring)', () => {
     it('provides a typed client API that surfaces host errors', async () => {
         const marketplace = api(), options = { token, build: 'test', marketplace };
         const w = await window(new SessionEngineServer(options));
-        const client = w.client as SessionEngineClient & { marketplace(): MarketplaceApi };
+        const client = w.client;
         expect(typeof client.marketplace).toBe('function');
         await client.marketplace().search('notes'); expect(marketplace.search).toHaveBeenCalledWith('notes', undefined);
         marketplace.search.mockRejectedValueOnce(new Error('Registry is offline'));
@@ -105,5 +105,13 @@ describe('C4 local-window Marketplace protocol (RED before wiring)', () => {
         expect(source).toMatch(/streamResponse:\s*true/);
         expect(source).toMatch(/marketplace:\s*marketplaceHost/);
         expect(source).toMatch(/await marketplaceHost\.close\(\)/);
+    });
+    it('the packaged host includes its ZIP reader and the locked runtime dependency closure', () => {
+        const manifest = JSON.parse(readFileSync('package.json', 'utf8')) as { dependencies: Record<string, string> };
+        const lock = JSON.parse(readFileSync('package-lock.json', 'utf8')) as { packages: Record<string, { version?: string; dev?: boolean; dependencies?: Record<string, string> }> };
+        expect(manifest.dependencies.yauzl, 'ZIP reader must ship with the host rather than only in the CI dev install').toBe('3.4.0');
+        expect(lock.packages['']!.dependencies?.yauzl).toBe('3.4.0');
+        expect(lock.packages['node_modules/yauzl']!.dev).not.toBe(true);
+        expect(lock.packages['node_modules/pend']!.dev).not.toBe(true);
     });
 });
