@@ -45,10 +45,10 @@ export class LocalFilesContent {
         try { return this.result(ref, value, kind, bytes); } catch (error) { this.release(ref); throw error; }
     }
     /** Encode the complete native DTO as JSON so UTF-8 blobs preserve lone UTF-16 surrogates too. */
-    terminalResult(value: unknown): unknown {
+    terminalResult(value: unknown, label = 'a terminal read'): unknown {
         const json = JSON.stringify(value);
         if (json === undefined || Buffer.byteLength(json) <= FILES_INLINE_BYTES) return value;
-        const ref = this.begin();
+        const ref = this.begin(label);
         try {
             const bytes = Buffer.from(json), scope = this.#scope(ref);
             const blob = this.#resource(scope, { scope, type: 'blob', kind: 'terminal-json', bytes, sha256: createHash('sha256').update(bytes).digest('hex') });

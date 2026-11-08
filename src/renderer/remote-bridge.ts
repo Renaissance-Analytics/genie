@@ -561,7 +561,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     if (local) {
         // ONE limiter for every family on this connection: together they never ask the host to hold more than it can (Tynn #547).
         const limit = heldLimiter();
-        terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on });
+        terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });
         bridge.terminals = terminalClient.terminals;
         bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });
         bridge.chatDrafts = localDraftsClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });

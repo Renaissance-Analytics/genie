@@ -733,7 +733,7 @@ export class RemoteHost {
             try {
                 const value = await terminals.call(connection.id, method, args, (channel, payload) => this.#send(connection, { kind: 'event', channel, payload }));
                 if (!this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
-                return ok(this.#content(connection).terminalResult(value));
+                return ok(this.#content(connection).terminalResult(value, method));
             } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
         }
         const materialized = this.#materialize(connection, method, args);
