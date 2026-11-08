@@ -31,17 +31,17 @@ describe('Plugins panel', () => {
         expect(html).toContain('data-plugin="com.example.sheets" data-plugin-state="disabled"');
         expect(html).toContain('data-plugin="com.example.localdev" data-plugin-state="refused"');
         expect(html).toContain('data-plugin="(broken)" data-plugin-state="invalid"');
-        expect(html).toMatch(/signed by example-2026/);
+        expect(html).toMatch(/Signed by example-2026/);
         expect(html).toMatch(/unsigned plugins are not installed/);
         expect(html).toMatch(/unknown key “shell”|unknown key "shell"|unknown key &quot;shell&quot;/);
     });
 
     it('Enable/Disable only for installable plugins; the folder path is shown so a person knows where plugins go; null draws a skeleton', () => {
         const html = render(plugins);
-        expect(html).toContain('data-action="plugin-disable" data-plugin-id="com.example.presentation"');
-        expect(html).toContain('data-action="plugin-enable" data-plugin-id="com.example.sheets"');
-        expect(html).not.toContain('data-plugin-id="com.example.localdev"');
-        expect(html).not.toContain('data-plugin-id="(broken)"');
+        expect(html).toContain('data-plugin-switch="com.example.presentation"');
+        expect(html).toContain('data-plugin-switch="com.example.sheets"');
+        expect(html).not.toContain('data-plugin-switch="com.example.localdev"');
+        expect(html).not.toContain('data-plugin-switch="(broken)"');
         expect(html).toMatch(/\/home\/u\/\.genie\/plugins/);
         expect(render(null)).toContain('data-plugins');
         expect(render({ ...plugins, entries: [] })).toMatch(/No plugins yet/);
