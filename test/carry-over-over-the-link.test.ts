@@ -20,8 +20,18 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
  */
 let dir: string;
 const hosts: SessionHost[] = [];
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-carry-link-')); });
-afterEach(async () => { await Promise.all(hosts.splice(0).map((h) => h.settled())); await rm(dir, { recursive: true, force: true }); });
+// ---- PROBE (throwaway, never merged): time each phase of this file's hooks and its long-ledger test on Windows.
+const probeT = () => performance.now();
+const probeLog = (phase: string, ms: number) => console.log(`GENIE-PROBE file=carry phase=${phase} ms=${Math.round(ms)} test="${String(expect.getState().currentTestName ?? '?')}"`);
+beforeEach(async () => { const t = probeT(); dir = await mkdtemp(join(tmpdir(), 'genie2-carry-link-')); probeLog('before-mkdtemp', probeT() - t); });
+afterEach(async () => {
+    let t = probeT();
+    await Promise.all(hosts.splice(0).map((h) => h.settled()));
+    probeLog('after-settled', probeT() - t);
+    t = probeT();
+    await rm(dir, { recursive: true, force: true });
+    probeLog('after-rm', probeT() - t);
+});
 const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 const TOKEN = 'carry-token';
 
@@ -75,18 +85,23 @@ describe('historyRows over the link', () => {
     it('a long ledger: the reply stays under the byte bound, keeps the NEWEST rows in order, and says it cut; a caller asking more is held to the host’s ceiling', async () => {
         const r = rig();
         const record = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        let pt = probeT();
         r.host.start(record, dir);
+        probeLog('long-start', probeT() - pt); pt = probeT();
         // 120 turns of an 8 KB reply: about a megabyte of ledger.
         for (let n = 1; n <= 120; n += 1) {
             r.host.prompt(record.id, `question ${n}`, 'you');
             r.events().onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `answer ${n} ${'x'.repeat(8000)}` } } as never);
             r.events().onTurnEnd?.({ stopReason: 'end_turn' } as never);
         }
+        probeLog('long-120-turns-sync', probeT() - pt); pt = probeT();
         await r.host.settled();
+        probeLog('long-settled', probeT() - pt); pt = probeT();
         const [h, w] = memoryPair();
         r.server.accept(h);
         const client = new SessionEngineClient();
         expect(await client.connect(w, TOKEN)).toMatchObject({ ok: true });
+        probeLog('long-connect', probeT() - pt); pt = probeT();
         const ask = askOf(client);
         const bytes = (rows: unknown) => Buffer.byteLength(JSON.stringify(rows ?? []), 'utf8');
 
@@ -95,6 +110,7 @@ describe('historyRows over the link', () => {
             expect((got.rows ?? []).some((x) => x.event['text'] === 'question 120')).toBe(true);
             return got;
         }, { timeout: 5000 });
+        probeLog('long-first-ask', probeT() - pt); pt = probeT();
         expect(bytes(small.rows)).toBeLessThanOrEqual(64 * 1024);
         expect(small.cut).toBe(true);
         // The newest kept, in order: the last turn's question before its answer, and nothing from the start.
@@ -111,6 +127,7 @@ describe('historyRows over the link', () => {
         const all = await ask(record.id, { limit: 5, maxBytes: 128 * 1024 });
         expect(all.cut).toBe(false);
         expect((all.rows ?? []).length).toBe(5);
+        probeLog('long-other-asks', probeT() - pt);
     });
 });
 
