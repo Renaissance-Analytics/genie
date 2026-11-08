@@ -156,3 +156,16 @@ export function pushVerdict(passes, { p95Bytes = 32 * 1024, meanBytes = 24 * 102
     }
     return { ok: reasons.length === 0, p95Bytes, meanBytes, rows, reasons };
 }
+
+/**
+ * THE PAGE BUDGET WHILE A TERMINAL STREAMS (Tynn #525, L5): against the same run's idle phase, so a slower runner is not a
+ * failure of its own. The mouse's delay to the next frame (p95) no more than `p95SlackMs` over idle's, and no frame gap
+ * over `maxFrameGapMs`. A phase the mouse never reached fails: nothing measured.
+ */
+export function pageVerdict({ idle, streaming }, { p95SlackMs = 10, maxFrameGapMs = 100 } = {}) {
+    const reasons = [];
+    if (!(idle?.count > 0) || !(streaming?.count > 0)) reasons.push('the mouse reached no frame in the idle or the streaming phase');
+    else if (streaming.p95 > idle.p95 + p95SlackMs) reasons.push(`mouse to frame p95 ${streaming.p95} ms while the terminal streams, idle ${idle.p95} ms (bound idle + ${p95SlackMs})`);
+    if (streaming?.worstFrameGapMs > maxFrameGapMs) reasons.push(`a frame gap of ${Math.round(streaming.worstFrameGapMs)} ms while the terminal streams (bound ${maxFrameGapMs})`);
+    return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, idleP95: idle?.p95 ?? null, streamingP95: streaming?.p95 ?? null, worstFrameGapMs: streaming?.worstFrameGapMs ?? null, reasons };
+}
