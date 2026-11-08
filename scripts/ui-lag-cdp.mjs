@@ -28,11 +28,13 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
 // Ten pairs (the coordinator's (b), Tynn #536): a stable median of paired differences on the Linux runner.
 const SLICE_PAIRS = 10, SLICE_MS = 1200, SETTLE_MS = 400;
+// One pair traced in the profiled pass (Tynn #537): what every thread of the window did, terminal on against off.
+const TRACE_PAIR = 4, TRACE_CATEGORIES = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'blink', 'cc', 'gpu', 'viz', 'benchmark', 'renderer.scheduler', 'v8.execute'];
 const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, HOST_BUDGET_MS = 100, IDLE_MS = 6000, BUILD_MS = 52000, CONTROL_MS = 120;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
@@ -49,10 +51,11 @@ function logTail(path, max = 65536) {
     } finally { closeSync(fd); }
 }
 class Cdp {
-    next = 0; pending = new Map();
+    next = 0; pending = new Map(); listeners = new Map();
+    on(method, fn) { this.listeners.set(method, fn); return () => this.listeners.delete(method); }
     static async connect(url) {
         const c = new Cdp(); c.socket = new WebSocket(url); let timer;
-        c.socket.addEventListener('message', (event) => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; { const done = c.pending.get(frame.id); if (typeof done === 'function') done(frame); } c.pending.delete(frame.id); });
+        c.socket.addEventListener('message', (event) => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; if (frame.method) c.listeners.get(frame.method)?.(frame.params); { const done = c.pending.get(frame.id); if (typeof done === 'function') done(frame); } c.pending.delete(frame.id); });
         c.socket.addEventListener('close', () => { c.dead ??= 'CDP closed'; for (const done of c.pending.values()) done({ error: { message: c.dead } }); c.pending.clear(); });
         try { await Promise.race([new Promise((ok, no) => { c.socket.addEventListener('open', ok, { once: true }); c.socket.addEventListener('error', no, { once: true }); }), new Promise((_, no) => { timer = setTimeout(() => no(new Error('CDP connect timed out')), 10000); })]); }
         finally { clearTimeout(timer); }
@@ -264,6 +267,20 @@ try {
         await until(`the Files panel ${want ? 'open' : 'closed'}`, async () => (await filesOpen()) === want, 15000);
     };
 
+    /** A Chromium trace of `fn`'s span on the page's session: every thread of the window, the GPU and compositor too. */
+    async function traced(fn) {
+        const events = [];
+        const stopData = page.on('Tracing.dataCollected', (p) => { for (const e of p.value) events.push(e); });
+        const complete = new Promise((done) => { const stop = page.on('Tracing.tracingComplete', () => { stop(); done(); }); });
+        // A trace that cannot start is reported, and the slice still runs: the trace explains, the gauges decide.
+        try { await page.request('Tracing.start', { traceConfig: { includedCategories: TRACE_CATEGORIES, recordMode: 'recordAsMuchAsPossible' }, transferMode: 'ReportEvents' }); }
+        catch (e) { stopData(); console.log(`UI_LAG_TRACE_UNAVAILABLE ${e.message}`); return { value: await fn(), events: null }; }
+        let value;
+        try { value = await fn(); }
+        finally { await page.request('Tracing.end', {}); await Promise.race([complete, sleep(30000)]); stopData(); }
+        return { value, events };
+    }
+
     async function runPass(label, profiled) {
         const phases = [];
         const mark = async (name) => ({ name, mainMs: (await main.evaluate('performance.now()')), pageMs: await page.evaluate('performance.now()'), hostMs: await hostCdp.evaluate('performance.now()'), wallMs: Date.now() });
@@ -305,20 +322,26 @@ try {
         demand(typeof termTab === 'string', 'the terminal\'s tab is in the workspace\'s tab strip');
         const show = async (tab) => { await page.evaluate(`document.querySelector('[data-workspace-tab="${tab}"]').click(); true`); };
         p = await mark('build-terminal');
-        const slices = [], mouse = [], keys = [];
+        const slices = [], mouse = [], keys = [], traces = {};
         for (let k = 0; k < SLICE_PAIRS; k += 1) {
             for (const [cond, tab] of [['on', termTab], ['off', 'home']]) {
                 await show(tab);
                 await sleep(SETTLE_MS);
                 await focusField();
-                const from = await page.evaluate('performance.now()');
-                const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
-                mouse.push(...d.mouse); keys.push(...d.keys);
-                slices.push({ cond, from, to: await page.evaluate('performance.now()') });
+                const slice = async () => {
+                    const from = await page.evaluate('performance.now()');
+                    const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
+                    return { d, from, to: await page.evaluate('performance.now()') };
+                };
+                let s, trace = null;
+                if (profiled && k === TRACE_PAIR) { const t = await traced(slice); s = t.value; trace = t.events; } else s = await slice();
+                mouse.push(...s.d.mouse); keys.push(...s.d.keys);
+                if (trace?.length) { writeFileSync(join(OUT, `ui-lag-trace-${cond}.json`), JSON.stringify({ traceEvents: trace })); traces[cond] = traceSummary(trace); }
+                slices.push({ cond, from: s.from, to: s.to });
             }
         }
         await show(termTab);
-        phases.push({ ...p, end: await mark('build-terminal-end'), input: { mouse, keys }, slices });
+        phases.push({ ...p, end: await mark('build-terminal-end'), input: { mouse, keys }, slices, traces });
         await toggleFiles(true); await focusField();
         p = await mark('build-files');
         const finished = async () => json(done)?.run === run;
@@ -371,6 +394,7 @@ try {
                 input: { mouseRtt: summarize(ph.input.mouse), keyRtt: summarize(ph.input.keys), mouseHandler: summarize(inputs.filter((x) => x.kind === 'mouse').map((x) => x.handlerMs)), mouseToFrame: summarize(inputs.filter((x) => x.kind === 'mouse').map((x) => x.frameMs)), keyToFrame: summarize(inputs.filter((x) => x.kind === 'key').map((x) => x.frameMs)) },
                 host: { worstMs: Math.round(hostGapsIn[0]?.ms ?? 0), over50: pass.hostState.gauge.gaps.filter((g) => g.ms > BUDGET_MS && g.endedMs >= ph.hostMs && g.startedMs <= ph.end.hostMs).length, gaps: hostGapsIn,
                     spawns: (() => { const own = pass.hostState.spawns.filter(([t]) => t >= ph.hostMs && t <= ph.end.hostMs); const by = {}; for (const [, f] of own) by[f] = (by[f] ?? 0) + 1; return { count: own.length, by }; })() },
+                ...(ph.traces && Object.keys(ph.traces).length ? { traces: ph.traces } : {}),
                 ...(ph.slices ? { slices: ph.slices.map((sl) => {
                     const own = pass.pageState.inputs.filter((x) => x.kind === 'mouse' && x.at >= sl.from && x.at <= sl.to).map((x) => x.frameMs);
                     const gaps = pass.pageState.frames.filter((g) => g.endedMs >= sl.from && g.startedMs <= sl.to).map((g) => g.ms);
@@ -456,9 +480,11 @@ try {
     // THE PAGE BUDGET (Tynn #525, from a distribution since #536): the terminal on screen against off, the same build.
     const termSlices = passes[0].rows.find((r) => r.phase === 'build-terminal')?.slices ?? [];
     const pageBudget = sliceVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
-    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget };
+    // THE THROUGHPUT BUDGET (Tynn #537): the input the page keeps up with, terminal on screen against off, the same slices.
+    const throughput = throughputVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
+    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread during the build (${JSON.stringify(h.by)})`)].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread during the build (${JSON.stringify(h.by)})`)].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
@@ -476,6 +502,7 @@ finally {
     for (const p of out.passes) for (const r of p.rows ?? []) {
         console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${r.host.worstMs} over50=${r.host.over50} spawns=${r.host.spawns.count} ${JSON.stringify(r.host.spawns.by)} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
         if (r.slices) console.log(`UI_LAG_SLICES ${p.label}/${r.phase} ${JSON.stringify(r.slices.map((x) => [x.cond, x.count, x.p95, x.worstGapMs, x.fps]))}`);
+        for (const [cond, t] of Object.entries(r.traces ?? {})) console.log(`UI_LAG_TRACE ${cond} ${JSON.stringify(t)}`.slice(0, 4000));
         if (r.sliceProfiles) {
             console.log(`UI_LAG_SLICE_PROFILE on ${JSON.stringify(r.sliceProfiles.on)}`.slice(0, 3000));
             console.log(`UI_LAG_SLICE_PROFILE off ${JSON.stringify(r.sliceProfiles.off)}`.slice(0, 3000));
