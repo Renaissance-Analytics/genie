@@ -25,7 +25,7 @@ export class FilesTreeKeeper {
         if (!treeChanges) return event;
         const prev = this.#trees.get(event.workspaceId);
         if (!prev) {
-            if (!this.#told.has(event.workspaceId)) { this.#told.add(event.workspaceId); this.#log(`files git: changes to a tree this window does not hold (${event.workspaceId}); sent on without a tree`); }
+            if (true) { this.#log(`files git: changes to a tree this window does not hold (${event.workspaceId}); sent on without a tree`); }
             return rest;
         }
         const tree = applyTreeChanges(prev, treeChanges);
