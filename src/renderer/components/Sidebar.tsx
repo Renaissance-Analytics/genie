@@ -39,6 +39,8 @@ export interface SidebarProps {
     route: string;
     /** Things waiting on a human. `0` shows no badge; `null` means the queue is unread. */
     deckCount: number | null;
+    /** Questions from earlier runs still unanswered (2026-11-08): a small badge of their own, never in `deckCount`. */
+    deckStaleCount?: number | null | undefined;
     workspaces: readonly RailItem[];
     /**
      * Which rows this build can actually render a surface for.
@@ -203,7 +205,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null }: SidebarProps) {
+export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null }: SidebarProps) {
     countRender('Sidebar');
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
@@ -340,6 +342,16 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         className="ml-auto rounded-sm bg-[var(--warning)]/15 px-1.5 font-mono text-[11px] tabular-nums text-[var(--warning)]"
                     >
                         {badge}
+                    </span>
+                ) : null}
+                {/* Earlier runs' questions, still unanswered: never hidden, never in the count above. */}
+                {deckStaleCount !== null && deckStaleCount > 0 ? (
+                    <span
+                        data-deck-stale-badge={deckStaleCount}
+                        title={`${deckStaleCount} from earlier runs, still unanswered`}
+                        className={`${badge !== null ? 'ml-1' : 'ml-auto'} rounded-sm bg-[var(--bg-2)] px-1 font-mono text-[10px] tabular-nums text-[var(--fg-3)]`}
+                    >
+                        {deckStaleCount}
                     </span>
                 ) : null}
                 </NavRow>
