@@ -27,7 +27,9 @@ const plugins = (over: Partial<NonNullable<FeatureData['plugins']>> = {}): NonNu
 let host: HTMLDivElement;
 let root: Root;
 let actions: FeatureAction[];
+const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 beforeEach(() => {
+    g.IS_REACT_ACT_ENVIRONMENT = true;
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
