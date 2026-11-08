@@ -104,7 +104,7 @@ describe('remote access over the engine link', () => {
         const seen: unknown[] = [];
         await windowOn(true, async (_method, _args, context) => { seen.push(context); return null; });
         expect(await p.call('snapshot')).toMatchObject({ kind: 'result', ok: true });
-        expect(seen).toEqual([expect.objectContaining({ origin: 'device', isOwner: true, label: 'glenn’s phone' })]);
+        expect(seen).toEqual([expect.objectContaining({ origin: 'device', isOwner: true, label: 'phone' })]);
     });
 
     it('a window\'s replica reads and drives the host\'s PIN, and is told when it changes', async () => {

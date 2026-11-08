@@ -152,8 +152,9 @@ describe('main.ts wiring', () => {
         .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
         .join('\n');
 
-    it('the remote API’s features.act passes no origin', () => {
-        expect(source).toMatch(/act: \(action\) => handleFeatureAction\(services!, action, featureState, featurePorts\),/);
+    // The host API decides by who it admitted (Tynn #578): only this machine's own window is local; see p4-call-context.test.ts.
+    it('the remote API’s features.act takes its origin from the host’s context, never from the action', () => {
+        expect(source).toMatch(/act: \(action, context\) => handleFeatureAction\(services!, action, featureState, featurePorts, featureOriginOf\(context, hostPicks\)\),/);
     });
 
     it('main’s own IPC derives the origin from the sender, and records picks only from a window that is not remote', () => {
