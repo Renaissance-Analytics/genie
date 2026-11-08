@@ -87,10 +87,28 @@ function installMainGauge(create) {
 
 /** genie-host's gauge (Tynn #524): its timer lateness, every gap over 16 ms. Serialized into genie-host. */
 function installHostGauge(create) {
-    const s = globalThis.__uiLagHost = { gauge: create({ intervalMs: 10, thresholdMs: 16, now: () => performance.now() }) };
+    const s = globalThis.__uiLagHost = { gauge: create({ intervalMs: 10, thresholdMs: 16, now: () => performance.now() }), spawns: [] };
     s.timer = setInterval(() => s.gauge.beat(), 10);
-    s.stop = () => clearInterval(s.timer);
+    /*
+     * EVERY PROCESS genie-host CREATES ON ITS OWN THREAD (Tynn #532): Windows creates a process synchronously on the
+     * calling thread, so each one is a stall of its own (one git spawn held genie-host 295 ms on the runner). Counted where
+     * every spawn, execFile and fork of this process passes: ChildProcess.prototype.spawn. Only the program's name is kept.
+     */
+    const { ChildProcess } = process.getBuiltinModule('node:child_process');
+    const original = ChildProcess.prototype.spawn;
+    ChildProcess.prototype.spawn = function (options) {
+        const file = typeof options?.file === 'string' ? options.file.split(/[\\/]/).pop().slice(0, 40) : '?';
+        const next = Array.isArray(options?.args) && typeof options.args[1] === 'string' ? options.args[1].split(/[\\/]/).pop().slice(0, 40) : '';
+        if (s.spawns.length < 5000) s.spawns.push([performance.now(), next ? `${file} ${next}` : file]);
+        return original.call(this, options);
+    };
+    s.stop = () => { clearInterval(s.timer); if (ChildProcess.prototype.spawn !== original) ChildProcess.prototype.spawn = original; };
     return { now: performance.now() };
+}
+/** The spawn gauge's positive control: one process genie-host creates on its own thread, on purpose. */
+function uiLagControlSpawnHost() {
+    const { execFile } = process.getBuiltinModule('node:child_process');
+    return new Promise((done) => { execFile(process.execPath, ['-e', '0'], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true }, () => done(true)); });
 }
 
 /** The page's gauges: timer lateness, long tasks, frame gaps, input delays, the Files pushes. Serialized into the page. */
@@ -254,6 +272,7 @@ try {
         await sleep(200);
         // In a task of its own (a timer): a block inside CDP's own evaluate is not a long task the page's observer reports.
         const hostCtl = await hostCdp.evaluate(`(${uiLagControlBusyHost.toString()})(${CONTROL_MS})`);
+        await hostCdp.evaluate(`(${uiLagControlSpawnHost.toString()})()`);
         await sleep(200);
         const pageCtl = await page.evaluate(`new Promise((done) => setTimeout(() => done((${uiLagControlBusyPage.toString()})(${CONTROL_MS})), 0))`);
         await sleep(400);
@@ -294,7 +313,7 @@ try {
     for (const [label, profiled] of [['gauges', false], ['profiled', true]]) {
         const pass = await runPass(label, profiled);
         const mainState = await main.evaluate('({ gauge: globalThis.__uiLag.gauge.snapshot(), calls: globalThis.__uiLag.calls.splice(0) })');
-        const hostState = await hostCdp.evaluate('({ gauge: globalThis.__uiLagHost.gauge.snapshot() })');
+        const hostState = await hostCdp.evaluate('({ gauge: globalThis.__uiLagHost.gauge.snapshot(), spawns: globalThis.__uiLagHost.spawns.splice(0) })');
         const pageState = await page.evaluate('(() => { const s = window.__uiLag; return { gauge: s.gauge.snapshot(), longtasks: s.longtasks.splice(0), frames: s.frames.splice(0), inputs: s.inputs.splice(0), files: s.files.splice(0) }; })()');
         await main.evaluate('globalThis.__uiLag.gauge.reset(); true'); await hostCdp.evaluate('globalThis.__uiLagHost.gauge.reset(); true'); await page.evaluate('window.__uiLag.gauge.reset(); true');
         passes.push({ ...pass, mainState, hostState, pageState });
@@ -327,7 +346,8 @@ try {
                 main: { worstMs: Math.round(mainGaps[0]?.ms ?? 0), over50: pass.mainState.gauge.gaps.filter((g) => g.ms > BUDGET_MS && g.endedMs >= ph.mainMs && g.startedMs <= ph.end.mainMs).length, gaps: mainGaps },
                 page: { worstMs: Math.round(pageGaps[0]?.ms ?? 0), gaps: pageGaps, longtasks: { count: longtasks.length, totalMs: Math.round(longtasks.reduce((a, l) => a + l.ms, 0)), worst: [...longtasks].sort((a, b) => b.ms - a.ms).slice(0, 5) }, frameGaps: frames },
                 input: { mouseRtt: summarize(ph.input.mouse), keyRtt: summarize(ph.input.keys), mouseHandler: summarize(inputs.filter((x) => x.kind === 'mouse').map((x) => x.handlerMs)), mouseToFrame: summarize(inputs.filter((x) => x.kind === 'mouse').map((x) => x.frameMs)), keyToFrame: summarize(inputs.filter((x) => x.kind === 'key').map((x) => x.frameMs)) },
-                host: { worstMs: Math.round(hostGapsIn[0]?.ms ?? 0), over50: pass.hostState.gauge.gaps.filter((g) => g.ms > BUDGET_MS && g.endedMs >= ph.hostMs && g.startedMs <= ph.end.hostMs).length, gaps: hostGapsIn },
+                host: { worstMs: Math.round(hostGapsIn[0]?.ms ?? 0), over50: pass.hostState.gauge.gaps.filter((g) => g.ms > BUDGET_MS && g.endedMs >= ph.hostMs && g.startedMs <= ph.end.hostMs).length, gaps: hostGapsIn,
+                    spawns: (() => { const own = pass.hostState.spawns.filter(([t]) => t >= ph.hostMs && t <= ph.end.hostMs); const by = {}; for (const [, f] of own) by[f] = (by[f] ?? 0) + 1; return { count: own.length, by }; })() },
                 filesPushes: { count: files.length, bytes: files.reduce((a, [, n]) => a + n, 0), maxBytes: Math.max(0, ...files.map(([, n]) => n)), sizes: files.map(([, n]) => n) },
                 calls,
             };
@@ -354,6 +374,7 @@ try {
     for (const pass of passes) {
         const ctl = pass.rows[0];
         demand(ctl.main.worstMs >= CONTROL_MS * 0.8, `${pass.label}: window main's gauge saw the deliberate ${CONTROL_MS} ms block (${ctl.main.worstMs} ms)`);
+        demand(ctl.host.spawns.count >= 1, `${pass.label}: the spawn gauge counted the process genie-host was made to create on its own thread (${JSON.stringify(ctl.host.spawns)})`);
         demand(ctl.host.worstMs >= CONTROL_MS * 0.8, `${pass.label}: genie-host's gauge saw the deliberate ${CONTROL_MS} ms block (${ctl.host.worstMs} ms)`);
         demand(ctl.page.worstMs >= CONTROL_MS * 0.8, `${pass.label}: the page's gauge saw the deliberate ${CONTROL_MS} ms block (${ctl.page.worstMs} ms)`);
         if (pageGauge.longtasks) demand(ctl.page.longtasks.worst[0]?.ms >= CONTROL_MS * 0.8, `${pass.label}: the long-task observer saw the deliberate block`);
@@ -379,9 +400,14 @@ try {
     // THE FILES PUSH BUDGET (Tynn #523): bytes per push to the page with the Files panel open during the build.
     const pushes = pushVerdict(passes.map((p) => ({ pass: p.label, sizes: p.rows.find((x) => x.phase === 'build-files')?.filesPushes.sizes ?? [] })));
     for (const p of passes) for (const r of p.rows) delete r.filesPushes.sizes; // counted above; not printed per push
-    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok, main: mainBudget, paging, pushes };
+    // THE HOST SPAWN BUDGET (Tynn #532): genie-host creates NO process on its own thread during the build. Its git and
+    // its helpers' processes are created by its spawn-host child (Windows creates a process synchronously on the calling
+    // thread). Counted, not timed: a count does not depend on how slow the runner is that day.
+    const hostSpawns = passes.map((p) => ({ pass: p.label, ...p.rows.filter((r) => r.phase.startsWith('build')).reduce((a, r) => { a.count += r.host.spawns.count; for (const [f, n] of Object.entries(r.host.spawns.by)) a.by[f] = (a.by[f] ?? 0) + n; return a; }, { count: 0, by: {} }) }));
+    const spawnsOk = hostSpawns.every((h) => h.count === 0);
+    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk, main: mainBudget, paging, pushes, hostSpawns };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...paging.reasons, ...pushes.reasons].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread during the build (${JSON.stringify(h.by)})`)].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
@@ -397,7 +423,7 @@ finally {
     writeFileSync(join(OUT, 'ui-lag-result.json'), JSON.stringify(out, null, 2));
     // What a person reads in the log: each phase's numbers, then what each of the worst gaps was.
     for (const p of out.passes) for (const r of p.rows ?? []) {
-        console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${r.host.worstMs} over50=${r.host.over50} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
+        console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${r.host.worstMs} over50=${r.host.over50} spawns=${r.host.spawns.count} ${JSON.stringify(r.host.spawns.by)} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
         if (r.mainProfile) console.log(`UI_LAG_PROFILE main ${r.phase} ${JSON.stringify(r.mainProfile.ms)} own=${JSON.stringify(r.mainProfile.ownFrames)}`);
         for (const g of r.mainGapStacks ?? []) console.log(`UI_LAG_STACK main ${r.phase} gap=${g.gapMs}ms ${JSON.stringify(g)}`.slice(0, 4000));
         if (r.hostProfile) console.log(`UI_LAG_PROFILE host ${r.phase} ${JSON.stringify(r.hostProfile.ms)} own=${JSON.stringify(r.hostProfile.ownFrames)}`);
