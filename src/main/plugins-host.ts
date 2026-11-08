@@ -130,8 +130,7 @@ export class PluginsService {
         const folder = resolve(dir, entry.folder);
         if (dirname(folder) !== resolve(dir) || entry.folder.length === 0) throw new Error(`${pluginId} is not a folder of the plugins directory`);
         await rm(folder, { recursive: true, force: true });
-        this.#plugins = await this.#open();
-        this.#emit();
+        await this.reload();
         return true;
     }
 
