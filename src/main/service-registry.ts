@@ -245,7 +245,7 @@ export class ServiceRegistry {
     async #add(input: { engine: string; major: string; scope: ServiceScope; consent: boolean; workspaceId?: string; custom?: CustomEngineSpec; variant?: string }): Promise<AddResult> {
         const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
         if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
-        if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
+        if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace${def.sharedBecause ? `. ${def.sharedBecause}` : ''}`);
         if (def.sharing === 'dedicated-only' && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — ${def.dedicatedBecause ?? 'an arbitrary image has no multi-tenant story to share'}`);
         if (def.custom && !input.custom) throw new Error(`${input.engine} needs its image, port and env`);
         if (input.variant !== undefined && !def.variants?.[input.variant]) throw new Error(`${input.engine} has no variant ${JSON.stringify(input.variant)}`);

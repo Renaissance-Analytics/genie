@@ -28,11 +28,13 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
 // Ten pairs (the coordinator's (b), Tynn #536): a stable median of paired differences on the Linux runner.
 const SLICE_PAIRS = 10, SLICE_MS = 1200, SETTLE_MS = 400;
+// One pair traced in the profiled pass (Tynn #537): what every thread of the window did, terminal on against off.
+const TRACE_PAIR = 4, TRACE_CATEGORIES = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'blink', 'cc', 'gpu', 'viz', 'benchmark', 'renderer.scheduler', 'v8.execute'];
 const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, HOST_BUDGET_MS = 100, IDLE_MS = 6000, BUILD_MS = 52000, CONTROL_MS = 120;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
@@ -49,10 +51,11 @@ function logTail(path, max = 65536) {
     } finally { closeSync(fd); }
 }
 class Cdp {
-    next = 0; pending = new Map();
+    next = 0; pending = new Map(); listeners = new Map();
+    on(method, fn) { this.listeners.set(method, fn); return () => this.listeners.delete(method); }
     static async connect(url) {
         const c = new Cdp(); c.socket = new WebSocket(url); let timer;
-        c.socket.addEventListener('message', (event) => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; { const done = c.pending.get(frame.id); if (typeof done === 'function') done(frame); } c.pending.delete(frame.id); });
+        c.socket.addEventListener('message', (event) => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; if (frame.method) c.listeners.get(frame.method)?.(frame.params); { const done = c.pending.get(frame.id); if (typeof done === 'function') done(frame); } c.pending.delete(frame.id); });
         c.socket.addEventListener('close', () => { c.dead ??= 'CDP closed'; for (const done of c.pending.values()) done({ error: { message: c.dead } }); c.pending.clear(); });
         try { await Promise.race([new Promise((ok, no) => { c.socket.addEventListener('open', ok, { once: true }); c.socket.addEventListener('error', no, { once: true }); }), new Promise((_, no) => { timer = setTimeout(() => no(new Error('CDP connect timed out')), 10000); })]); }
         finally { clearTimeout(timer); }
@@ -117,7 +120,7 @@ function uiLagControlSpawnHost() {
 
 /** The page's gauges: timer lateness, long tasks, frame gaps, input delays, the Files pushes. Serialized into the page. */
 function installPageGauge(create) {
-    const s = window.__uiLag = { gauge: create({ intervalMs: 10, thresholdMs: 16, now: () => performance.now() }), longtasks: [], frames: [], inputs: [], files: [], lastFrame: null };
+    const s = window.__uiLag = { gauge: create({ intervalMs: 10, thresholdMs: 16, now: () => performance.now() }), longtasks: [], frames: [], frameTimes: [], inputs: [], files: [], lastFrame: null };
     s.timer = setInterval(() => s.gauge.beat(), 10);
     if (typeof PerformanceObserver === 'function' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
         new PerformanceObserver((list) => { for (const e of list.getEntries()) if (s.longtasks.length < 20000) s.longtasks.push({ startedMs: e.startTime, endedMs: e.startTime + e.duration, ms: e.duration }); }).observe({ type: 'longtask' });
@@ -125,7 +128,7 @@ function installPageGauge(create) {
     }
     const frame = (t) => {
         if (document.visibilityState !== 'visible') s.lastFrame = null;
-        else { if (s.lastFrame !== null && t - s.lastFrame > 50 && s.frames.length < 20000) s.frames.push({ startedMs: s.lastFrame, endedMs: t, ms: t - s.lastFrame }); s.lastFrame = t; }
+        else { if (s.lastFrame !== null && t - s.lastFrame > 50 && s.frames.length < 20000) s.frames.push({ startedMs: s.lastFrame, endedMs: t, ms: t - s.lastFrame }); s.lastFrame = t; if (s.frameTimes.length < 100000) s.frameTimes.push(t); }
         requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
@@ -146,6 +149,28 @@ function installPageGauge(create) {
     Object.assign(field.style, { position: 'fixed', right: '8px', bottom: '8px', width: '220px', height: '48px', zIndex: '2147483647', opacity: '0.9' });
     document.body.appendChild(field);
     return { now: performance.now(), longtasks: s.longtaskSupported === true };
+}
+
+/**
+ * WHAT IS COMPOSITED OVER THE WINDOW (Tynn #537): every element with a backdrop filter or a filter, where it is and what it
+ * says. The trace of run 42489513576 showed, on and off alike, a backdrop-filter render surface and the whole window
+ * damaged on every drawn frame, each draw ~45 ms in Linux's software compositor. Serialized into the page.
+ */
+function uiLagComposited() {
+    const out = [];
+    for (const el of document.querySelectorAll('*')) {
+        const cs = getComputedStyle(el);
+        if ((cs.backdropFilter && cs.backdropFilter !== 'none') || (cs.filter && cs.filter !== 'none')) {
+            const r = el.getBoundingClientRect();
+            const data = Object.fromEntries([...el.attributes].filter((a) => a.name.startsWith('data-') || a.name === 'role' || a.name.startsWith('aria-')).map((a) => [a.name, a.value.slice(0, 60)]));
+            let up = el.parentElement, owner = null;
+            while (up && !owner) { if ([...up.attributes].some((a) => a.name.startsWith('data-') || a.name === 'role')) owner = up.outerHTML.slice(0, up.outerHTML.indexOf('>') + 1).slice(0, 200); up = up.parentElement; }
+            out.push({ tag: el.tagName.toLowerCase(), backdrop: cs.backdropFilter, filter: cs.filter, rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)], visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden', data, owner, cls: String(el.className).slice(0, 160), text: (el.textContent ?? '').trim().slice(0, 120) });
+        }
+    }
+    // And every dialog open, with what it says: the element over the window belongs to one.
+    const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')].map((d) => ({ data: Object.fromEntries([...d.attributes].filter((a) => a.name.startsWith('data-') || a.name.startsWith('aria-')).map((a) => [a.name, a.value.slice(0, 60)])), text: (d.textContent ?? '').trim().split(String.fromCharCode(10)).join(' ').slice(0, 300) }));
+    return { filtered: out.slice(0, 20), dialogs: dialogs.slice(0, 5) };
 }
 
 /** A deliberate block, the gauges' positive control and the profiles' alignment marker. Serialized into each thread. */
@@ -242,6 +267,21 @@ try {
     hostRecord ??= json(join(runtime, 'host.json'));
     hostCdp = await Cdp.connect((await until('owned genie-host inspector', async () => (await targets(HOST_INSPECT))[0], 30000)).webSocketDebuggerUrl);
     const box = await page.evaluate('({ width: innerWidth, height: innerHeight })');
+    console.log(`UI_LAG_COMPOSITED ready ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
+    /*
+     * WHAT'S NEW, CLOSED AS A PERSON CLOSES IT (Tynn #537). A first run shows it over the whole window (smoke-cdp closes it
+     * the same way), and until now the row measured with it open: its backdrop, a full-window blur, was redrawn in Linux's
+     * software compositor every time the terminal under it changed — about 45 ms a draw (runs 42489513576 and a996fdc0).
+     * That was the terminal's "cost" on Linux. Nothing is measured with a dialog over the window: see `noDialog`.
+     */
+    await until('What’s new on a first run', () => page.evaluate(`Boolean(document.querySelector('[data-whats-new]'))`), 30000);
+    await page.evaluate(`document.querySelector('[data-action="whats-new-close"]').click(); true`);
+    await until('What’s new to close', () => page.evaluate(`!document.querySelector('[data-whats-new]')`), 15000);
+    const noDialog = async (when) => {
+        const open = await page.evaluate(`[...document.querySelectorAll('[aria-modal="true"], [role="dialog"], dialog[open]')].filter((d) => { const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).map((d) => (d.textContent ?? '').trim().slice(0, 80))`);
+        demand(open.length === 0, `no dialog over the window ${when}: ${JSON.stringify(open)}`);
+    };
+    await noDialog('once What’s new is closed');
 
     // The workspace, and a Terminals panel in a tab of its own (as smoke-cdp's check 49 places one).
     await page.evaluate(`window.location.hash = '#genie://workspace/tynn'; true`);
@@ -251,6 +291,7 @@ try {
     await page.evaluate(`document.querySelector('[data-designed-tab] [data-add-panel="terminal"]').click(); true`);
     await until('the terminal pane', () => page.evaluate(`Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-pane] .xterm-rows'))`), 30000);
     await sleep(1500);
+    console.log(`UI_LAG_COMPOSITED terminal-placed ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
     const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
 
     await main.evaluate(`(${installMainGauge.toString()})((${createGapGauge.toString()}))`);
@@ -263,6 +304,20 @@ try {
         await page.evaluate(`document.querySelector('[data-action="toggle-files"]').click(); true`);
         await until(`the Files panel ${want ? 'open' : 'closed'}`, async () => (await filesOpen()) === want, 15000);
     };
+
+    /** A Chromium trace of `fn`'s span on the page's session: every thread of the window, the GPU and compositor too. */
+    async function traced(fn) {
+        const events = [];
+        const stopData = page.on('Tracing.dataCollected', (p) => { for (const e of p.value) events.push(e); });
+        const complete = new Promise((done) => { const stop = page.on('Tracing.tracingComplete', () => { stop(); done(); }); });
+        // A trace that cannot start is reported, and the slice still runs: the trace explains, the gauges decide.
+        try { await page.request('Tracing.start', { traceConfig: { includedCategories: TRACE_CATEGORIES, recordMode: 'recordAsMuchAsPossible' }, transferMode: 'ReportEvents' }); }
+        catch (e) { stopData(); console.log(`UI_LAG_TRACE_UNAVAILABLE ${e.message}`); return { value: await fn(), events: null }; }
+        let value;
+        try { value = await fn(); }
+        finally { await page.request('Tracing.end', {}); await Promise.race([complete, sleep(30000)]); stopData(); }
+        return { value, events };
+    }
 
     async function runPass(label, profiled) {
         const phases = [];
@@ -284,6 +339,7 @@ try {
         await sleep(400);
         phases.push({ ...c0, end: await mark('control-end'), mainCtl, hostCtl, pageCtl, input: { mouse: [], keys: [] } });
 
+        await noDialog(`before the ${label} pass is measured`);
         let p = await mark('idle');
         let input = await drive(page, { ms: IDLE_MS, width: box.width, height: box.height });
         phases.push({ ...p, end: await mark('idle-end'), input });
@@ -305,20 +361,28 @@ try {
         demand(typeof termTab === 'string', 'the terminal\'s tab is in the workspace\'s tab strip');
         const show = async (tab) => { await page.evaluate(`document.querySelector('[data-workspace-tab="${tab}"]').click(); true`); };
         p = await mark('build-terminal');
-        const slices = [], mouse = [], keys = [];
+        const slices = [], mouse = [], keys = [], traces = {};
         for (let k = 0; k < SLICE_PAIRS; k += 1) {
             for (const [cond, tab] of [['on', termTab], ['off', 'home']]) {
                 await show(tab);
                 await sleep(SETTLE_MS);
                 await focusField();
-                const from = await page.evaluate('performance.now()');
-                const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
-                mouse.push(...d.mouse); keys.push(...d.keys);
-                slices.push({ cond, from, to: await page.evaluate('performance.now()') });
+                const slice = async () => {
+                    const from = await page.evaluate('performance.now()');
+                    const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
+                    return { d, from, to: await page.evaluate('performance.now()') };
+                };
+                let s, trace = null;
+                if (profiled && k === TRACE_PAIR) { const t = await traced(slice); s = t.value; trace = t.events; } else s = await slice();
+                mouse.push(...s.d.mouse); keys.push(...s.d.keys);
+                if (profiled && k === TRACE_PAIR) console.log(`UI_LAG_COMPOSITED ${cond} ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
+                if (trace?.length) { writeFileSync(join(OUT, `ui-lag-trace-${cond}.json`), JSON.stringify({ traceEvents: trace })); traces[cond] = traceSummary(trace); }
+                slices.push({ cond, from: s.from, to: s.to });
             }
         }
         await show(termTab);
-        phases.push({ ...p, end: await mark('build-terminal-end'), input: { mouse, keys }, slices });
+        await noDialog(`after the ${label} pass's slices`);
+        phases.push({ ...p, end: await mark('build-terminal-end'), input: { mouse, keys }, slices, traces });
         await toggleFiles(true); await focusField();
         p = await mark('build-files');
         const finished = async () => json(done)?.run === run;
@@ -337,7 +401,7 @@ try {
         const pass = await runPass(label, profiled);
         const mainState = await main.evaluate('({ gauge: globalThis.__uiLag.gauge.snapshot(), calls: globalThis.__uiLag.calls.splice(0) })');
         const hostState = await hostCdp.evaluate('({ gauge: globalThis.__uiLagHost.gauge.snapshot(), spawns: globalThis.__uiLagHost.spawns.splice(0) })');
-        const pageState = await page.evaluate('(() => { const s = window.__uiLag; return { gauge: s.gauge.snapshot(), longtasks: s.longtasks.splice(0), frames: s.frames.splice(0), inputs: s.inputs.splice(0), files: s.files.splice(0) }; })()');
+        const pageState = await page.evaluate('(() => { const s = window.__uiLag; return { gauge: s.gauge.snapshot(), longtasks: s.longtasks.splice(0), frames: s.frames.splice(0), frameTimes: s.frameTimes.splice(0), inputs: s.inputs.splice(0), files: s.files.splice(0) }; })()');
         await main.evaluate('globalThis.__uiLag.gauge.reset(); true'); await hostCdp.evaluate('globalThis.__uiLagHost.gauge.reset(); true'); await page.evaluate('window.__uiLag.gauge.reset(); true');
         passes.push({ ...pass, mainState, hostState, pageState });
     }
@@ -371,10 +435,12 @@ try {
                 input: { mouseRtt: summarize(ph.input.mouse), keyRtt: summarize(ph.input.keys), mouseHandler: summarize(inputs.filter((x) => x.kind === 'mouse').map((x) => x.handlerMs)), mouseToFrame: summarize(inputs.filter((x) => x.kind === 'mouse').map((x) => x.frameMs)), keyToFrame: summarize(inputs.filter((x) => x.kind === 'key').map((x) => x.frameMs)) },
                 host: { worstMs: Math.round(hostGapsIn[0]?.ms ?? 0), over50: pass.hostState.gauge.gaps.filter((g) => g.ms > BUDGET_MS && g.endedMs >= ph.hostMs && g.startedMs <= ph.end.hostMs).length, gaps: hostGapsIn,
                     spawns: (() => { const own = pass.hostState.spawns.filter(([t]) => t >= ph.hostMs && t <= ph.end.hostMs); const by = {}; for (const [, f] of own) by[f] = (by[f] ?? 0) + 1; return { count: own.length, by }; })() },
+                ...(ph.traces && Object.keys(ph.traces).length ? { traces: ph.traces } : {}),
                 ...(ph.slices ? { slices: ph.slices.map((sl) => {
                     const own = pass.pageState.inputs.filter((x) => x.kind === 'mouse' && x.at >= sl.from && x.at <= sl.to).map((x) => x.frameMs);
                     const gaps = pass.pageState.frames.filter((g) => g.endedMs >= sl.from && g.startedMs <= sl.to).map((g) => g.ms);
-                    return { cond: sl.cond, count: own.length, p95: summarize(own).p95, worstGapMs: Math.round(Math.max(0, ...gaps)) };
+                    const frames = pass.pageState.frameTimes.filter((t) => t >= sl.from && t <= sl.to).length;
+                    return { cond: sl.cond, count: own.length, p95: summarize(own).p95, worstGapMs: Math.round(Math.max(0, ...gaps)), fps: Math.round(frames / ((sl.to - sl.from) / 1000)) };
                 }) } : {}),
                 filesPushes: { count: files.length, bytes: files.reduce((a, [, n]) => a + n, 0), maxBytes: Math.max(0, ...files.map(([, n]) => n)), sizes: files.map(([, n]) => n) },
                 calls,
@@ -389,6 +455,20 @@ try {
             }
             if (pageIdx && Number.isFinite(pageOffset)) {
                 row.pageProfile = windowProfile(pageIdx, ph.pageMs + pageOffset, ph.end.pageMs + pageOffset, { top: 5, isOwn });
+                if (ph.slices && row.slices) {
+                    // THE TERMINAL ON SCREEN AGAINST OFF, SLICE BY SLICE (Tynn #537): each slice's page time and its top frames, and
+                    // the frames summed over each condition, so a cost only some "on" slices pay shows where it is.
+                    const perSlice = ph.slices.map((sl, k) => ({ cond: sl.cond, p95: row.slices[k]?.p95, count: row.slices[k]?.count, ...windowProfile(pageIdx, sl.from + pageOffset, sl.to + pageOffset, { top: 3, depth: 14, isOwn }) }));
+                    const sum = (cond) => {
+                        const own = new Map(), ms = { js: 0, program: 0, gc: 0, idle: 0 };
+                        for (const x of perSlice.filter((y) => y.cond === cond)) {
+                            for (const k of Object.keys(ms)) ms[k] += x.ms[k];
+                            for (const f of x.ownFrames) own.set(f.frame, (own.get(f.frame) ?? 0) + f.ms);
+                        }
+                        return { ms: Object.fromEntries(Object.entries(ms).map(([k, v]) => [k, Math.round(v)])), own: [...own].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([frame, v]) => ({ frame, ms: Math.round(v) })) };
+                    };
+                    row.sliceProfiles = { perSlice: perSlice.map((x) => ({ cond: x.cond, p95: x.p95, count: x.count, ms: x.ms, top: x.stacks[0]?.stack?.slice(0, 300) ?? null })), on: sum('on'), off: sum('off') };
+                }
                 const worstPage = [...longtasks].sort((a, b) => b.ms - a.ms).slice(0, 5);
                 row.pageLongtaskStacks = worstPage.map((l) => ({ longtaskMs: Math.round(l.ms), ...windowProfile(pageIdx, l.startedMs + pageOffset, l.endedMs + pageOffset, { top: 3, isOwn }) }));
             }
@@ -441,9 +521,11 @@ try {
     // THE PAGE BUDGET (Tynn #525, from a distribution since #536): the terminal on screen against off, the same build.
     const termSlices = passes[0].rows.find((r) => r.phase === 'build-terminal')?.slices ?? [];
     const pageBudget = sliceVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
-    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget };
+    // THE THROUGHPUT BUDGET (Tynn #537): the input the page keeps up with, terminal on screen against off, the same slices.
+    const throughput = throughputVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
+    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread during the build (${JSON.stringify(h.by)})`)].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread during the build (${JSON.stringify(h.by)})`)].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
@@ -460,7 +542,13 @@ finally {
     // What a person reads in the log: each phase's numbers, then what each of the worst gaps was.
     for (const p of out.passes) for (const r of p.rows ?? []) {
         console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${r.host.worstMs} over50=${r.host.over50} spawns=${r.host.spawns.count} ${JSON.stringify(r.host.spawns.by)} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
-        if (r.slices) console.log(`UI_LAG_SLICES ${p.label}/${r.phase} ${JSON.stringify(r.slices.map((x) => [x.cond, x.count, x.p95, x.worstGapMs]))}`);
+        if (r.slices) console.log(`UI_LAG_SLICES ${p.label}/${r.phase} ${JSON.stringify(r.slices.map((x) => [x.cond, x.count, x.p95, x.worstGapMs, x.fps]))}`);
+        for (const [cond, t] of Object.entries(r.traces ?? {})) console.log(`UI_LAG_TRACE ${cond} ${JSON.stringify(t)}`.slice(0, 4000));
+        if (r.sliceProfiles) {
+            console.log(`UI_LAG_SLICE_PROFILE on ${JSON.stringify(r.sliceProfiles.on)}`.slice(0, 3000));
+            console.log(`UI_LAG_SLICE_PROFILE off ${JSON.stringify(r.sliceProfiles.off)}`.slice(0, 3000));
+            for (const x of r.sliceProfiles.perSlice) console.log(`UI_LAG_SLICE_PROFILE slice ${JSON.stringify(x)}`.slice(0, 1200));
+        }
         if (r.mainProfile) console.log(`UI_LAG_PROFILE main ${r.phase} ${JSON.stringify(r.mainProfile.ms)} own=${JSON.stringify(r.mainProfile.ownFrames)}`);
         for (const g of r.mainGapStacks ?? []) console.log(`UI_LAG_STACK main ${r.phase} gap=${g.gapMs}ms ${JSON.stringify(g)}`.slice(0, 4000));
         if (r.hostProfile) console.log(`UI_LAG_PROFILE host ${r.phase} ${JSON.stringify(r.hostProfile.ms)} own=${JSON.stringify(r.hostProfile.ownFrames)}`);

@@ -198,6 +198,48 @@ export function sliceVerdict({ on, off }, { p95SlackMs = 10, maxFrameGapMs = 100
 }
 
 /**
+ * THE THROUGHPUT BUDGET (Tynn #537): how much of the input the page keeps up with while the terminal is on screen, against
+ * the slice beside it with it off. `count` is the mouse events whose frame came within the slice; the median of the paired
+ * ratios on/off at least `minRatio`. The bound is from the Windows runner's recorded runs (run 42488024371: paired ratios
+ * 0.92-0.99, median 0.96); the Linux runner in the same run kept up with about half (0.49-0.69). An "off" slice with no
+ * input says nothing, and its pair is left out; an "on" slice with none is the worst case and counts as 0.
+ */
+export function throughputVerdict({ on, off }, { minRatio = 0.9, minSlices = 3 } = {}) {
+    const pairs = on.map((x, k) => [x, off[k]]).filter(([a, b]) => a && b && b.count > 0);
+    const ratios = pairs.map(([a, b]) => a.count / b.count), reasons = [];
+    const ratio = median(ratios), r2 = (v) => (v === null ? null : Math.round(v * 100) / 100);
+    if (pairs.length < minSlices) reasons.push(`too few pairs with input off screen: ${pairs.length} (need ${minSlices})`);
+    else if (ratio < minRatio) reasons.push(`mouse events acknowledged, median of ${pairs.length} paired ratios: the terminal on screen ${r2(ratio)} of off (bound ${minRatio}; on ${median(pairs.map(([a]) => a.count))}, off ${median(pairs.map(([, b]) => b.count))})`);
+    return { ok: reasons.length === 0, minRatio, pairs: pairs.length, ratio: r2(ratio), ratios: ratios.map(r2), reasons };
+}
+
+/**
+ * A CHROMIUM TRACE, SUMMARISED (Tynn #537): what each thread spent its time on during one slice. Threads are named from the
+ * trace's own `thread_name` events (else `pid:tid`). `threads` is each thread's time with nested events counted once;
+ * `top` the events by their summed duration, nested ones included as their own rows. Only complete events (`X`) count.
+ */
+export function traceSummary(events, { top = 15 } = {}) {
+    const names = new Map(), perThread = new Map(), perEvent = new Map();
+    for (const e of events) if (e.ph === 'M' && e.name === 'thread_name') names.set(`${e.pid}:${e.tid}`, e.args?.name ?? `${e.pid}:${e.tid}`);
+    const complete = events.filter((e) => e.ph === 'X' && typeof e.dur === 'number' && typeof e.ts === 'number').sort((a, b) => a.ts - b.ts || b.dur - a.dur);
+    const reach = new Map();
+    for (const e of complete) {
+        const id = `${e.pid}:${e.tid}`, thread = names.get(id) ?? id, key = `${thread}\u0000${e.name}`;
+        const row = perEvent.get(key) ?? { thread, name: e.name, us: 0, count: 0 };
+        row.us += e.dur; row.count += 1; perEvent.set(key, row);
+        // Top-level on its thread when it starts after the last top-level event there ended.
+        const end = reach.get(id) ?? -Infinity;
+        if (e.ts >= end) { perThread.set(thread, (perThread.get(thread) ?? 0) + e.dur); reach.set(id, e.ts + e.dur); }
+        else if (e.ts + e.dur > end) { perThread.set(thread, perThread.get(thread) + (e.ts + e.dur - end)); reach.set(id, e.ts + e.dur); }
+    }
+    const ms = (us) => Math.round(us / 100) / 10;
+    return {
+        threads: [...perThread].sort((a, b) => b[1] - a[1]).map(([thread, us]) => ({ thread, ms: ms(us) })),
+        top: [...perEvent.values()].sort((a, b) => b.us - a.us).slice(0, top).map((x) => ({ thread: x.thread, name: x.name, ms: ms(x.us), count: x.count })),
+    };
+}
+
+/**
  * The row's own fixture git, bounded (Tynn #536: spawnSync git ETIMEDOUT on the Windows runner, genie#1718). `run` is
  * tried up to `attempts` times while it times out, `reset` between tries; any other failure is thrown at once.
  */

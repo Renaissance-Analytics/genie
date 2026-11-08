@@ -1,3 +1,4 @@
+import { MAILPIT_AUTH_MOUNT, MAILPIT_SMTP_AUTH_FILE } from './mail.js';
 import { mailpitNameOf } from './mailpit-name.js';
 import { assertGeneratedPassword, seaweedEntrypointScript } from './service-provision.js';
 import { APP_ENGINES, SOCKUDO_COMMAND, SOCKUDO_CONFIG_TARGET, SOCKUDO_IMAGE, SOCKUDO_PORT, SOCKUDO_VERSION, websocketHostEnv } from './websockets.js';
@@ -108,6 +109,13 @@ export interface EngineDef {
     readonly sharing: 'shared-or-dedicated' | 'shared-only' | 'dedicated-only';
     /** Why a `dedicated-only` engine is never shared, said when a shared one is asked for. */
     readonly dedicatedBecause?: string;
+    /** Why a `shared-only` engine is never added per workspace, said when a dedicated one is asked for. */
+    readonly sharedBecause?: string;
+    /**
+     * A `shared-only` engine that WAS offered per workspace (Mailpit, before Genie Mail G2): a dedicated one already on a
+     * machine is still planned, started and updated as it is. Only a NEW one is refused, where it is added.
+     */
+    readonly keepsDedicated?: boolean;
     /**
      * The image tag for a major, when it is not the major itself — Mailpit publishes `v1.30`, and
      * there is no bare `1.30` (Genie 1 measured that 404 on its first live run).
@@ -329,9 +337,17 @@ export const SERVICE_CATALOG: readonly EngineDef[] = [
         // half an engine. Each workspace's mail carries its own tag (a namespace, as Genie 1's did): the plus address
         // in MAIL_FROM_ADDRESS, which Mailpit tags by default from v1.19, and GENIE_MAIL_TAG for an app that sets its
         // own From.
-        engine: 'mailpit', image: 'axllent/mailpit', tag: (major) => `v${major}`, internalPort: 1025, majors: ['1.30'], sharing: 'shared-or-dedicated',
+        //
+        // GENIE MAIL (Tynn #383, story G2 #488): ONE Mailpit per workstation, owned by the host, because Genie Mail at
+        // mail.gen is one app for every workspace. A new per-workspace Mailpit is refused with the reason; one already on
+        // a machine keeps running as its own source (decision 2, 2026-11-07: no migration).
+        // ITS SEND API IS GENIE'S ALONE (G1's finding 6, genie#1712): with no send-API auth, Mailpit records an
+        // unverified Basic user as a message's Username and tag. Its own credential (the instance's, which no workspace's
+        // env carries) closes that: measured in test/mailpit-measure/mailpit-send-api-auth.accept.ts.
+        engine: 'mailpit', image: 'axllent/mailpit', tag: (major) => `v${major}`, internalPort: 1025, majors: ['1.30'], sharing: 'shared-only', keepsDedicated: true,
+        sharedBecause: 'Genie Mail at mail.gen is one app for every workspace: each workspace gets its own inboxes in the one Mailpit',
         surfaces: [{ name: 'ui', internalPort: 8025 }],
-        containerEnv: () => ({ MP_DATABASE: '/data/mailpit.db' }),
+        containerEnv: (c) => ({ MP_DATABASE: '/data/mailpit.db', ...(c.user && c.password ? { MP_SEND_API_AUTH: `${c.user}:${c.password}` } : {}) }),
         hostEnv: (host, port, _c, namespace) => ({ MAIL_MAILER: 'smtp', MAIL_HOST: host, MAIL_PORT: String(port), ...(namespace ? mailTagEnv(namespace) : {}) }),
     },
     {
@@ -688,15 +704,23 @@ export function containerPlan(input: {
     configFile?: string;
     /** The engine's variant (`pgvector`): its image, everything else the engine's. */
     variant?: string;
+    /**
+     * Mailpit only (Genie Mail G3): the host directory holding the inbox book's SMTP auth file (main/mail-host.ts). Mounted
+     * as a directory, so the host's rename-in-place is seen; Mailpit reads it only at start (G1's finding 7).
+     */
+    smtpAuthDir?: string;
 }): ContainerPlan {
     const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
     if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
     if (def.adoptOnly) throw new Error(`${input.engine} can only be taken over from Genie 1, not created: its images are no longer published`);
-    if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
+    // A kept dedicated one (Mailpit's, before G2) is planned as it is: new ones are refused where they are ADDED.
+    if (def.sharing === 'shared-only' && input.scope.kind !== 'shared' && !def.keepsDedicated) throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
     // The arbitrary image only. A Redis shared before the owner's D2 (hosting fixes 3.2) is still planned as it is: new
     // shared ones are refused where they are ADDED (service-registry.ts), not ones already on a machine.
     if (def.custom && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — an arbitrary image has no multi-tenant story to share`);
     if (input.variant !== undefined && !def.variants?.[input.variant]) throw new Error(`${input.engine} has no variant ${JSON.stringify(input.variant)}`);
+    if (input.smtpAuthDir !== undefined && input.engine !== 'mailpit') throw new Error(`${input.engine} reads no SMTP auth file; only Mailpit does`);
+    const mailAuth = input.engine === 'mailpit' ? input.smtpAuthDir : undefined;
     const key = `${input.scope.kind === 'shared' ? 'shared' : input.scope.workspaceId}-${input.engine}${input.variant ? `-${input.variant}` : ''}-${input.major}`;
     if (def.custom) {
         const c = input.custom;
@@ -730,10 +754,15 @@ export function containerPlan(input: {
         // A stateless engine (Sockudo) has nothing to keep: no volume is created, and none is there for "delete data".
         volume: def.stateless ? null : `genie-${key}-data`,
         publish,
-        env: tenancy && input.admin ? tenancy.containerEnv(input.admin.password) : def.containerEnv(input.credentials ?? {}),
+        env: {
+            ...(tenancy && input.admin ? tenancy.containerEnv(input.admin.password) : def.containerEnv(input.credentials ?? {})),
+            // The inbox book's auth file: an inbox's SMTP user and password, plain AUTH over loopback (as G1 measured it).
+            ...(mailAuth ? { MP_SMTP_AUTH_FILE: `${MAILPIT_AUTH_MOUNT}/${MAILPIT_SMTP_AUTH_FILE}`, MP_SMTP_AUTH_ALLOW_INSECURE: 'true' } : {}),
+        },
         ...(launch ? { entrypoint: launch.entrypoint } : {}),
         ...(command ? { command } : {}),
         ...(def.config && input.configFile ? { mounts: [{ source: input.configFile, target: def.config.target }] } : {}),
+        ...(mailAuth ? { mounts: [{ source: mailAuth, target: MAILPIT_AUTH_MOUNT }] } : {}),
     };
 }
 
