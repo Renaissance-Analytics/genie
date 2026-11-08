@@ -231,7 +231,7 @@ describe('driving: two windows on one host (Tynn #529)', () => {
         expect(b.state()).toMatchObject({ lastRefusal: 'laptop is driving; take the baton to make changes', needsBaton: true });
 
         // Take control: the second drives, and the first is told at once, and by whom.
-        expect(await b.takeBaton({ force: true })).toEqual({ ok: true });
+        expect(await (b.takeBaton as (o?: { force?: boolean }) => Promise<unknown>)({ force: true })).toEqual({ ok: true });
         await settle();
         expect(b.state()).toMatchObject({ driving: true, driver: 'desk', needsBaton: false, lastRefusal: null });
         expect(a.state()).toMatchObject({ driving: false, driver: 'desk', batonLostTo: 'desk' });
