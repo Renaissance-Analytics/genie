@@ -74,7 +74,7 @@ describe('the wiring: every window can set it, a remote one too, scoped like the
     it('the detail carries it; the shared API and local/remote bridges pass it on without native forwarding', () => {
         const main = src('src/main/main.ts');
         expect(main.includes("ipcMain.handle('genie:agent-set-drive-pages'")).toBe(false);
-        expect(main).toMatch(/drivePages: record\.drivePages === true/);
+        expect(src('src/main/agent-detail.ts')).toMatch(/drivePages: record\.drivePages === true/);
         expect(src('src/main/preload.ts').includes('genie:agent-set-drive-pages')).toBe(false);
         expect(src('src/main/host-api.ts')).toContain('return deps.agentOps.setDrivePages(args[0], args[1]);');
         expect(src('src/renderer/local-session.ts')).toContain('setDrivePages: (id, on) => requestAgent((agents) => agents.setDrivePages(id, on))');

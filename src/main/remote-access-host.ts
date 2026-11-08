@@ -4,6 +4,7 @@ import { Baton, PairingPins } from '../core/remote.js';
 import type { PreAuth, RemoteMethod, ServerConnection, ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
+import { PHONE_METHODS } from './host-alone-api.js';
 
 /**
  * REMOTE ACCESS'S HOST SIDE, IN GENIE-HOST (Tynn #409, host split P5d.1). A phone (over the tailnet) and a Pilot (over the
@@ -26,19 +27,33 @@ export interface HostRemoteApiPorts {
     readonly window: { connected(): boolean; invoke(method: RemoteMethod, args: unknown[]): Promise<unknown> };
     /** Events for remote connections: the host's own, and those a connected window forwards. */
     readonly onEvent?: (listener: (channel: string, payload: unknown) => void) => () => void;
+    /**
+     * GENIE-HOST'S OWN ANSWERS TO A PHONE (Tynn #551, host-alone-api.ts): the phone's methods, used only while no window is
+     * connected; its events reach remote connections only then (a connected window forwards its own). A getter: genie-host
+     * builds it once its session host is up.
+     */
+    readonly alone?: HostApi | (() => HostApi | null);
     /** The workspace an agent is in (a guest is held to its own), from the host's roster. */
     readonly workspaceOfAgent?: (agentId: string) => string | null;
 }
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
+    const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
     return {
         invoke: async (method, args) => {
             const own = ports.own[method];
             if (own) return own(args);
             if (ports.window.connected()) return ports.window.invoke(method, args);
+            const answers = PHONE_METHODS.has(method) ? alone() : null;
+            if (answers) return answers.invoke(method, args);
             throw new Error(`${ports.hostName} answers ${method} only while a Genie window is open there: open Genie on ${ports.hostName}`);
         },
-        onEvent: (listener) => ports.onEvent?.(listener) ?? (() => {}),
+        onEvent: (listener, options) => {
+            const offWindow = ports.onEvent?.(listener) ?? (() => {});
+            // genie-host's own events only while no window is connected: a connected window forwards its own.
+            const offAlone = alone()?.onEvent((channel, payload) => { if (!ports.window.connected()) listener(channel, payload); }, options) ?? (() => {});
+            return () => { offWindow(); offAlone(); };
+        },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
     };
 }
