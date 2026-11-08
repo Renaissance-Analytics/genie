@@ -13,6 +13,7 @@ A guided sequence of steps the person walks through.
 | Field | Type | Required | Default | What it is |
 |---|---|---|---|---|
 | `steps` | non-empty list of step objects | yes | — | The steps, in order. |
+| `grantable` | boolean | no | `true` | Whether a GApp may be granted it. `false` for what only the person may do: an app that lists it is refused at install. |
 
 ## Example payload
 
