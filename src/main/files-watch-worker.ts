@@ -17,27 +17,32 @@ import { nodeWatchSource, type WatchSource } from './files-watch-hub.js';
  * this thread, said once.
  */
 
-/** Runs in the worker, from its source text: everything it uses it requires itself. */
-function watchInWorker(): void {
-    const { parentPort, workerData } = require('node:worker_threads') as typeof import('node:worker_threads');
-    const { watch, stat } = require('node:fs') as typeof import('node:fs');
-    const { join } = require('node:path') as typeof import('node:path');
-    const { root, ignored } = workerData as { root: string; ignored: string[] };
-    const skip = new Set(ignored);
-    let batch: Array<[string, number | null, boolean]> = [], timer: ReturnType<typeof setTimeout> | null = null;
-    const flush = () => { timer = null; const out = batch; batch = []; if (out.length) parentPort!.postMessage(out); };
-    const watcher = watch(root, { recursive: true }, (_type, filename) => {
-        if (typeof filename !== 'string') return;
-        const rel = filename.replace(/\\/g, '/');
-        if (rel === '' || rel.split('/').some((seg) => skip.has(seg))) return;
-        stat(join(root, filename), (error, info) => {
-            batch.push(error ? [rel, null, false] : [rel, info.mtimeMs, info.isDirectory()]);
-            timer ??= setTimeout(flush, 20);
-        });
-    });
-    watcher.on('error', () => { /* a lost watcher means no new marks; the tree still opens */ });
-    parentPort!.on('message', (m) => { if (m === 'close') { watcher.close(); if (timer) clearTimeout(timer); flush(); process.exit(0); } });
-}
+/**
+ * The worker's own source, as text, run with `eval`: a literal, never a function's `toString()`, which the bundler
+ * rewrites (its `require` becomes a helper of the bundle's that the worker does not have: measured in the built host,
+ * the worker started and reported nothing).
+ */
+export const WATCH_WORKER_SOURCE = [
+    "const { parentPort, workerData } = require('node:worker_threads');",
+    "const { watch, stat } = require('node:fs');",
+    "const { join, sep } = require('node:path');",
+    'const { root, ignored } = workerData;',
+    'const skip = new Set(ignored);',
+    'let batch = [], timer = null;',
+    'const flush = () => { timer = null; const out = batch; batch = []; if (out.length) parentPort.postMessage(out); };',
+    'const watcher = watch(root, { recursive: true }, (_type, filename) => {',
+    "    if (typeof filename !== 'string') return;",
+    "    const rel = filename.split(sep).join('/');",
+    "    if (rel === '' || rel.split('/').some((seg) => skip.has(seg))) return;",
+    '    stat(join(root, filename), (error, info) => {',
+    '        batch.push(error ? [rel, null, false] : [rel, info.mtimeMs, info.isDirectory()]);',
+    '        if (timer === null) timer = setTimeout(flush, 20);',
+    '    });',
+    '});',
+    "watcher.on('error', () => {});",
+    "parentPort.on('message', (m) => { if (m === 'close') { watcher.close(); if (timer) clearTimeout(timer); flush(); process.exit(0); } });",
+    "parentPort.postMessage('ready');",
+].join('\n');
 
 export interface WorkerWatchOptions {
     /** Told once when the worker could not start and the watch runs on this thread instead. */
@@ -54,22 +59,34 @@ export function workerWatchSource(options: WorkerWatchOptions = {}): WatchSource
         const since = process.platform === 'darwin' ? Date.now() : Number.NEGATIVE_INFINITY;
         let closed = false;
         let worker: Pick<Worker, 'on' | 'postMessage' | 'terminate'>;
+        let here: { close(): void } | null = null;
+        // A worker that cannot start, or fails, is replaced by the watch on this thread: a watch is never simply lost.
+        const fallBack = (why: string) => {
+            if (closed || here) return;
+            options.log?.(`files watch: the watcher's own thread ${why}; watching on genie-host's thread`);
+            here = (options.fallback ?? nodeWatchSource)(root, onPath);
+        };
         try {
             const start = options.startWorker ?? ((source, workerData) => new Worker(source, { eval: true, workerData }));
-            worker = start(`(${watchInWorker.toString()})()`, { root, ignored: [...IGNORED_NAMES] });
+            worker = start(WATCH_WORKER_SOURCE, { root, ignored: [...IGNORED_NAMES] });
         } catch (error) {
-            options.log?.(`files watch: the watcher's own thread could not start (${error instanceof Error ? error.message : String(error)}); watching on genie-host's thread`);
-            return (options.fallback ?? nodeWatchSource)(root, onPath);
+            fallBack(`could not start (${error instanceof Error ? error.message : String(error)})`);
+            return { close: () => { closed = true; here?.close(); } };
         }
-        worker.on('message', (batch: Array<[string, number | null, boolean]>) => {
-            if (closed || !Array.isArray(batch)) return;
-            for (const [name, mtimeMs, isDirectory] of batch) {
+        worker.on('message', (batch: unknown) => {
+            if (closed || here || !Array.isArray(batch)) return;
+            for (const [name, mtimeMs, isDirectory] of batch as Array<[string, number | null, boolean]>) {
                 const rel = confine(root, name);
                 if (rel === null || rel === '') continue;
                 if (countsAsDiskChange(mtimeMs === null ? null : { mtimeMs, isDirectory }, since)) onPath(rel);
             }
         });
-        worker.on('error', (error) => { options.log?.(`files watch: the watcher's thread failed: ${error instanceof Error ? error.message : String(error)}`); });
-        return { close: () => { if (closed) return; closed = true; try { worker.postMessage('close'); } catch { /* already gone */ } setTimeout(() => { void worker.terminate(); }, 1_000).unref?.(); } };
+        worker.on('error', (error) => { fallBack(`failed (${error instanceof Error ? error.message : String(error)})`); });
+        worker.on('exit', (code) => { if (!closed) fallBack(`ended (exit ${String(code)})`); });
+        return { close: () => {
+            if (closed) return; closed = true; here?.close();
+            try { worker.postMessage('close'); } catch { /* already gone */ }
+            setTimeout(() => { void worker.terminate(); }, 1_000).unref?.();
+        } };
     };
 }
