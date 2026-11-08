@@ -138,6 +138,8 @@ const VERB_WORDS: Record<string, { running: string; done: string }> = {
     'task.ready': { running: 'Moving to QA…', done: 'Ready for QA' },
     'task.done': { running: 'Finishing…', done: 'Done' },
     'task.restart': { running: 'Restarting…', done: 'Restarted' },
+    // The Home's Details save (row H1).
+    'details.update': { running: 'Saving…', done: 'Saved' },
 };
 
 /** The claim actions: their progress is said on the board's own line, not in a form. */
