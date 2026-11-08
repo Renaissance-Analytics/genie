@@ -218,11 +218,15 @@ export function verifyPluginSignature(input: { bytes: Buffer; signature: string 
 
 export type InstallDecision = { install: true; label: string } | { install: false; reason: string };
 
+/** What a package running only because publisher checks are off is called, wherever it shows (ADF B5). */
+export const UNVERIFIED_LABEL = 'Unverified';
+
 /** Signed by default. Unsigned runs only under developer mode, and then it is labelled wherever it shows. */
-export function installDecision(check: SignatureCheck, options: { developerMode: boolean }): InstallDecision {
+export function installDecision(check: SignatureCheck, options: { publisherChecksOff: boolean }): InstallDecision {
     if (check.signed) return { install: true, label: `signed by ${check.keyId}` };
     // ADF B4: a package changed after signing is never run, whatever developer mode says.
     if (check.tampered) return { install: false, reason: `refused as tampered: ${check.reason}. A package changed after it was signed never runs, with publisher checks on or off.` };
-    if (options.developerMode) return { install: true, label: 'UNSIGNED — developer mode' };
-    return { install: false, reason: `unsigned plugins are not installed: ${check.reason}. Turn on developer mode to run a local unsigned plugin, labelled as such.` };
+    // ADF B5: publisher checks off, it runs, Unverified, with no network until the person allows it (plugin-host.ts).
+    if (options.publisherChecksOff) return { install: true, label: UNVERIFIED_LABEL };
+    return { install: false, reason: `unsigned plugins are not installed: ${check.reason}. Turn off publisher checks (Settings → Plugins) to run it at your own risk; it is then labelled Unverified.` };
 }

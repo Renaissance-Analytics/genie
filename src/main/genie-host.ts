@@ -674,7 +674,7 @@ async function main(): Promise<void> {
      * under developer mode (the host's own setting). Its MCP server offers and runs their tools with no window; every
      * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
      */
-    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, developerMode: () => settings.snapshot().developer_mode === true });
+    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true });
     const engine = new SessionEngineServer({
         token,
         build,
