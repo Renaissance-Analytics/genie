@@ -95,7 +95,9 @@ beforeAll(async () => {
     });
     const plan = containerPlan({ engine: 'mailpit', major: '1.30', scope: { kind: 'shared' }, publishedPort: 1, surfacePorts: { ui: 2 }, credentials: SEND_API, smtpAuthDir: join(dir, 'mailpit-auth') });
     await docker('pull', MAILPIT_MEASURED_IMAGE);
-    await docker('run', '-d', '--name', name, '-p', '127.0.0.1::1025', '-p', '127.0.0.1::8025', '--tmpfs', '/data',
+    // /data on a volume, as Genie's own plan keeps it: a rotate restarts Mailpit (finding 7), and a tmpfs would lose the
+    // messages stored before it, which the queries below read.
+    await docker('run', '-d', '--name', name, '-p', '127.0.0.1::1025', '-p', '127.0.0.1::8025', '-v', '/data',
         ...(plan.mounts ?? []).flatMap((m) => ['-v', `${m.source}:${m.target}:ro`]),
         ...Object.entries(plan.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]),
         MAILPIT_MEASURED_IMAGE);
@@ -103,7 +105,7 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-    if (name) await docker('rm', '-f', name).catch(() => '');
+    if (name) await docker('rm', '-f', '-v', name).catch(() => '');
     if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
