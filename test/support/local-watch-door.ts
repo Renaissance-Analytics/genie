@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import type { FilesHubEvent, FilesWant } from '../../src/main/files-watch-hub.js';
 import { FilesWatchHub } from '../../src/main/files-watch-hub.js';
+import { FilesTreeKeeper } from '../../src/main/files-tree-keeper.js';
 import { localFilesClient } from '../../src/renderer/local-files-client.js';
 import { localPageClient } from '../../src/renderer/local-content-client.js';
 import { verifiedBlobClient } from '../../src/renderer/blob-reader.js';
@@ -10,12 +11,14 @@ import { resourceDoor, resultValue } from './local-resource-door.js';
 export const watchTick = () => new Promise<void>(resolve => setImmediate(resolve));
 export async function localWatchDoor(cleanups: Array<() => Promise<void>>) {
     const listeners = new Set<(event: FilesHubEvent) => void>();
+    // As main.ts: the window keeps each workspace's tree; genie-host sends only its changes after the first.
+    const keeper = new FilesTreeKeeper();
     const watchers: Array<{ root: string; closed: boolean; emit(path: string): void }> = [];
     const timers: Array<() => void> = [];
     const data = { tree: { 'a.txt': 'modified' } as Record<string, 'modified' | 'added' | 'deleted' | 'untracked'> };
     const git = vi.fn(async () => data.tree), repo = vi.fn(async (_root: string, rel: string) => ({ ok: true as const, value: { branch: rel || 'main', changes: [] } }));
     const hub = new FilesWatchHub({ source: (root, emit) => { const watcher = { root, closed: false, emit }; watchers.push(watcher); return { close: () => { watcher.closed = true; } }; },
-        gitTree: git, repoStatus: repo as never, send: (_owner, event) => { for (const listener of listeners) listener(event); },
+        gitTree: git, repoStatus: repo as never, send: (_owner, event) => { const kept = keeper.accept(event); for (const listener of listeners) listener(kept); },
         schedule: fn => { let live = true; timers.push(() => { if (live) fn(); }); return () => { live = false; }; } });
     let register = async (_id: string) => {};
     const watch = vi.fn(async (id: string, workspaceId: string, want: FilesWant) => {
