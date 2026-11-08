@@ -294,7 +294,7 @@ try {
     main = await Cdp.connect(target.webSocketDebuggerUrl);
     inspector = await Cdp.connect((await until('main inspector', async () => (await targets(INSPECT))[0], 30_000)).webSocketDebuggerUrl);
     await until('preload/door registration', () => main.evaluate('typeof window.genieLocalProtocol === "object" && typeof window.genie === "object"'), 60_000);
-    await until('real composed services', () => main.evaluate('window.genie.features.snapshot().then(d=>!!d.remote)'), 60_000);
+    await until('real composed services', () => main.evaluate('(window.genieTest ?? window.genie).features.snapshot().then(d=>!!d.remote)'), 60_000);
     const refs = await doorScopes(); await observeDoor(refs);
     mainId = await inspector.evaluate(`(() => { const { BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron'); return BrowserWindow.getAllWindows().find((w) => /index\\.html/.test(w.webContents.getURL())).webContents.id; })()`);
     if (BREAK) await inspector.evaluate(`(() => { for (const wc of globalThis.__doorNative.admitted.keys()) if (wc.id === ${mainId}) globalThis.__doorNative.admitted.delete(wc); return true; })()`);
@@ -344,7 +344,7 @@ try {
             log(`  4 ${label}`);
             try { return await run(); } catch (error) { throw new Error(`${label}: ${error.message}`); }
         };
-        const site = await until('declared fixture site', async () => (await main.evaluate('window.genie.features.snapshot()')).hosting?.sites?.find((s) => s.host === 'doorpanel.gen'), 30_000);
+        const site = await until('declared fixture site', async () => (await main.evaluate('(window.genieTest ?? window.genie).features.snapshot()')).hosting?.sites?.find((s) => s.host === 'doorpanel.gen'), 30_000);
         await step('start declared fixture site', () => main.evaluate(`window.genie.features.act({kind:'hosting.startSite',siteId:${JSON.stringify(site.id)}})`));
         const before = await inspector.evaluate(`process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').webContents.getAllWebContents().map((w) => w.id)`);
         const tabs = { tabs: [{ id: 'door-tab', name: 'Door panel', layout: 'single', cells: [{ kind: 'site', ref: 'doorpanel.gen' }] }] };
@@ -493,7 +493,7 @@ try {
         let access;
         try {
             access = await until('real tailnet availability', async () => {
-                const state = await main.evaluate('window.genie.features.snapshot().then(d=>d.remote)');
+                const state = await main.evaluate('(window.genieTest ?? window.genie).features.snapshot().then(d=>d.remote)');
                 return state?.url || (state?.unavailable && !['not started', 'stopped'].includes(state.unavailable)) ? state : null;
             }, 75_000);
         } catch { throw new Unmeasured('the enabled fixture tailnet listener did not settle within 75s'); }
@@ -508,7 +508,7 @@ try {
         await within(10_000, 'real remote socket', new Promise((resolve, reject) => { remote.addEventListener('open',resolve,{once:true}); remote.addEventListener('error',()=>reject(new Unmeasured('advertised tailnet endpoint unreachable')),{once:true}); }));
         remote.send(JSON.stringify({kind:'hello',auth:{kind:'pin',code:issued.remote.pin.code},label}));
         await until('pairing request', async () => frames.find(f=>f.kind==='pairing'));
-        const waiting = await until('own native Allow request', async () => (await main.evaluate('window.genie.features.snapshot()')).remote.pairRequests.find(p=>p.label===label));
+        const waiting = await until('own native Allow request', async () => (await main.evaluate('(window.genieTest ?? window.genie).features.snapshot()')).remote.pairRequests.find(p=>p.label===label));
         await main.evaluate(`window.genie.features.act({kind:'remote.answerPair',id:${JSON.stringify(waiting.id)},allow:true})`);
         await until('real remote owner welcome', async () => frames.find(f=>f.kind==='welcome'&&f.isOwner));
         let next=0;

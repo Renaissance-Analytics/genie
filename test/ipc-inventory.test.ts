@@ -93,8 +93,8 @@ describe('P4 IPC inventory', () => {
         expect(channels(`// ipcMain.handle('not:a:call', () => {});
             const text = "ipcMain.handle('not:a:call', () => {})";
             ipcMain.handle(CLIPBOARD_WRITE_CHANNEL, () => {});
-            ipcMain.handle(FEATURE_CHANNELS.snapshot, () => {});`, 'control.ts'))
-            .toEqual([CLIPBOARD_WRITE_CHANNEL, FEATURE_CHANNELS.snapshot]);
+            ipcMain.handle(FEATURE_CHANNELS.act, () => {});`, 'control.ts'))
+            .toEqual([CLIPBOARD_WRITE_CHANNEL, FEATURE_CHANNELS.act]);
         expect(() => channels('ipcMain.handle(unlistedBinding, () => {});', 'control.ts')).toThrow('unresolved IPC channel');
     });
 });

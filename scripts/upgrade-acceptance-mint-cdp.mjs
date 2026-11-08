@@ -145,7 +145,7 @@ async function launch(command, args) {
     await until('window.genie', 30_000, () => cdp.evaluate('typeof window.genie === "object"'));
     return cdp;
 }
-const signedIn = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.tynn?.user?.name ?? null)');
+const signedIn = (cdp) => cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.integrations?.tynn?.user?.name ?? null)');
 const start = async (cdp, id) => { await waitForPageProbe(cdp); return cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(id)}, "graceful"); true`); };
 const newRun = (seen) => until('a new run of the provider', 60_000, () => records().find((r) => !seen.has(r.pid)) ?? null);
 

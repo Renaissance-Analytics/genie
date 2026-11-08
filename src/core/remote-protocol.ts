@@ -105,6 +105,8 @@ export const REMOTE_METHODS = [
     'terminals.attach',
     'terminals.list',
     'features.snapshot',
+    // P4 family 11 (Tynn #560): a custom alert sound's data, read by this machine's own window.
+    'features.soundData',
     'features.act',
     'features.setBrowserBounds',
     'updates.state',
@@ -166,7 +168,7 @@ export const COMPANION_EVENT = 'remote-companion';
 export interface CompanionEvent { readonly revoked: string }
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', features: 'local-features' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
@@ -176,6 +178,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'terminals.list': 'read',
     'terminals.attach': 'read',
     'features.snapshot': 'read',
+    'features.soundData': 'local',
     'updates.state': 'read',
     openAgent: 'write',
     stopAgent: 'write',

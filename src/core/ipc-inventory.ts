@@ -90,8 +90,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:workspace-tynn-features-unwatch', 'protocol:workspaces.tynnFeaturesUnwatch'],
     ['genie:add-workspace', 'window-port'],
     ['genie:features-browser-bounds', 'window-port'],
-    ['genie:features-snapshot', 'protocol:features.snapshot'],
-    ['genie:features-sound-data', 'protocol:features.soundData'],
     ['genie:features-picked', 'window-port'],
     ['genie:features-act', 'protocol:features.act'],
 

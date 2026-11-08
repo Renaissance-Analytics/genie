@@ -277,15 +277,8 @@ const bridge: PreloadBridge = {
         },
     },
     features: {
-        snapshot: () => ipcRenderer.invoke(FEATURE_CHANNELS.snapshot) as Promise<FeatureData>,
-        subscribe: (onChange) => {
-            const handler = (_e: unknown, data: FeatureData) => onChange(data);
-            ipcRenderer.on(FEATURE_CHANNELS.changed, handler);
-            return () => { ipcRenderer.removeListener(FEATURE_CHANNELS.changed, handler); };
-        },
         act: (action) => ipcRenderer.invoke(FEATURE_CHANNELS.act, action) as Promise<FeatureData>,
         setBrowserBounds: (bounds) => ipcRenderer.invoke(FEATURE_CHANNELS.browserBounds, bounds) as Promise<void>,
-        soundData: (key) => ipcRenderer.invoke(FEATURE_CHANNELS.soundData, key) as Promise<string | null>,
         picked: (paths) => ipcRenderer.invoke(FEATURE_CHANNELS.picked, paths) as Promise<void>,
     },
 
