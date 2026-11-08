@@ -234,9 +234,9 @@ export class SpawnHostClient {
         return this.#call('spawn.exec', [binary, [...args], options]) as Promise<RunResult>;
     }
 
-    /** A detached process of Genie's own (the Genie browser), created by the spawn host (Tynn #535): its pid, or null. */
-    async spawnDetached(file: string, args: readonly string[], env: Readonly<Record<string, string>>, logFile: string): Promise<number | null> {
-        const value = await this.#call('spawn.detached', [file, [...args], { ...env }, logFile]) as { pid?: unknown } | null;
+    /** A detached process of Genie's own (the Genie browser, the updater), created by the spawn host (Tynn #535): its pid, or null. */
+    async spawnDetached(file: string, args: readonly string[], env: Readonly<Record<string, string>>, logFile: string, hide = false): Promise<number | null> {
+        const value = await this.#call('spawn.detached', [file, [...args], { ...env }, logFile, hide]) as { pid?: unknown } | null;
         return typeof value?.pid === 'number' && value.pid > 0 ? value.pid : null;
     }
 

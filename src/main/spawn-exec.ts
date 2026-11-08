@@ -101,13 +101,13 @@ export const streamInProcess: LineStream = (binary, args, onLine, onEnd) => {
  * ELECTRON_RUN_AS_NODE), detached, its output appended to `logFile`. Its pid, or null. Created by the spawn host for
  * genie-host (Tynn #535), and by genie-host itself only between that child's lives.
  */
-export function spawnDetachedProcess(file: string, args: readonly string[], env: Readonly<Record<string, string>>, logFile: string): number | null {
+export function spawnDetachedProcess(file: string, args: readonly string[], env: Readonly<Record<string, string>>, logFile: string, hide = false): number | null {
     mkdirSync(dirname(logFile), { recursive: true });
     const out = openSync(logFile, 'a');
     try {
         const own: Record<string, string> = { ...env };
         for (const k of Object.keys(own)) if (k.toUpperCase() === 'ELECTRON_RUN_AS_NODE') delete own[k];
-        const child = spawn(file, [...args], { detached: true, windowsHide: false, stdio: ['ignore', out, out], env: own });
+        const child = spawn(file, [...args], { detached: true, windowsHide: hide, stdio: ['ignore', out, out], env: own });
         child.on('error', () => {});
         child.unref();
         return child.pid ?? null;

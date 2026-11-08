@@ -91,6 +91,7 @@ describe('the window', () => {
         expect(host).toMatch(/new BrowserService\(\{ \.\.\.\(capabilities\.browser \? \{\} : \{ unavailable: NO_BROWSER_HERE \}\), startBrowser: \(launch\) => \{/);
         // Tynn #535: through the host's supervised spawn-host child while it is up (never on the host's own thread); between its lives, here.
         expect(host).toMatch(/supervisedClient\.spawnDetached\(launch\.file, launch\.args,/);
+        expect(host).toMatch(/startOwnDetached\('genie browser', launch,/);
         expect(host).toMatch(/const here = \(\) => \{ spawnBrowserProcess\(launch,/);
         expect(strip('src/main/engine-launch.ts')).toMatch(/export function spawnBrowserProcess\(/);
     });

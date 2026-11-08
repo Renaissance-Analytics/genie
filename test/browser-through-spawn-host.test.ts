@@ -1,4 +1,4 @@
-import { ChildProcess } from 'node:child_process';
+import { ChildProcess, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -48,4 +48,24 @@ describe('a detached start through the spawn host', () => {
         await new Promise((r) => setTimeout(r, 1_000));
         expect(alive(pid!)).toBe(true);
     }, 60_000);
+
+    it('it outlives the process that asked for it, killed outright with its spawn host (the updater runs on after genie-host)', async () => {
+        const log = join(root, 'logs', 'genie-updater.log');
+        const script = 'console.log("updater up " + process.pid); setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);';
+        const starter = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./fixtures/detached-starter.ts', import.meta.url)), log, script], { stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true });
+        let said = '';
+        starter.stdout!.on('data', (d: Buffer) => { said += d.toString('utf8'); });
+        await vi.waitFor(() => { expect(said).toMatch(/STARTED [1-9]\d* SPAWNHOST [1-9]\d*/); }, { timeout: 30_000, interval: 100 });
+        const [, startedPid, spawnHostPid] = /STARTED (\d+) SPAWNHOST (\d+)/.exec(said)!.map(Number) as [number, number, number];
+        started = startedPid;
+        await vi.waitFor(() => { expect(existsSync(log) && readFileSync(log, 'utf8')).toContain(`updater up ${startedPid}`); }, { timeout: 10_000, interval: 100 });
+        // CONTROL: all three run before the kill.
+        expect([alive(starter.pid!), alive(spawnHostPid), alive(startedPid)]).toEqual([true, true, true]);
+        starter.kill('SIGKILL');
+        // CONTROL: its spawn host goes with it (its link to the starter is gone)...
+        await vi.waitFor(() => { expect(alive(spawnHostPid)).toBe(false); }, { timeout: 15_000, interval: 100 });
+        // ...and what the spawn host started runs on.
+        await new Promise((r) => setTimeout(r, 1_000));
+        expect(alive(startedPid)).toBe(true);
+    }, 90_000);
 });

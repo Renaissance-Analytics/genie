@@ -28,7 +28,7 @@ export interface SpawnHostImpl {
     /** `execFile` for genie-host's git (Tynn #532); absent = this host runs no git. */
     readonly gitExec?: (file: string, args: readonly string[], options: ExecFileOptions, callback: GitExecCallback) => GitChild;
     /** A detached process of Genie's own, its output to `logFile` (Tynn #535); its pid. Absent = this host starts none. */
-    readonly spawnDetached?: (file: string, args: readonly string[], env: Record<string, string>, logFile: string) => number | null;
+    readonly spawnDetached?: (file: string, args: readonly string[], env: Record<string, string>, logFile: string, hide: boolean) => number | null;
 }
 
 /** What a git's options may carry over the wire: nothing but these. */
@@ -225,10 +225,10 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                 return;
             }
             case 'spawn.detached': {
-                const [file, argv, env, logFile] = args as [unknown, unknown, unknown, unknown];
+                const [file, argv, env, logFile, hide] = args as [unknown, unknown, unknown, unknown, unknown];
                 if (!impl.spawnDetached || typeof file !== 'string' || !Array.isArray(argv) || !argv.every((a) => typeof a === 'string') || typeof logFile !== 'string' || typeof env !== 'object' || env === null) { refuse(id, new Error('this spawn host starts no detached process')); return; }
                 const vars = Object.fromEntries(Object.entries(env as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string'));
-                try { answer(id, { pid: impl.spawnDetached(file, argv, vars, logFile) }); } catch (error) { refuse(id, error); }
+                try { answer(id, { pid: impl.spawnDetached(file, argv, vars, logFile, hide === true) }); } catch (error) { refuse(id, error); }
                 return;
             }
             case 'git.kill': {
