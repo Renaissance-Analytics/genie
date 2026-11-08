@@ -54,9 +54,8 @@ async function tlsServer(ca: IssuedPem, handler: Handler): Promise<string> {
 const answers = (status: number, body: unknown, headers: Record<string, string> = {}): Handler => (_req, res) => { res.writeHead(status, { 'Content-Type': 'application/json', ...headers }); res.end(JSON.stringify(body)); };
 const GET = { method: 'GET' as const, headers: {}, credentials: 'omit' as const, redirect: 'error' as const, signal: new AbortController().signal };
 
-// Tests-first streaming contract: retain the existing text path for other callers, add a bounded binary path for ZIPs.
-type BinaryAnswer = { readonly body: ReadableStream<Uint8Array> };
-async function allBytes(answer: BinaryAnswer): Promise<Buffer> {
+async function allBytes(answer: Awaited<ReturnType<ReturnType<typeof hostHttpsFetch>>>): Promise<Buffer> {
+    if (!answer.body) throw new Error('The binary HTTPS response has no body');
     const reader = answer.body.getReader(); const chunks: Uint8Array[] = [];
     try { for (;;) { const next = await reader.read(); if (next.done) return Buffer.concat(chunks); chunks.push(next.value); } }
     finally { reader.releaseLock(); }
@@ -65,14 +64,14 @@ it('streams ZIP bytes without UTF-8 decoding/re-encoding them', async () => {
     const bytes = Buffer.from([0x50, 0x4b, 0, 0xff, 0xfe, 0x80, 0x01, 0x7f]);
     const url = await tlsServer(GENIE_CA, (_req, res) => { res.writeHead(200); res.end(bytes); });
     const options = { machineRoots: trusted, env: {}, streamResponse: true, maxResponseBytes: 1024 };
-    const answer = await hostHttpsFetch(options)(`${url}/`, GET) as unknown as BinaryAnswer;
+    const answer = await hostHttpsFetch(options)(`${url}/`, GET);
     expect(answer.body).toBeDefined();
     expect(await allBytes(answer)).toEqual(bytes);
 });
 it('caps the streamed binary path while receiving, without a Content-Length', async () => {
     const url = await tlsServer(GENIE_CA, (_req, res) => { res.writeHead(200); res.write(Buffer.alloc(2048)); res.end(Buffer.alloc(2048)); });
     const options = { machineRoots: trusted, env: {}, streamResponse: true, maxResponseBytes: 1024 };
-    const answer = await hostHttpsFetch(options)(`${url}/`, GET) as unknown as BinaryAnswer;
+    const answer = await hostHttpsFetch(options)(`${url}/`, GET);
     expect(answer.body).toBeDefined();
     await expect(allBytes(answer)).rejects.toThrow(/response.*(?:limit|large|size)/i);
 });

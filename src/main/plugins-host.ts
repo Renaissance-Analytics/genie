@@ -66,6 +66,12 @@ export class PluginsService {
         return () => { this.#listeners.delete(listener); };
     }
 
+    /** Re-read local packages after a verified install; network availability cannot decide whether activation succeeded. */
+    async reload(): Promise<void> {
+        this.#plugins = await this.#open();
+        this.#emit();
+    }
+
     /**
      * A window's change: `setEnabled [id, enabled]` (persisted; `false` for one that is not installable) or `refresh []`
      * (re-read the folder: developer mode flipped, a plugin was dropped in). The new state is told BEFORE the answer, so a

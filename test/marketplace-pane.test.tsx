@@ -1,33 +1,11 @@
 // @vitest-environment happy-dom
-import { act, type ComponentType } from 'react';
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PluginCapabilities, PluginManifest } from '../src/core/plugins.js';
+import type { PluginCapabilities } from '../src/core/plugins.js';
+import type { MarketplaceApi, MarketplaceRow as PackageRow, MarketplaceReview as Review } from '../src/core/marketplace.js';
+import { MarketplacePane } from '../src/renderer/components/MarketplacePane.js';
 
-// Tests-first contract; replace the loader/interfaces with actual imports after measured CI RED.
-interface PackageRow {
-    id: string; name: string;
-    publisher: { id: string; name: string; verification: { method: 'domain'; identity: string } };
-    version: { version: string; digest: string; key_id: string; permissions: PluginCapabilities; file_count: number; uncompressed_size: number; published_at: string; download_url: string };
-    installedVersion: string | null;
-    updateAvailable: boolean;
-}
-interface Review {
-    token: string;
-    package: PackageRow;
-    manifest: PluginManifest;
-    installedVersion: string | null;
-    needsConsent: boolean;
-}
-interface MarketplaceApi {
-    search(query: string, cursor?: string): Promise<{ packages: readonly PackageRow[]; nextCursor: string | null }>;
-    prepare(id: string, version: string): Promise<Review>;
-    install(token: string, consent: boolean): Promise<{ id: string; version: string }>;
-    discard(token: string): Promise<void>;
-}
-const source = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'components', 'MarketplacePane.tsx')).href;
 const id = 'org.example.plugin';
 const capabilities: PluginCapabilities = { network: { hosts: ['api.example.org'] }, genieApi: ['knowledge'] };
 const row = (installedVersion: string | null = null): PackageRow => ({
@@ -57,8 +35,7 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); document.body.innerHTML = ''; });
 const draw = async () => {
-    const module = await import(/* @vite-ignore */ source) as { MarketplacePane: ComponentType<{ api: MarketplaceApi }> };
-    await act(async () => { root.render(<module.MarketplacePane api={api} />); });
+    await act(async () => { root.render(<MarketplacePane api={api} />); });
 };
 const button = (action: string) => document.querySelector(`[data-marketplace-action="${action}"]`) as HTMLButtonElement | null;
 const click = async (action: string) => {
@@ -99,11 +76,10 @@ describe('C4 Marketplace pane (independent of the pending B8 tab hookup)', () =>
     });
 
     it('an update with a new capability opens consent again and does not install until confirmed', async () => {
-        const next = review('1.0.0', true);
+        const original = review('1.0.0', true);
         const wider = { ...capabilities, genieApi: ['knowledge', 'manageTerminals'] };
-        next.manifest = { ...next.manifest, capabilities: wider };
-        next.package = { ...next.package, version: { ...next.package.version, permissions: wider } };
-        api.search.mockResolvedValueOnce({ packages: [next.package], nextCursor: null });
+        const next = { ...original, manifest: { ...original.manifest, capabilities: wider }, package: { ...row('1.0.0'), version: { ...original.package.version, permissions: wider } } };
+        api.search.mockResolvedValueOnce({ packages: [{ ...next.package, installedVersion: next.installedVersion, updateAvailable: true }], nextCursor: null });
         api.prepare.mockResolvedValueOnce(next);
         await draw(); await click('update');
         expect(document.querySelector('[data-marketplace-review]')?.textContent).toContain('manageTerminals');

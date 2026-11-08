@@ -1,41 +1,17 @@
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import { ZipFile } from 'yazl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PluginCapabilities, PluginManifest } from '../src/core/plugins.js';
+import type { PluginCapabilities } from '../src/core/plugins.js';
+import type { MarketplacePackage } from '../src/core/marketplace.js';
+import { MarketplaceHost, type MarketplaceHostOptions as HostOptions } from '../src/main/marketplace-host.js';
 import { MarketplaceClient } from '../src/main/marketplace-client.js';
 import { PluginsService } from '../src/main/plugins-host.js';
 import { signPackage } from './plugin-sign-helper.js';
 
-// Tests-first contract; remove the dynamic loader and import actual types after measured runtime RED.
-interface VersionData {
-    version: string; digest: string; key_id: string; permissions: PluginCapabilities;
-    file_count: number; uncompressed_size: number; published_at: string; download_url: string;
-}
-interface PackageData {
-    id: string; name: string;
-    publisher: { id: string; name: string; verification: { method: 'domain'; identity: string } };
-    version: VersionData;
-}
-interface Review {
-    token: string; package: PackageData; manifest: PluginManifest; installedVersion: string | null; needsConsent: boolean;
-}
-interface HostOptions {
-    pluginsDir: string; stagingDir: string; grantsFile: string;
-    registry: MarketplaceClient; plugins: PluginsService; fetch: typeof fetch;
-    origin?: string; now?: () => number; reviewMaxAgeMs?: number; maxArchiveBytes?: number;
-}
-interface HostContract {
-    search(query: string, cursor?: string): Promise<{ packages: readonly (PackageData & { installedVersion: string | null; updateAvailable: boolean })[]; nextCursor: string | null }>;
-    prepare(id: string, version: string): Promise<Review>;
-    install(token: string, consent: boolean): Promise<{ id: string; version: string }>;
-    discard(token: string): Promise<void>;
-    close(): Promise<void> | void;
-}
-const source = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'main', 'marketplace-host.ts')).href;
+type PackageData = { -readonly [K in keyof MarketplacePackage]: MarketplacePackage[K] };
 const id = 'org.example.plugin';
 const publisher = { id: '01ARZ3NDEKTSV4RRFFQ69G5FAV', name: 'Example Publisher', verification: { method: 'domain' as const, identity: 'publisher.example.org' } };
 const pair = generateKeyPairSync('ed25519');
@@ -56,7 +32,7 @@ let fetcher: ReturnType<typeof vi.fn<typeof fetch>>;
 let publisherChecksOff: boolean;
 let registryKeysActive: boolean;
 const versions = new Map<string, Fixture>();
-const opened = new Set<HostContract>();
+const opened = new Set<MarketplaceHost>();
 
 async function zip(files: Record<string, Buffer>): Promise<Buffer> {
     const archive = new ZipFile();
@@ -106,9 +82,8 @@ async function fixture(version = '1.0.0', capabilities = baseCaps): Promise<Fixt
     versions.set(version, result);
     return result;
 }
-async function open(over: Partial<HostOptions> = {}): Promise<HostContract> {
-    const module = await import(/* @vite-ignore */ source) as { MarketplaceHost: { open(options: HostOptions): Promise<HostContract> } };
-    const host = await module.MarketplaceHost.open({ pluginsDir, stagingDir, grantsFile, registry, plugins, fetch: fetcher, now: () => clock, ...over });
+async function open(over: Partial<HostOptions> = {}): Promise<MarketplaceHost> {
+    const host = await MarketplaceHost.open({ pluginsDir, stagingDir, grantsFile, registry, plugins, fetch: fetcher, now: () => clock, ...over });
     opened.add(host); return host;
 }
 const installed = () => plugins.dump().entries.find(entry => entry.id === id);
