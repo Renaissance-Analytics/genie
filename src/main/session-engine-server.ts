@@ -539,6 +539,11 @@ export class SessionEngineServer {
             if (args[0] !== 'dismiss') throw new Error('engine.crash takes dismiss');
             return this.#options.crash.dismiss();
         }
+        // The catalog is the host's own, ready before any agent engine is (ADF A4): answered here.
+        if (method === 'catalog.snapshot' || method === 'catalog.docs') {
+            if (!this.#options.catalog) throw new Error('This host keeps no catalog.');
+            return method === 'catalog.snapshot' ? this.#options.catalog.snapshot() : this.#options.catalog.docs(String(args[0] ?? '') as never, String(args[1] ?? ''));
+        }
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
         const id = (i = 0): AgentId => {
@@ -690,12 +695,6 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
-            case 'catalog.snapshot':
-                if (!this.#options.catalog) throw new Error('This host keeps no catalog.');
-                return this.#options.catalog.snapshot();
-            case 'catalog.docs':
-                if (!this.#options.catalog) throw new Error('This host keeps no catalog.');
-                return this.#options.catalog.docs(str(0) as never, str(1));
             case 'engine.plugins':
                 if (!this.#options.plugins) throw new Error('This host keeps no plugins.');
                 if (!conn.local) throw new Error('Genie’s plugins are changed from a local window only.');

@@ -14,9 +14,12 @@ const localId = (d: ElementDefinition) => (d.id.startsWith(`${d.packageId}.`) ? 
 const pluginName = (d: ElementDefinition) => (typeof d.payload.pluginName === 'string' ? d.payload.pluginName : d.packageId);
 const str = (v: unknown, fallback: string) => (typeof v === 'string' && v !== '' ? v : fallback);
 
+/** Drawn by a client: `client`, or `both` with its link (the owner's ruling q_d71981d6). Host-only elements never reach a window. */
+const onAClient = (d: ElementDefinition) => (d.reach.side as string) !== 'host';
+
 /** The editors, in catalog order (Genie's own first), as the window's router takes them (core/plugin-editors.ts `editorFor`). */
 export function catalogEditors(defs: readonly ElementDefinition[]): ClaimingEditor[] {
-    return defs.filter((d) => d.kind === 'editor').map((d) => ({
+    return defs.filter((d) => d.kind === 'editor' && onAClient(d)).map((d) => ({
         id: localId(d),
         title: str(d.payload.title, d.docs.name),
         extensions: Array.isArray(d.payload.extensions) ? (d.payload.extensions as string[]) : [],
@@ -28,7 +31,7 @@ export function catalogEditors(defs: readonly ElementDefinition[]): ClaimingEdit
 
 /** The panels a workspace offers (`+plugin`), as the window draws them. */
 export function catalogPanels(defs: readonly ElementDefinition[]): Array<{ pluginId: string; pluginName: string; id: string; title: string; fancyComponent: { export: VettedFancyExport }; props: Readonly<Record<string, unknown>> }> {
-    return defs.filter((d) => d.kind === 'panel').map((d) => ({
+    return defs.filter((d) => d.kind === 'panel' && onAClient(d)).map((d) => ({
         pluginId: d.packageId,
         pluginName: pluginName(d),
         id: localId(d),

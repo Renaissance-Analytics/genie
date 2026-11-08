@@ -113,8 +113,8 @@ describe('a window without the adapter says so', () => {
     const board = catalog.get('ai.genie.artboard.board')!;
 
     it('an editor or panel whose compiled adapter this window has opens with it', () => {
-        expect(adapterFor(sheet, { editors: ['SheetWorkbook'], panels: [] })).toEqual({ ok: true, adapter: 'SheetWorkbook' });
-        expect(adapterFor(board, { editors: [], panels: ['ArtBoardPanel'] })).toEqual({ ok: true, adapter: 'ArtBoardPanel' });
+        expect(adapterFor(sheet, { editors: ['SheetWorkbook'], panels: [] })).toMatchObject({ ok: true, adapter: 'SheetWorkbook' });
+        expect(adapterFor(board, { editors: [], panels: ['ArtBoardPanel'] })).toMatchObject({ ok: true, adapter: 'ArtBoardPanel' });
     });
 
     it('one this OLDER window lacks: "needs a newer Genie", naming the element — never a blank pane', () => {
@@ -134,3 +134,41 @@ describe('a window without the adapter says so', () => {
 });
 
 void Catalog;
+
+/**
+ * THE CATALOG CARRIES EACH ELEMENT'S SIDE (the owner's rulings q_d71981d6: "ADF and the host split are one design";
+ * "forward-looking only"). A window opens what runs on a client; an element on BOTH sides opens with the host calls and
+ * events its client side may use (`reach.link`) — the only channel between its halves. Names are ids only: no aliases.
+ */
+describe('sides over the protocol', () => {
+    const catalog = genieCatalog();
+    const sheet = catalog.get('ai.genie.spreadsheet.sheet')!;
+
+    it('an element on both sides opens with its link: the host calls its client side may make', () => {
+        expect(adapterFor(sheet, { editors: ['SheetWorkbook'], panels: [] })).toEqual({ ok: true, adapter: 'SheetWorkbook', calls: ['files.readBytes', 'files.writeBytes'], events: [] });
+    });
+
+    it('an element on the host alone is not opened by a window, by its side (CONTROL: the kind is not the reason)', () => {
+        const hostPanel = { ...sheet, kind: 'panel' as const, reach: { ...sheet.reach, side: 'host' as const }, payload: { fancyComponent: 'ArtBoardPanel' } };
+        const r = adapterFor(hostPanel as never, { editors: [], panels: ['ArtBoardPanel'] });
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect(r.reason).toMatch(/runs on the host/);
+    });
+
+    it('the snapshot and every change carry each element’s side and link as the host has them', () => {
+        const h = host();
+        const snap = h.service.snapshot();
+        const s = snap.definitions.find((d) => d.id === 'ai.genie.spreadsheet.sheet')!;
+        expect(s.reach).toMatchObject({ side: 'both', link: { calls: ['files.readBytes', 'files.writeBytes'] } });
+        expect(snap.definitions.find((d) => d.id === 'imDone')?.reach.side).toBe('host');
+    });
+
+    it('no aliases: a replica and catalog.docs find an element by its id alone', () => {
+        const h = host();
+        const replica = new CatalogReplica(async () => h.service.snapshot());
+        replica.rebase(h.service.snapshot());
+        expect(replica.get('ai.genie.spreadsheet.createWorkbook')).not.toBeNull();
+        expect(Object.keys(replica.get('ai.genie.spreadsheet.createWorkbook')!)).not.toContain('aliases');
+        expect(h.service.docs('tool', 'ai.genie.spreadsheet.createWorkbook')).not.toBeNull();
+    });
+});

@@ -22,9 +22,9 @@ export class CatalogService {
         return { revision: this.#revision, definitions: this.#defs };
     }
 
-    /** One element's definition (its docs, schemas and payload), by kind and id or alias; `null` when there is none. */
+    /** One element's definition (its docs, schemas, payload, side and link), by kind and id; `null` when there is none. */
     docs(kind: CatalogKind, id: string): ElementDefinition | null {
-        const d = this.#defs.find((x) => x.id === id || x.aliases.includes(id));
+        const d = this.#defs.find((x) => x.id === id);
         return d && d.kind === kind ? d : null;
     }
 
