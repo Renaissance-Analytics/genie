@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -38,7 +38,10 @@ describe("the harness's log sidecar follows rotation and clearing", () => {
         for (const seg of segments) await writeFile(join(dir, `${seg}.index.json`), '{"version":1}', 'utf8');
         await writeFile(`${threadLogFile(dir, id)}.index.json`, '{"version":1,"stale":true}', 'utf8');
         await store.clearLog(keyOf(id));
-        expect(await sidecars()).toEqual([]);
+        // No segment keeps one; the active log may get a FRESH one (prism-harness 0.10.2 writes it on clear), never the stale.
+        const left = await sidecars();
+        expect(left.filter((f) => /[.]\d{6}[.]jsonl[.]index[.]json$/.test(f))).toEqual([]);
+        for (const f of left) expect(await readFile(join(dir, f), 'utf8')).not.toContain('stale');
     });
 
     it('CONTROL: an append that does not rotate leaves the active sidecar alone', async () => {
