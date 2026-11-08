@@ -102,6 +102,10 @@ import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
 import { sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
+import { openRelayMember, PopKeypair } from './relay-member.js';
+import { mintConnectGrant } from './tynn-network.js';
+import { RemoteBrowsers } from './remote-browsers.js';
+import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
 import { deviceSocket } from './device-socket.js';
 import { configWriter, writeWorkspaceConfig } from './workspace-config-sync.js';
@@ -123,6 +127,8 @@ import { startHostMcp, type HostMcp } from './host-mcp.js';
 import { hostPluginTools } from './plugins-host.js';
 import { MARKETPLACE_PAGE_BYTES, openMarketplacePlugins } from './marketplace-client.js';
 import { CatalogService } from './catalog-host.js';
+import { setOfferedFlowKinds } from '../core/flow-canvas.js';
+import { catalogFlowKinds } from '../core/catalog-projections.js';
 import { hostCatalog } from './genie-catalog.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
@@ -470,6 +476,9 @@ async function main(): Promise<void> {
         log: say,
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
     })));
+    /** This host's Tynn account once open (Tynn #552): a relay connection asks it synchronously whether it is signed in. */
+    let tynnAccountNow: TynnAccount | null = null;
+    void tynnOpening.then((account) => { tynnAccountNow = account; }, () => {});
     // GITHUB'S ACCOUNT (P3.4 cut c): its tokens and the authenticated git are here, and never cross to a window.
     const githubOpening = proxyMemory.then((memory) => {
         const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say, followSameOrigin: 5 });
@@ -717,6 +726,11 @@ async function main(): Promise<void> {
      */
     const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins()));
     pluginsService.onEvent(() => catalogService.rebuild());
+    // A package installed, updated, disabled or removed reaches agents now, not at the next restart (ADF A6).
+    catalogService.onEvent(() => mcp?.refreshTools());
+    // The flow palette's door and the runner here offer what the catalog holds, as it changes (ADF A5).
+    setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions));
+    catalogService.onEvent(() => setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions)));
     /*
      * REMOTE ACCESS'S HOST SIDE (Tynn #409, host split P5d.1): the tailnet listener, the remote host, the paired devices,
      * the PIN, the pair prompts, the baton and the lock are HERE, so a paired phone reaches this machine with every window
@@ -826,6 +840,21 @@ async function main(): Promise<void> {
             socket: (url) => deviceSocket(url),
             send: (owner, event) => engine.deviceEvent(owner, event),
             log: say,
+            /*
+             * A PILOT'S CONNECTION TO ANOTHER TYNN WORKSTATION (Tynn #552, host split P5d.4; audit M-e): the grant is minted
+             * here with this host's Tynn account, the proof key made and kept here, the relay member opened and renewed
+             * here; the window gets a channel. The browser's door to that workstation's sites is here too.
+             */
+            relay: {
+                signedIn: () => tynnAccountNow?.status().signedIn === true,
+                keypair: () => PopKeypair.generate(),
+                mint: (workstationId, jwk) => (tynnAccountNow
+                    ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
+                    : Promise.resolve({ ok: false as const, reason: 'sign in to Tynn to connect to a Tynn workstation' })),
+                // Through the one socket this host dials with (device-socket.ts): the machine's roots, no redirects.
+                open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
+            },
+            browsers: new RemoteBrowsers(siteDoor),
         }),
         workstation: new WorkstationService({
             store: workstationKeyStore(join(home, 'workstation.json'), keychain),

@@ -1,4 +1,5 @@
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import { catalogEditors, catalogPanels } from '../core/catalog-projections.js';
 import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { hostPathRefusal, REMOTE_ORIGIN, type FeatureOrigin } from './host-picks.js';
 import { TYNN_HOST } from '../core/tynn.js';
@@ -576,7 +577,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
-        plugins: { dir: services.pluginsDir, publisherChecksOff: services.settings.snapshot().publisher_checks_off === true, entries: services.plugins.list(), panels: services.plugins.panels() as never, editors: services.plugins.editors() },
+        plugins: { dir: services.pluginsDir, publisherChecksOff: services.settings.snapshot().publisher_checks_off === true, entries: services.plugins.list(), panels: catalogPanels(services.catalogDefinitions()) as never, editors: catalogEditors(services.catalogDefinitions()) },
         remote: {
             host: services.remote.hostName,
             url: services.remote.url(),

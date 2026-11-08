@@ -6,6 +6,7 @@ import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoard
 import { readTynnPage, runTynnPageAction } from './tynn-page-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { readTynnIssueChanges, readTynnIssues, runTynnIssueAction } from './tynn-issues-client.js';
+import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
@@ -656,57 +657,30 @@ async function readWorkspaceTynnIssues(workspaceId: unknown, filters: unknown): 
 }
 /**
  * THE LIVE BOARD (genie#1295 row B4; the host split, P5c): genie-host follows each open Tynn tab per view — one socket for
- * every board, released with this window's link — and its rings and live state come back for the workspaces this window's
- * views watch, broadcast to the renderers as `genie:workspace-tynn-board-live`. A tab that closes drops its watch. On the
- * emergency no-host path the door is the window's own hub (issue-watch-emergency.ts).
+ * every board, released with this window's link — and its rings and live state come back for the views watching. Since P4
+ * family 12 (Tynn #561) a view's watch is its local connection's (`tynn.watch` on the door, remote-host.ts), released with
+ * it, and its signals reach only that connection. On the emergency no-host path the door is the window's own hub
+ * (issue-watch-emergency.ts).
  */
 let tynnBoardDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
-const tynnBoardWatches = new Map<number, () => void>();
-let tynnBoardWatchSeq = 0;
-/** Start following a workspace's board for a tab; answers the watch's id (to stop it), or null when not linked. */
-async function watchTynnBoard(workspaceId: string, onGone: (stop: () => void) => void): Promise<number | null> {
-    const door = tynnBoardDoor;
-    if (door === null || tynnProjectFor(workspaceId) === null) return null;
-    const id = ++tynnBoardWatchSeq;
-    const viewId = `tynn-board-${id}`;
-    if (!(await door.watch(viewId, workspaceId))) return null;
-    const stop = () => { if (tynnBoardWatches.delete(id)) door.unwatch(viewId); };
-    tynnBoardWatches.set(id, stop);
-    onGone(stop);
-    return id;
-}
 /** Issues subscriptions belong to the host connection, just like the live board's. */
 let tynnIssuesDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
-const tynnIssuesWatches = new Map<number, () => void>();
-let tynnIssuesWatchSeq = 0;
-/** Start following a workspace's issue queue for a window; answers the watch's id, or null when not linked. */
-async function watchTynnIssues(workspaceId: string, onGone: (stop: () => void) => void): Promise<number | null> {
-    const door = tynnIssuesDoor;
-    if (door === null) return null;
-    const id = ++tynnIssuesWatchSeq;
-    const viewId = `tynn-issues-${id}`;
-    if (!(await door.watch(viewId, workspaceId))) return null;
-    const stop = () => { if (tynnIssuesWatches.delete(id)) door.unwatch(viewId); };
-    tynnIssuesWatches.set(id, stop);
-    onGone(stop);
-    return id;
-}
 /** Features subscriptions (row F1) belong to the host connection, like the Issues queue's; no host, no live page. */
 let tynnFeaturesDoor: { watch(viewId: string, workspaceId: string): Promise<boolean>; unwatch(viewId: string): void } | null = null;
-const tynnFeaturesWatches = new Map<number, () => void>();
-let tynnFeaturesWatchSeq = 0;
-/** Start following a workspace's Features page for a window; answers the watch's id, or null when not linked or no host. */
-async function watchTynnFeatures(workspaceId: string, onGone: (stop: () => void) => void): Promise<number | null> {
-    const door = tynnFeaturesDoor;
-    if (door === null) return null;
-    const id = ++tynnFeaturesWatchSeq;
-    const viewId = `tynn-features-${id}`;
-    if (!(await door.watch(viewId, workspaceId))) return null;
-    const stop = () => { if (tynnFeaturesWatches.delete(id)) door.unwatch(viewId); };
-    tynnFeaturesWatches.set(id, stop);
-    onGone(stop);
-    return id;
-}
+/** The Tynn tab's live signals, to the local door's watch port (P4 family 12): never broadcast to every window. */
+const tynnLive = new Set<(event: TynnWatchEvent) => void>();
+const emitTynn = (kind: TynnWatchKind, workspaceId: string, signal: unknown): void => { for (const l of [...tynnLive]) l({ kind, workspaceId, signal }); };
+const tynnDoorOf = (kind: TynnWatchKind) => (kind === 'board' ? tynnBoardDoor : kind === 'issues' ? tynnIssuesDoor : tynnFeaturesDoor);
+/** The host API's Tynn watch port: one view per local window's watch; a board is followed only when it is linked. */
+const tynnWatchPort: TynnWatchPort = {
+    watch: async (kind, viewId, workspaceId) => {
+        const door = tynnDoorOf(kind);
+        if (door === null || (kind === 'board' && tynnProjectFor(workspaceId) === null)) return false;
+        return door.watch(viewId, workspaceId);
+    },
+    unwatch: (kind, viewId) => { tynnDoorOf(kind)?.unwatch(viewId); },
+    subscribe: (listener) => { tynnLive.add(listener); return () => { tynnLive.delete(listener); }; },
+};
 function tynnProjectFor(workspaceId: string): string | null {
     const workspace = (registry?.snapshot().workspaces ?? []).find((w) => w.id === workspaceId);
     let manifest: string | null = null;
@@ -1134,7 +1108,7 @@ const hostPicks = new HostPicks();
 /** The Tynn account each relay window was opened under (accountKeyOf). */
 const remoteWindowAccount = new Map<BrowserWindow, string | null>();
 const tynnAccountKeyNow = (): string | null => { const status = tynnAccount?.status(); return status ? accountKeyOf(status) : null; };
-const relayLiveFor = (win: BrowserWindow): boolean => [...relayChannels.values()].some((c) => c.sender === win.webContents);
+const relayLiveFor = (win: BrowserWindow): boolean => [...relayChannels.values(), ...linkedRelays.values()].some((c) => c.sender === win.webContents);
 function openRemoteWindow(url: string, name?: string | null): void {
     // The machine's NAME rides with the window (Genie 1's openWorkstationById: "The display name drives the host window
     // title"): its connecting screen says it, never the raw `relay:<id>`.
@@ -1237,6 +1211,11 @@ let relayStatusNow: RelayHostStatus = { state: 'off' };
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
 const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieRoot()))(`keychain ${line}`); } catch { /* the console has it */ } };
 const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents; workstationId: string }>();
+/**
+ * A window's connection to a Tynn workstation that GENIE-HOST holds (Tynn #552, P5d.4; audit M-e): the grant, the key and
+ * the relay member are the host's; this window has the channel. (`relayChannels` is the emergency path, with no host.)
+ */
+const linkedRelays = new Map<string, { sender: Electron.WebContents; workstationId: string }>();
 /** The sockets to other machines the host holds for each window (genie:device-open). */
 const deviceChannels = new Map<string, Electron.WebContents>();
 /** The Genie browser for each Tynn workstation a window here drives: a door per connection (remote-browsers.ts). */
@@ -2304,10 +2283,19 @@ async function boot(): Promise<void> {
         if (!browser) return { ok: false, error: 'Genie’s browser is not ready yet' };
         const at = typeof address === 'string' ? address : undefined;
         const remoteUrl = [...remoteWindows].find(([, w]) => !w.isDestroyed() && w.webContents === event.sender)?.[0] ?? null;
-        const conn = browserConnectionFor({ remoteUrl, relays: [...relayChannels.values()].filter((c) => c.sender === event.sender) });
+        const link = deviceLinkNow();
+        const relays: Array<{ workstationId: string; transport: RelayMemberTransport | string }> = [
+            ...[...relayChannels.values()].filter((c) => c.sender === event.sender),
+            ...(link ? [...linkedRelays].filter(([, c]) => c.sender === event.sender).map(([channel, c]) => ({ workstationId: c.workstationId, transport: channel })) : []),
+        ];
+        const conn = browserConnectionFor({ remoteUrl, relays });
         if (conn.kind === 'refused') return { ok: false, error: conn.reason };
         if (conn.kind === 'local') return openLocalBrowser(at, 'user-gesture');
-        const via = await remoteBrowsers.connect(conn.workstationId, conn.transport);
+        // A channel genie-host holds (Tynn #552): its door to that workstation's sites is the host's too.
+        const via = typeof conn.transport === 'string'
+            ? (link ? await link.browserVia(conn.transport) : null)
+            : await remoteBrowsers.connect(conn.workstationId, conn.transport);
+        if (!via) return { ok: false, error: 'This window is not connected to its workstation right now. Reconnect, then open the browser again.' };
         const hosts = Array.isArray(rawHosts) ? rawHosts.filter(isGenHost) : [];
         const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
         return browser.open(at, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
@@ -2352,6 +2340,21 @@ async function boot(): Promise<void> {
         if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
         const refusedByRole = droneRefusal(workstationRoleNow);
         if (refusedByRole) return { ok: false, reason: refusedByRole };
+        // GENIE-HOST DIALS (Tynn #552, P5d.4; audit M-e): it mints the grant, keeps the key, opens the relay member; this
+        // window gets a channel. Tynn's own refusal comes back for this window to word, from the role it read.
+        const link = deviceLinkNow();
+        if (link) {
+            hearDeviceLink(link);
+            const sender = event.sender;
+            const offStep = link.onStep((id, step) => { if (id === workstationId && !sender.isDestroyed()) sender.send('genie:relay-open-step', workstationId, step); });
+            const opened = await link.openRelay(workstationId).finally(offStep);
+            if (!opened.ok) return 'refusal' in opened ? { ...(await wordTynnRefusal(opened.refusal, rereadRole)), stage: 'tynn' } : opened;
+            deviceChannels.set(opened.channel, sender);
+            linkedRelays.set(opened.channel, { sender, workstationId });
+            // The window went: its connection goes with it.
+            sender.once('destroyed', () => { if (deviceChannels.delete(opened.channel)) { linkedRelays.delete(opened.channel); link.close(opened.channel); } });
+            return { ok: true, channel: opened.channel };
+        }
         const account = tynnAccount;
         if (!account?.status().signedIn) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = PopKeypair.generate();
@@ -2396,6 +2399,7 @@ async function boot(): Promise<void> {
         link.onClosed((channel, reason) => {
             const sender = deviceChannels.get(channel);
             deviceChannels.delete(channel);
+            linkedRelays.delete(channel);
             if (sender && !sender.isDestroyed()) sender.send('genie:relay-closed', channel, reason);
         });
     };
@@ -2544,47 +2548,6 @@ async function boot(): Promise<void> {
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
     // The parent is picked in the window over the host's disk (Tynn #835).
     const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
-    // THE TYNN TAB (genie#1295): the workspace's own project's board, through the person's pairing — never an agent's key.
-    ipcMain.handle('genie:workspace-tynn-board', (_event, rawId: unknown, rawScope: unknown) =>
-        (typeof rawId === 'string' ? readTynnBoard(tynnBoardPorts(), rawId, (rawScope ?? {}) as BoardScope) : { ok: false, state: 'error', reason: 'name a workspace' }));
-    // Row B4, the live board: what changed since a cursor (never the whole board), and following a workspace's board.
-    ipcMain.handle('genie:workspace-tynn-board-changes', (_event, rawId: unknown, rawScope: unknown, rawCursor: unknown, rawIds: unknown) =>
-        (typeof rawId === 'string' && typeof rawCursor === 'string'
-            ? readTynnBoardChanges(tynnBoardPorts(), rawId, (rawScope ?? {}) as BoardScope, rawCursor, Array.isArray(rawIds) ? rawIds.filter((x): x is string => typeof x === 'string') : [])
-            : { ok: false, state: 'error', reason: 'name a workspace and a cursor' }));
-    ipcMain.handle('genie:workspace-tynn-board-watch', (event, rawId: unknown) =>
-        (typeof rawId === 'string' ? watchTynnBoard(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
-    ipcMain.handle('genie:workspace-tynn-board-unwatch', (_event, rawWatch: unknown) => {
-        if (typeof rawWatch === 'number') tynnBoardWatches.get(rawWatch)?.();
-    });
-    // The tab's other pages (genie#1295: WIP, …), each read whole, as tynn.ai renders it.
-    ipcMain.handle('genie:workspace-tynn-page', (_event, rawId: unknown, rawPage: unknown, rawQuery: unknown) =>
-        readWorkspaceTynnPage(rawId, rawPage, rawQuery));
-    ipcMain.handle('genie:workspace-tynn-board-action', (_event, rawId: unknown, rawInput: unknown) =>
-        (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnBoardAction(tynnBoardPorts(), rawId, rawInput as { action: string; ids: BoardIds; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
-    // Row I1, the Tynn tab's Issues: the workspace's own project's issue queue, its actions, what changed, and following it.
-    ipcMain.handle('genie:workspace-tynn-issues', (_event, rawId: unknown, rawFilters: unknown) =>
-        readWorkspaceTynnIssues(rawId, rawFilters ?? {}));
-    ipcMain.handle('genie:workspace-tynn-issue-action', (_event, rawId: unknown, rawInput: unknown) =>
-        (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnIssueAction(tynnBoardPorts(), rawId, rawInput as { action: string; issueId: string | null; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
-    // Row H1, the Home's Details save: a write on the workspace's own project, through the person's pairing.
-    ipcMain.handle('genie:workspace-tynn-page-action', (_event, rawId: unknown, rawInput: unknown) =>
-        (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnPageAction(tynnBoardPorts(), rawId, rawInput as { action: string; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
-    ipcMain.handle('genie:workspace-tynn-issues-changes', (_event, rawId: unknown, rawFilters: unknown, rawCursor: unknown, rawIds: unknown) =>
-        (typeof rawId === 'string' && typeof rawCursor === 'string'
-            ? readTynnIssueChanges(tynnBoardPorts(), rawId, rawFilters ?? {}, rawCursor, Array.isArray(rawIds) ? rawIds.filter((x): x is string => typeof x === 'string') : [])
-            : { ok: false, state: 'error', reason: 'name a workspace and a cursor' }));
-    ipcMain.handle('genie:workspace-tynn-issues-watch', (event, rawId: unknown) =>
-        (typeof rawId === 'string' ? watchTynnIssues(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
-    ipcMain.handle('genie:workspace-tynn-issues-unwatch', (_event, rawWatch: unknown) => {
-        if (typeof rawWatch === 'number') tynnIssuesWatches.get(rawWatch)?.();
-    });
-    // Row F1: follow the Features page (the host holds one socket for every open tab).
-    ipcMain.handle('genie:workspace-tynn-features-watch', (event, rawId: unknown) =>
-        (typeof rawId === 'string' ? watchTynnFeatures(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
-    ipcMain.handle('genie:workspace-tynn-features-unwatch', (_event, rawWatch: unknown) => {
-        if (typeof rawWatch === 'number') tynnFeaturesWatches.get(rawWatch)?.();
-    });
     // "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt): the `.agents/*` a workspace
     // brought and has not registered, and adopting one — read from its AGENT.md, never rewritten. The sacred grant is the
     // linked Tynn project's `sacred_agent_name`; signed out or unlinked grants nothing.
@@ -2775,7 +2738,7 @@ async function boot(): Promise<void> {
         // them through the replica.
         ...(agentEngineLink ? { flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() } } : {}),
         // The plugins are genie-host's (ADF A3, Tynn #447): this window reads them through the replica.
-        ...(agentEngineLink ? { plugins: agentEngineLink.client.plugins() } : {}),
+        ...(agentEngineLink ? { plugins: agentEngineLink.client.plugins(), catalog: agentEngineLink.client.catalog() } : {}),
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
@@ -2873,6 +2836,8 @@ async function boot(): Promise<void> {
          */
         ...(linkedRemote ? { remoteAccess: linkedRemote } : {}),
         remoteApi: (remoteApiNow = buildHostApi({
+            // Following the Tynn tab, by subscription (P4 family 12, Tynn #561).
+            tynnWatch: tynnWatchPort,
             localTerminals: createNativeTerminalPort({
                 terminals: () => terminals,
                 workspaces: () => registry?.snapshot().workspaces ?? [],
@@ -2999,6 +2964,9 @@ async function boot(): Promise<void> {
                 tynnIssues: (id, filters) => readWorkspaceTynnIssues(id, filters ?? {}),
                 tynnIssueAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnIssueAction(tynnBoardPorts(), id, input as { action: string; issueId: string | null; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
                 tynnPageAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnPageAction(tynnBoardPorts(), id, input as { action: string; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name a workspace and an action' })),
+                // The live tab's reads (P4 family 12): what changed since a cursor, never the whole board or queue.
+                tynnBoardChanges: (id, scope, cursor, ids) => readTynnBoardChanges(tynnBoardPorts(), id, (scope ?? {}) as BoardScope, cursor, ids),
+                tynnIssueChanges: (id, filters, cursor, ids) => readTynnIssueChanges(tynnBoardPorts(), id, filters ?? {}, cursor, ids),
                 tynnOwnerOptions: () => listTynnOwners(workspaceOps),
                 createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },
                 importedAgents: (id) => readImportedAgents(adoptionPorts, id),
@@ -3709,19 +3677,19 @@ async function boot(): Promise<void> {
         },
         host: windowSessions,
         wake: (agentId) => wakeAgent(agentId),
-        onBoard: (event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); },
-        onIssues: (event) => { broadcast('genie:workspace-tynn-issues-live', event.workspaceId, event.signal); },
+        onBoard: (event) => { emitTynn('board', event.workspaceId, event.signal); },
+        onIssues: (event) => { emitTynn('issues', event.workspaceId, event.signal); },
         log: (line) => { console.log(`[genie] ${line}`); },
     }));
     if (agentEngineLink) {
         const engineClient = agentEngineLink.client;
         issueWatchNow = engineClient.issueWatch();
         tynnBoardDoor = { watch: (viewId, workspaceId) => engineClient.tynnBoardWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnBoardUnwatch(viewId); } };
-        engineClient.onTynnBoardEvent((event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); });
+        engineClient.onTynnBoardEvent((event) => { emitTynn('board', event.workspaceId, event.signal); });
         tynnIssuesDoor = { watch: (viewId, workspaceId) => engineClient.tynnIssuesWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnIssuesUnwatch(viewId); } };
-        engineClient.onTynnIssuesEvent((event) => { broadcast('genie:workspace-tynn-issues-live', event.workspaceId, event.signal); });
+        engineClient.onTynnIssuesEvent((event) => { emitTynn('issues', event.workspaceId, event.signal); });
         tynnFeaturesDoor = { watch: (viewId, workspaceId) => engineClient.tynnFeaturesWatch(viewId, workspaceId), unwatch: (viewId) => { void engineClient.tynnFeaturesUnwatch(viewId); } };
-        engineClient.onTynnFeaturesEvent((event) => { broadcast('genie:workspace-tynn-features-live', event.workspaceId, event.signal); });
+        engineClient.onTynnFeaturesEvent((event) => { emitTynn('features', event.workspaceId, event.signal); });
     } else if (windowIssueWatch) {
         const own = windowIssueWatch;
         const replica = new IssueWatchReplica(async (method, args) => (await own).issueWatch.call(method, args));

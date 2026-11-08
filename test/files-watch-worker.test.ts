@@ -56,6 +56,24 @@ describe('workerWatchSource', () => {
         handle.close();
     });
 
+    it('the catch-up leaves to the live watch what is stamped after that watch came up (files-watch-cdp: one batch per edit)', async () => {
+        // The walk reaches a file long after the watch is up on a big workspace (run 42527142658, Windows: 6,000 files sort
+        // before the edited one). A stamp later than the watch's start is the live watch's to report, so no timing here: a
+        // file stamped a minute ahead and never touched while watched; and, as the control, one stamped just before the ask.
+        root = await mkdtemp(join(tmpdir(), 'genie-watch-worker-'));
+        await writeFile(join(root, 'after-the-watch.txt'), 'the live watch reports this one');
+        await writeFile(join(root, 'before-the-watch.txt'), 'the catch-up reports this one');
+        const now = Date.now();
+        await utimes(join(root, 'after-the-watch.txt'), new Date(now + 60_000), new Date(now + 60_000));
+        await utimes(join(root, 'before-the-watch.txt'), new Date(now - 5), new Date(now - 5));
+        const seen: string[] = [];
+        const handle = workerWatchSource({ fallback: vi.fn(() => ({ close: () => {} })) })(root, (rel) => seen.push(rel));
+        await vi.waitFor(() => expect(seen).toContain('before-the-watch.txt'), { timeout: 5_000, interval: 20 });
+        await new Promise((r) => setTimeout(r, 300));
+        expect(seen).not.toContain('after-the-watch.txt');
+        handle.close();
+    });
+
     it('the catch-up does not report a file written well before the watch was asked for (files-watch-cdp: one batch per edit)', async () => {
         root = await mkdtemp(join(tmpdir(), 'genie-watch-worker-'));
         // As files-watch-cdp's phases: the last edit 700 ms before the next view's watch; and one stamped by a coarse clock
