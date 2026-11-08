@@ -1,9 +1,10 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, truncate, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PACKAGE_SIGNATURE_FILE, packageDigest, packageListing, packageSigningBytes, publisherKeyId } from '../src/core/plugin-integrity.js';
+import { PACKAGE_LIMITS, PACKAGE_SIGNATURE_FILE, packageDigest, packageLimitProblem, packageListing, packageSigningBytes, publisherKeyId } from '../src/core/plugin-integrity.js';
+import { readPackageFiles } from '../src/main/plugin-package.js';
 import { pluginTools } from '../src/main/mcp-tools-plugins.js';
 import { PluginHost } from '../src/main/plugin-host.js';
 import type { Caller } from '../src/main/mcp-tools.js';
@@ -153,6 +154,42 @@ describe('the format (genie-package/1), as the Tynn marketplace checks it too', 
         const entry = host.list().find((p) => p.id === 'com.example.notes');
         expect(entry!.state).toBe('refused');
         expect(entry!.reason).toMatch(/is not the fingerprint of the key/);
+    });
+});
+
+describe('the limits (approved with the format): refused before any hashing, in words', () => {
+    const entry = (path: string, size: number) => ({ path, size });
+
+    it('are 10,000 files, 200 MB in all, 50 MB a file and 1,024 bytes a path', () => {
+        expect(PACKAGE_LIMITS).toEqual({ files: 10_000, totalBytes: 200 * 1024 * 1024, fileBytes: 50 * 1024 * 1024, pathBytes: 1024 });
+    });
+
+    it('each limit, one past it, is refused naming it; at the limit, nothing is', () => {
+        const MB = 1024 * 1024;
+        expect(packageLimitProblem(Array.from({ length: 10_000 }, (_, i) => entry(`f${i}`, 1)))).toBeNull();
+        expect(packageLimitProblem(Array.from({ length: 10_001 }, (_, i) => entry(`f${i}`, 1)))).toMatch(/10,001 files.*at most 10,000/);
+        expect(packageLimitProblem([entry('big.bin', 50 * MB)])).toBeNull();
+        expect(packageLimitProblem([entry('big.bin', 50 * MB + 1)])).toMatch(/big\.bin is .* at most 50 MB a file/);
+        const fiveOf40 = Array.from({ length: 5 }, (_, i) => entry(`part${i}.bin`, 40 * MB));
+        expect(packageLimitProblem(fiveOf40)).toBeNull();
+        expect(packageLimitProblem([...fiveOf40, entry('one-more', 1)])).toMatch(/at most 200 MB in all/);
+        expect(packageLimitProblem([entry(`${'a'.repeat(1024)}`, 1)])).toBeNull();
+        expect(packageLimitProblem([entry(`${'a'.repeat(1025)}`, 1)])).toMatch(/a path of 1,025 bytes.*at most 1,024/);
+        // Bytes, not characters: 512 two-byte characters is 1,024 bytes; 513 is over.
+        expect(packageLimitProblem([entry('é'.repeat(512), 1)])).toBeNull();
+        expect(packageLimitProblem([entry('é'.repeat(513), 1)])).toMatch(/1,026 bytes/);
+    });
+
+    it('a package with a file past 50 MB is refused before it is read: the reason says why, and nothing was hashed', async () => {
+        await truncate(join(pkg, 'tools.cjs'), 50 * 1024 * 1024 + 1).catch(async () => { await writeFile(join(pkg, 'tools.cjs'), ''); await truncate(join(pkg, 'tools.cjs'), 50 * 1024 * 1024 + 1); });
+        let reads = 0;
+        const r = await readPackageFiles(pkg, { onRead: () => { reads++; } });
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect(r.reason).toMatch(/tools\.cjs is .* at most 50 MB a file/);
+        expect(reads).toBe(0);
+        const entry = await stateOf(true);
+        expect(entry!.state).toBe('refused');
+        expect(entry!.reason).toMatch(/at most 50 MB a file/);
     });
 });
 
