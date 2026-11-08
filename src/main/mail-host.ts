@@ -64,7 +64,8 @@ export class MailHost {
     }
 
     /** A new inbox and its password, answered once. */
-    create(input: { workspaceId: string; workspaceSlug: string; name: string }): Promise<{ inbox: Inbox; password: string }> {
+    /** `restart: false`: the caller restarts Mailpit itself, later (Genie Mail G5 tells the env first). */
+    create(input: { workspaceId: string; workspaceSlug: string; name: string }, options: { restart?: boolean } = {}): Promise<{ inbox: Inbox; password: string }> {
         return this.#serial(async () => {
             const problem = inboxNameProblem(input.name);
             if (problem) throw new Error(`${problem}; nothing was created`);
@@ -83,7 +84,7 @@ export class MailHost {
                 createdAt: (this.#ports.now ?? Date.now)(),
                 hash: await this.#ports.hash(password),
             };
-            await this.#commit({ inboxes: [...this.#book.inboxes, entry] });
+            await this.#commit({ inboxes: [...this.#book.inboxes, entry] }, options.restart !== false);
             return { inbox: view(entry), password };
         });
     }
@@ -114,12 +115,12 @@ export class MailHost {
     }
 
     /** The book, then the file, then Mailpit restarted to read it (finding 7). */
-    async #commit(book: Book): Promise<void> {
+    async #commit(book: Book, restart = true): Promise<void> {
         await writeJsonAtomic(this.#ports.storeFile, book, PRIVATE_FILE);
         this.#ports.onWrite?.('store');
         this.#book = book;
         await this.#writeAuthFile();
-        await this.#ports.restartMailpit();
+        if (restart) await this.#ports.restartMailpit();
     }
 
     async #writeAuthFile(): Promise<void> {

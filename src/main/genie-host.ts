@@ -354,6 +354,11 @@ async function main(): Promise<void> {
             userData: home,
             supervisor: processSupervisor,
             settings,
+            // Genie Mail G5: the workspaces' default inbox passwords live in the host keychain, for env injection only.
+            mailSecrets: {
+                get: async (name) => { const read = await keychain.get(name); return read.kind === 'value' ? read.value : null; },
+                set: async (name, value) => (await keychain.set(name, value)).ok,
+            },
             appEnv: (source) => appInboxDoor.envFor(source),
             elevate: (steps) => hostingElevation.run(steps),
             workspaces: () => hostRegistry.workspaceStates(),
