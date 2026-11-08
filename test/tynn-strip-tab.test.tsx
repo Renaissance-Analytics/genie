@@ -46,6 +46,9 @@ const agentPage = (route: string, opts: { linked: boolean; host: boolean }) => r
         onSelectRow={() => {}}
         onSend={() => {}}
         onCloseChat={() => {}}
+        answeringApproval={null}
+        onAnswerApproval={() => {}}
+        onAnswerDeckItem={() => {}}
     />,
 );
 const TAB = (view: string) => `data-workspace-tab="${view}"`;
