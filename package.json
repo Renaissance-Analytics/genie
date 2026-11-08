@@ -54,6 +54,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "ws": "^8.22.1",
+    "yauzl": "3.4.0",
     "yazl": "3.3.1"
   },
   "devDependencies": {
@@ -71,8 +72,7 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5",
-    "yauzl": "3.4.0"
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "global-agent": "^4.1.3"

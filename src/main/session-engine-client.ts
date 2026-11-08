@@ -814,7 +814,7 @@ export class SessionEngineClient {
             return answer.value as T;
         };
         this.#marketplace ??= {
-            search: (query, cursor) => request('search', [query, cursor]),
+            search: (query, cursor) => request('search', cursor === undefined ? [query] : [query, cursor]),
             prepare: (id, version) => request('prepare', [id, version]),
             install: (token, consent) => request('install', [token, consent]),
             discard: async token => { await request('discard', [token]); },
