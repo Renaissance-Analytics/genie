@@ -16,6 +16,9 @@ export interface TerminalCellProps {
     /** The terminal as the workspace holds it, or `null` when it is not there. */
     readonly terminal: { readonly id: string; readonly exited: number | null } | null;
     readonly output: string;
+    /** Where the output stream is (Tynn #542): the pane writes only what was appended. */
+    readonly outputEnd?: number;
+    readonly outputEpoch?: number;
     /** The pane, once its code has loaded (Workspace loads it lazily). */
     readonly Pane: ComponentType<TerminalPaneProps> | null;
     readonly root: string;
@@ -65,6 +68,8 @@ export function TerminalCell(p: TerminalCellProps) {
                     <p.Pane
                         paneId={t.id}
                         output={p.output}
+                        {...(p.outputEnd !== undefined ? { outputEnd: p.outputEnd } : {})}
+                        {...(p.outputEpoch !== undefined ? { outputEpoch: p.outputEpoch } : {})}
                         readOnly={t.exited !== null}
                         onData={(data) => p.onData(t.id, data)}
                         onResize={(size) => p.onResize(t.id, size)}

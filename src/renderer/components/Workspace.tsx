@@ -23,6 +23,8 @@ import {
     emptyWorkspace,
     terminalClosed,
     terminalData,
+    terminalOutput,
+    terminalReplaced,
     terminalExited,
     terminalOpened,
     type WorkspaceState,
@@ -341,7 +343,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
         const batch = outputBatch({ cap: OUTPUT_CAP, apply: (held) => setState((value) => held.reduce((v, [id, text]) => terminalData(v, id, text), value)) });
         const stops = (JSON.parse(terminalMembership) as string[]).map(id => watchTerminal(terminals, workspace.id, id, {
             // A snapshot replaces the output: what was held before it is in it.
-            snapshot: joined => { batch.drop(id); flushSync(() => { setState(value => ({ ...value, output: { ...value.output, [id]: joined.scrollback } })); setTerminalError(null); }); },
+            snapshot: joined => { batch.drop(id); flushSync(() => { setState(value => terminalReplaced(value, id, joined.scrollback)); setTerminalError(null); }); },
             data: text => batch.data(id, text),
             // The output before an exit is applied first, in the same update.
             exit: code => flushSync(() => { batch.flush(); setState(value => terminalExited(value, id, code)); }),
@@ -565,6 +567,8 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                             key={id}
                                             paneId={id}
                                             output={state.output[id] ?? ''}
+                                            outputEnd={terminalOutput(state, id).end}
+                                            outputEpoch={terminalOutput(state, id).epoch}
                                             readOnly={t.exited !== null}
                                             onData={(data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
                                             onResize={({ cols, rows }) => {
@@ -951,6 +955,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                         terminalId={p.ref}
                                         terminal={held}
                                         output={p.ref === null ? '' : state.output[p.ref] ?? ''}
+                                        {...(p.ref === null ? {} : { outputEnd: terminalOutput(state, p.ref).end, outputEpoch: terminalOutput(state, p.ref).epoch })}
                                         Pane={Pane}
                                         root={workspace.path}
                                         onData={(id, data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
