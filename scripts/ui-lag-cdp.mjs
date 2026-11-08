@@ -99,7 +99,9 @@ function installHostGauge(create) {
     ChildProcess.prototype.spawn = function (options) {
         const file = typeof options?.file === 'string' ? options.file.split(/[\\/]/).pop().slice(0, 40) : '?';
         const next = Array.isArray(options?.args) && typeof options.args[1] === 'string' ? options.args[1].split(/[\\/]/).pop().slice(0, 40) : '';
-        if (s.spawns.length < 5000) s.spawns.push([performance.now(), next ? `${file} ${next}` : file]);
+        // Genie's own executable started as the APP (not as Node): a window, the Genie browser or the updater, once each.
+        const app = options?.file === process.execPath && Array.isArray(options?.envPairs) && !options.envPairs.includes('ELECTRON_RUN_AS_NODE=1');
+        if (s.spawns.length < 5000) s.spawns.push([performance.now(), app ? `app launch: ${file}` : next ? `${file} ${next}` : file]);
         return original.call(this, options);
     };
     s.stop = () => { clearInterval(s.timer); if (ChildProcess.prototype.spawn !== original) ChildProcess.prototype.spawn = original; };
@@ -403,7 +405,7 @@ try {
     // THE HOST SPAWN BUDGET (Tynn #532): genie-host creates NO process on its own thread during the build. Its git and
     // its helpers' processes are created by its spawn-host child (Windows creates a process synchronously on the calling
     // thread). Counted, not timed: a count does not depend on how slow the runner is that day.
-    const hostSpawns = passes.map((p) => ({ pass: p.label, ...p.rows.filter((r) => r.phase.startsWith('build')).reduce((a, r) => { a.count += r.host.spawns.count; for (const [f, n] of Object.entries(r.host.spawns.by)) a.by[f] = (a.by[f] ?? 0) + n; return a; }, { count: 0, by: {} }) }));
+    const hostSpawns = passes.map((p) => ({ pass: p.label, ...p.rows.filter((r) => r.phase.startsWith('build')).reduce((a, r) => { for (const [f, n] of Object.entries(r.host.spawns.by)) { if (f.startsWith('app launch:')) a.apps[f] = (a.apps[f] ?? 0) + n; else { a.count += n; a.by[f] = (a.by[f] ?? 0) + n; } } return a; }, { count: 0, by: {}, apps: {} }) }));
     const spawnsOk = hostSpawns.every((h) => h.count === 0);
     result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk, main: mainBudget, paging, pushes, hostSpawns };
     code = BUDGET && !result.budget.ok ? 1 : 0;

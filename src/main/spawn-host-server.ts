@@ -1,8 +1,7 @@
 import type { PtyPort, PtySpawnOptions } from './terminal-host.js';
 import type { ListedPty, PtyTag, SpawnChannel, SpawnFrame } from './spawn-host-protocol.js';
 import type { LineStream, RunOptions, RunResult } from './spawn-exec.js';
-import type { ExecFileOptions } from 'node:child_process';
-import type { GitChild, GitExecCallback } from './git-exec.js';
+import type { ExecFileOptions, GitChild, GitExecCallback } from './git-exec.js';
 import { randomUUID } from 'node:crypto';
 import { SPAWN_PROTOCOL } from './spawn-host-protocol.js';
 import { splitTerminalText, TerminalOutputCounter } from '../core/terminal-stream.js';

@@ -1,5 +1,4 @@
-import type { ExecFileOptions } from 'node:child_process';
-import { gitExecFile, type GitChild } from './git-exec.js';
+import { gitExecFile, type ExecFileOptions, type GitChild } from './git-exec.js';
 import { join } from 'node:path';
 import { redactSecrets } from '../core/github.js';
 import { commitIdentityConfig } from '../core/add-workspace.js';

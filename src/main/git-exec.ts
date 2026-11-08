@@ -1,5 +1,7 @@
 import { execFile, type ExecFileOptions } from 'node:child_process';
 
+export type { ExecFileOptions };
+
 /**
  * WHERE GIT'S PROCESSES ARE CREATED (Tynn #532). Windows creates a process synchronously on the calling thread: measured in
  * the UI-lag row on the Windows runner, one git read held genie-host 295 ms inside `spawn`, and a build runs one every
