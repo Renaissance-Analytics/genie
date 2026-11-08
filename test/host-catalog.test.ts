@@ -58,7 +58,7 @@ const until = async (ok: () => boolean, ms = 10_000) => {
 
 describe('genie-host serves the plugin tools with no window', () => {
     it('lists and CALLS ai.genie.spreadsheet.createWorkbook with no window ever attached (no WindowView sent)', async () => {
-        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, developerMode: () => false });
+        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: () => false });
         mcp = startHostMcp(ports(hostPluginTools(service, { sandboxDir: join(dir, 'sandbox'), api: async () => { throw new Error('none'); } }), () => false));
         await until(() => mcp!.endpoint() !== null);
         expect(mcp.status().tools.map((t) => t.name)).toContain(SHEET);
@@ -69,7 +69,7 @@ describe('genie-host serves the plugin tools with no window', () => {
     });
 
     it('the plugin tool is the host’s own: run here, never forwarded to a window (CONTROL: a window tool still is)', async () => {
-        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, developerMode: () => false });
+        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: () => false });
         mcp = startHostMcp(ports(hostPluginTools(service, { sandboxDir: join(dir, 'sandbox'), api: async () => { throw new Error('none'); } }), () => true));
         await until(() => mcp!.endpoint() !== null);
         const sheet = mcp.registrations().find((r) => r.definition.name === SHEET)!;
@@ -84,7 +84,7 @@ describe('genie-host serves the plugin tools with no window', () => {
 
 describe('the plugins are the host’s; a window reads them through a replica', () => {
     it('the host’s dump carries the plugins, their panels and editors — with no window, and the same after one closes', async () => {
-        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, developerMode: () => false });
+        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: () => false });
         const dump = service.dump();
         expect(dump.entries.map((e) => e.id)).toEqual(['ai.genie.document', 'ai.genie.spreadsheet', 'ai.genie.presentation', 'ai.genie.repository', 'ai.genie.artboard']);
         expect(dump.editors.map((e) => `${e.pluginId}.${e.id}`)).toEqual(['ai.genie.document.document', 'ai.genie.spreadsheet.sheet', 'ai.genie.presentation.deck']);
@@ -92,7 +92,7 @@ describe('the plugins are the host’s; a window reads them through a replica', 
     });
 
     it('a replica answers what the window asks (list, panels, editors, an editor’s bytes) from the host’s dump, and asks the host to change', async () => {
-        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, developerMode: () => false });
+        const service = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: () => false });
         const asked: string[] = [];
         const replica = new PluginsReplica(async (method, args) => { asked.push(`${method} ${JSON.stringify(args)}`); return service.call(method, args); });
         expect(replica.list()).toEqual([]);

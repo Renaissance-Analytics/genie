@@ -39,3 +39,25 @@ export function outputStep(prev: OutputView | null, next: OutputView): OutputSte
     if (next.text.startsWith(prev.text)) return { reset: false, write: next.text.slice(prev.text.length) };
     return { reset: true, write: next.text };
 }
+
+/**
+ * A TERMINAL'S OUTPUT AS A VIEW KEEPS IT (Tynn #544): the kept text (its newest `cap` characters), and its position. The
+ * Workspace keeps the same per terminal in its own state (`outputAt`, #542); the Agent view and the Take Over window keep
+ * one of these each.
+ */
+export interface OutputStream {
+    readonly text: string;
+    readonly end: number;
+    readonly epoch: number;
+}
+
+/** The output REPLACED (a snapshot on attach): a new epoch, which the pane starts from a clean terminal. */
+export function streamReplaced(prev: OutputStream | null, text: string): OutputStream {
+    return { text, end: text.length, epoch: (prev?.epoch ?? 0) + 1 };
+}
+
+/** Output appended: counted in full, kept to `cap` from the front. */
+export function streamAppended(prev: OutputStream, data: string, cap: number): OutputStream {
+    const joined = prev.text + data;
+    return { text: joined.length > cap ? joined.slice(joined.length - cap) : joined, end: prev.end + data.length, epoch: prev.epoch };
+}

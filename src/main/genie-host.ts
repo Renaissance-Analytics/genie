@@ -159,7 +159,8 @@ const recordFile = join(runtime, 'host.json');
 const tokenFile = join(runtime, 'host.token');
 
 mkdirSync(runtime, { recursive: true });
-const lifecycleLog = openLifecycleLog(runtime);
+// Off the host's thread (Tynn #548): a line is queued and written in order; an exit writes what is left.
+const lifecycleLog = openLifecycleLog(runtime, { async: true });
 const say = (line: string): void => {
     console.log(`[genie-host] ${new Date().toISOString()} ${line}`);
 };
@@ -675,7 +676,7 @@ async function main(): Promise<void> {
      * under developer mode (the host's own setting). Its MCP server offers and runs their tools with no window; every
      * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
      */
-    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, developerMode: () => settings.snapshot().developer_mode === true });
+    const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true });
     /*
      * THE CATALOG (ADF A4, Tynn #448): Genie's own elements and every ENABLED installed plugin's, revisioned. Built again
      * whenever the plugins change; every window follows it over the engine connection (catalog.snapshot, catalog.changed).

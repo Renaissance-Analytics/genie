@@ -3,6 +3,13 @@ import type { LocalTerminalMethod } from '../core/local-terminals.js';
 import { encodeTerminalNativeArguments } from '../core/local-terminals.js';
 import { splitTerminalText, TerminalStreamReceiver, terminalPosition } from '../core/terminal-stream.js';
 import type { GenieBridge } from './bridge.js';
+import { unlimited, type HeldLimit } from './local-content-client.js';
+
+/**
+ * The calls whose answer can be a held response (a snapshot, a list, an open): they share the connection's held limit with
+ * Files (Tynn #547). Keystrokes, resizes and acks never wait behind a Files read.
+ */
+const HELD_TERMINAL_METHODS: ReadonlySet<LocalTerminalMethod> = new Set<LocalTerminalMethod>(['terminals.localWatch', 'terminals.localAttach', 'terminals.localList', 'terminals.localOpen', 'terminals.localFinish']);
 
 type Terminals = GenieBridge['terminals'];
 type Joined = NonNullable<Awaited<ReturnType<Terminals['attach']>>>;
@@ -37,6 +44,7 @@ interface Port {
     release(ref: string): Promise<unknown>;
     blobs: BlobClient;
     on(channel: string, listener: (payload: unknown) => void): () => void;
+    limit?: HeldLimit;
 }
 interface ViewState { view: string; id: string; alive: boolean; receiver: TerminalStreamReceiver; chain: Promise<void>; observer: TerminalObserver; restart(): Promise<void> }
 
@@ -45,11 +53,13 @@ export function localTerminalClient(port: Port): { terminals: Terminals; dispose
     let closed = false;
     const request = async <T>(method: LocalTerminalMethod, ...args: unknown[]): Promise<T> => {
         if (closed) throw new Error('terminal connection is closed');
-        const result = await port.read<T | { terminalContent: { ref: string; blob: string } }>(method, ...args);
-        if (!result || typeof result !== 'object' || !('terminalContent' in result)) return result as T;
-        const content = result.terminalContent;
-        try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await port.blobs.readAll('terminal-json', content.blob))) as T; }
-        finally { await port.release(content.ref); }
+        return (HELD_TERMINAL_METHODS.has(method) ? port.limit ?? unlimited : unlimited)(async () => {
+            const result = await port.read<T | { terminalContent: { ref: string; blob: string } }>(method, ...args);
+            if (!result || typeof result !== 'object' || !('terminalContent' in result)) return result as T;
+            const content = result.terminalContent;
+            try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await port.blobs.readAll('terminal-json', content.blob))) as T; }
+            finally { await port.release(content.ref); }
+        });
     };
     const stop = (state: ViewState) => {
         if (!state.alive) return; state.alive = false; active.delete(state.view);

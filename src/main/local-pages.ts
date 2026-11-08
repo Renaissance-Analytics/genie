@@ -5,14 +5,26 @@ interface Pending { item: MetadataItem; bytes: number }
 interface Opened { id: string; resource: string; releaseBudget: () => void; source: PageSource | null; pending: Pending | null; busy: boolean; released: boolean }
 class OversizedRecord extends Error {}
 
-/** A response and cursors over that same snapshot share a slot; other lists retain their own reservation. */
+/**
+ * A response and cursors over that same snapshot share a slot; other lists retain their own reservation. A full budget
+ * names what holds it (Tynn #547): nothing is evicted, since a held response may still be mid-read in the window.
+ */
 export class LocalPageBudget {
-    readonly #held = new Map<string, number>();
-    hold(key: string = randomUUID()): () => void {
-        if (!this.#held.has(key) && this.#held.size >= MAX_OPEN_PAGES) throw new Error(`only ${MAX_OPEN_PAGES} lists or responses may be held on this connection`);
-        this.#held.set(key, (this.#held.get(key) ?? 0) + 1);
+    readonly #held = new Map<string, { count: number; label: string; since: number }>();
+    readonly #now: () => number;
+    constructor(now: () => number = Date.now) { this.#now = now; }
+    hold(key: string = randomUUID(), label = 'a list'): () => void {
+        const entry = this.#held.get(key);
+        if (!entry && this.#held.size >= MAX_OPEN_PAGES) throw new Error(`only ${MAX_OPEN_PAGES} lists or responses may be held on this connection; held by ${this.holders()}`);
+        if (entry) entry.count++; else this.#held.set(key, { count: 1, label, since: this.#now() });
         let held = true;
-        return () => { if (!held) return; held = false; const count = this.#held.get(key) ?? 0; if (count <= 1) this.#held.delete(key); else this.#held.set(key, count - 1); };
+        return () => { if (!held) return; held = false; const e = this.#held.get(key); if (!e) return; if (e.count <= 1) this.#held.delete(key); else e.count--; };
+    }
+    /** What holds the slots, by label, oldest first: `files.localOpen ×3 (oldest 4s)`. */
+    holders(): string {
+        const now = this.#now(), groups = new Map<string, { n: number; oldest: number }>();
+        for (const { label, since } of this.#held.values()) { const g = groups.get(label); if (g) { g.n++; g.oldest = Math.min(g.oldest, since); } else groups.set(label, { n: 1, oldest: since }); }
+        return [...groups].sort((a, b) => a[1].oldest - b[1].oldest).map(([label, g]) => `${label}${g.n > 1 ? ` ×${g.n}` : ''} (oldest ${Math.max(0, Math.round((now - g.oldest) / 1000))}s)`).join(', ') || 'nothing';
     }
 }
 
@@ -31,7 +43,7 @@ export class LocalPages {
         if (typeof ref !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(ref)) throw new Error('a list needs a host-issued reference');
         if (this.#opened.size >= MAX_OPEN_PAGES) throw new Error(`only ${MAX_OPEN_PAGES} lists may be open on this connection`);
         if (!this.#openSource) throw new Error('list metadata is not available on this host yet');
-        const resource = this.#resourceOf?.(ref) ?? randomUUID(), releaseBudget = this.#budget.hold(resource);
+        const resource = this.#resourceOf?.(ref) ?? randomUUID(), releaseBudget = this.#budget.hold(resource, `list ${kind}`);
         const e: Opened = { id: randomUUID(), resource, releaseBudget, source: null, pending: null, busy: true, released: false };
         this.#opened.set(e.id, e);
         try {
