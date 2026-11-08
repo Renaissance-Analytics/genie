@@ -33,10 +33,12 @@ import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type Host
 import { holdMigration, portsOf } from './migration-holds.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
+import type { PluginsApi } from './plugins-replica.js';
+import { LocalPlugins } from './plugins-host.js';
 import { PluginHost } from './plugin-host.js';
-import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
+import type { Verification } from './mcp-server.js';
 import { Baton, PairingPins } from '../core/remote.js';
 import { PairApprovals } from '../core/pair-confirm.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
@@ -132,6 +134,8 @@ export interface ComposeInput extends HostingOptions {
      * window then builds none of its own. Absent = it builds its own (hosting-compose.ts) — the emergency path, until P6.
      */
     readonly hosting?: HostingApi;
+    /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
+    readonly plugins?: PluginsApi;
     /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
     readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
     /**
@@ -305,8 +309,10 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     syncConfig(workspacePath: string, source?: SyncSource): Promise<SyncResult[]>;
     /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md, then the skills (separate from the four config-sync targets). */
     syncAgentDocs(workspacePath: string, source?: SyncSource): Promise<void>;
-    /** §6.7: the plugin host over `<userData>/plugins`; re-read when developer mode changes. */
-    readonly plugins: PluginHost;
+    /** §6.7: the plugins, genie-host's through its replica (ADF A3); re-read when developer mode changes. */
+    readonly plugins: PluginsApi;
+    /** This window's OWN plugins, opened only with no genie-host (the emergency path); `null` when the host owns them. */
+    readonly ownPlugins: LocalPlugins | null;
     readonly pluginsDir: string;
     /** Re-read the plugins folder (after developer mode flips, or a plugin was dropped in). */
     pluginsRefresh(): Promise<void>;
@@ -428,12 +434,17 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const approvals: WindowAgentStores['approvals'] = input.agentStores?.approvals ?? ownApprovals!;
 
     const hostName = input.hostName ?? hostname();
-    // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
+    // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode. They are
+    // GENIE-HOST'S (ADF A3, Tynn #447): this window reads them through the host's replica and opens no plugin host itself.
     const pluginsDir = join(input.userData, 'plugins');
-    const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS });
+    // With NO genie-host (the emergency path) this window loads its own, as it always did: no regression (the coordinator's
+    // ruling for the owner, 2026-11-08); genie-host owns them whenever it is there.
+    const openOwnPlugins = () => LocalPlugins.start(() => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS }));
     stage?.begin('plugins');
-    let plugins = await openPlugins();
-    stage?.end(); stage?.begin('remote-devices');
+    const ownPlugins = input.plugins ? null : await openOwnPlugins();
+    stage?.end();
+    const plugins: PluginsApi = input.plugins ?? ownPlugins!;
+    stage?.begin('remote-devices');
     const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
     stage?.end();
     // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
@@ -675,9 +686,10 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 agentFiles: agentFiles.list(),
             };
         },
-        get plugins() { return plugins; },
+        plugins,
+        ownPlugins,
         pluginsDir,
-        pluginsRefresh: async () => { plugins = await openPlugins(); },
+        pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {
             // Nothing of Genie's goes into a folder the person has not trusted, its token above all.
             if (!(await mayWriteInto(workspacePath))) return [];

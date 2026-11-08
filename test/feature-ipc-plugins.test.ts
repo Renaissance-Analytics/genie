@@ -5,12 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
+import { PluginsService } from '../src/main/plugins-host.js';
+import { PluginsReplica } from '../src/main/plugins-replica.js';
 
 /**
- * PLUGINS IN THE SNAPSHOT (§6.7). The composed services open the plugin host at `<userData>/plugins`
- * with the publisher keys Genie carries and the `developer_mode` setting; the snapshot lists every
- * entry; `plugins.setEnabled` flips an installable one and is refused (returns the same list) for one
- * that is not. Turning developer mode on re-reads the folder so an unsigned local plugin appears enabled.
+ * PLUGINS IN THE SNAPSHOT (§6.7). The plugin host at `<userData>/plugins` is GENIE-HOST'S (ADF A3, Tynn #447): the
+ * window's composed services read it through the host's replica — so this test composes the services the way main.ts
+ * does with a host, over the host's real `PluginsService`, wired as the engine wires it (a call asks the host; the host's
+ * change comes back as its dump). The snapshot lists every entry; `plugins.setEnabled` flips an installable one and is
+ * refused (returns the same list) for one that is not. Turning developer mode on re-reads the folder so an unsigned local
+ * plugin appears enabled.
  */
 
 const pty: PtyPort = {
@@ -21,11 +25,18 @@ const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
 
 let dir: string;
 let services: ComposedServices;
+let host: PluginsService;
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-plugins-'));
     await mkdir(join(dir, 'plugins', 'local-dev'), { recursive: true });
     await writeFile(join(dir, 'plugins', 'local-dev', 'genie-plugin.json'), JSON.stringify({ id: 'com.example.localdev', name: 'Local Dev', version: '0.1.0', publisher: { name: 'Me', keyId: 'me' } }));
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
+    let developerMode = () => false;
+    host = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, developerMode: () => developerMode() });
+    const replica = new PluginsReplica((method, args) => host.call(method, args));
+    host.onEvent((dump) => replica.rebase(dump));
+    replica.rebase(host.dump());
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, plugins: replica });
+    developerMode = () => services.settings.snapshot().developer_mode === true;
 });
 afterEach(async () => {
     await services.shutdown();
@@ -55,7 +66,7 @@ describe('plugins in the snapshot', () => {
 
         const off = await handleFeatureAction(services, { kind: 'plugins.setEnabled', id: 'com.example.localdev', enabled: false }, state());
         expect(local(off)).toMatchObject({ state: 'disabled' });
-        expect(services.plugins.guard('com.example.localdev')).toBeNull();
+        expect(host.plugins().guard('com.example.localdev')).toBeNull();
     });
 
     it('the official plugins are listed first and their editors reach the renderer; disabling one takes its editor away', async () => {
