@@ -5,6 +5,8 @@ import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 import { runOfficialTool } from './official-tools.js';
 import { PluginHost, type PluginEntry } from './plugin-host.js';
 import { launchSubprocessIn, runPluginTool } from './plugin-runner.js';
+import type { EditorBytesDecision } from '../core/plugin-editors.js';
+import type { PluginsApi } from './plugins-replica.js';
 
 /**
  * THE PLUGINS ARE GENIE-HOST'S (ADF A3, Tynn #447; spec .ai/plans/specs/adf-sdk.md). The host opens the plugin host over
@@ -82,19 +84,56 @@ export class PluginsService {
 }
 
 /**
- * The plugins' tools as the host's MCP server runs them: the ENABLED plugins' tools, each plugin's guard, and the run —
- * an official tool in process (main/official-tools.ts), anyone else's in its sandboxed child (main/plugin-runner.ts,
- * genie#871: its folder, the workspace only if declared, the declared hosts only).
+ * A WINDOW WITH NO GENIE-HOST keeps its plugins (the coordinator's ruling for the owner, 2026-11-08: "a window with no
+ * genie-host still loads plugins itself, as today, so there's no regression. genie-host owns them whenever it's present").
+ * Its own plugin host, re-opened on refresh, behind the same surface a window reads the host's through; and its tools,
+ * which that window then serves itself (`localPluginTools`).
  */
-export function hostPluginTools(service: PluginsService, opts: {
+export class LocalPlugins implements PluginsApi {
+    #host: PluginHost;
+    readonly #open: () => Promise<PluginHost>;
+
+    private constructor(host: PluginHost, open: () => Promise<PluginHost>) {
+        this.#host = host;
+        this.#open = open;
+    }
+
+    static async start(open: () => Promise<PluginHost>): Promise<LocalPlugins> {
+        return new LocalPlugins(await open(), open);
+    }
+
+    list(): readonly PluginEntry[] { return this.#host.list(); }
+    panels(): PluginsDump['panels'] { return this.#host.panels(); }
+    editors(): readonly ClaimingEditor[] { return this.#host.editors(); }
+    editorBytes(pluginId: string, path: string): EditorBytesDecision { return this.#host.editorBytes(pluginId, path); }
+    setEnabled(pluginId: string, enabled: boolean): Promise<boolean> { return this.#host.setEnabled(pluginId, enabled); }
+    async refresh(): Promise<void> { this.#host = await this.#open(); }
+    /** The ENABLED plugins' tools and each one's guard, live across a refresh. */
+    tools(): ReturnType<PluginHost['tools']> { return this.#host.tools(); }
+    guard(pluginId: string): ReturnType<PluginHost['guard']> { return this.#host.guard(pluginId); }
+}
+
+export interface PluginToolsRunOptions {
     /** Where a plugin's child is launched from (`<root>/plugin-sandbox`). */
     readonly sandboxDir: string;
     /** The Genie API a plugin may ask for, by name. */
     readonly api: (method: string, params: unknown) => Promise<unknown>;
-}): PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] } {
+}
+
+/** The plugins' tools as the host's MCP server runs them (ADF A3): genie-host's own plugins. */
+export function hostPluginTools(service: PluginsService, opts: PluginToolsRunOptions): PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] } {
+    return localPluginTools({ tools: () => service.plugins().tools(), guard: (id) => service.plugins().guard(id) }, opts);
+}
+
+/**
+ * The plugins' tools from a source of them: the ENABLED plugins' tools, each plugin's guard, and the run — an official
+ * tool in process (main/official-tools.ts), anyone else's in its sandboxed child (main/plugin-runner.ts, genie#871: its
+ * folder, the workspace only if declared, the declared hosts only). genie-host's, or a window's with no genie-host.
+ */
+export function localPluginTools(source: Pick<PluginToolsDeps['plugins'], 'tools' | 'guard'>, opts: PluginToolsRunOptions): PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] } {
     return {
-        tools: () => service.plugins().tools(),
-        guard: (id) => service.plugins().guard(id),
+        tools: () => source.tools(),
+        guard: (id) => source.guard(id),
         run: (input) => input.official
             ? runOfficialTool({ pluginId: input.manifest.id, tool: input.tool.name, args: input.args, caller: input.caller, manifest: input.manifest })
             : runPluginTool({

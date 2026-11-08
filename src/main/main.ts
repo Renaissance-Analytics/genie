@@ -243,6 +243,7 @@ import type { InboxStore } from './inbox-store.js';
 import type { AttentionStore } from './attention-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
+import { localPluginTools } from './plugins-host.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
@@ -3488,8 +3489,15 @@ async function boot(): Promise<void> {
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
             serviceExec: runServiceExec,
             // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window, so
-            // this window serves none (and on the emergency path, with no host, there are no plugins at all).
-            plugins: { tools: () => [], guard: () => null, run: async () => ({ ok: false, reason: "a plugin's tool runs in Genie's host, not this window" }) },
+            // this window serves none — unless there is NO host (the emergency path): then its own, as it always did.
+            plugins: composed.ownPlugins ? localPluginTools(composed.ownPlugins, {
+                sandboxDir: join(genieRoot(), 'plugin-sandbox'),
+                // The genie API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
+                api: async (method, params) => {
+                    if (method === 'knowledge.search') return composed.knowledge.search({ ...(typeof params === 'object' && params !== null ? params : {}) } as never);
+                    throw new Error(`${method} is not offered to plugins`);
+                },
+            }) : { tools: () => [], guard: () => null, run: async () => ({ ok: false, reason: "a plugin's tool runs in Genie's host, not this window" }) },
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;

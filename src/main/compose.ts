@@ -33,7 +33,11 @@ import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type Host
 import { holdMigration, portsOf } from './migration-holds.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
-import { NO_PLUGINS, type PluginsApi } from './plugins-replica.js';
+import type { PluginsApi } from './plugins-replica.js';
+import { LocalPlugins } from './plugins-host.js';
+import { PluginHost } from './plugin-host.js';
+import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
+import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
 import type { Verification } from './mcp-server.js';
 import { Baton, PairingPins } from '../core/remote.js';
 import { PairApprovals } from '../core/pair-confirm.js';
@@ -130,7 +134,7 @@ export interface ComposeInput extends HostingOptions {
      * window then builds none of its own. Absent = it builds its own (hosting-compose.ts) — the emergency path, until P6.
      */
     readonly hosting?: HostingApi;
-    /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = none: this window opens no plugin host. */
+    /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
     readonly plugins?: PluginsApi;
     /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
     readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
@@ -307,6 +311,8 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     syncAgentDocs(workspacePath: string, source?: SyncSource): Promise<void>;
     /** §6.7: the plugins, genie-host's through its replica (ADF A3); re-read when developer mode changes. */
     readonly plugins: PluginsApi;
+    /** This window's OWN plugins, opened only with no genie-host (the emergency path); `null` when the host owns them. */
+    readonly ownPlugins: LocalPlugins | null;
     readonly pluginsDir: string;
     /** Re-read the plugins folder (after developer mode flips, or a plugin was dropped in). */
     pluginsRefresh(): Promise<void>;
@@ -431,7 +437,13 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode. They are
     // GENIE-HOST'S (ADF A3, Tynn #447): this window reads them through the host's replica and opens no plugin host itself.
     const pluginsDir = join(input.userData, 'plugins');
-    const plugins: PluginsApi = input.plugins ?? NO_PLUGINS;
+    // With NO genie-host (the emergency path) this window loads its own, as it always did: no regression (the coordinator's
+    // ruling for the owner, 2026-11-08); genie-host owns them whenever it is there.
+    const openOwnPlugins = () => LocalPlugins.start(() => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS }));
+    stage?.begin('plugins');
+    const ownPlugins = input.plugins ? null : await openOwnPlugins();
+    stage?.end();
+    const plugins: PluginsApi = input.plugins ?? ownPlugins!;
     stage?.begin('remote-devices');
     const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
     stage?.end();
@@ -675,6 +687,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
             };
         },
         plugins,
+        ownPlugins,
         pluginsDir,
         pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {
