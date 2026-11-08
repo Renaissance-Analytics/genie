@@ -117,7 +117,7 @@ import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
-import { unsupportedSlashCommand } from '../core/provider-commands.js';
+import { slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
@@ -1181,9 +1181,8 @@ export class SessionHost {
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): { ok: true } | { ok: false; reason: string | null } {
         const entry = this.#running.get(agentId);
         if (!entry || !entry.session.running) return { ok: false, reason: null };
-        // A slash command the agent cannot run is said to the composer, never sent as a chat message (Tynn #440).
-        const unsupported = by === 'you' ? unsupportedSlashCommand(text, entry.session.extensions, reportsCommandsFor(entry.provider)) : null;
-        if (unsupported !== null) return { ok: false, reason: unsupported };
+        const command = this.#yourCommand(agentId, entry, text, by, attachments.length > 0);
+        if (command !== null) return command;
         const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
         if (!built.ok) return { ok: false, reason: built.reason };
         try {
@@ -1193,6 +1192,24 @@ export class SessionHost {
         }
         this.#emit(agentId);
         return { ok: true };
+    }
+
+    /**
+     * A SLASH COMMAND YOU TYPED (Tynn #440): `null` when this is not one Genie acts on (not a command, or not yours —
+     * Genie's notice, a peer's message), else what became of it. One the agent did not advertise is refused, never sent
+     * as chat. One it advertised goes to a provider that runs commands (`runsCommands`: Codex) as that command, taking
+     * no arguments; to one that does not (Claude), it is the prompt text as before (`null` here), and its CLI runs it.
+     */
+    #yourCommand(agentId: AgentId, entry: Running, text: string, by: string | null, withFiles: boolean): { ok: true } | { ok: false; reason: string } | null {
+        if (by !== 'you') return null;
+        const unsupported = unsupportedSlashCommand(text, entry.session.extensions, reportsCommandsFor(entry.provider));
+        if (unsupported !== null) return { ok: false, reason: unsupported };
+        const command = slashCommandOf(text);
+        if (command === null || !entry.session.runsCommands) return null;
+        if (command.args || withFiles) return { ok: false, reason: `/${command.name} was not sent: it takes no arguments here.` };
+        const refused = entry.session.runCommand(command.name, text.trim(), by);
+        this.#emit(agentId);
+        return refused === null ? { ok: true } : { ok: false, reason: refused };
     }
 
     /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
@@ -1420,6 +1437,9 @@ export class SessionHost {
         const entry = this.#running.get(agentId);
         if (!entry) return null;
         if (!entry.session.running) return null;
+        // The phone's text-only message comes this way: the same check as the composer's (Tynn #440).
+        const command = this.#yourCommand(agentId, entry, text, by, false);
+        if (command !== null) return command.ok ? { queued: null } : null;
         const queued = entry.session.deliver(text, by, null, context);
         this.#emit(agentId);
         return { queued };

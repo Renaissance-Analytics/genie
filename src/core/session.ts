@@ -117,6 +117,13 @@ export interface SessionDriver {
     steer?(content: readonly PromptBlock[], options: { clientId: string }): Promise<SteerAcceptanceLike>;
     steerState?(clientId: string): SteerRecordLike | { readonly kind: 'not_known' };
     acknowledgeSteer?(clientId: string): boolean;
+    /**
+     * RUN ONE OF THE COMMANDS THE PROVIDER ADVERTISED — prism-acp 0.39.0's `CodexDriver.runCommand(name)` (Tynn #440):
+     * `compact`, `review`. Resolves on acceptance; the command's completion is the turn's end (`onTurnEnd`). Rejects
+     * with `CommandUnsupported` (`code: 'command_unsupported'`, a fixed `reason`) when it will not run. Absent (Claude):
+     * a command is the prompt text, and the CLI runs it.
+     */
+    runCommand?(name: string): Promise<void>;
 }
 
 /** prism-acp 0.38.0's `SteerAcceptance`: the native reply to one steer. */
@@ -1615,6 +1622,54 @@ export class AgentSession {
         return null;
     }
 
+    /** Whether this agent's provider runs its commands as commands (`SessionDriver.runCommand`), not as prompt text. */
+    get runsCommands(): boolean {
+        return typeof this.#driver?.runCommand === 'function';
+    }
+
+    /**
+     * RUN THE PROVIDER'S OWN COMMAND (Tynn #440): `/compact` typed to a Codex agent is Codex's compaction, never a chat
+     * message. It opens a turn as a prompt does — your `/compact` in the chat, Working — and that turn ends when the
+     * provider reports the command done. Answers `null` when it was handed over, or why it was not: refused at once
+     * when a turn is running or the agent cannot take one; a refusal from the provider (`CommandUnsupported`) arrives
+     * later, said in the chat with its reason, and no turn is left running.
+     */
+    runCommand(name: string, text: string, by: string | null): string | null {
+        const driver = this.#driver;
+        if (!driver?.runCommand) return `/${name} was not run: this agent runs no commands.`;
+        if (!this.running || this.#starting || this.#held || this.#inTurn || this.#approval !== null || this.#needsNewDriver || this.#options.mayTakeWork?.() === false) {
+            return `/${name} was not run: the agent is busy.`;
+        }
+        if (by === 'you') this.resumeAfterStop();
+        let accepted: Promise<void>;
+        try {
+            accepted = driver.runCommand(name);
+        } catch (error) {
+            return `/${name} was not run: ${commandRefusalWords(error)}.`;
+        }
+        const endedBefore = this.#endedThisRun;
+        this.#queued = [];
+        void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
+        this.#inTurn = true;
+        this.#limitThisTurn = false;
+        void this.#emitRow(promptRow(text, by, null, {}));
+        this.#turnState = 'working';
+        this.#stopCooling();
+        this.#changed();
+        void accepted.catch((error: unknown) => {
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `/${name} did not run: ${commandRefusalWords(error)}.` });
+            // No turn comes of a refused command: the one opened for it is closed here, unless the provider ended it.
+            if (this.#inTurn && this.#endedThisRun === endedBefore && !this.#ended) {
+                this.#inTurn = false;
+                this.#turnState = 'idle';
+                this.#startIdle();
+                this.#flushAfterTurn();
+            }
+            this.#changed();
+        });
+        return null;
+    }
+
     /** A word from Genie held for the next turn this session opens (`holdForNextWork`); `null` = none. */
     #heldForNextWork: string | null = null;
     #heldSent: (() => void) | null = null;
@@ -2379,6 +2434,16 @@ export class AgentSession {
         // take the turn down with it — and must not vanish either (`#record`).
         await this.#record(event, whole);
     }
+}
+
+/**
+ * Why a command did not run, in words: prism-acp's `CommandUnsupported` carries a fixed `reason`
+ * (`native_method_missing` → "native method missing"); anything else, its message.
+ */
+function commandRefusalWords(error: unknown): string {
+    const reason = typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'command_unsupported' ? (error as { reason?: unknown }).reason : undefined;
+    if (typeof reason === 'string' && reason !== '') return reason.replace(/_/g, ' ');
+    return error instanceof Error && error.message !== '' ? error.message : 'the provider refused it';
 }
 
 /** What a prompt's ledger row carries beyond its text: a Genie notice's mail (beta.33 item 18). */
