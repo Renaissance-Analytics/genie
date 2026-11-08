@@ -152,10 +152,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             case 'welcome':
                 setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null });
                 resolveReady({ ok: true });
-                // Another machine's window hears who drives, and drives at once when it is one that does (Tynn #529).
-                if (auth.kind !== 'local') {
+                // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
+                if (options.drive === true && auth.kind !== 'local') {
                     void call('baton.watch');
-                    void (options.drive === true ? control('baton.take') : refreshBaton());
+                    void control('baton.take');
                 }
                 return;
             case 'pairing':
