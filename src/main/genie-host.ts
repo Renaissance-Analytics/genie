@@ -736,7 +736,7 @@ async function main(): Promise<void> {
     let remoteAccessService: RemoteAccessService | null = null;
     const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => remoteAccessService?.pushStatus() });
     remoteAccessService = new RemoteAccessService(remoteAccessHost, relayBridge, {
-        switch: remoteSwitch,
+        switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
         newestWindow: () => engineRef?.newestLocalWindow() ?? null,
         windowEvent: (channel, payload) => { for (const l of [...remoteWindowEvents]) l(channel, payload); },
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),

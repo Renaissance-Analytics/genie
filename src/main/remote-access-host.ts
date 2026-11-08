@@ -241,7 +241,7 @@ export type RemoteAccessEvent = { readonly kind: 'status'; readonly status: Remo
 
 export interface RemoteAccessServicePorts {
     /** The listener's switch (remote-access.ts): applied when `remote_access` changes, Restart from Settings. */
-    readonly switch: { apply(): Promise<void>; restart(): Promise<void> };
+    readonly switch: { apply(): Promise<void>; restart(): Promise<void>; stop(): Promise<void> };
     /** The newest local window's connection: only its events reach remote connections (one window feeds them). */
     readonly newestWindow: () => string | null;
     /** An event the newest window forwarded, for remote connections. */
@@ -255,7 +255,7 @@ export interface RemoteAccessServicePorts {
  * (session-engine-server.ts). Settings → Workstation's remote section reads the status and drives the PIN, the devices,
  * the lock and the pair answers; the window's relay host bridges its connections; the newest window forwards its events.
  */
-const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'answerPair', 'apply', 'restart']);
+const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'answerPair', 'apply', 'restart', 'start', 'stop']);
 
 export class RemoteAccessService {
     readonly #access: RemoteAccessHost;
@@ -290,6 +290,10 @@ export class RemoteAccessService {
             case 'unlock': a.unlock(); return true;
             case 'answerPair': return a.answerPair(String(args[0]), args[1] === true);
             case 'apply': await this.#ports.switch.apply(); return a.status();
+            // The handlers genie.remote-access's catalog payload names (genie-catalog.ts): start follows the setting.
+            case 'start': await this.#ports.switch.apply(); return a.status();
+            case 'stop': await this.#ports.switch.stop(); return a.status();
+            case 'health': { const s = a.status(); return { host: s.host, listening: s.url !== null, why: s.unavailable }; }
             case 'restart': await this.#ports.switch.restart(); return a.status();
             case 'bridge.open': return this.#bridge.open(owner, args[0]);
             case 'bridge.frame': return this.#bridge.frame(owner, String(args[0]), String(args[1]));

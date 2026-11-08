@@ -57,7 +57,7 @@ beforeEach(async () => {
         }),
     });
     const service = new RemoteAccessService(access, bridge, {
-        switch: { apply: async () => {}, restart: async () => {} },
+        switch: { apply: async () => {}, restart: async () => {}, stop: async () => {} },
         newestWindow: () => server.newestLocalWindow(),
         windowEvent: () => {},
         send: (owner, event) => server.remoteAccessEvent(owner, event),

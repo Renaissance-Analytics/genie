@@ -60,6 +60,24 @@ function viewReach(adapter: string): ElementDefinition['reach'] {
         : { scopes: ['workspace'], side: 'client', requiresWindow: true, remote: 'allowed' };
 }
 
+/**
+ * REMOTE ACCESS (Tynn #409, host split P5d.1; the owner: the host split is built on ADF). A host-service on BOTH sides:
+ * genie-host runs the tailnet listener, the remote host, the paired devices, the PIN, the baton and the lock, window or
+ * not (remote-access-host.ts); this machine's own window draws Settings → Workstation's remote section and drives it. The
+ * engine link's `engine.remoteAccess` call and `remoteAccess.event` event are the only channel between them.
+ */
+export const REMOTE_ACCESS_ELEMENT: ElementDefinition = {
+    id: 'genie.remote-access',
+    kind: 'host-service',
+    version: BUILTIN_VERSION,
+    packageId: BUILTIN_PACKAGE_ID,
+    source: 'builtin',
+    docs: { name: 'Remote access', description: 'A paired phone (over the tailnet) or a Pilot (over the Tynn relay) reaches this machine, with every Genie window closed. One baton, one lock, one list of paired devices.' },
+    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.remoteAccess'], events: ['remoteAccess.event'] } },
+    permissions: { capabilities: [], network: [] },
+    payload: { start: 'remoteAccess.start', stop: 'remoteAccess.stop', health: 'remoteAccess.health', settingsSection: 'workstation' },
+};
+
 export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclaration {
     return {
         id: BUILTIN_PACKAGE_ID,
@@ -75,7 +93,7 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
             reach: TOOL_REACH,
             permissions: { capabilities: [], network: [] },
             payload: { handler: t.name, inputSchema: t.inputSchema, ...(t.annotations === undefined ? {} : { annotations: t.annotations }) },
-        })),
+        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT]),
     };
 }
 
