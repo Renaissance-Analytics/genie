@@ -3,7 +3,7 @@ import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
 import { cancelIntent } from '../core/session.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
-import { readTynnPage } from './tynn-page-client.js';
+import { readTynnPage, runTynnPageAction } from './tynn-page-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { readTynnIssueChanges, readTynnIssues, runTynnIssueAction } from './tynn-issues-client.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
@@ -2544,6 +2544,9 @@ async function boot(): Promise<void> {
         readWorkspaceTynnIssues(rawId, rawFilters ?? {}));
     ipcMain.handle('genie:workspace-tynn-issue-action', (_event, rawId: unknown, rawInput: unknown) =>
         (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnIssueAction(tynnBoardPorts(), rawId, rawInput as { action: string; issueId: string | null; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
+    // Row H1, the Home's Details save: a write on the workspace's own project, through the person's pairing.
+    ipcMain.handle('genie:workspace-tynn-page-action', (_event, rawId: unknown, rawInput: unknown) =>
+        (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnPageAction(tynnBoardPorts(), rawId, rawInput as { action: string; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
     ipcMain.handle('genie:workspace-tynn-issues-changes', (_event, rawId: unknown, rawFilters: unknown, rawCursor: unknown, rawIds: unknown) =>
         (typeof rawId === 'string' && typeof rawCursor === 'string'
             ? readTynnIssueChanges(tynnBoardPorts(), rawId, rawFilters ?? {}, rawCursor, Array.isArray(rawIds) ? rawIds.filter((x): x is string => typeof x === 'string') : [])
@@ -2956,6 +2959,7 @@ async function boot(): Promise<void> {
                 tynnBoardAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnBoardAction(tynnBoardPorts(), id, input as { action: string; ids: BoardIds; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
                 tynnIssues: (id, filters) => readWorkspaceTynnIssues(id, filters ?? {}),
                 tynnIssueAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnIssueAction(tynnBoardPorts(), id, input as { action: string; issueId: string | null; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
+                tynnPageAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnPageAction(tynnBoardPorts(), id, input as { action: string; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name a workspace and an action' })),
                 tynnOwnerOptions: () => listTynnOwners(workspaceOps),
                 createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },
                 importedAgents: (id) => readImportedAgents(adoptionPorts, id),
