@@ -24,7 +24,10 @@ import { Store } from '../src/main/store.js';
 
 const dirs: string[] = [];
 const tempDir = () => { const d = mkdtempSync(join(tmpdir(), 'genie2-turns-')); dirs.push(d); return d; };
-afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
+// Every session's writes settled first: a write still landing while its folder is deleted fails the delete (ENOTEMPTY).
+const sessions: AgentSession[] = [];
+const own = (session: AgentSession): AgentSession => { sessions.push(session); return session; };
+afterAll(async () => { await Promise.all(sessions.map((session) => session.settled())); for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 function fakeDriver(refuse: () => string | null = () => null) {
@@ -47,7 +50,7 @@ describe('the first turn after a restart', () => {
     it("continues the count it was started with — at once, never from 1 while the history is still being read", () => {
         const rows: StreamEvent[] = [];
         const d = fakeDriver();
-        const session = new AgentSession({ agentId: mintAgentId(), cwd: tempDir(), store: openDurableStore(tempDir()), driverFactory: d.factory, processTree: noProcessTree, onEvent: (e) => rows.push(e), turnsBefore: 267 });
+        const session = own(new AgentSession({ agentId: mintAgentId(), cwd: tempDir(), store: openDurableStore(tempDir()), driverFactory: d.factory, processTree: noProcessTree, onEvent: (e) => rows.push(e), turnsBefore: 267 }));
         session.start();
         session.prompt('hello again', 'you');
         expect(turnsIn(rows)).toEqual([268]);
@@ -62,7 +65,7 @@ describe('a prompt the provider refuses', () => {
         const rows: StreamEvent[] = [];
         let refuse: string | null = 'Codex turn already in flight';
         const d = fakeDriver(() => refuse);
-        const session = new AgentSession({ agentId: mintAgentId(), cwd: tempDir(), store: openDurableStore(tempDir()), driverFactory: d.factory, processTree: noProcessTree, onEvent: (e) => rows.push(e), turnsBefore: 10 });
+        const session = own(new AgentSession({ agentId: mintAgentId(), cwd: tempDir(), store: openDurableStore(tempDir()), driverFactory: d.factory, processTree: noProcessTree, onEvent: (e) => rows.push(e), turnsBefore: 10 }));
         session.start();
         d.endTurn(); // the session is idle and ready
         const before = rows.length;
