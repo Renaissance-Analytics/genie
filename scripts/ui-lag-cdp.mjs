@@ -268,6 +268,20 @@ try {
     hostCdp = await Cdp.connect((await until('owned genie-host inspector', async () => (await targets(HOST_INSPECT))[0], 30000)).webSocketDebuggerUrl);
     const box = await page.evaluate('({ width: innerWidth, height: innerHeight })');
     console.log(`UI_LAG_COMPOSITED ready ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
+    /*
+     * WHAT'S NEW, CLOSED AS A PERSON CLOSES IT (Tynn #537). A first run shows it over the whole window (smoke-cdp closes it
+     * the same way), and until now the row measured with it open: its backdrop, a full-window blur, was redrawn in Linux's
+     * software compositor every time the terminal under it changed — about 45 ms a draw (runs 42489513576 and a996fdc0).
+     * That was the terminal's "cost" on Linux. Nothing is measured with a dialog over the window: see `noDialog`.
+     */
+    await until('What’s new on a first run', () => page.evaluate(`Boolean(document.querySelector('[data-whats-new]'))`), 30000);
+    await page.evaluate(`document.querySelector('[data-action="whats-new-close"]').click(); true`);
+    await until('What’s new to close', () => page.evaluate(`!document.querySelector('[data-whats-new]')`), 15000);
+    const noDialog = async (when) => {
+        const open = await page.evaluate(`[...document.querySelectorAll('[aria-modal="true"], [role="dialog"], dialog[open]')].filter((d) => { const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).map((d) => (d.textContent ?? '').trim().slice(0, 80))`);
+        demand(open.length === 0, `no dialog over the window ${when}: ${JSON.stringify(open)}`);
+    };
+    await noDialog('once What’s new is closed');
 
     // The workspace, and a Terminals panel in a tab of its own (as smoke-cdp's check 49 places one).
     await page.evaluate(`window.location.hash = '#genie://workspace/tynn'; true`);
@@ -325,6 +339,7 @@ try {
         await sleep(400);
         phases.push({ ...c0, end: await mark('control-end'), mainCtl, hostCtl, pageCtl, input: { mouse: [], keys: [] } });
 
+        await noDialog(`before the ${label} pass is measured`);
         let p = await mark('idle');
         let input = await drive(page, { ms: IDLE_MS, width: box.width, height: box.height });
         phases.push({ ...p, end: await mark('idle-end'), input });
@@ -366,6 +381,7 @@ try {
             }
         }
         await show(termTab);
+        await noDialog(`after the ${label} pass's slices`);
         phases.push({ ...p, end: await mark('build-terminal-end'), input: { mouse, keys }, slices, traces });
         await toggleFiles(true); await focusField();
         p = await mark('build-files');
