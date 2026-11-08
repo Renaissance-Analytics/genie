@@ -4,13 +4,15 @@ import type { BlobClient } from '../core/local-blobs.js';
 import { LOCAL_UPLOAD_MAX_BYTES, type LocalUploadClient, type PageClient } from '../core/local-content.js';
 import type { GenieBridge } from './bridge.js';
 import { encodeLocalBase64 } from './local-base64.js';
+import { unlimited, type HeldLimit } from './local-content-client.js';
 
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 const text = (value: unknown) => typeof value === 'string' ? value : null;
 const imageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml', 'image/webp']);
 async function sha(bytes: Uint8Array<ArrayBuffer>): Promise<string> { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join(''); }
 
-export function localArtboardClient(port: { read<T>(method: LocalArtboardMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient }): NonNullable<GenieBridge['artboard']> {
+export function localArtboardClient(port: { read<T>(method: LocalArtboardMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient; limit?: HeldLimit }): NonNullable<GenieBridge['artboard']> {
+    const limit = port.limit ?? unlimited;
     const asset = async (value: ArtboardBlob, expectedType?: string): Promise<Uint8Array> => {
         if (!value || typeof value.ref !== 'string' || typeof value.size !== 'number' || !Number.isSafeInteger(value.size) || value.size < 0 || (value.sha256 !== null && (typeof value.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(value.sha256))) || typeof value.type !== 'string' || (expectedType !== undefined && value.type !== expectedType)) throw new Error('invalid ArtBoard content metadata');
         const bytes = await port.blobs.readAll('artboard-post', value.ref);
@@ -57,7 +59,7 @@ export function localArtboardClient(port: { read<T>(method: LocalArtboardMethod,
     return {
         read: async workspaceId => {
             const args = [text(workspaceId)]; if (encode(args).byteLength > ARTBOARD_CALL_BYTES) throw new Error('the ArtBoard workspace identifier is too large for a bounded call');
-            return decode(await port.read('artboard.read', ...args));
+            return limit(async () => decode(await port.read('artboard.read', ...args)));
         },
         review: async (workspaceId, postId, verdict, comment) => {
             // Native ignores nonstring comments before serialization, including BigInt and cyclic objects.
