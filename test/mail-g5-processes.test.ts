@@ -71,7 +71,7 @@ describe('the process book restarts a workspace\'s running processes with the en
 describe('Mailpit is wired only after the running processes have the credentials', () => {
     let events: string[];
     let wired: boolean;
-    let processes: MailServicePorts['restartProcesses'];
+    let processes: NonNullable<MailServicePorts['restartProcesses']>;
     let said: string[];
     const ports = (): MailServicePorts => ({
         storeFile: join(dir, 'mail-inboxes.json'),

@@ -339,6 +339,8 @@ async function main(): Promise<void> {
         void stores.registrySettled().then(() => { for (const l of [...workspacesListeners]) l(); });
     });
     let hosting: HostingStack | null = null;
+    /** Genie Mail G5: the process book, once open, whose running processes restart with new mail credentials. */
+    let mailProcessBook: ProcessBook | null = null;
     /** The running agents compared with their workspace's verdict (genie#1519): bound once the sessions exist. */
     let hostVerdicts: TrustVerdicts | null = null;
     try {
@@ -358,6 +360,14 @@ async function main(): Promise<void> {
             mailSecrets: {
                 get: async (name) => { const read = await keychain.get(name); return read.kind === 'value' ? read.value : null; },
                 set: async (name, value) => (await keychain.set(name, value)).ok,
+            },
+            // Before Mailpit reads the book, every running process of a workspace getting credentials restarts with them.
+            // None open yet: none is running, and each reads the credentials as it starts.
+            restartWorkspaceProcesses: async (workspaceIds) => {
+                const book = mailProcessBook;
+                if (!book) return { ok: true };
+                const r = await book.restartRunning(workspaceIds);
+                return r.failed.length === 0 ? { ok: true } : { ok: false, reason: r.failed.map((f) => `${f.name}: ${f.reason}`).join('; ') };
             },
             appEnv: (source) => appInboxDoor.envFor(source),
             elevate: (steps) => hostingElevation.run(steps),
@@ -963,6 +973,7 @@ async function main(): Promise<void> {
             });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             processBookNow = processBook;
+            mailProcessBook = processBook;
             const restored = processBook.restore();
             if (safeMode.active()) for (const p of processBook.kept()) if (restored.heldBack.includes(p.id)) safeMode.hold('process', { id: p.id, name: p.name });
             lifecycleLog(`process book open: ${restored.started.length} restored, ${restored.heldBack.length} held back`);

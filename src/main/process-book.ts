@@ -472,6 +472,31 @@ export class ProcessBook {
         return this.#run(wanted);
     }
 
+    /**
+     * Genie Mail G5: restart every RUNNING (unscheduled) process of these workspaces, so it reads the service env as it is
+     * now: a process reads its env as it starts, and a queue worker left on the old one would send mail with no credentials
+     * once Mailpit reads the inbox book. Stopped processes stay stopped (their next start reads it). Answers what was
+     * restarted and, by name, what could not be and why; nothing that could not restart is left stopped by this.
+     */
+    async restartRunning(workspaceIds: readonly string[]): Promise<{ restarted: string[]; failed: Array<{ id: string; name: string; reason: string }> }> {
+        const wanted = new Set(workspaceIds);
+        const live = new Map(this.#deps.supervisor.list().map((s) => [s.id, s]));
+        const restarted: string[] = [];
+        const failed: Array<{ id: string; name: string; reason: string }> = [];
+        for (const p of this.#data.processes) {
+            if (!wanted.has(p.workspaceId) || p.schedule) continue;
+            const state = live.get(p.id)?.state;
+            if (state !== 'running' && state !== 'restarting') continue;
+            try {
+                await this.restart(p.id);
+                restarted.push(p.id);
+            } catch (error) {
+                failed.push({ id: p.id, name: p.name, reason: error instanceof Error ? error.message : String(error) });
+            }
+        }
+        return { restarted, failed };
+    }
+
     /** The person's stop: written down first, so it holds through a restart even if the kill is the last thing that happens. */
     async stop(id: string): Promise<void> {
         await this.#setWanted(id, false);

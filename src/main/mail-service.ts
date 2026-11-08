@@ -37,6 +37,13 @@ export interface MailServicePorts {
     readonly restart: () => Promise<void>;
     /** These workspaces' env changed: their running sites restart with it. */
     readonly envChanged: (workspaceIds: readonly string[]) => void;
+    /**
+     * Restart these workspaces' RUNNING background processes so they read the credentials (a process reads its env as it
+     * starts). `ok: false` names what could not restart: Mailpit then waits. Absent = no process book here.
+     */
+    readonly restartProcesses?: (workspaceIds: readonly string[]) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Where a held-back wiring is said (the host's log). */
+    readonly say?: (line: string) => void;
 }
 
 /** A workspace's mail name, the `<workspace>` of `app@<workspace>.mail.gen`: one DNS label from its derived slug. */
@@ -50,6 +57,9 @@ export class MailService {
     readonly #ports: MailServicePorts;
     readonly #book: MailHost;
     readonly #credentials = new Map<string, MailCredentials>();
+    /** Workspaces whose credentials are in their env but whose running processes have not restarted with them yet. */
+    readonly #pending = new Set<string>();
+    #waiting: string | null = null;
     #syncing: Promise<void> = Promise.resolve();
 
     private constructor(ports: MailServicePorts, book: MailHost) {
@@ -73,6 +83,11 @@ export class MailService {
     /** A workspace's default inbox credentials for its env, or null while it has none. */
     credentialsFor(workspaceId: string): MailCredentials | null {
         return this.#credentials.get(workspaceId) ?? null;
+    }
+
+    /** Why Mailpit is not reading the book yet (a process that could not restart), or null. */
+    waiting(): string | null {
+        return this.#waiting;
     }
 
     /** Bring every attached workspace's default inbox and credentials up, then let Mailpit read the book, in that order. */
@@ -107,9 +122,20 @@ export class MailService {
             this.#credentials.set(workspaceId, { username: created.inbox.smtpUser, password: created.password, from: created.inbox.address });
             changed.push(workspaceId);
         }
-        if (changed.length === 0) return;
-        // 2: the env, before Mailpit reads the book.
-        this.#ports.envChanged(changed);
+        // 2: the env (its running sites restart with it), before Mailpit reads the book.
+        if (changed.length > 0) this.#ports.envChanged(changed);
+        for (const workspaceId of changed) this.#pending.add(workspaceId);
+        if (this.#pending.size === 0) return;
+        // 2b: the running background processes too: one left on the old env would send with no credentials and get 530.
+        const processes = this.#ports.restartProcesses ? await this.#ports.restartProcesses([...this.#pending]) : { ok: true as const };
+        if (!processes.ok) {
+            // Mailpit waits: reading the book now would refuse that process. Said, and tried again on the next sync.
+            this.#waiting = processes.reason;
+            this.#ports.say?.(`Genie Mail: Mailpit is not reading the inbox book yet, because a running process could not restart with its workspace's mail credentials: ${processes.reason}`);
+            return;
+        }
+        this.#pending.clear();
+        this.#waiting = null;
         // 3: Mailpit reads the book: wired now (it reads it as it starts), or restarted to read the new inboxes.
         if (!this.#ports.wired()) await this.#ports.wire();
         else await this.#ports.restart();

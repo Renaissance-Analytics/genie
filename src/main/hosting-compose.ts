@@ -172,6 +172,8 @@ export interface HostingComposeInput extends HostingOptions {
      * book, and Genie's shared Mailpit asks no one for credentials.
      */
     readonly mailSecrets?: MailServicePorts['secrets'] | undefined;
+    /** Genie Mail G5: restart the running background processes of these workspaces with their env as it is now. */
+    readonly restartWorkspaceProcesses?: MailServicePorts['restartProcesses'];
 }
 
 /** The hosting as its builder holds it: the API, and its shutdown in the steps a quit interleaves with stopping every supervised process. */
@@ -555,6 +557,8 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
             wire: async () => { await engines.wireMail(); },
             restart: () => engines.restartMail(),
             envChanged: () => { engines.envChanged(); },
+            ...(input.restartWorkspaceProcesses ? { restartProcesses: input.restartWorkspaceProcesses } : {}),
+            say: (line) => { console.error(`[genie] ${line}`); },
         });
         const syncMail = () => { void mail?.sync().catch((error: unknown) => { console.error(`[genie] Genie Mail: ${error instanceof Error ? error.message : String(error)}`); }); };
         engines.onChange(syncMail);
