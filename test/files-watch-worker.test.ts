@@ -19,20 +19,20 @@ describe('workerWatchSource', () => {
         root = await mkdtemp(join(tmpdir(), 'genie-watch-worker-'));
         await mkdir(join(root, 'src'), { recursive: true });
         await mkdir(join(root, 'node_modules', 'x'), { recursive: true });
-        const fromWorker = vi.fn();
-        // The real worker, with its batches counted: a watch that ran on this thread instead would report with none. The
-        // watch on this thread covers only the worker's start: it is closed when the worker says its own watch is up.
-        const bridgeClosed = vi.fn(), fallback = vi.fn(() => ({ close: bridgeClosed }));
-        const source = workerWatchSource({ fallback, startWorker: (code, data) => { const w = new Worker(code, { eval: true, workerData: data }); w.on('message', (m) => { if (Array.isArray(m)) fromWorker(m); }); return w; } });
+        const fromWorker = vi.fn(), ready = vi.fn();
+        // The real worker, with its batches counted: a watch that ran on this thread instead would report with none. And NO
+        // watch on this thread at all (Tynn #539): on Linux starting one scans the whole workspace on genie-host's thread.
+        const fallback = vi.fn(() => ({ close: () => {} }));
+        const source = workerWatchSource({ fallback, startWorker: (code, data) => { const w = new Worker(code, { eval: true, workerData: data }); w.on('message', (m) => { if (Array.isArray(m)) fromWorker(m); else if (m === 'ready') ready(); }); return w; } });
         const seen: string[] = [];
         const handle = source(root, (rel) => seen.push(rel));
-        await vi.waitFor(() => expect(bridgeClosed).toHaveBeenCalledOnce(), { timeout: 5_000, interval: 20 }); // the worker's watch is up
+        await vi.waitFor(() => expect(ready).toHaveBeenCalledOnce(), { timeout: 5_000, interval: 20 }); // the worker's watch is up
         await writeFile(join(root, 'node_modules', 'x', 'index.js'), 'ignored');
         await writeFile(join(root, 'src', 'a.ts'), 'seen');
         await vi.waitFor(() => expect(seen).toContain('src/a.ts'), { timeout: 5_000, interval: 50 });
-        // From the worker's batches, not a fallback watch on this thread.
+        // From the worker's batches, and never a watch on this thread.
         expect(fromWorker).toHaveBeenCalled();
-        expect(fallback).toHaveBeenCalledOnce();
+        expect(fallback).not.toHaveBeenCalled();
         expect(seen.some((p) => p.startsWith('node_modules/'))).toBe(false);
         handle.close();
         await new Promise((r) => setTimeout(r, 200));
@@ -42,12 +42,17 @@ describe('workerWatchSource', () => {
         expect(seen.length).toBe(before);
     });
 
-    it('a write the moment the watch is asked for is seen: the watch on this thread covers the worker\'s start', async () => {
+    it('a write the moment the watch is asked for is seen, with no watch on this thread: the worker catches up on its start', async () => {
         root = await mkdtemp(join(tmpdir(), 'genie-watch-worker-'));
+        await mkdir(join(root, 'deep', 'er'), { recursive: true });
         const seen: string[] = [];
-        const handle = workerWatchSource()(root, (rel) => seen.push(rel));
+        const fallback = vi.fn(() => ({ close: () => {} }));
+        const handle = workerWatchSource({ fallback })(root, (rel) => seen.push(rel));
+        // Before the worker's own watch can be up.
         await writeFile(join(root, 'at-once.txt'), 'seen');
-        await vi.waitFor(() => expect(seen).toContain('at-once.txt'), { timeout: 5_000, interval: 50 });
+        await writeFile(join(root, 'deep', 'er', 'nested.txt'), 'seen');
+        await vi.waitFor(() => { expect(seen).toContain('at-once.txt'); expect(seen).toContain('deep/er/nested.txt'); }, { timeout: 5_000, interval: 50 });
+        expect(fallback).not.toHaveBeenCalled();
         handle.close();
     });
 
@@ -55,7 +60,7 @@ describe('workerWatchSource', () => {
         const log = vi.fn(), closedHere = vi.fn(), fallback = vi.fn(() => ({ close: closedHere }));
         const source = workerWatchSource({ log, fallback, startWorker: () => new Worker('process.exit(3)', { eval: true }) });
         const handle = source('/w', () => {});
-        // The watch on this thread started at once; the worker's end is said once, and that watch is kept, not restarted.
+        // The worker's end is said once, and the watch on this thread takes over (started once, not restarted).
         await vi.waitFor(() => expect(log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('ended (exit 3)')), { timeout: 5_000, interval: 20 });
         expect(fallback).toHaveBeenCalledOnce();
         expect(closedHere).not.toHaveBeenCalled();
