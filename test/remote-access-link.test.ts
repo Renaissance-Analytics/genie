@@ -53,7 +53,7 @@ beforeEach(async () => {
         api: hostRemoteApi({
             hostName: 'alphar',
             own: { 'updates.state': async () => ({ phase: 'idle' }) },
-            window: { connected: () => server.newestLocalWindow() !== null, invoke: (m, a) => server.remoteInvoke(m, a) },
+            window: { connected: () => server.newestLocalWindow() !== null, invoke: (m, a, c) => server.remoteInvoke(m, a, c) },
         }),
     });
     const service = new RemoteAccessService(access, bridge, {
@@ -66,7 +66,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { for (const close of links.splice(0)) close(); await rm(home, { recursive: true, force: true }); });
 
-async function windowOn(local: boolean, onRemoteInvoke?: (method: string, args: unknown[]) => Promise<unknown>) {
+async function windowOn(local: boolean, onRemoteInvoke?: (method: string, args: unknown[], context: unknown) => Promise<unknown>) {
     const [h, raw] = memoryPair();
     server.accept(h, { local });
     const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage(l), onClose: (l) => raw.onClose(l), close: () => raw.close() };
@@ -96,6 +96,15 @@ describe('remote access over the engine link', () => {
         local.close();
         await settle();
         expect(await p.call('snapshot')).toMatchObject({ kind: 'result', ok: false });
+    });
+
+    it('a window answering for the host is told who really asked: a phone stays a device (P4, Tynn #578)', async () => {
+        const p = phone();
+        await p.hello({ kind: 'token', token });
+        const seen: unknown[] = [];
+        await windowOn(true, async (_method, _args, context) => { seen.push(context); return null; });
+        expect(await p.call('snapshot')).toMatchObject({ kind: 'result', ok: true });
+        expect(seen).toEqual([expect.objectContaining({ origin: 'device', isOwner: true, label: 'phone' })]);
     });
 
     it('a window\'s replica reads and drives the host\'s PIN, and is told when it changes', async () => {

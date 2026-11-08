@@ -102,7 +102,7 @@ describe('family4 update/activity reads and actions', () => {
         const invoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         expect(await call(client.bridge, row)).toEqual(await call(oldFamily(invoke), row));
         expect(invoke).toHaveBeenCalledExactlyOnceWith(row.channel, ...row.args);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);
     });
     it.each(rows)('pageBridge routes $method through the shared client, preserving stable identity and unmoved calls', async (row) => {
@@ -112,7 +112,7 @@ describe('family4 update/activity reads and actions', () => {
         const preload = { ...oldFamily(oldInvoke), snapshot, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge;
         const bridge = pageBridge(preload); expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge, row)).toEqual(row.result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args); expect(oldInvoke).not.toHaveBeenCalled();
         expect(await bridge.snapshot()).toEqual({ agents: [] }); expect(snapshot).toHaveBeenCalledTimes(1);
     });
@@ -168,7 +168,7 @@ describe('family4 update/activity reads and actions', () => {
         const row = rows.find((row) => row.method === method)!, deps = protocolContractDeps(dir), operation = operationFor(deps, row);
         const source = serve(deps), owner = await source.connect('owner');
         expect(await call(owner.bridge, row)).toEqual(row.result);
-        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(method, []); expect(operation).toHaveBeenCalledTimes(1);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(method, [], expect.anything()); expect(operation).toHaveBeenCalledTimes(1);
     });
 });
 

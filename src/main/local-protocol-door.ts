@@ -18,12 +18,13 @@ interface WindowConnection {
     end(reason: string, refused?: boolean): void;
 }
 interface AdmittedWindow {
+    readonly contents: LocalDoorContents;
     connection: WindowConnection | null;
     detach(): void;
 }
 
 /** Main owns admission and the local proof. The handle routes frames within one window; it grants no access. */
-export function localProtocolDoor(ipcMain: LocalDoorIpc): LocalProtocolDoor {
+export function localProtocolDoor(ipcMain: LocalDoorIpc, options: { windowKind?: (contents: LocalDoorContents) => 'main' | 'remote' } = {}): LocalProtocolDoor {
     const admitted = new Map<LocalDoorContents, AdmittedWindow>();
     const listeners = new Set<(connection: ServerConnection) => void>();
     let disposed = false;
@@ -59,9 +60,11 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc): LocalProtocolDoor {
             },
         };
         entry.connection = current;
+        // Asked when the page opens its connection, not at admit: main records a remote window only once it has made it.
+        const window = options.windowKind?.(entry.contents);
         const connection: ServerConnection = {
             remoteAddress: 'local-window',
-            preAuth: { kind: 'local', label: 'this Genie window', isOwner: true, workspaceId: null, readonly: false },
+            preAuth: { kind: 'local', label: 'this Genie window', isOwner: true, workspaceId: null, readonly: false, ...(window ? { window } : {}) },
             send: (text) => {
                 if (closed) return;
                 if (Buffer.byteLength(text, 'utf8') > LOCAL_FRAME_LIMIT_BYTES) return current.end(capReason, true);
@@ -109,7 +112,7 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc): LocalProtocolDoor {
         onConnection: (listener) => { if (!disposed) listeners.add(listener); return () => { listeners.delete(listener); }; },
         admit: (contents) => {
             if (disposed || contents.isDestroyed() || admitted.has(contents)) return;
-            const entry: AdmittedWindow = { connection: null, detach: () => {} };
+            const entry: AdmittedWindow = { contents, connection: null, detach: () => {} };
             const gone = () => { entry.connection?.end('the local window renderer ended'); };
             const navigate = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
                 if (details.isMainFrame && !details.isSameDocument) entry.connection?.end('the local window reloaded or navigated');

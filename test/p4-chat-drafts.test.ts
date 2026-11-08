@@ -34,7 +34,7 @@ describe('7E chat drafts through the admitted local door', () => {
     it('load reaches the real store and reconstructs its exact native shape', async () => {
         const f = await fixture(); await f.store.save('agent_a', draft()); f.ports.all.mockClear();
         expect(await f.drafts.load()).toEqual({ agent_a: draft() }); expect(f.ports.all).toHaveBeenCalledExactlyOnceWith();
-        expect(f.invoke).toHaveBeenCalledWith('chatDrafts.load', []);
+        expect(f.invoke).toHaveBeenCalledWith('chatDrafts.load', [], expect.anything());
     });
     it('save records the native agent and complete draft; null clears and returns undefined', async () => {
         const f = await fixture(); const value = draft();

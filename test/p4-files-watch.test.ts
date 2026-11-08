@@ -100,7 +100,7 @@ describe('7D same-client subscriptions and bounded cached refetch', () => {
         const first = await resourceDoor(cleanups, {}, { localFiles: { files: () => ({ tree: async () => a }) } }), ca = await first.client();
         const second = await resourceDoor(cleanups, {}, { localFiles: { files: () => ({ tree: async () => b }) } }), cb = await second.client();
         expect(await ca.bridge.files.tree('work')).toEqual(a); expect(await cb.bridge.files.tree('work')).toEqual(b);
-        expect(first.invoke).toHaveBeenCalledExactlyOnceWith('files.tree', ['work']); expect(second.invoke).toHaveBeenCalledExactlyOnceWith('files.tree', ['work']);
+        expect(first.invoke).toHaveBeenCalledExactlyOnceWith('files.tree', ['work'], expect.anything()); expect(second.invoke).toHaveBeenCalledExactlyOnceWith('files.tree', ['work'], expect.anything());
     });
     it('a remote bridge keeps its no-Files result when a local bridge exists in the same page', async () => {
         const local = await resourceDoor(cleanups, {}, { localFiles: { files: () => ({ tree: async () => [{ id: 'local.txt', label: 'local.txt', type: 'file' }] }) } });
