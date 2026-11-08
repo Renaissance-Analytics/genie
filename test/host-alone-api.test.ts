@@ -1,0 +1,174 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentRecord } from '../src/core/identity.js';
+import { hostAloneApi, PHONE_METHODS, type HostAloneEngine, type HostAlonePorts } from '../src/main/host-alone-api.js';
+import { hostRemoteApi } from '../src/main/remote-access-host.js';
+import { Registry } from '../src/main/registry.js';
+import { Store } from '../src/main/store.js';
+
+/*
+ * THE PHONE'S METHODS, ANSWERED BY GENIE-HOST WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2). genie-host runs the
+ * SAME host API the window does (host-api.ts `buildHostApi`), over what it owns: the registry's files, its session host,
+ * its attention, inbox and approval stores, the workspaces' files. What a phone asks is answered as the window would
+ * answer it; anything else is refused with what to do. While a window is open, the window answers, as before.
+ */
+
+let dir = '';
+let registry: Registry;
+let atlas: AgentRecord;
+const calls: string[] = [];
+
+function engine(running = false): HostAloneEngine {
+    const live = new Set<string>(running ? ['*'] : []);
+    const isLive = (id: string) => live.has('*') || live.has(id);
+    const subscribers = new Set<(id: string) => void>();
+    const fake = {
+        probe: (id: string) => (isLive(id) ? { running: true, inTurn: false } : null),
+        start: (r: AgentRecord, cwd: string) => { calls.push(`start ${r.name} ${cwd}`); live.add(r.id); return { ok: true }; },
+        stop: (id: string) => { calls.push(`stop ${id === atlas.id ? 'atlas' : id}`); live.delete(id); live.delete('*'); return true; },
+        ended: async () => { calls.push('ended'); return { verified: true, survivors: [], reason: '' }; },
+        deliverOwed: async () => { calls.push('deliverOwed'); return 0; },
+        cancel: () => ({ ok: true }),
+        resumeLimit: (provider: string) => { calls.push(`resumeLimit ${provider}`); },
+        prompt: async (_id: string, text: string, by: string | null) => { calls.push(`prompt ${text} by ${by}`); return true; },
+        promptWith: async (_id: string, text: string, files: readonly unknown[], by: string | null) => { calls.push(`promptWith ${text} ${files.length} by ${by}`); return { ok: true }; },
+        resolvePrompt: async () => ({ ok: true }),
+        answerApproval: (_id: string, option: string, note: string) => { calls.push(`answerApproval ${option} ${note}`); return { ok: true }; },
+        subscribe: (l: (id: string) => void) => { subscribers.add(l); return () => subscribers.delete(l); },
+        needsNewDriver: () => false,
+        notice: () => true,
+        ledgerFor: () => [],
+        turnsFor: () => 3,
+        recentStderrFor: () => [],
+        rowsFor: () => [],
+        refusals: new Map(),
+        emit: (id: string) => { for (const l of subscribers) l(id); },
+    };
+    return fake as unknown as HostAloneEngine;
+}
+
+function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlonePorts {
+    return {
+        hostName: 'alphar',
+        registry,
+        engine: () => e,
+        cwdFor: (r) => (r.workspaceId === 'tynn' ? '/w/tynn' : '/home'),
+        startRefusal: () => null,
+        attention: {
+            finished: () => [{ id: 'fin_1', agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', text: 'shipped the fix', at: 1 }] as never,
+            markSeen: (id) => { calls.push(`markSeen ${id}`); },
+            answer: async (id, answer) => { calls.push(`answer ${id} ${JSON.stringify(answer.selections)}`); return true as never; },
+            lists: { done: async () => true },
+        },
+        approvals: { resolve: () => true },
+        inbox: { unread: () => [], receive: async () => [] as never, involving: () => [] },
+        deliverToAgent: async () => true,
+        files: {
+            children: async (workspaceId, path) => { calls.push(`children ${workspaceId} ${path}`); return [{ name: 'README.md', path: 'README.md', kind: 'file' }] as never; },
+            open: async (_w, path) => ({ ok: false as const, path, error: 'n/a' }),
+            readBytes: async (_w, path) => ({ ok: false as const, path, error: 'n/a' }),
+            upload: async () => ({ ok: false as const, reason: 'n/a' }),
+        },
+        ...over,
+    };
+}
+
+beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'genie2-host-alone-'));
+    calls.length = 0;
+    registry = new Registry(new Store(dir));
+    await registry.load({ name: 'alphar', healthy: true });
+    await registry.addWorkspace({ id: 'tynn', path: '/w/tynn' });
+    atlas = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+});
+afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+describe('genie-host answers the phone itself', () => {
+    it('the snapshot and an agent\'s detail, from the host\'s own registry and session host', async () => {
+        const api = hostAloneApi(ports(engine(true)));
+        const snapshot = (await api.invoke('snapshot', [])) as { agents: Array<{ id: string; name: string }> };
+        expect(snapshot.agents.map((a) => a.name)).toContain('atlas');
+        const detail = (await api.invoke('agentDetail', [atlas.id])) as { agent: { name: string; cwd: string }; session: unknown; turns: number };
+        expect(detail).toMatchObject({ agent: { name: 'atlas', cwd: '/w/tynn' }, session: { running: true }, turns: 3 });
+        expect(await api.invoke('agentDetail', ['agent_nobody'])).toBeNull();
+    });
+
+    it('a message starts a stopped agent first, as the composer does, then is sent by you', async () => {
+        const api = hostAloneApi(ports(engine(false)));
+        expect(await api.invoke('prompt', [atlas.id, 'look at the build'])).toEqual({ ok: true });
+        expect(calls).toEqual(['start atlas /w/tynn', 'promptWith look at the build 0 by you']);
+    });
+
+    it('an approval answer, Resume now, and a restart go to the host\'s own session host', async () => {
+        const api = hostAloneApi(ports(engine(true)));
+        expect(await api.invoke('answerApproval', [atlas.id, 'allow', 'go ahead'])).toEqual({ ok: true });
+        expect(await api.invoke('resumeLimit', [atlas.id])).toEqual({ ok: true });
+        expect(await api.invoke('agents.restart', [atlas.id, 'graceful'])).toEqual({ ok: true, kind: 'graceful' });
+        expect(calls).toEqual(['answerApproval allow go ahead', 'resumeLimit claude', 'stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
+    });
+
+    it('Restart with handoff: the one restart, then the note, and the finished item seen', async () => {
+        const api = hostAloneApi(ports(engine(true)));
+        expect(await api.invoke('restartWithHandoff', [atlas.id, 'fin_1'])).toMatchObject({ ok: true });
+        expect(calls.slice(0, 4)).toEqual(['stop atlas', 'ended', 'start atlas /w/tynn', 'deliverOwed']);
+        expect(calls.some((c) => c.startsWith('prompt '))).toBe(true);
+    });
+
+    it('the Deck answer for a question is answered in the host\'s attention store; any other feature action needs a window', async () => {
+        const api = hostAloneApi(ports(engine(true)));
+        const item = { id: 'q_1', source: 'agent-question', agentId: atlas.id, agentName: 'atlas', workspaceId: 'tynn', title: 'Ship it?', blocking: true, priority: 'high', at: 1, answer: { kind: 'options', options: [{ id: 'yes', label: 'Yes' }] }, forwardedFrom: null };
+        await api.invoke('features.act', [{ kind: 'deck.answer', item, optionId: 'yes' }]);
+        expect(calls).toContain('answer q_1 [["yes"]]');
+        await expect(api.invoke('features.act', [{ kind: 'settings.set', key: 'theme', value: 'dark' }])).rejects.toThrow('open Genie on alphar');
+    });
+
+    it('the phone\'s file browser lists the workspace through the host\'s files', async () => {
+        const api = hostAloneApi(ports(engine(true)));
+        expect(await api.invoke('files.children', ['tynn', ''])).toEqual([{ name: 'README.md', path: 'README.md', kind: 'file' }]);
+        expect(calls).toEqual(['children tynn ']);
+    });
+
+    it('its events: the snapshot when the registry changes, an agent\'s detail when its session does', async () => {
+        const e = engine(true);
+        const api = hostAloneApi(ports(e, { schedule: (_ms, fn) => { fn(); return () => {}; } }));
+        const seen: string[] = [];
+        const off = api.onEvent((channel) => { seen.push(channel); });
+        registry.touch();
+        (e as unknown as { emit(id: string): void }).emit(atlas.id);
+        expect(seen).toContain('snapshot');
+        expect(seen).toContain(`agent:${atlas.id}`);
+        off();
+    });
+});
+
+describe('the remote host uses it only while no window is connected', () => {
+    it('the phone\'s methods: the window while one is open, genie-host while none; anything else is refused with none', async () => {
+        let windowOpen = true;
+        const alone = hostAloneApi(ports(engine(true)));
+        const api = hostRemoteApi({
+            hostName: 'alphar', own: {},
+            window: { connected: () => windowOpen, invoke: async (method) => ({ fromWindow: method }) },
+            alone,
+        });
+        expect(await api.invoke('snapshot', [])).toEqual({ fromWindow: 'snapshot' });
+        windowOpen = false;
+        expect(((await api.invoke('snapshot', [])) as { agents: unknown[] }).agents.length).toBeGreaterThan(0);
+        await expect(api.invoke('addAgent', ['tynn', {}])).rejects.toThrow('alphar answers addAgent only while a Genie window is open there: open Genie on alphar');
+        expect([...PHONE_METHODS].sort()).toEqual(['agentDetail', 'agents.restart', 'answerApproval', 'features.act', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'prompt', 'restartWithHandoff', 'resumeLimit', 'snapshot']);
+    });
+
+    it('genie-host\'s own events reach remote connections only while no window is connected (a window forwards its own)', async () => {
+        let windowOpen = true;
+        const alone = { invoke: vi.fn(), onEvent: (l: (c: string, p: unknown) => void) => { emitAlone = l; return () => {}; }, workspaceOfAgent: () => null };
+        let emitAlone: (c: string, p: unknown) => void = () => {};
+        const api = hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => windowOpen, invoke: async () => null }, alone });
+        const seen: string[] = [];
+        api.onEvent((channel) => { seen.push(channel); });
+        emitAlone('snapshot', {});
+        windowOpen = false;
+        emitAlone('snapshot', { n: 2 });
+        expect(seen).toEqual(['snapshot']);
+    });
+});
