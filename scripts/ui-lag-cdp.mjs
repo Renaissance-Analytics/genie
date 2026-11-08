@@ -27,10 +27,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
-import { installMeasurementHostLaunch } from './artboard-gap-probe.mjs';
+import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
 import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, summarize, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
-const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, started = Date.now(), sessions = [];
+const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
 const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, IDLE_MS = 6000, TERMINAL_MS = 10000, BUILD_MS = 22000, CONTROL_MS = 120;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
@@ -85,6 +85,14 @@ function installMainGauge(create) {
     return { now: performance.now() };
 }
 
+/** genie-host's gauge (Tynn #524): its timer lateness, every gap over 16 ms. Serialized into genie-host. */
+function installHostGauge(create) {
+    const s = globalThis.__uiLagHost = { gauge: create({ intervalMs: 10, thresholdMs: 16, now: () => performance.now() }) };
+    s.timer = setInterval(() => s.gauge.beat(), 10);
+    s.stop = () => clearInterval(s.timer);
+    return { now: performance.now() };
+}
+
 /** The page's gauges: timer lateness, long tasks, frame gaps, input delays, the Files pushes. Serialized into the page. */
 function installPageGauge(create) {
     const s = window.__uiLag = { gauge: create({ intervalMs: 10, thresholdMs: 16, now: () => performance.now() }), longtasks: [], frames: [], inputs: [], files: [], lastFrame: null };
@@ -120,6 +128,7 @@ function installPageGauge(create) {
 
 /** A deliberate block, the gauges' positive control and the profiles' alignment marker. Serialized into each thread. */
 function uiLagControlBusyMain(ms) { const start = performance.now(); let x = 0; while (performance.now() - start < ms) for (let i = 0; i < 10000; i += 1) x += i; return { start, end: performance.now(), x: x > 0 }; }
+function uiLagControlBusyHost(ms) { const start = performance.now(); let x = 0; while (performance.now() - start < ms) for (let i = 0; i < 10000; i += 1) x += i; return { start, end: performance.now(), x: x > 0 }; }
 function uiLagControlBusyPage(ms) { const start = performance.now(); let x = 0; while (performance.now() - start < ms) for (let i = 0; i < 10000; i += 1) x += i; return { start, end: performance.now(), x: x > 0 }; }
 
 /** The mouse moves over the window and keys are typed, each round trip timed, until `untilFn()` or `ms`. */
@@ -169,30 +178,15 @@ function sourceMapper() {
 }
 const isOwn = (frame) => /\bsrc\/(main|renderer|core)\/|dist\/main\//.test(frame);
 
-/** The host gauge's gaps over 100 ms (its fixed threshold), from the measurement preload's log lines. */
-function hostGaps(path, pids) {
-    if (!existsSync(path)) return { read: false, gaps: [] };
-    const gaps = [];
-    let beats = 0;
-    for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-        if (!line.startsWith('ARTBOARD_HOST_GAUGE ')) continue;
-        let v; try { v = JSON.parse(line.slice(20)); } catch { continue; }
-        if (!pids.includes(v.pid)) continue;
-        if (v.kind === 'beat') beats += 1;
-        if (v.kind === 'gap') gaps.push({ startedWallMs: v.startedWallMs, endedWallMs: v.endedWallMs, ms: v.latenessMs });
-    }
-    return { read: true, beats, gaps };
-}
-
-let app, page, main, root, hostRecord, hostLaunch, failure = null, code = 1;
+let app, page, main, hostCdp, root, hostRecord, hostLaunch, failure = null, code = 1;
 const passes = [], savedProfiles = {}, result = { budget: null, controls: {}, limits: [] };
 try {
     demand(process.env.CI === 'true' || process.env.GENIE_UI_LAG_ALLOW === '1' || (process.platform === 'linux' && process.env.USER === 'genie'), 'refused: run only in CI or an explicitly allowed test VM');
     demand(existsSync('dist/main/entry.js'), 'run from a built checkout');
-    for (const port of [PORT, INSPECT]) { let occupied = false; try { await targets(port); occupied = true; } catch (e) { if (e.name === 'TimeoutError') occupied = true; } demand(!occupied, `debugger port ${port} occupied; no app touched`); }
+    for (const port of [PORT, INSPECT, HOST_INSPECT]) { let occupied = false; try { await targets(port); occupied = true; } catch (e) { if (e.name === 'TimeoutError') occupied = true; } demand(!occupied, `debugger port ${port} occupied; no app touched`); }
     root = mkdtempSync(join(tmpdir(), 'genie-ui-lag-')); const workspace = join(root, 'workspace'), runtime = join(root, '.genie', 'runtime');
     mkdirSync(workspace); mkdirSync(OUT, { recursive: true });
-    const env = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE_PAGE_PROBE: '1', GENIE_ARTBOARD_MEASURE_ALLOW: '1' };
+    const env = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE_PAGE_PROBE: '1', GENIE_UI_LAG_MEASURE: '1' };
     execFileSync(process.execPath, [resolve('scripts/smoke-seed.mjs')], { cwd: workspace, env, stdio: 'pipe', timeout: 15000, windowsHide: true });
     // THE WORKSPACE: a git repository of 1,500 tracked sources, its build output ignored, and the build script.
     for (let d = 0; d < 30; d += 1) { mkdirSync(join(workspace, 'src', `m${d}`), { recursive: true }); for (let f = 0; f < 50; f += 1) writeFileSync(join(workspace, 'src', `m${d}`, `s${f}.js`), `export const s${d}_${f} = ${f};\n`); }
@@ -207,13 +201,13 @@ try {
     if (process.platform === 'linux' && ['wayland', 'x11'].includes(process.env.XDG_SESSION_TYPE)) args.push(`--ozone-platform=${process.env.XDG_SESSION_TYPE}`);
     const xvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
     app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd); app.on('error', (e) => console.error(e.message));
-    // genie-host gets the measurement gauge as its preload, installed before main's entry runs (as the ArtBoard row).
+    // genie-host is started with an inspector of its own, by a hook installed before main's entry runs (Tynn #524).
     main = await Cdp.connect((await until('owned paused main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
     await main.request('Debugger.enable', {}); await main.request('Runtime.runIfWaitingForDebugger', {});
     const paused = await until('owned entry pause', async () => main.paused);
-    const hostOptions = { home: join(root, '.genie'), entry: resolve('dist/main/host.js'), preloadUrl: pathToFileURL(resolve('scripts/artboard-host-gauge.mjs')).href };
+    const hostOptions = { home: join(root, '.genie'), entry: resolve('dist/main/host.js'), inspectPort: HOST_INSPECT };
     const installed = await main.request('Debugger.evaluateOnCallFrame', { callFrameId: paused.callFrames[0].callFrameId, returnByValue: true,
-        expression: `globalThis.__uiLagHostLaunch=(${installMeasurementHostLaunch.toString()})(Object.assign(${JSON.stringify(hostOptions)},{execPath:process.execPath}));true` });
+        expression: `globalThis.__uiLagHostLaunch=(${installUiLagHostLaunch.toString()})(Object.assign(${JSON.stringify(hostOptions)},{execPath:process.execPath}));true` });
     if (installed.exceptionDetails) throw new Error(installed.exceptionDetails.exception?.description ?? 'host gauge installation failed');
     await main.request('Debugger.resume', {}); await main.request('Debugger.disable', {});
 
@@ -222,6 +216,7 @@ try {
     await waitForPageProbe(page);
     await until('ready page connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 60000);
     hostRecord ??= json(join(runtime, 'host.json'));
+    hostCdp = await Cdp.connect((await until('owned genie-host inspector', async () => (await targets(HOST_INSPECT))[0], 30000)).webSocketDebuggerUrl);
     const box = await page.evaluate('({ width: innerWidth, height: innerHeight })');
 
     // The workspace, and a Terminals panel in a tab of its own (as smoke-cdp's check 49 places one).
@@ -235,6 +230,7 @@ try {
     const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
 
     await main.evaluate(`(${installMainGauge.toString()})((${createGapGauge.toString()}))`);
+    await hostCdp.evaluate(`(${installHostGauge.toString()})((${createGapGauge.toString()}))`);
     const pageGauge = await page.evaluate(`(${installPageGauge.toString()})((${createGapGauge.toString()}))`);
     const focusField = () => page.evaluate(`document.querySelector('[data-ui-lag-typing]').focus(); true`);
     const filesOpen = () => page.evaluate(`document.querySelector('[data-action="toggle-files"]')?.getAttribute('data-panel-open') === 'true'`);
@@ -246,9 +242,9 @@ try {
 
     async function runPass(label, profiled) {
         const phases = [];
-        const mark = async (name) => ({ name, mainMs: (await main.evaluate('performance.now()')), pageMs: await page.evaluate('performance.now()'), wallMs: Date.now() });
+        const mark = async (name) => ({ name, mainMs: (await main.evaluate('performance.now()')), pageMs: await page.evaluate('performance.now()'), hostMs: await hostCdp.evaluate('performance.now()'), wallMs: Date.now() });
         if (profiled) {
-            for (const c of [main, page]) { await c.request('Profiler.enable', {}); await c.request('Profiler.setSamplingInterval', { interval: 1000 }); await c.request('Profiler.start', {}); }
+            for (const c of [main, page, hostCdp]) { await c.request('Profiler.enable', {}); await c.request('Profiler.setSamplingInterval', { interval: 1000 }); await c.request('Profiler.start', {}); }
             await sleep(1500);
         }
         // CONTROL: one deliberate block on each thread. Every gauge must see it, and each profile must name it.
@@ -257,9 +253,11 @@ try {
         const mainCtl = await main.evaluate(`(${uiLagControlBusyMain.toString()})(${CONTROL_MS})`);
         await sleep(200);
         // In a task of its own (a timer): a block inside CDP's own evaluate is not a long task the page's observer reports.
+        const hostCtl = await hostCdp.evaluate(`(${uiLagControlBusyHost.toString()})(${CONTROL_MS})`);
+        await sleep(200);
         const pageCtl = await page.evaluate(`new Promise((done) => setTimeout(() => done((${uiLagControlBusyPage.toString()})(${CONTROL_MS})), 0))`);
         await sleep(400);
-        phases.push({ ...c0, end: await mark('control-end'), mainCtl, pageCtl, input: { mouse: [], keys: [] } });
+        phases.push({ ...c0, end: await mark('control-end'), mainCtl, hostCtl, pageCtl, input: { mouse: [], keys: [] } });
 
         let p = await mark('idle');
         let input = await drive(page, { ms: IDLE_MS, width: box.width, height: box.height });
@@ -288,7 +286,7 @@ try {
         let profiles = null;
         if (profiled) {
             profiles = {};
-            for (const [name, c] of [['main', main], ['page', page]]) { profiles[name] = (await c.request('Profiler.stop', {})).profile; await c.request('Profiler.disable', {}); }
+            for (const [name, c] of [['main', main], ['page', page], ['host', hostCdp]]) { profiles[name] = (await c.request('Profiler.stop', {})).profile; await c.request('Profiler.disable', {}); }
         }
         return { label, profiled, run, build, phases, profiles };
     }
@@ -296,27 +294,28 @@ try {
     for (const [label, profiled] of [['gauges', false], ['profiled', true]]) {
         const pass = await runPass(label, profiled);
         const mainState = await main.evaluate('({ gauge: globalThis.__uiLag.gauge.snapshot(), calls: globalThis.__uiLag.calls.splice(0) })');
+        const hostState = await hostCdp.evaluate('({ gauge: globalThis.__uiLagHost.gauge.snapshot() })');
         const pageState = await page.evaluate('(() => { const s = window.__uiLag; return { gauge: s.gauge.snapshot(), longtasks: s.longtasks.splice(0), frames: s.frames.splice(0), inputs: s.inputs.splice(0), files: s.files.splice(0) }; })()');
-        await main.evaluate('globalThis.__uiLag.gauge.reset(); true'); await page.evaluate('window.__uiLag.gauge.reset(); true');
-        passes.push({ ...pass, mainState, pageState });
+        await main.evaluate('globalThis.__uiLag.gauge.reset(); true'); await hostCdp.evaluate('globalThis.__uiLagHost.gauge.reset(); true'); await page.evaluate('window.__uiLag.gauge.reset(); true');
+        passes.push({ ...pass, mainState, hostState, pageState });
     }
 
     // THE NUMBERS, per pass and phase.
     hostLaunch = await main.evaluate('globalThis.__uiLagHostLaunch?.snapshot()');
-    await sleep(1200); // the host gauge's last records are in its log
-    const host = hostGaps(join(root, '.genie', 'logs', 'genie-host.log'), hostLaunch?.injectedPids ?? []);
     const mapper = sourceMapper();
     for (const pass of passes) {
-        const mainIdx = pass.profiles ? indexProfile(pass.profiles.main, mapper) : null, pageIdx = pass.profiles ? indexProfile(pass.profiles.page, mapper) : null;
+        const hostIdx = pass.profiles ? indexProfile(pass.profiles.host, mapper) : null, mainIdx = pass.profiles ? indexProfile(pass.profiles.main, mapper) : null, pageIdx = pass.profiles ? indexProfile(pass.profiles.page, mapper) : null;
         const ctl = pass.phases[0];
         // Profile clock = gauge clock + offset, from the control block each profile must contain.
         const mainOffset = mainIdx ? (firstSampleWith(mainIdx, 'uiLagControlBusyMain') ?? NaN) - ctl.mainCtl.start : null;
         const pageOffset = pageIdx ? (firstSampleWith(pageIdx, 'uiLagControlBusyPage') ?? NaN) - ctl.pageCtl.start : null;
-        pass.alignment = { mainOffsetMs: mainOffset, pageOffsetMs: pageOffset };
+        const hostOffset = hostIdx ? (firstSampleWith(hostIdx, 'uiLagControlBusyHost') ?? NaN) - ctl.hostCtl.start : null;
+        pass.alignment = { mainOffsetMs: mainOffset, pageOffsetMs: pageOffset, hostOffsetMs: hostOffset };
         pass.rows = pass.phases.map((ph) => {
             const inMain = (x) => x >= ph.mainMs && x <= ph.end.mainMs, inPage = (x) => x >= ph.pageMs && x <= ph.end.pageMs;
             const mainGaps = worstGaps(pass.mainState.gauge.gaps, ph.mainMs, ph.end.mainMs, 8);
             const pageGaps = worstGaps(pass.pageState.gauge.gaps, ph.pageMs, ph.end.pageMs, 5);
+            const hostGapsIn = worstGaps(pass.hostState.gauge.gaps, ph.hostMs, ph.end.hostMs, 8);
             const longtasks = pass.pageState.longtasks.filter((l) => l.endedMs >= ph.pageMs && l.startedMs <= ph.end.pageMs);
             const frames = worstGaps(pass.pageState.frames, ph.pageMs, ph.end.pageMs, 5);
             const inputs = pass.pageState.inputs.filter((x) => inPage(x.at));
@@ -328,13 +327,17 @@ try {
                 main: { worstMs: Math.round(mainGaps[0]?.ms ?? 0), over50: pass.mainState.gauge.gaps.filter((g) => g.ms > BUDGET_MS && g.endedMs >= ph.mainMs && g.startedMs <= ph.end.mainMs).length, gaps: mainGaps },
                 page: { worstMs: Math.round(pageGaps[0]?.ms ?? 0), gaps: pageGaps, longtasks: { count: longtasks.length, totalMs: Math.round(longtasks.reduce((a, l) => a + l.ms, 0)), worst: [...longtasks].sort((a, b) => b.ms - a.ms).slice(0, 5) }, frameGaps: frames },
                 input: { mouseRtt: summarize(ph.input.mouse), keyRtt: summarize(ph.input.keys), mouseHandler: summarize(inputs.filter((x) => x.kind === 'mouse').map((x) => x.handlerMs)), mouseToFrame: summarize(inputs.filter((x) => x.kind === 'mouse').map((x) => x.frameMs)), keyToFrame: summarize(inputs.filter((x) => x.kind === 'key').map((x) => x.frameMs)) },
-                host: { worst: worstGaps(host.gaps.map((g) => ({ startedMs: g.startedWallMs, endedMs: g.endedWallMs, ms: g.ms })), ph.wallMs, ph.end.wallMs, 5) },
+                host: { worstMs: Math.round(hostGapsIn[0]?.ms ?? 0), over50: pass.hostState.gauge.gaps.filter((g) => g.ms > BUDGET_MS && g.endedMs >= ph.hostMs && g.startedMs <= ph.end.hostMs).length, gaps: hostGapsIn },
                 filesPushes: { count: files.length, bytes: files.reduce((a, [, n]) => a + n, 0), maxBytes: Math.max(0, ...files.map(([, n]) => n)), sizes: files.map(([, n]) => n) },
                 calls,
             };
             if (mainIdx && Number.isFinite(mainOffset)) {
                 row.mainProfile = windowProfile(mainIdx, ph.mainMs + mainOffset, ph.end.mainMs + mainOffset, { top: 5, isOwn });
                 row.mainGapStacks = mainGaps.slice(0, 5).map((g) => ({ gapMs: Math.round(g.ms), ...windowProfile(mainIdx, g.startedMs + mainOffset, g.endedMs + mainOffset, { top: 3, isOwn }) }));
+            }
+            if (hostIdx && Number.isFinite(hostOffset)) {
+                row.hostProfile = windowProfile(hostIdx, ph.hostMs + hostOffset, ph.end.hostMs + hostOffset, { top: 5, isOwn });
+                row.hostGapStacks = hostGapsIn.slice(0, 5).map((g) => ({ gapMs: Math.round(g.ms), ...windowProfile(hostIdx, g.startedMs + hostOffset, g.endedMs + hostOffset, { top: 3, isOwn }) }));
             }
             if (pageIdx && Number.isFinite(pageOffset)) {
                 row.pageProfile = windowProfile(pageIdx, ph.pageMs + pageOffset, ph.end.pageMs + pageOffset, { top: 5, isOwn });
@@ -351,6 +354,7 @@ try {
     for (const pass of passes) {
         const ctl = pass.rows[0];
         demand(ctl.main.worstMs >= CONTROL_MS * 0.8, `${pass.label}: window main's gauge saw the deliberate ${CONTROL_MS} ms block (${ctl.main.worstMs} ms)`);
+        demand(ctl.host.worstMs >= CONTROL_MS * 0.8, `${pass.label}: genie-host's gauge saw the deliberate ${CONTROL_MS} ms block (${ctl.host.worstMs} ms)`);
         demand(ctl.page.worstMs >= CONTROL_MS * 0.8, `${pass.label}: the page's gauge saw the deliberate ${CONTROL_MS} ms block (${ctl.page.worstMs} ms)`);
         if (pageGauge.longtasks) demand(ctl.page.longtasks.worst[0]?.ms >= CONTROL_MS * 0.8, `${pass.label}: the long-task observer saw the deliberate block`);
         for (const row of pass.rows.slice(1)) {
@@ -359,12 +363,12 @@ try {
         }
         demand(pass.rows.filter((r) => r.phase.startsWith('build')).some((r) => r.filesPushes.count > 0), `${pass.label}: the build's writes reached the page as Files pushes`);
         if (pass.profiled) {
-            demand(Number.isFinite(pass.alignment.mainOffsetMs) && Number.isFinite(pass.alignment.pageOffsetMs), `${pass.label}: each profile holds its control block (alignment ${JSON.stringify(pass.alignment)})`);
+            demand(Number.isFinite(pass.alignment.mainOffsetMs) && Number.isFinite(pass.alignment.pageOffsetMs) && Number.isFinite(pass.alignment.hostOffsetMs), `${pass.label}: each profile holds its control block (alignment ${JSON.stringify(pass.alignment)})`);
             demand(/uiLagControlBusyMain/.test(ctl.mainGapStacks?.[0]?.stacks?.[0]?.stack ?? ''), `${pass.label}: main's worst control gap is attributed to the control block`);
         }
         result.controls[pass.label] = 'passed';
     }
-    demand(host.read && host.beats > 0, 'genie-host\'s gauge ran (its preload was installed and beat)');
+    demand(hostLaunch?.pids?.length > 0, 'genie-host was started with the row\'s inspector');
 
     // Every gap of the unprofiled pass's build phases, not only each phase's worst few: `over` is the true count.
     const build = passes[0].phases.filter((ph) => ph.name.startsWith('build'));
@@ -380,6 +384,7 @@ try {
     if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...paging.reasons, ...pushes.reasons].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
+    try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
     try { await main?.evaluate('globalThis.__uiLag?.stop(); globalThis.__uiLagHostLaunch?.stop(); true'); } catch {}
     try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.quit();true"); } catch {}
     for (const s of sessions) s.socket.close(); await sleep(1000); if (app?.exitCode === null) { try { app.kill('SIGTERM'); } catch {} }
@@ -387,14 +392,16 @@ finally {
     if (hostRecord && record?.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt && Number.isFinite(record.startedAt) && record.startedAt >= started) { try { process.kill(record.pid, 'SIGTERM'); } catch {} }
     mkdirSync(OUT, { recursive: true });
     for (const [label, profiles] of Object.entries(savedProfiles)) for (const [name, prof] of Object.entries(profiles)) writeFileSync(join(OUT, `ui-lag-${label}-${name}.cpuprofile`), JSON.stringify(prof));
-    result.limits.push('the workspace is untrusted (git reads its own config first, as for any untrusted folder)', 'typing goes to a field of the probe, not a chat composer', 'genie-host gaps under 100 ms are not recorded (its gauge threshold)', 'GitHub runners, not the owner\'s machine: absolute numbers differ');
+    result.limits.push('the workspace is untrusted (git reads its own config first, as for any untrusted folder)', 'typing goes to a field of the probe, not a chat composer', 'GitHub runners, not the owner\'s machine: absolute numbers differ');
     const out = { code, failure, platform: process.platform, head: head(), budgetEnforced: BUDGET, ...result, passes: passes.map((p) => ({ label: p.label, profiled: p.profiled, build: p.build, alignment: p.alignment, rows: p.rows })) };
     writeFileSync(join(OUT, 'ui-lag-result.json'), JSON.stringify(out, null, 2));
     // What a person reads in the log: each phase's numbers, then what each of the worst gaps was.
     for (const p of out.passes) for (const r of p.rows ?? []) {
-        console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${Math.round(r.host.worst[0]?.ms ?? 0)} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
+        console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${r.host.worstMs} over50=${r.host.over50} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
         if (r.mainProfile) console.log(`UI_LAG_PROFILE main ${r.phase} ${JSON.stringify(r.mainProfile.ms)} own=${JSON.stringify(r.mainProfile.ownFrames)}`);
         for (const g of r.mainGapStacks ?? []) console.log(`UI_LAG_STACK main ${r.phase} gap=${g.gapMs}ms ${JSON.stringify(g)}`.slice(0, 4000));
+        if (r.hostProfile) console.log(`UI_LAG_PROFILE host ${r.phase} ${JSON.stringify(r.hostProfile.ms)} own=${JSON.stringify(r.hostProfile.ownFrames)}`);
+        for (const g of r.hostGapStacks ?? []) console.log(`UI_LAG_STACK host ${r.phase} gap=${g.gapMs}ms ${JSON.stringify(g)}`.slice(0, 4000));
         if (r.pageProfile) console.log(`UI_LAG_PROFILE page ${r.phase} ${JSON.stringify(r.pageProfile.ms)} own=${JSON.stringify(r.pageProfile.ownFrames)}`);
         for (const l of r.pageLongtaskStacks ?? []) console.log(`UI_LAG_STACK page ${r.phase} longtask=${l.longtaskMs}ms ${JSON.stringify(l)}`.slice(0, 4000));
     }
