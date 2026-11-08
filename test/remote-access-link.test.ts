@@ -70,7 +70,7 @@ async function windowOn(local: boolean, onRemoteInvoke?: (method: string, args: 
     const [h, raw] = memoryPair();
     server.accept(h, { local });
     const t: ClientTransport = { send: (m) => raw.send(m), onMessage: (l) => raw.onMessage(l), onClose: (l) => raw.onClose(l), close: () => raw.close() };
-    const client = new SessionEngineClient({ ...(onRemoteInvoke ? { onRemoteInvoke } : {}) });
+    const client = new SessionEngineClient({ ...(onRemoteInvoke ? { onRemoteInvoke: onRemoteInvoke as never } : {}) });
     expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
     links.push(() => t.close());
     return { client, close: () => t.close() };
