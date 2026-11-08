@@ -225,8 +225,8 @@ export const UNVERIFIED_LABEL = 'Unverified';
 export function installDecision(check: SignatureCheck, options: { publisherChecksOff: boolean }): InstallDecision {
     if (check.signed) return { install: true, label: `signed by ${check.keyId}` };
     // ADF B4: a package changed after signing is never run, whatever developer mode says.
-    if (check.tampered) return { install: false, reason: `refused as tampered: ${check.reason}. A package changed after it was signed never runs, with publisher checks on or off.` };
+    if (check.tampered) return { install: false, reason: `refused as tampered: ${check.reason}; reinstall it from its publisher, because a package changed after it was signed never runs, with publisher checks on or off.` };
     // ADF B5: publisher checks off, it runs, Unverified, with no network until the person allows it (plugin-host.ts).
     if (options.publisherChecksOff) return { install: true, label: UNVERIFIED_LABEL };
-    return { install: false, reason: `unsigned plugins are not installed: ${check.reason}. Turn off publisher checks (Settings → Plugins) to run it at your own risk; it is then labelled Unverified.` };
+    return { install: false, reason: `unsigned plugins are not installed: ${check.reason}; turn off publisher checks (Settings → Plugins) to run it at your own risk, labelled Unverified.` };
 }

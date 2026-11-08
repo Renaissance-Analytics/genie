@@ -80,6 +80,24 @@ export const REMOTE_ACCESS_ELEMENT: ElementDefinition = {
     payload: { start: 'remoteAccess.start', stop: 'remoteAccess.stop', health: 'remoteAccess.health', settingsSection: 'workstation' },
 };
 
+/**
+ * A PILOT'S CONNECTION TO ANOTHER WORKSTATION (Tynn #552, host split P5d.4; audit M-e). A host-service on BOTH sides:
+ * genie-host mints the Tynn grant with its own account, holds the proof key, opens the relay member and the browser's door
+ * to that workstation's sites; the window that asked speaks the remote protocol on a channel, through the engine link's
+ * device link, which is the only channel between the two sides. The grant never crosses to the window.
+ */
+export const RELAY_MEMBER_ELEMENT: ElementDefinition = {
+    id: 'genie.relay-member',
+    kind: 'host-service',
+    version: BUILTIN_VERSION,
+    packageId: BUILTIN_PACKAGE_ID,
+    source: 'builtin',
+    docs: { name: 'Connect to a workstation', description: 'This machine connects to another of the person\'s Tynn workstations over the Tynn relay, and its window drives that workstation; the Tynn grant and the proof key stay in Genie\'s host.' },
+    reach: { scopes: ['workstation'], side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.deviceLink'], events: ['device.event'] } },
+    permissions: { capabilities: [], network: [] },
+    payload: { start: 'deviceLink.openRelay', stop: 'deviceLink.close', health: 'deviceLink.relayHealth', settingsSection: 'workstation' },
+};
+
 export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclaration {
     return {
         id: BUILTIN_PACKAGE_ID,
@@ -99,7 +117,7 @@ export function builtinToolPackage(tools: readonly BuiltinTool[]): PackageDeclar
                 // GApps v2 decision 3: a tool that acts as the person, or waits on their approval, is never granted to an app.
                 ...(PERSON_ONLY_TOOLS.has(t.name) ? { grantable: false } : {}),
             },
-        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT]),
+        } as ElementDefinition)).concat([REMOTE_ACCESS_ELEMENT, RELAY_MEMBER_ELEMENT]),
     };
 }
 

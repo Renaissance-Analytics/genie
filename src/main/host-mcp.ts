@@ -85,6 +85,11 @@ export interface HostMcpPorts {
 }
 
 export interface HostMcp {
+    /**
+     * The plugins changed: build the tools again and serve them (ADF A6, Tynn #450). An agent's next `tools/list` shows
+     * them, on the same endpoint, with no restart.
+     */
+    refreshTools(): void;
     /** What the window said. The server is already starting (it does not wait for a window). */
     setView(view: WindowView): Promise<void>;
     /** A session's Genie MCP entry: the endpoint, its token and this agent's caller key. */
@@ -207,6 +212,16 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         endpoint: () => server?.endpoint() ?? null,
         status: () => ({ endpoint: server?.endpoint() ?? null, verified, tools }),
         stop: async () => { await server?.stop().catch(() => undefined); },
+        refreshTools: () => {
+            if (!server) return;
+            try {
+                server.setRegistrations(build());
+                ports.log(`mcp: now serving ${tools.length} tools`);
+            } catch (error) {
+                // What was offered stays offered: a build that fails must not take every agent's tools away.
+                ports.log(`mcp: the tools could not be rebuilt: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        },
         registrations: () => servedNow,
         runNative: async (call) => {
             const r = native.get(call.name);

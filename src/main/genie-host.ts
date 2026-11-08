@@ -102,6 +102,10 @@ import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
 import { sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
+import { openRelayMember, PopKeypair } from './relay-member.js';
+import { mintConnectGrant } from './tynn-network.js';
+import { RemoteBrowsers } from './remote-browsers.js';
+import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
 import { deviceSocket } from './device-socket.js';
 import { configWriter, writeWorkspaceConfig } from './workspace-config-sync.js';
@@ -147,6 +151,7 @@ import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
 import { setThreadStoreSlowLog } from '../core/thread-store.js';
+import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 
 /**
@@ -257,6 +262,9 @@ async function main(): Promise<void> {
      */
     // On Windows, one long-lived PowerShell for this host's process readings and its private files (windows-helper.ts). It ends when this process does, however it does.
     if (process.platform === 'win32') setWin32ProcessReader((script) => { const helper = sharedWindowsHelper(); return helper ? helper.run(script).completed.then((r) => r.stdout) : Promise.reject(new Error('no helper')); });
+    // prism-harness 0.10.3's lock identity (a CIM query on Windows), read ASYNCHRONOUSLY and started now; awaited below,
+    // before the session host takes work, so no thread write ever pays for it. A failed read follows the SDK's own retry.
+    const lockIdentity = warmLockIdentity().catch((error: unknown) => { lifecycleLog(`lock identity unread: ${error instanceof Error ? error.message : String(error)}`); });
     const spawnLedger = SpawnLedger.open(join(runtime, 'children.json'), randomUUID());
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
     // prism-acp's supervisor (a Job Object on Windows) before any agent starts: a provider is never run uncontained.
@@ -473,6 +481,9 @@ async function main(): Promise<void> {
         log: say,
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
     })));
+    /** This host's Tynn account once open (Tynn #552): a relay connection asks it synchronously whether it is signed in. */
+    let tynnAccountNow: TynnAccount | null = null;
+    void tynnOpening.then((account) => { tynnAccountNow = account; }, () => {});
     // GITHUB'S ACCOUNT (P3.4 cut c): its tokens and the authenticated git are here, and never cross to a window.
     const githubOpening = proxyMemory.then((memory) => {
         const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say, followSameOrigin: 5 });
@@ -725,6 +736,8 @@ async function main(): Promise<void> {
     let gappBook: GAppBook | null = null;
     const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins(), gappBook ?? undefined));
     pluginsService.onEvent(() => catalogService.rebuild());
+    // A package installed, updated, disabled or removed reaches agents now, not at the next restart (ADF A6).
+    catalogService.onEvent(() => mcp?.refreshTools());
     // The flow palette's door and the runner here offer what the catalog holds, as it changes (ADF A5).
     setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions));
     catalogService.onEvent(() => setOfferedFlowKinds(catalogFlowKinds(catalogService.snapshot().definitions)));
@@ -847,6 +860,21 @@ async function main(): Promise<void> {
             socket: (url) => deviceSocket(url),
             send: (owner, event) => engine.deviceEvent(owner, event),
             log: say,
+            /*
+             * A PILOT'S CONNECTION TO ANOTHER TYNN WORKSTATION (Tynn #552, host split P5d.4; audit M-e): the grant is minted
+             * here with this host's Tynn account, the proof key made and kept here, the relay member opened and renewed
+             * here; the window gets a channel. The browser's door to that workstation's sites is here too.
+             */
+            relay: {
+                signedIn: () => tynnAccountNow?.status().signedIn === true,
+                keypair: () => PopKeypair.generate(),
+                mint: (workstationId, jwk) => (tynnAccountNow
+                    ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
+                    : Promise.resolve({ ok: false as const, reason: 'sign in to Tynn to connect to a Tynn workstation' })),
+                // Through the one socket this host dials with (device-socket.ts): the machine's roots, no redirects.
+                open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
+            },
+            browsers: new RemoteBrowsers(siteDoor),
         }),
         workstation: new WorkstationService({
             store: workstationKeyStore(join(home, 'workstation.json'), keychain),
@@ -919,6 +947,7 @@ async function main(): Promise<void> {
     files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
+    await lockIdentity;
     const host = new SessionHost({
         userData: home,
         ...engineHostOptions,

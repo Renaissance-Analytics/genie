@@ -76,6 +76,8 @@ export interface HostApiDeps {
     artboard?: LocalArtboardPort;
     chatDrafts?: LocalDraftsStore;
     filesWatch?: FilesWatchPort;
+    /** Following the Tynn tab (P4 family 12, Tynn #561): one view per watch; its signals, by kind and workspace. */
+    tynnWatch?: import('../core/local-tynn-watch.js').TynnWatchPort;
     localFiles?: LocalFilesDeps;
     localOwner?: LocalOwnerDeps;
     /** The timer and clock the agent events are coalesced on (core/coalesce.ts). Default: the real ones. */
@@ -195,6 +197,9 @@ export interface HostApiDeps {
         tynnIssueAction?(workspaceId: string, input: unknown): Promise<unknown>;
         /** One write on a page of the tab (the Home's Details save, genie#1295 H1). Optional: refused where absent. */
         tynnPageAction?(workspaceId: string, input: unknown): Promise<unknown>;
+        /** What changed on the board / the issue queue since a cursor (P4 family 12): the live tab's reads. */
+        tynnBoardChanges?(workspaceId: string, scope: unknown, cursor: string, ids: readonly string[]): Promise<unknown>;
+        tynnIssueChanges?(workspaceId: string, filters: unknown, cursor: string, ids: readonly string[]): Promise<unknown>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<unknown>;
         removeRepo(workspaceId: string, slug: string): Promise<unknown>;
         /** Optional: a host without it answers the call with a refusal rather than failing to build its deps. */
@@ -261,6 +266,7 @@ export interface HostApiDeps {
     } | null;
 }
 
+const TYNN_NO_ACTION = { ok: false, state: 'error', reason: 'name a workspace and an action' } as const;
 const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''));
 const num = (v: unknown): number | undefined => (typeof v === 'number' && v > 0 ? Math.floor(v) : undefined);
 const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
@@ -541,24 +547,33 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return typeof args[0] === 'string' ? deps.workspaceOps.wake(args[0]) : { ok: false, reason: 'wake names a workspace' };
             case 'workspaces.remove':
                 return typeof args[0] === 'string' ? deps.workspaceOps.remove(args[0]) : { ok: false, reason: 'remove names a workspace' };
+            // THE TYNN TAB (P4 family 12, Tynn #561): the window's own calls come this way now, with the IPC path's refusals.
             case 'workspaces.tynnBoard':
                 if (!deps.workspaceOps.tynnBoard) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnBoard(str(args[0]), args[1]);
+                return typeof args[0] === 'string' ? deps.workspaceOps.tynnBoard(args[0], args[1] ?? {}) : { ok: false, state: 'error', reason: 'name a workspace' };
             case 'workspaces.tynnPage':
                 if (!deps.workspaceOps.tynnPage) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnPage(str(args[0]), args[1], args[2]);
+                return deps.workspaceOps.tynnPage(args[0] as string, args[1], args[2]);
             case 'workspaces.tynnBoardAction':
                 if (!deps.workspaceOps.tynnBoardAction) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnBoardAction(str(args[0]), args[1]);
+                return typeof args[0] === 'string' && typeof args[1] === 'object' && args[1] !== null ? deps.workspaceOps.tynnBoardAction(args[0], args[1]) : TYNN_NO_ACTION;
             case 'workspaces.tynnIssues':
                 if (!deps.workspaceOps.tynnIssues) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnIssues(str(args[0]), args[1]);
+                return deps.workspaceOps.tynnIssues(args[0] as string, args[1] ?? {});
             case 'workspaces.tynnIssueAction':
                 if (!deps.workspaceOps.tynnIssueAction) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnIssueAction(str(args[0]), args[1]);
+                return typeof args[0] === 'string' && typeof args[1] === 'object' && args[1] !== null ? deps.workspaceOps.tynnIssueAction(args[0], args[1]) : TYNN_NO_ACTION;
             case 'workspaces.tynnPageAction':
                 if (!deps.workspaceOps.tynnPageAction) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnPageAction(str(args[0]), args[1]);
+                return typeof args[0] === 'string' && typeof args[1] === 'object' && args[1] !== null ? deps.workspaceOps.tynnPageAction(args[0], args[1]) : TYNN_NO_ACTION;
+            case 'workspaces.tynnBoardChanges':
+            case 'workspaces.tynnIssueChanges': {
+                const read = method === 'workspaces.tynnBoardChanges' ? deps.workspaceOps.tynnBoardChanges : deps.workspaceOps.tynnIssueChanges;
+                if (!read) throw new Error('this host has no live Tynn tab');
+                const [id, scope, cursor, ids] = args;
+                if (typeof id !== 'string' || typeof cursor !== 'string') return { ok: false, state: 'error', reason: 'name a workspace and a cursor' };
+                return read(id, scope ?? {}, cursor, Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : []);
+            }
             case 'workspaces.listRepos':
                 return deps.workspaceOps.listRepos(str(args[0]));
             case 'workspaces.addRepo': {
@@ -671,6 +686,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     return {
         invoke,
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
+        ...(deps.tynnWatch ? { tynnWatch: deps.tynnWatch } : {}),
         ...(deps.localTerminals ? { localTerminals: deps.localTerminals } : {}),
         ...(deps.takeOver ? { takeOverEnded: (terminalId: string) => deps.takeOver!.ended(terminalId) } : {}),
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
@@ -702,6 +718,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
                 deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
+                deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };
