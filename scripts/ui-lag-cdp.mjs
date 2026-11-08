@@ -31,7 +31,7 @@ import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
 import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, summarize, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
-const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, IDLE_MS = 6000, TERMINAL_MS = 10000, BUILD_MS = 22000, CONTROL_MS = 120;
+const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, HOST_BUDGET_MS = 100, IDLE_MS = 6000, TERMINAL_MS = 10000, BUILD_MS = 22000, CONTROL_MS = 120;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
 const json = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
@@ -379,9 +379,12 @@ try {
     // THE FILES PUSH BUDGET (Tynn #523): bytes per push to the page with the Files panel open during the build.
     const pushes = pushVerdict(passes.map((p) => ({ pass: p.label, sizes: p.rows.find((x) => x.phase === 'build-files')?.filesPushes.sizes ?? [] })));
     for (const p of passes) for (const r of p.rows) delete r.filesPushes.sizes; // counted above; not printed per push
-    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok, main: mainBudget, paging, pushes };
+    // THE HOST BUDGET (Tynn #524): genie-host late by no more than 100 ms during the build. It runs the agents, the
+    // terminals and the watcher: a stall there is every window's, even when window main is idle.
+    const hostBudget = budgetVerdict(passes[0].hostState.gauge.gaps.filter((g) => build.some((ph) => g.endedMs >= ph.hostMs && g.startedMs <= ph.end.hostMs)), HOST_BUDGET_MS);
+    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && hostBudget.ok, main: mainBudget, paging, pushes, host: hostBudget };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...paging.reasons, ...pushes.reasons].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...paging.reasons, ...pushes.reasons].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
