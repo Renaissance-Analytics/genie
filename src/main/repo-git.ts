@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { gitExecFile } from './git-exec.js';
 import { GitDidNotAnswer, withinGitLimit, type GitLimit } from './git-ports.js';
 import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
 import { guardRepoPath, parseRepoStatus, type RepoStatus } from './repo-model.js';
@@ -27,7 +27,7 @@ async function git(cwd: string, args: readonly string[], limit?: GitLimit): Prom
         };
         const options = { cwd, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } };
         if (limit) limit.git(args, options, answered);
-        else execFile(resolveProgram('git'), [...args], { ...options, windowsHide: true }, answered);
+        else gitExecFile(resolveProgram('git'), [...args], { ...options, windowsHide: true }, answered);
     });
 }
 

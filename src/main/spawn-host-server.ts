@@ -1,6 +1,7 @@
 import type { PtyPort, PtySpawnOptions } from './terminal-host.js';
 import type { ListedPty, PtyTag, SpawnChannel, SpawnFrame } from './spawn-host-protocol.js';
 import type { LineStream, RunOptions, RunResult } from './spawn-exec.js';
+import type { ExecFileOptions, GitChild, GitExecCallback } from './git-exec.js';
 import { randomUUID } from 'node:crypto';
 import { SPAWN_PROTOCOL } from './spawn-host-protocol.js';
 import { splitTerminalText, TerminalOutputCounter } from '../core/terminal-stream.js';
@@ -24,6 +25,21 @@ export interface SpawnHostImpl {
     readonly stream: LineStream;
     /** The pty engine for supervised processes; `null` = this host makes no ptys. */
     readonly pty: PtyPort | null;
+    /** `execFile` for genie-host's git (Tynn #532); absent = this host runs no git. */
+    readonly gitExec?: (file: string, args: readonly string[], options: ExecFileOptions, callback: GitExecCallback) => GitChild;
+}
+
+/** What a git's options may carry over the wire: nothing but these. */
+function gitOptions(raw: unknown): ExecFileOptions {
+    const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+    const env = typeof o['env'] === 'object' && o['env'] !== null ? Object.fromEntries(Object.entries(o['env'] as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string')) : undefined;
+    return {
+        windowsHide: true,
+        ...(typeof o['cwd'] === 'string' ? { cwd: o['cwd'] } : {}),
+        ...(typeof o['maxBuffer'] === 'number' ? { maxBuffer: o['maxBuffer'] } : {}),
+        ...(typeof o['timeout'] === 'number' ? { timeout: o['timeout'] } : {}),
+        ...(env ? { env } : {}),
+    };
 }
 
 /**
@@ -44,6 +60,7 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
     let opening: { id: string; counter: TerminalOutputCounter; ended: boolean } | null = null;
     const byEngine = new Map<string, string>(); // the engine's id → main's
     const streams = new Map<string, { stop(): void }>();
+    const gits = new Map<string, GitChild>();
     const event = (ch: Extract<SpawnFrame, { kind: 'event' }>['channel'], payload: unknown) => channel.send({ kind: 'event', channel: ch, payload });
     const answer = (id: number, value: unknown) => { if (id > 0) channel.send({ kind: 'result', id, ok: true, value }); };
     const refuse = (id: number, error: unknown) => {
@@ -87,6 +104,7 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
             try { impl.pty?.kill(engineId); } catch { /* already gone */ }
         }
         for (const [id, s] of [...streams]) { streams.delete(id); s.stop(); }
+        for (const [id, g] of [...gits]) { gits.delete(id); try { g.kill(); } catch { /* already gone */ } }
     };
 
     channel.onFrame((frame) => {
@@ -185,6 +203,33 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                     ...known.get(ptyId)?.counter.snapshot(),
                 }));
                 answer(id, listed);
+                return;
+            }
+            case 'git.exec': {
+                const [gitId, file, argv, options] = args as [string, string, string[], unknown];
+                if (!impl.gitExec || typeof gitId !== 'string' || typeof file !== 'string' || !Array.isArray(argv) || !argv.every((a) => typeof a === 'string')) { refuse(id, new Error('this spawn host runs no git')); return; }
+                try {
+                    const child = impl.gitExec(file, argv, gitOptions(options), (error, stdout, stderr) => {
+                        gits.delete(gitId);
+                        const e = error as (Error & { code?: unknown; killed?: unknown; signal?: unknown }) | null;
+                        event('git.exit', {
+                            id: gitId, stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), exitCode: child.exitCode, signalCode: child.signalCode,
+                            error: e ? { message: e.message, ...(typeof e.code === 'string' || typeof e.code === 'number' ? { code: e.code } : {}), ...(typeof e.killed === 'boolean' ? { killed: e.killed } : {}), ...(typeof e.signal === 'string' ? { signal: e.signal } : {}) } : null,
+                        });
+                    });
+                    gits.set(gitId, child);
+                    answer(id, { pid: child.pid ?? null });
+                } catch (error) { refuse(id, error); }
+                return;
+            }
+            case 'git.kill': {
+                gits.get(args[0] as string)?.kill();
+                answer(id, true);
+                return;
+            }
+            case 'git.stdin': {
+                gits.get(args[0] as string)?.stdin?.end(typeof args[1] === 'string' ? args[1] : undefined);
+                answer(id, true);
                 return;
             }
             case 'host.shutdown': {

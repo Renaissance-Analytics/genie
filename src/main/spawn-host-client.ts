@@ -1,4 +1,6 @@
-import { fork, type ChildProcess } from 'node:child_process';
+import { execFile, fork, type ChildProcess, type ExecFileOptions } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import type { GitChild, GitExecCallback } from './git-exec.js';
 import { randomUUID } from 'node:crypto';
 import { parseSpawnFrame, type ListedPty, type SpawnFrame, type SpawnMethod } from './spawn-host-protocol.js';
 import { execInProcess, streamInProcess, type LineStream, type RunOptions, type RunResult } from './spawn-exec.js';
@@ -67,6 +69,28 @@ export const HELPER_GONE_WAIT_MS = 10_000;
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
+/**
+ * A git the spawn host created (Tynn #532), as genie-host holds it: its pid (once the host says it), its exit and its
+ * codes when it ends, `kill()` and `stdin.end()` sent to the real one. What the read limit and its kill-tree walk use.
+ */
+class RemoteGitChild extends EventEmitter implements GitChild {
+    pid: number | undefined = undefined;
+    exitCode: number | null = null;
+    signalCode: NodeJS.Signals | null = null;
+    readonly stdin: { end(input?: string): unknown };
+    readonly #send: (method: 'git.kill' | 'git.stdin', args: unknown[]) => void;
+    constructor(readonly gitId: string, send: (method: 'git.kill' | 'git.stdin', args: unknown[]) => void) {
+        super();
+        this.#send = send;
+        this.stdin = { end: (input?: string) => { this.#send('git.stdin', [gitId, input ?? '']); return this.stdin; } };
+    }
+    kill(): boolean {
+        if (this.exitCode !== null || this.signalCode !== null) return false;
+        this.#send('git.kill', [this.gitId]);
+        return true;
+    }
+}
+
 export class SpawnHostClient {
     readonly #options: SpawnHostOptions;
     readonly #log: (line: string) => void;
@@ -80,6 +104,7 @@ export class SpawnHostClient {
     #sentEnv: string | null = null;
     readonly #pending = new Map<number, Pending>();
     readonly #streams = new Map<string, { onLine: (line: string) => void; onEnd: (reason: string) => void }>();
+    readonly #gits = new Map<string, { child: RemoteGitChild; callback: GitExecCallback }>();
     readonly #ptys = new Map<string, { pid: number | null; position?: TerminalPosition | null }>();
     readonly #data = new Set<(id: string, data: string, position?: TerminalDataPosition) => void>();
     readonly #exit = new Set<(id: string, code: number, position?: TerminalPosition) => void>();
@@ -191,6 +216,7 @@ export class SpawnHostClient {
         this.#pending.clear();
         for (const [, s] of [...this.#streams]) s.onEnd(`the spawn host is unreachable: ${reason}`);
         this.#streams.clear();
+        this.#endGits(`the spawn host is unreachable: ${reason}`);
     }
 
     /** A live pty found by `linkUp`, taken back: its output, exit and writes are routed as for one opened here. */
@@ -206,6 +232,49 @@ export class SpawnHostClient {
     exec(binary: string, args: readonly string[], options: RunOptions = {}): Promise<RunResult> {
         if (this.#fallback) return execInProcess(binary, args, options);
         return this.#call('spawn.exec', [binary, [...args], options]) as Promise<RunResult>;
+    }
+
+    /**
+     * `execFile`, created by the spawn host (Tynn #532): genie-host's git, through git-exec.ts. Answered at once with the
+     * child as genie-host holds it; its callback and exit come when the real git ends.
+     */
+    gitExec = (file: string, args: readonly string[], options: ExecFileOptions, callback: GitExecCallback): GitChild => {
+        if (this.#fallback) return execFile(file, [...args], options, callback);
+        const gitId = `git_${randomUUID()}`;
+        const child = new RemoteGitChild(gitId, (method, a) => this.#send({ kind: 'call', id: 0, method, args: a }));
+        this.#gits.set(gitId, { child, callback });
+        const wire = {
+            ...(typeof options.cwd === 'string' ? { cwd: options.cwd } : {}),
+            ...(typeof options.maxBuffer === 'number' ? { maxBuffer: options.maxBuffer } : {}),
+            ...(typeof options.timeout === 'number' ? { timeout: options.timeout } : {}),
+            ...(options.env ? { env: options.env } : {}),
+        };
+        this.#call('git.exec', [gitId, file, [...args], wire]).then(
+            (value) => { const pid = (value as { pid?: unknown } | null)?.pid; if (typeof pid === 'number' && pid > 0) child.pid = pid; },
+            (error: unknown) => this.#gitEnded(gitId, { error: { message: error instanceof Error ? error.message : String(error), code: (error as { code?: unknown })?.code ?? 'ESPAWNHOST' }, stdout: '', stderr: '', exitCode: null, signalCode: null }),
+        );
+        return child;
+    };
+
+    #gitEnded(gitId: string, payload: Record<string, unknown>): void {
+        const entry = this.#gits.get(gitId);
+        if (!entry) return;
+        this.#gits.delete(gitId);
+        const raw = payload['error'] as { message?: unknown; code?: unknown; killed?: unknown; signal?: unknown } | null | undefined;
+        const error = raw ? Object.assign(new Error(typeof raw.message === 'string' ? raw.message : 'git failed'), {
+            ...(raw.code !== undefined ? { code: raw.code } : {}), ...(typeof raw.killed === 'boolean' ? { killed: raw.killed } : {}), ...(typeof raw.signal === 'string' ? { signal: raw.signal } : {}),
+        }) : null;
+        const exitCode = typeof payload['exitCode'] === 'number' ? payload['exitCode'] : null;
+        const signalCode = typeof payload['signalCode'] === 'string' ? payload['signalCode'] as NodeJS.Signals : null;
+        // Ended either way: a git with no code of its own (the host lost) is ended, -1.
+        entry.child.exitCode = exitCode ?? (signalCode === null ? -1 : null);
+        entry.child.signalCode = signalCode;
+        entry.child.emit('exit', entry.child.exitCode, signalCode);
+        entry.callback(error, String(payload['stdout'] ?? ''), String(payload['stderr'] ?? ''));
+    }
+
+    #endGits(why: string): void {
+        for (const gitId of [...this.#gits.keys()]) this.#gitEnded(gitId, { error: { message: why, code: 'ESPAWNHOST' }, stdout: '', stderr: '', exitCode: null, signalCode: null });
     }
 
     stream: LineStream = (binary, args, onLine, onEnd) => {
@@ -358,6 +427,7 @@ export class SpawnHostClient {
         this.#pending.clear();
         for (const [, s] of [...this.#streams]) s.onEnd(`the spawn host ${why}`);
         this.#streams.clear();
+        this.#endGits(`the spawn host ${why}`);
         const killPid = this.#options.killPid ?? ((pid: number) => { try { process.kill(pid); } catch { /* already gone */ } });
         const pidAlive = this.#options.pidAlive ?? ((pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; } });
         const lost = [...this.#ptys].map(([id, p]) => ({ id, pid: p.pid }));
@@ -430,6 +500,9 @@ export class SpawnHostClient {
                 for (const l of this.#exit) { if (position) l(id, code, position); else l(id, code); }
                 return;
             }
+            case 'git.exit':
+                this.#gitEnded(id, payload);
+                return;
             case 'stream.line':
                 this.#streams.get(id)?.onLine(String(payload['line'] ?? ''));
                 return;
