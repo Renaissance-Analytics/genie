@@ -19,6 +19,8 @@ export interface PluginToolRef {
     readonly tool: PluginTool;
     /** Genie's own (an official plugin, beta.33 item 14): run in-process, not launched from a plugin folder. */
     readonly official?: boolean;
+    /** ADF B4: check the package again before its code is loaded to run; null = run it, else why it is refused. */
+    readonly verify?: () => Promise<string | null>;
 }
 
 export interface PluginToolsDeps {
@@ -73,6 +75,9 @@ export function pluginTools(deps: PluginToolsDeps): Registration[] {
             if (typeof caller === 'string') return err(caller);
             const guard = deps.plugins.guard(ref.pluginId);
             if (!guard) return err(`plugin ${ref.pluginId} is not enabled`);
+            // ADF B4: a signed package's files are checked again before its code is loaded to run.
+            const refused = ref.verify ? await ref.verify() : null;
+            if (refused) return err(refused);
             const { terminalId: _omit, ...rest } = args;
             if (ref.tool.gated) {
                 const verdict = await deps.approve(caller, 'plugin', name, context);

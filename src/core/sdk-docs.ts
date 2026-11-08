@@ -1,4 +1,5 @@
 import { CATALOG_SCHEMA_VERSION, ENVELOPE_FIELDS, KIND_SPECS, type EnvelopeField, type FieldSpec, type KindSpec } from './catalog.js';
+import { PACKAGE_FORMAT, PACKAGE_FORMAT_DOC } from './plugin-integrity.js';
 
 /**
  * THE SDK'S DOCS, GENERATED FROM THE CATALOG'S SCHEMAS (ADF B7, Tynn #457) — pure. `KIND_SPECS` and `ENVELOPE_FIELDS`
@@ -37,6 +38,8 @@ function indexPage(specs: readonly KindSpec[]): string {
         'genie-host validates every definition against the schemas these pages are generated from, and registers a package\'s definitions together, or none of them.',
         '',
         `Catalog schema version: ${CATALOG_SCHEMA_VERSION}.`,
+        '',
+        `A package is signed over every file in it: [the package format](packages.md) (\`${PACKAGE_FORMAT}\`).`,
         '',
         '## Contribution families',
         '',
@@ -110,6 +113,8 @@ export function renderSdkDocs(specs: readonly KindSpec[] = KIND_SPECS, envelope:
     const pages = new Map<string, string>();
     pages.set('README.md', indexPage(specs));
     pages.set('envelope.md', envelopePage(envelope));
+    // ADF B4: the package signing format, from the code that checks it (core/plugin-integrity.ts).
+    pages.set('packages.md', [HEADER.replace('src/core/catalog.ts', 'src/core/plugin-integrity.ts'), '', `# The package format: ${PACKAGE_FORMAT}`, '', ...PACKAGE_FORMAT_DOC, ''].join('\n'));
     for (const spec of specs) pages.set(`kinds/${spec.kind}.md`, kindPage(spec));
     return pages;
 }
