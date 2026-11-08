@@ -46,7 +46,7 @@ export interface TitleBarProps {
      */
     workstation: { name: string; healthy: boolean } | null;
     /** Driving another machine (§6.8): the loud badge, who holds the baton, the lock. Absent on the local machine. */
-    remote?: { host: string; driver: string | null; driving: boolean; locked: boolean } | null | undefined;
+    remote?: RemoteBadge | null | undefined;
     onNavigate: (route: string) => void;
     onOpenPalette: () => void;
     /** The width the native window buttons take at the right, measured (core/window.ts `controlsInset`); 0 = none. */
@@ -89,6 +89,19 @@ export interface TitleBarProps {
         onRefresh?: (() => void) | undefined;
         refresh?: ConnectProgress | undefined;
     } | undefined;
+}
+
+/**
+ * The badge's reading, and Take control (Tynn #529): offered whenever this window does not drive and the host is not
+ * locked, naming who it takes control from. `lostTo`: who took control from this window.
+ */
+export interface RemoteBadge {
+    readonly host: string;
+    readonly driver: string | null;
+    readonly driving: boolean;
+    readonly locked: boolean;
+    readonly lostTo?: string | null | undefined;
+    readonly onTakeControl?: (() => void) | undefined;
 }
 
 export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect }: TitleBarProps) {
@@ -265,7 +278,14 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     className="flex shrink-0 items-center gap-2 rounded-md bg-[var(--warning)]/15 px-2 py-0.5 font-mono text-[11px] text-[var(--warning)]"
                 >
                     <span className="font-semibold">{remoteBadge(remote.host)}</span>
-                    <span className="text-[var(--fg-3)]">{remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
+                    <span className="text-[var(--fg-3)]">{remote.locked ? 'locked' : remote.driving ? 'you are driving' : remote.lostTo && remote.lostTo === remote.driver ? `${remote.lostTo} took control` : remote.driver ? `${remote.driver} is driving` : 'nobody is driving'}</span>
+                    {remote.onTakeControl && !remote.driving && !remote.locked ? (
+                        <Button size="xs" type="button" data-action="take-control" onClick={remote.onTakeControl}
+                            // no-drag: in the bar's drag region a click is the OS's.
+                            className="[-webkit-app-region:no-drag] rounded border border-[var(--warning)]/40 px-1.5 py-0 font-sans text-[11px] font-medium text-[var(--warning)] hover:bg-[var(--warning)]/20">
+                            {remote.driver ? `Take control from ${remote.driver}` : 'Take control'}
+                        </Button>
+                    ) : null}
                 </div>
             ) : null}
             {/*
