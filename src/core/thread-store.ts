@@ -146,6 +146,9 @@ export class ThreadStore extends FileSessionStore {
         const seq = list.reduce((m, seg) => Math.max(m, seg.seq), 0) + 1;
         const file = `${ledgerName(key)}.${String(seq).padStart(6, '0')}.jsonl`;
         await this.#timed('rotate', key, () => rename(path, join(this.#directory, file)));
+        // The harness's line-count sidecar (prism-harness >= 0.10.2, `<log>.index.json`) matched the file by size, times,
+        // inode and device; the rename changed its ctime, so it is removed, never moved.
+        await unlink(`${path}${LOG_SIDECAR}`).catch(() => undefined);
         list.push({ seq, file, lines, bytes: size, summary: null });
         this.#segments.set(key, list);
         await this.#saveIndex(key, list);
@@ -318,8 +321,12 @@ export class ThreadStore extends FileSessionStore {
 
     /** Cleared: the segments and their index go too. */
     override async clearLog(key: string): Promise<void> {
-        for (const seg of await this.#index(key)) await unlink(join(this.#directory, seg.file)).catch(() => undefined);
+        for (const seg of await this.#index(key)) {
+            await unlink(join(this.#directory, seg.file)).catch(() => undefined);
+            await unlink(join(this.#directory, `${seg.file}${LOG_SIDECAR}`)).catch(() => undefined);
+        }
         await unlink(this.#indexFile(key)).catch(() => undefined);
+        await unlink(`${this.logFile(key)}${LOG_SIDECAR}`).catch(() => undefined);
         this.#segments.set(key, []);
         this.#counts.delete(key);
         await super.clearLog(key);
@@ -387,6 +394,8 @@ export async function* linesFromEndOf(path: string): AsyncGenerator<Buffer[]> {
     }
 }
 
+/** prism-harness's line-count sidecar beside a log (0.10.2+): `<log>.index.json`. */
+const LOG_SIDECAR = '.index.json';
 /** How big a thread log grows before it rotates (Tynn #557). */
 export const THREAD_ROTATE_BYTES = 64 * 1024 * 1024;
 /** A store step this slow is logged by name. */
