@@ -112,14 +112,18 @@ describe('remote access over the engine link', () => {
     });
 
     it('the window\'s relay host bridges a Pilot into the host\'s remote host, scoped as its grant says; the window leaving ends it', async () => {
-        const local = await windowOn(true);
+        const snapshot = { agents: [{ id: 'agent_a', workspaceId: 'tynn' }, { id: 'agent_b', workspaceId: 'fancy' }], workspaces: [{ id: 'tynn' }, { id: 'fancy' }], deckItems: [], signals: {} };
+        const local = await windowOn(true, async (method) => (method === 'snapshot' ? snapshot : null));
         const relay: Array<(c: ServerConnection) => void> = [];
         local.client.remoteAccess().bridge({ onConnection: (cb) => { relay.push(cb); return () => {}; } });
         const pair = inMemoryPair();
         for (const cb of relay) cb({ ...pair.server, remoteAddress: 'relay:wren', preAuth: { label: 'wren', isOwner: false, workspaceId: 'tynn', readonly: false } });
         const pilot = wire(pair.client);
         expect(await pilot.hello({ kind: 'relay' }, 'wren')).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn' });
-        expect(await pilot.call('updates.state')).toMatchObject({ kind: 'result', ok: true, value: { phase: 'idle' } });
+        // Through the bridge, the host and the window: the guest sees its own workspace only.
+        const seen = await pilot.call('snapshot');
+        expect(seen).toMatchObject({ kind: 'result', ok: true });
+        expect((seen as { value: { agents: Array<{ id: string }> } }).value.agents.map((a) => a.id)).toEqual(['agent_a']);
         local.close();
         expect(await pilot.next()).toBe('closed');
     });

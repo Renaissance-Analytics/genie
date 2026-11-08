@@ -255,6 +255,8 @@ export interface RemoteAccessServicePorts {
  * (session-engine-server.ts). Settings → Workstation's remote section reads the status and drives the PIN, the devices,
  * the lock and the pair answers; the window's relay host bridges its connections; the newest window forwards its events.
  */
+const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'answerPair', 'apply', 'restart']);
+
 export class RemoteAccessService {
     readonly #access: RemoteAccessHost;
     readonly #bridge: RelayBridgeHost;
@@ -272,6 +274,13 @@ export class RemoteAccessService {
     }
 
     async call(owner: string, method: string, args: unknown[]): Promise<unknown> {
+        const value = await this.#perform(owner, method, args);
+        // What the person changed is what every window shows next (RemoteHost does not say so for a PIN).
+        if (CHANGES_STATUS.has(method)) this.pushStatus();
+        return value;
+    }
+
+    async #perform(owner: string, method: string, args: unknown[]): Promise<unknown> {
         const a = this.#access;
         switch (method) {
             case 'status': return a.status();
