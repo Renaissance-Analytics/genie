@@ -120,3 +120,21 @@ describe('CONTROL: what the catalog projects passes its validator', () => {
         expect(pluginPackage(p.manifest, 'builtin').contributions.find((c) => c.kind === 'editor')?.payload).toMatchObject({ pluginName: 'Document' });
     });
 });
+
+/**
+ * PROJECTED BY SIDE (the owner's ruling q_d71981d6: every element declares where it runs). A window's editors and panels
+ * are the elements a client draws: `client`, or `both` with their link. An element that runs on the host alone is never
+ * offered to a window, whatever its kind.
+ */
+describe('a window is offered what runs on a client', () => {
+    const sheet = genieCatalog().get('ai.genie.spreadsheet.sheet')!;
+    const board = genieCatalog().get('ai.genie.artboard.board')!;
+    const on = <T extends { reach: object }>(d: T, side: string) => ({ ...d, reach: { ...d.reach, side } });
+
+    it('a host-only editor or panel is not projected (CONTROL: on a client, or both, it is)', () => {
+        expect(catalogEditors([on(sheet, 'host')] as never)).toEqual([]);
+        expect(catalogPanels([on(board, 'host')] as never)).toEqual([]);
+        expect(catalogEditors([on(sheet, 'both')] as never).map((e) => e.id)).toEqual(['sheet']);
+        expect(catalogPanels([on(board, 'client')] as never).map((p) => p.id)).toEqual(['board']);
+    });
+});
