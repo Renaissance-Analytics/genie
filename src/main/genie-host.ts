@@ -157,7 +157,8 @@ const recordFile = join(runtime, 'host.json');
 const tokenFile = join(runtime, 'host.token');
 
 mkdirSync(runtime, { recursive: true });
-const lifecycleLog = openLifecycleLog(runtime);
+// Off the host's thread (Tynn #548): a line is queued and written in order; an exit writes what is left.
+const lifecycleLog = openLifecycleLog(runtime, { async: true });
 const say = (line: string): void => {
     console.log(`[genie-host] ${new Date().toISOString()} ${line}`);
 };
