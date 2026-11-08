@@ -21,6 +21,13 @@ import { parseFrame, type Frame } from './remote-protocol.js';
 /** Bumped on any change a peer of another build could misread. A mismatch is refused, named, and the host replaced. */
 export const ENGINE_PROTOCOL = 2;
 
+/**
+ * What a link says in its `hello`. A WINDOW answers the host's calls to it (a forwarded tool, an elevation); the Genie
+ * browser's own process (browser-process.ts) links to the host too, for its pages and cookies, and answers neither.
+ */
+export const WINDOW_LINK_LABEL = 'genie window';
+export const BROWSER_LINK_LABEL = 'genie browser';
+
 export const ENGINE_METHODS = [
     // Commands (window → host): each answers with the session host's own answer.
     'engine.start',
