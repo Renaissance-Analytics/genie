@@ -28,12 +28,14 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
-import { budgetVerdict, capVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, capVerdict, createGapGauge, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
 // Ten pairs (the coordinator's (b), Tynn #536): a stable median of paired differences on the Linux runner.
 const SLICE_PAIRS = 10, SLICE_MS = 1200, SETTLE_MS = 400;
 // PAST THE OUTPUT CAP (Tynn #542): more than the view keeps per terminal (OUTPUT_CAP, 2,000,000), then slices while it streams.
+// The Take Over window's flood (Tynn #544): six times the view's cap, so a view that keeps everything shows it.
+const TAKEOVER_FLOOD_BYTES = 12_000_000;
 const FLOOD_BYTES = 2_500_000, PAST_SLICES = 6, PAST_STREAM_MS = PAST_SLICES * (SLICE_MS + SETTLE_MS) + 4000;
 // One pair traced in the profiled pass (Tynn #537): what every thread of the window did, terminal on against off.
 const TRACE_PAIR = 4, TRACE_CATEGORIES = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'blink', 'cc', 'gpu', 'viz', 'benchmark', 'renderer.scheduler', 'v8.execute'];
@@ -459,10 +461,13 @@ try {
         await tk.request('Performance.enable', {});
         await tk.evaluate(`(${installPageGauge.toString()})((${createGapGauge.toString()}))`);
         const tkBox = await tk.evaluate('({ width: innerWidth, height: innerHeight })');
+        // The page's heap after a collection, before the flood and after it has all arrived (Tynn #544).
+        const heap = async () => { try { await tk.request('HeapProfiler.collectGarbage', {}); return (await tk.request('Runtime.getHeapUsage', {})).usedSize; } catch { return Number.NaN; } };
+        const heap0 = await heap();
         const run = `takeover${Date.now() % 100000}`, pastFile = join(workspace, 'flood-past.json');
         rmSync(pastFile, { force: true });
         await tk.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
-        await tk.request('Input.insertText', { text: `node flood.mjs ${FLOOD_BYTES} ${PAST_STREAM_MS} ${run}` });
+        await tk.request('Input.insertText', { text: `node flood.mjs ${TAKEOVER_FLOOD_BYTES} ${PAST_STREAM_MS} ${run}` });
         await tk.request('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
         await tk.request('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
         const flooded = await until('the flood in the Take Over window', async () => json(pastFile), 90000);
@@ -475,6 +480,11 @@ try {
             const to = await tk.evaluate('performance.now()');
             tkSlices.push({ cond: 'takeover', from, to, scriptMs: (await scriptMs(tk)) - script0 });
         }
+        const tkDone = await until('the Take Over flood to end', () => tk.evaluate(`(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').includes('UI_LAG_FLOOD_DONE ${run}')`), 120000).catch(() => false);
+        await sleep(1000);
+        const heap1 = await heap();
+        result.takeoverHeld = { done: tkDone === true, heap0, heap1, ...heldVerdict({ floodBytes: TAKEOVER_FLOOD_BYTES, growthBytes: tkDone === true ? heap1 - heap0 : Number.NaN }) };
+        console.log(`UI_LAG_TAKEOVER_HELD ${JSON.stringify(result.takeoverHeld)}`);
         const st = await tk.evaluate('(() => { const s = window.__uiLag; return { frames: s.frames.splice(0), frameTimes: s.frameTimes.splice(0), inputs: s.inputs.splice(0) }; })()');
         result.takeover = { flooded, slices: tkSlices.map((sl) => {
             const own = st.inputs.filter((x) => x.kind === 'mouse' && x.at >= sl.from && x.at <= sl.to).map((x) => x.frameMs);
@@ -611,9 +621,10 @@ try {
     const capBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: passes[0].rows.find((r) => r.phase === 'terminal-past-cap')?.slices ?? [] });
     // THE TAKE OVER WINDOW'S TERMINAL (Tynn #544): streaming past the cap there, against the workspace's terminal below it.
     const takeoverBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: result.takeover?.slices ?? [] });
-    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok && capBudget.ok && takeoverBudget.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput, cap: capBudget, takeover: takeoverBudget };
+    const heldBudget = result.takeoverHeld ?? { ok: false, reasons: ['the Take Over window was not measured'] };
+    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok && capBudget.ok && takeoverBudget.ok && heldBudget.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput, cap: capBudget, takeover: takeoverBudget, held: heldBudget };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...capBudget.reasons, ...takeoverBudget.reasons.map((r) => `Take Over window: ${r}`), ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread (${JSON.stringify(h.by)})`)].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...capBudget.reasons, ...takeoverBudget.reasons.map((r) => `Take Over window: ${r}`), ...heldBudget.reasons.map((r) => `Take Over window: ${r}`), ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread (${JSON.stringify(h.by)})`)].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
