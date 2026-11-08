@@ -127,7 +127,7 @@ describe('the workspace sync takes the sign-in from Genie\'s Tynn account', () =
 
     it('signing in or out of Tynn writes every workspace\'s protocol again (main), not only at start', async () => {
         const main = await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        const hook = main.match(/tynnAccount\?\.onChange\(\(\) => \{\n\s*\/\/ THE WORK MODEL[\s\S]*?\n\s{12}\}\);/)?.[0];
+        const hook = main.match(/tynnAccount\?\.onChange\(\(\) => \{\r?\n\s*\/\/ THE WORK MODEL[\s\S]*?\r?\n {12}\}\);/)?.[0];
         expect(hook).toBeDefined();
         expect(hook).toContain('composed.syncAgentDocs(w.path)');
         expect(hook).not.toContain('status().signedIn) return');

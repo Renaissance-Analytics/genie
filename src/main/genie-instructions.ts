@@ -1,6 +1,6 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { providerProtocol, sharedProtocol } from '../core/genie-protocol.js';
+import { providerProtocol, sharedProtocol, type WorkTracking } from '../core/genie-protocol.js';
 import { GENIE_SKILLS, skillFile } from './agent-skills.js';
 import type { GenieInstructionFiles } from './session-host.js';
 
@@ -14,7 +14,7 @@ The person has not said yes to what this folder's own files would run. So its in
 
 let written = 0;
 
-export async function writeGenieInstructions(home: string, tools: readonly { name: string; description: string }[]): Promise<GenieInstructionFiles> {
+export async function writeGenieInstructions(home: string, tools: readonly { name: string; description: string }[], tracking: WorkTracking = 'files'): Promise<GenieInstructionFiles> {
     const promptFile = join(home, 'prompt.md');
     const pluginDir = join(home, 'plugin');
     const put = async (path: string, text: string) => {
@@ -23,9 +23,9 @@ export async function writeGenieInstructions(home: string, tools: readonly { nam
         await writeFile(temporary, text, 'utf8');
         await rename(temporary, path);
     };
-    const promptText = [sharedProtocol(tools), providerProtocol('claude'), NOTE].join('\n\n');
+    const promptText = [sharedProtocol(tools, tracking), providerProtocol('claude'), NOTE].join('\n\n');
     await put(promptFile, promptText);
     await put(join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'genie-own', version: '1.0.0', description: "Genie's own skills" }, null, 2));
     for (const skill of GENIE_SKILLS) await put(join(pluginDir, 'skills', skill.name, 'SKILL.md'), skillFile(skill));
-    return { promptFile, pluginDir, promptText, codexPromptText: [sharedProtocol(tools), providerProtocol('codex'), NOTE].join('\n\n') };
+    return { promptFile, pluginDir, promptText, codexPromptText: [sharedProtocol(tools, tracking), providerProtocol('codex'), NOTE].join('\n\n') };
 }
