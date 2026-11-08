@@ -59,8 +59,9 @@ describe('plugins in the snapshot', () => {
         expect(local(before)).toMatchObject({ state: 'refused', label: null });
         expect(local(before).reason).toMatch(/^unsigned plugins are not installed/);
 
-        const refused = await handleFeatureAction(services, { kind: 'plugins.setEnabled', id: 'com.example.localdev', enabled: true }, state());
-        expect(local(refused)).toMatchObject({ state: 'refused' });
+        // ADF B8: a change the host refuses is a failure the page shows, never dropped; and nothing changed.
+        await expect(handleFeatureAction(services, { kind: 'plugins.setEnabled', id: 'com.example.localdev', enabled: true }, state())).rejects.toThrow(/com\.example\.localdev could not be enabled/);
+        expect(local(await handleFeatureAction(services, { kind: 'settings.set', key: 'publisher_checks_off', value: false }, state()))).toMatchObject({ state: 'refused' });
 
         const dev = await handleFeatureAction(services, { kind: 'settings.set', key: 'publisher_checks_off', value: true }, state());
         expect(dev.plugins).toMatchObject({ publisherChecksOff: true });

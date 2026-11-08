@@ -1,5 +1,5 @@
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
-import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
+import { appendFileSync, closeSync, ftruncateSync, mkdirSync, openSync, readSync, renameSync, statSync } from 'node:fs';
+import { appendFile, mkdir, open as openFile, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -19,6 +19,49 @@ import { join } from 'node:path';
  *
  * Never throws into its caller: a stop must not fail because its log could not be written.
  */
+/**
+ * A WRITE CUT BY A KILL, MENDED AT THE NEXT OPEN (Tynn #548; C3's CI run: a forced kill left a torn last line). A file
+ * write is not atomic against SIGKILL: the kernel copies it a page at a time and stops at a fatal signal, so any batch can
+ * be cut mid-line. Before the first line it writes, a log opened again drops a last line that has no newline — the cut
+ * tail of a write that never finished — so everything it writes follows whole lines. Returns the file's size after.
+ */
+const TAIL_PROBE = 64 * 1024;
+function mendSync(file: string): number {
+    const size = statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+    if (size === 0) return 0;
+    const fd = openSync(file, 'r+');
+    try {
+        const at = Math.max(0, size - TAIL_PROBE);
+        const tail = Buffer.alloc(size - at);
+        readSync(fd, tail, 0, tail.length, at);
+        if (tail[tail.length - 1] === 0x0a) return size;
+        const lastNewline = tail.lastIndexOf(0x0a);
+        // No newline in the probe: everything from the probe's start is one cut line (lines are far shorter than 64 KB).
+        const keep = lastNewline === -1 ? at : at + lastNewline + 1;
+        ftruncateSync(fd, keep);
+        return keep;
+    } finally {
+        closeSync(fd);
+    }
+}
+async function mend(file: string): Promise<number> {
+    const size = (await stat(file).catch(() => null))?.size ?? 0;
+    if (size === 0) return 0;
+    const handle = await openFile(file, 'r+');
+    try {
+        const at = Math.max(0, size - TAIL_PROBE);
+        const tail = Buffer.alloc(size - at);
+        await handle.read(tail, 0, tail.length, at);
+        if (tail[tail.length - 1] === 0x0a) return size;
+        const lastNewline = tail.lastIndexOf(0x0a);
+        const keep = lastNewline === -1 ? at : at + lastNewline + 1;
+        await handle.truncate(keep);
+        return keep;
+    } finally {
+        await handle.close();
+    }
+}
+
 /** One write's worth of whole lines: small enough to be a single write, so a kill never tears a line. */
 const BATCH_BYTES = 32 * 1024;
 
@@ -37,7 +80,7 @@ export function openLifecycleLog(dir: string, options: { now?: () => number; max
                 const text = stamp(line);
                 if (size === null) {
                     mkdirSync(dir, { recursive: true });
-                    size = statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+                    size = mendSync(file);
                 }
                 if (size + Buffer.byteLength(text) > maxBytes && size > 0) {
                     renameSync(file, `${file}.1`);
@@ -87,7 +130,7 @@ export function openLifecycleLog(dir: string, options: { now?: () => number; max
             try {
                 if (size === null) {
                     await mkdir(dir, { recursive: true });
-                    size = (await stat(file).catch(() => null))?.size ?? 0;
+                    size = await mend(file);
                 }
                 if (rotateFor(bytes)) {
                     await rename(file, `${file}.1`);
@@ -117,7 +160,7 @@ export function openLifecycleLog(dir: string, options: { now?: () => number; max
         if (rest === '') return;
         try {
             mkdirSync(dir, { recursive: true });
-            const current = size ?? statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+            const current = size ?? mendSync(file);
             if (current > 0 && current + Buffer.byteLength(rest) > maxBytes) renameSync(file, `${file}.1`);
             appendFileSync(file, rest, 'utf8');
         } catch { /* the process is going; nothing more can be done */ }

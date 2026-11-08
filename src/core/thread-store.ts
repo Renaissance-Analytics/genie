@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, rename, stat, truncate, unlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, rename, stat, truncate, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSessionStore, Thread, type JsonObject, type SessionStore } from '@particle-academy/prism-harness';
 import { threadKeyFor, type AgentId } from './identity.js';
@@ -196,6 +196,54 @@ export class ThreadStore extends FileSessionStore {
         await this.#timed('repair', key, () => truncate(path, cut!));
         this.#counts.delete(key);
         return cut!;
+    }
+
+    /**
+     * A LEGACY LOCK FILE is cleared first (prism-harness 0.10): 0.8.0 locked a thread with a FILE holding its expiry stamp;
+     * 0.10 locks with a DIRECTORY and refuses a legacy file outright, forever (`legacy_lock_requires_maintenance`). One
+     * left by an older Genie is waited out while its stamp is live — as 0.8.0 itself did — then removed.
+     */
+    override async withLock<T>(key: string, callback: () => T | Promise<T>, ttlSeconds?: number, waitSeconds?: number): Promise<T> {
+        await this.#clearLegacyLock(key);
+        /*
+         * A RELEASE THAT FAILS AFTER THE WORK is not a failed write (prism-harness 0.10): the callback ran, its rows are in
+         * the log, and the SDK keeps the release for the next lock. Rejecting here would send the session's retry to append
+         * the same rows again. A lock never taken, or a callback that threw, still rejects.
+         */
+        let done = false;
+        let value: T;
+        try {
+            return await super.withLock(key, async () => { value = await callback(); done = true; return value; }, ttlSeconds, waitSeconds);
+        } catch (error) {
+            if (!done) throw error;
+            const log = this.#onSlow ?? slowLog;
+            if (log !== null) { try { log(`thread-store lock release failed log=${ledgerName(key)} reason=${error instanceof Error ? error.message : String(error)}`); } catch { /* nothing */ } }
+            return value!;
+        }
+    }
+
+    async #clearLegacyLock(key: string): Promise<void> {
+        const path = join(this.#directory, `${ledgerName(key)}.json.lock`);
+        for (;;) {
+            let info;
+            try { info = await lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+            if (!info.isFile()) return;
+            let expires = Number.NaN;
+            try { expires = Number.parseInt((await readFile(path, 'utf8')).trim(), 10); } catch { /* gone, or unreadable: below */ }
+            // A torn or unreadable stamp is bounded by the file's age, with 0.8.0's lock TTL.
+            if (!Number.isFinite(expires)) expires = info.mtimeMs + LEGACY_LOCK_TTL_MS;
+            // And no stamp outlives the longest lock 0.8.0 was ever asked for: a corrupt one must not hang the write.
+            expires = Math.min(expires, info.mtimeMs + LEGACY_LOCK_MAX_MS);
+            const now = Date.now();
+            if (expires > now) {
+                await new Promise((resolve) => setTimeout(resolve, Math.min(expires - now, 1000)));
+                continue;
+            }
+            await unlink(path).catch(() => undefined);
+            const log = this.#onSlow ?? slowLog;
+            if (log !== null) { try { log(`thread-store legacy lock cleared log=${ledgerName(key)}`); } catch { /* nothing */ } }
+            return;
+        }
     }
 
     /** The key's log file: see {@link threadLogFile}. */
@@ -396,6 +444,10 @@ export async function* linesFromEndOf(path: string): AsyncGenerator<Buffer[]> {
 
 /** prism-harness's line-count sidecar beside a log (0.10.2+): `<log>.index.json`. */
 const LOG_SIDECAR = '.index.json';
+/** prism-harness 0.8.0's lock TTL: what bounds a legacy lock file whose stamp cannot be read. */
+const LEGACY_LOCK_TTL_MS = 10_000;
+/** The most a legacy stamp is believed, from the file's own time. */
+const LEGACY_LOCK_MAX_MS = 60_000;
 /** How big a thread log grows before it rotates (Tynn #557). */
 export const THREAD_ROTATE_BYTES = 64 * 1024 * 1024;
 /** A store step this slow is logged by name. */

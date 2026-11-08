@@ -79,7 +79,7 @@ describe('publisher checks ON (the default): signed packages only', () => {
     it('an unsigned package is refused, saying how to run it and at whose risk', async () => {
         const host = await open(false);
         expect(entry(host, 'com.example.local')).toMatchObject({ state: 'refused', label: null });
-        expect(entry(host, 'com.example.local')!.reason).toMatch(/^unsigned plugins are not installed: .*Turn off publisher checks/);
+        expect(entry(host, 'com.example.local')!.reason).toMatch(/^unsigned plugins are not installed: .*turn off publisher checks/);
         expect(entry(host, 'com.example.signed')).toMatchObject({ state: 'enabled', label: `signed by ${KEY_ID}`, unverified: false });
     });
 });
