@@ -448,7 +448,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const pluginsDir = join(input.userData, 'plugins');
     // With NO genie-host (the emergency path) this window loads its own, as it always did: no regression (the coordinator's
     // ruling for the owner, 2026-11-08); genie-host owns them whenever it is there.
-    const openOwnPlugins = () => LocalPlugins.start(() => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS }));
+    const openOwnPlugins = () => LocalPlugins.start(() => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, publisherChecksOff: settings.snapshot().publisher_checks_off === true, official: OFFICIAL_PLUGINS }));
     stage?.begin('plugins');
     const ownPlugins = input.plugins ? null : await openOwnPlugins();
     stage?.end();

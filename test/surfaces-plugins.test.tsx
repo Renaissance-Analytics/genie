@@ -5,18 +5,18 @@ import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 
 /**
  * PLUGINS IN SETTINGS → WORKSTATION (§6.7). Every plugin folder is listed with its state and label —
- * signed by whom, or UNSIGNED under developer mode — and a refused or invalid one shows its REASON
+ * signed by whom, or Unverified while publisher checks are off — and a refused or invalid one shows its REASON
  * rather than vanishing. Enable/Disable for installable ones only. Empty says where plugins go.
  */
 
 const plugins: NonNullable<FeatureData['plugins']> = {
     dir: '/home/u/.genie/plugins',
-    developerMode: false,
+    publisherChecksOff: false,
     panels: [],
     entries: [
         { id: 'com.example.presentation', folder: 'presentation', name: 'Presentation', version: '1.0.0', state: 'enabled', label: 'signed by example-2026', reason: null },
         { id: 'com.example.sheets', folder: 'sheets', name: 'Sheets', version: '0.3.0', state: 'disabled', label: 'signed by example-2026', reason: null },
-        { id: 'com.example.localdev', folder: 'local-dev', name: 'localdev', version: '1.0.0', state: 'refused', label: null, reason: 'unsigned plugins are not installed: no signature file (genie-plugin.sig) beside the manifest. Turn on developer mode to run a local unsigned plugin, labelled as such.' },
+        { id: 'com.example.localdev', folder: 'local-dev', name: 'localdev', version: '1.0.0', state: 'refused', label: null, reason: 'unsigned plugins are not installed: no signature file (genie-plugin.sig) beside the manifest. Turn off publisher checks (Settings → Plugins) to run it at your own risk; it is then labelled Unverified.' },
         { id: '(broken)', folder: 'broken', name: 'broken', version: null, state: 'invalid', label: null, reason: 'unknown key "shell" — undeclared access does not exist; remove it or declare a known capability' },
     ],
 };
@@ -47,10 +47,10 @@ describe('Plugins panel', () => {
         expect(render({ ...plugins, entries: [] })).toMatch(/No plugins yet/);
     });
 
-    it('developer mode is named when on: unsigned plugins run and are labelled', () => {
-        const on = render({ ...plugins, developerMode: true, entries: [{ ...plugins.entries[2]!, state: 'enabled', label: 'UNSIGNED — developer mode', reason: null }] });
-        expect(on).toMatch(/UNSIGNED — developer mode/);
-        expect(on).toMatch(/Developer mode is on/);
-        expect(render(plugins)).not.toMatch(/Developer mode is on/);
+    it('publisher checks off is named: unsigned plugins run and are labelled Unverified', () => {
+        const on = render({ ...plugins, publisherChecksOff: true, entries: [{ ...plugins.entries[2]!, state: 'enabled', label: 'Unverified', reason: null }] });
+        expect(on).toMatch(/Unverified/);
+        expect(on).toMatch(/Publisher checks are off/);
+        expect(render(plugins)).not.toMatch(/Publisher checks are off/);
     });
 });

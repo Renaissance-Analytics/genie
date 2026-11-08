@@ -4,7 +4,7 @@
 
 Status: **active**.
 
-Side: **client**: a client (a Genie window, on this machine or another) draws it. A definition on the other side is refused.
+Side: **both**: a client draws it and its work is done on the host, over its `reach.link`. A definition on any other side is refused. On both, it declares `reach.link`.
 
 Opens files of the extensions it claims in one vetted Fancy editor. Genie's own editor wins a claim by default; another is offered in Open with.
 

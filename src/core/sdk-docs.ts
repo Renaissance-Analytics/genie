@@ -1,4 +1,5 @@
 import { CATALOG_SCHEMA_VERSION, ENVELOPE_FIELDS, KIND_SPECS, type EnvelopeField, type FieldSpec, type KindSpec } from './catalog.js';
+import { PACKAGE_FORMAT, PACKAGE_FORMAT_DOC } from './plugin-integrity.js';
 
 /**
  * THE SDK'S DOCS, GENERATED FROM THE CATALOG'S SCHEMAS (ADF B7, Tynn #457) — pure. `KIND_SPECS` and `ENVELOPE_FIELDS`
@@ -11,8 +12,14 @@ import { CATALOG_SCHEMA_VERSION, ENVELOPE_FIELDS, KIND_SPECS, type EnvelopeField
 const HEADER = '<!-- Generated from src/core/catalog.ts by `npm run docs:sdk`. Do not edit by hand: change the schema and regenerate. -->';
 
 /** A table cell: one line, no pipe that would end the cell. */
-const SIDES = '**Side** is where an element runs: on the **host** (genie-host, which owns the work and keeps running with no window open) or on a **client** (a Genie window, which draws). A family Genie runs today has a fixed side; the others leave it to each definition\'s `reach.side`.';
-const BOTH = 'An element with a part on each side (**both**) cannot say so yet: `reach.side` names one side. The catalog\'s model of an element\'s host and client parts comes with A4, the catalog over the engine protocol.';
+const SIDES = '**Side** is where an element runs: on the **host** (genie-host, which owns the work and keeps running with no window open), on a **client** (a Genie window, on this machine or another, which draws), or **both**. A family Genie runs today allows only the sides it can run on; the others leave it to each definition\'s `reach.side`.';
+const BOTH = 'An element on **both** sides declares `reach.link`, how its halves talk: the host methods its client side calls (`calls`) and the host events it follows (`events`). That is the only channel between them. One side alone has no link.';
+
+const SIDE_WORDS: Record<string, string> = {
+    host: 'genie-host runs it',
+    client: 'a client (a Genie window, on this machine or another) draws it',
+    both: 'a client draws it and its work is done on the host, over its `reach.link`',
+};
 
 const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 const yesNo = (required: boolean) => (required ? 'yes' : 'no');
@@ -38,11 +45,13 @@ function indexPage(specs: readonly KindSpec[]): string {
         '',
         `Catalog schema version: ${CATALOG_SCHEMA_VERSION}.`,
         '',
+        `A package is signed over every file in it: [the package format](packages.md) (\`${PACKAGE_FORMAT}\`).`,
+        '',
         '## Contribution families',
         '',
         '| Family | Status | Side | What it is |',
         '|---|---|---|---|',
-        ...specs.map((k) => `| [${k.kind}](kinds/${k.kind}.md) | ${k.status} | ${k.side ?? 'per definition'} | ${cell(k.summary)} |`),
+        ...specs.map((k) => `| [${k.kind}](kinds/${k.kind}.md) | ${k.status} | ${k.sides?.join(' or ') ?? 'per definition'} | ${cell(k.summary)} |`),
         '',
         SIDES,
         '',
@@ -82,9 +91,9 @@ function kindPage(spec: KindSpec): string {
             ? 'Status: **reserved**. Accepted and registered; nothing runs it yet.'
             : 'Status: **active**.',
         '',
-        spec.side === null
-            ? 'Side: set by each definition\'s `reach.side` (host or client).'
-            : `Side: **${spec.side}**: ${spec.side === 'host' ? 'genie-host runs it' : 'a client (a Genie window, on this machine or another) draws it'}. A definition on the other side is refused.`,
+        spec.sides === null
+            ? 'Side: set by each definition\'s `reach.side` (host, client or both).'
+            : `Side: ${spec.sides.map((s) => `**${s}**`).join(' or ')}: ${spec.sides.map((s) => SIDE_WORDS[s]).join('; or ')}. A definition on any other side is refused.${spec.sides.includes('both') ? ' On both, it declares `reach.link`.' : ''}`,
         '',
         spec.summary,
         '',
@@ -110,6 +119,8 @@ export function renderSdkDocs(specs: readonly KindSpec[] = KIND_SPECS, envelope:
     const pages = new Map<string, string>();
     pages.set('README.md', indexPage(specs));
     pages.set('envelope.md', envelopePage(envelope));
+    // ADF B4: the package signing format, from the code that checks it (core/plugin-integrity.ts).
+    pages.set('packages.md', [HEADER.replace('src/core/catalog.ts', 'src/core/plugin-integrity.ts'), '', `# The package format: ${PACKAGE_FORMAT}`, '', ...PACKAGE_FORMAT_DOC, ''].join('\n'));
     for (const spec of specs) pages.set(`kinds/${spec.kind}.md`, kindPage(spec));
     return pages;
 }

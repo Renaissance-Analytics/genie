@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { bridgeAccess, installDecision, parseManifest, verifyPluginSignature, type AccessDecision, type AccessRequest, type PluginManifest } from '../core/plugins.js';
+import { bridgeAccess, parseManifest, UNVERIFIED_LABEL, type AccessDecision, type AccessRequest, type PluginCapabilities, type PluginManifest } from '../core/plugins.js';
+import { checkPackage, currentDigest } from './plugin-package.js';
 import { editorBytesAccess, type ClaimingEditor, type EditorBytesDecision } from '../core/plugin-editors.js';
 import type { OfficialPlugin } from '../core/official-plugins.js';
 
@@ -30,10 +31,18 @@ export interface PluginEntry {
     readonly label: string | null;
     /** Why refused or invalid; `null` otherwise. */
     readonly reason: string | null;
+    /** ADF B5: running only because publisher checks are off. Absent for a refused or invalid entry. */
+    readonly unverified?: boolean;
+    /** The hosts its manifest declares. */
+    readonly networkHosts?: readonly string[];
+    /** May it reach them now: a signed package always; an Unverified one only once the person allowed it. */
+    readonly networkAllowed?: boolean;
 }
 
 interface Loaded extends PluginEntry {
     readonly manifest: PluginManifest | null;
+    /** ADF B4: the digest a SIGNED package was loaded with, re-checked before each run of its tools; null otherwise. */
+    readonly digest?: string | null;
 }
 
 export class PluginHost {
@@ -41,25 +50,35 @@ export class PluginHost {
     readonly #dir: string;
     readonly #stateFile: string;
     #disabled: Set<string>;
+    /** ADF B5: the Unverified packages the person allowed network, by id; kept beside the plugins. */
+    readonly #networkFile: string;
+    readonly #networkAllowed: Set<string>;
 
-    private constructor(entries: Loaded[], dir: string, stateFile: string, disabled: Set<string>) {
+    private constructor(entries: Loaded[], dir: string, stateFile: string, disabled: Set<string>, networkFile: string, networkAllowed: Set<string>) {
         this.#entries = entries;
         this.#dir = dir;
         this.#stateFile = stateFile;
         this.#disabled = disabled;
+        this.#networkFile = networkFile;
+        this.#networkAllowed = networkAllowed;
     }
 
     /**
      * `official` = the plugins that ship IN Genie (core/official-plugins.ts): trusted by construction, so they need no
      * publisher key and no developer mode; listed first; a folder claiming one of their ids is refused, not admitted.
      */
-    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; developerMode: boolean; official?: readonly OfficialPlugin[] }): Promise<PluginHost> {
+    static async open(input: { dir: string; keys: Readonly<Record<string, string>>; publisherChecksOff: boolean; official?: readonly OfficialPlugin[] }): Promise<PluginHost> {
         const stateFile = join(input.dir, 'plugins-state.json');
-        let disabled = new Set<string>();
-        try {
-            const parsed: unknown = JSON.parse(await readFile(stateFile, 'utf8'));
-            if (Array.isArray(parsed)) disabled = new Set(parsed.filter((x): x is string => typeof x === 'string'));
-        } catch { /* no state yet */ }
+        const readIds = async (file: string): Promise<Set<string>> => {
+            try {
+                const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
+                if (Array.isArray(parsed)) return new Set(parsed.filter((x): x is string => typeof x === 'string'));
+            } catch { /* nothing kept yet */ }
+            return new Set();
+        };
+        const disabled = await readIds(stateFile);
+        const networkFile = join(input.dir, 'plugins-network.json');
+        const networkAllowed = await readIds(networkFile);
 
         let folders: string[] = [];
         try {
@@ -73,7 +92,7 @@ export class PluginHost {
             // An official manifest that does not parse is Genie's own bug: listed invalid with the parser's words, never hidden.
             if (!parsed.ok) { entries.push({ id: `(official ${String(o.manifest.id)})`, folder: OFFICIAL_FOLDER, name: String(o.manifest.name), version: null, state: 'invalid', label: null, reason: parsed.reason, manifest: null }); continue; }
             officialIds.add(parsed.manifest.id);
-            entries.push({ id: parsed.manifest.id, folder: OFFICIAL_FOLDER, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: OFFICIAL_LABEL, reason: null, manifest: parsed.manifest });
+            entries.push({ id: parsed.manifest.id, folder: OFFICIAL_FOLDER, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: OFFICIAL_LABEL, reason: null, manifest: parsed.manifest, unverified: false, networkHosts: [...parsed.manifest.capabilities.network.hosts], networkAllowed: true });
         }
         for (const folder of folders) {
             let text: string;
@@ -93,27 +112,49 @@ export class PluginHost {
                 entries.push({ id: `(${folder})`, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'invalid', label: null, reason: `${parsed.manifest.id} is an official plugin that ships with Genie; a folder cannot replace it`, manifest: null });
                 continue;
             }
-            let signature: string | null = null;
-            try { signature = await readFile(join(input.dir, folder, 'genie-plugin.sig'), 'utf8'); } catch { signature = null; }
-            const decision = installDecision(verifyPluginSignature({ bytes: Buffer.from(text), signature, keyId: parsed.manifest.publisher.keyId }, input.keys), { developerMode: input.developerMode });
+            // ADF B4: the signature covers EVERY file of the package (core/plugin-integrity.ts), not the manifest alone.
+            const { decision, digest } = await checkPackage(join(input.dir, folder), { keyId: parsed.manifest.publisher.keyId, keys: input.keys, publisherChecksOff: input.publisherChecksOff });
             if (!decision.install) {
                 entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: 'refused', label: null, reason: decision.reason, manifest: parsed.manifest });
                 continue;
             }
-            entries.push({ id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: decision.label, reason: null, manifest: parsed.manifest });
+            const unverified = decision.label === UNVERIFIED_LABEL;
+            entries.push({
+                id: parsed.manifest.id, folder, name: parsed.manifest.name, version: parsed.manifest.version, state: disabled.has(parsed.manifest.id) ? 'disabled' : 'enabled', label: decision.label, reason: null, manifest: parsed.manifest, digest,
+                unverified, networkHosts: [...parsed.manifest.capabilities.network.hosts], networkAllowed: !unverified || networkAllowed.has(parsed.manifest.id),
+            });
         }
         // Installable first, then refused, then invalid — the person reads what works before what does not.
         const rank: Record<PluginState, number> = { enabled: 0, disabled: 0, refused: 1, invalid: 2 };
         entries.sort((a, b) => rank[a.state] - rank[b.state]);
-        return new PluginHost(entries, input.dir, stateFile, disabled);
+        return new PluginHost(entries, input.dir, stateFile, disabled, networkFile, networkAllowed);
     }
 
     /** The MCP tools of ENABLED plugins (§6.7), each with its folder and manifest — what the MCP surface offers agents. */
-    tools(): readonly { pluginId: string; dir: string; manifest: NonNullable<Loaded['manifest']>; tool: PluginTool; official: boolean }[] {
+    tools(): readonly { pluginId: string; dir: string; manifest: NonNullable<Loaded['manifest']>; tool: PluginTool; official: boolean; verify: () => Promise<string | null> }[] {
         // `official`: Genie's own tool, run in-process (main/official-tools.ts) — there is no plugin folder to launch from.
+        // `verify`: ADF B4, the package checked again before the run (null = run it; else why it is refused).
         return this.#entries.flatMap((e) =>
-            e.state === 'enabled' && e.manifest ? e.manifest.mcpTools.map((tool) => ({ pluginId: e.id, dir: join(this.#dir, e.folder), manifest: e.manifest!, tool, official: e.folder === OFFICIAL_FOLDER })) : [],
+            e.state === 'enabled' && e.manifest ? e.manifest.mcpTools.map((tool) => ({ pluginId: e.id, dir: join(this.#dir, e.folder), manifest: this.#effective(e)!, tool, official: e.folder === OFFICIAL_FOLDER, verify: () => this.#verifyAtLoad(e.id) })) : [],
         );
+    }
+
+    /**
+     * Before a signed package's code is loaded to run (ADF B4): its files must still be the ones signed. Changed, the
+     * package is refused from now on, so nothing calls it again. An unsigned package (developer mode) and Genie's own
+     * have no signed digest to hold to.
+     */
+    async #verifyAtLoad(pluginId: string): Promise<string | null> {
+        const index = this.#entries.findIndex((e) => e.id === pluginId);
+        const entry = this.#entries[index];
+        if (!entry) return `${pluginId} is not a plugin Genie has`;
+        if (entry.state !== 'enabled') return entry.reason ?? `${pluginId} is not enabled`;
+        if (!entry.digest) return null;
+        const now = await currentDigest(join(this.#dir, entry.folder));
+        if (now.ok && now.digest === entry.digest) return null;
+        const reason = `refused as tampered: ${now.ok ? 'a file changed, was added or was removed since the package was loaded, after it was signed' : now.reason}. A package changed after it was signed never runs, with publisher checks on or off.`;
+        this.#entries[index] = { ...entry, state: 'refused', label: null, reason, digest: null };
+        return reason;
     }
 
     /** The panels ENABLED plugins contribute (§6.7), each with its plugin's id and name — what the Workspace surface offers as `+plugin`. */
@@ -149,7 +190,43 @@ export class PluginHost {
         const entry = this.#entries.find((e) => e.id === pluginId);
         if (!entry || !entry.manifest || entry.state !== 'enabled') return null;
         const manifest = entry.manifest;
-        return (request) => bridgeAccess(manifest, request);
+        // ADF B5: an Unverified package has no network until the person allows it, whatever it declares.
+        const offline = entry.unverified === true && entry.networkAllowed !== true;
+        return (request) => (request.kind === 'network' && offline
+            ? { allowed: false, reason: `${manifest.id} is Unverified (publisher checks are off), so it has no network until you allow it for this package in Settings → Plugins` }
+            : bridgeAccess(manifest, request));
+    }
+
+    /**
+     * What an ENABLED plugin's tool may reach as it runs (its sandbox, plugin-runner.ts), read at the run: the declared
+     * capabilities, with no network for an Unverified package the person has not allowed (ADF B5). Null: not enabled.
+     */
+    capabilities(pluginId: string): PluginCapabilities | null {
+        const entry = this.#entries.find((e) => e.id === pluginId);
+        if (!entry || entry.state !== 'enabled') return null;
+        return this.#effective(entry)?.capabilities ?? null;
+    }
+
+    /** Allow or take back an Unverified package's network (ADF B5), kept. `false` for any package that is not Unverified. */
+    async setNetworkAllowed(pluginId: string, allowed: boolean): Promise<boolean> {
+        const index = this.#entries.findIndex((e) => e.id === pluginId);
+        const entry = this.#entries[index];
+        if (!entry || entry.unverified !== true || (entry.state !== 'enabled' && entry.state !== 'disabled')) return false;
+        if (allowed) this.#networkAllowed.add(pluginId); else this.#networkAllowed.delete(pluginId);
+        this.#entries[index] = { ...entry, networkAllowed: allowed };
+        await mkdir(dirname(this.#networkFile), { recursive: true });
+        const tmp = `${this.#networkFile}.${process.pid}.tmp`;
+        await writeFile(tmp, JSON.stringify([...this.#networkAllowed]), 'utf8');
+        await rename(tmp, this.#networkFile);
+        return true;
+    }
+
+    /** The manifest a run and the catalog see: an Unverified package not allowed network declares no hosts. */
+    #effective(entry: Loaded): PluginManifest | null {
+        const m = entry.manifest;
+        if (!m) return null;
+        if (entry.unverified !== true || entry.networkAllowed === true) return m;
+        return { ...m, capabilities: { ...m.capabilities, network: { hosts: [] } } };
     }
 
     /** Persisted. `false` for a plugin that is not installable (refused or invalid) or unknown. */

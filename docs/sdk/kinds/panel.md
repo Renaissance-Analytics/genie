@@ -4,7 +4,7 @@
 
 Status: **active**.
 
-Side: **client**: a client (a Genie window, on this machine or another) draws it. A definition on the other side is refused.
+Side: **client** or **both**: a client (a Genie window, on this machine or another) draws it; or a client draws it and its work is done on the host, over its `reach.link`. A definition on any other side is refused. On both, it declares `reach.link`.
 
 A panel in the workspace grid. It mounts one vetted Fancy component, drawn by Genie's own compiled adapter: a package ships no UI code.
 

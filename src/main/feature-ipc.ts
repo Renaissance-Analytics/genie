@@ -578,7 +578,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
-        plugins: { dir: services.pluginsDir, developerMode: services.settings.snapshot().developer_mode === true, entries: services.plugins.list(), panels: catalogPanels(services.catalogDefinitions()) as never, editors: catalogEditors(services.catalogDefinitions()) },
+        plugins: { dir: services.pluginsDir, publisherChecksOff: services.settings.snapshot().publisher_checks_off === true, entries: services.plugins.list(), panels: catalogPanels(services.catalogDefinitions()) as never, editors: catalogEditors(services.catalogDefinitions()) },
         remote: {
             host: services.remote.hostName,
             url: services.remote.url(),
@@ -1639,8 +1639,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'settings.set':
             await services.settings.set(action.key, action.value);
-            // Developer mode decides whether unsigned local plugins are admitted: re-read the folder under the new rule.
-            if (action.key === 'developer_mode') await services.pluginsRefresh();
+            // Publisher checks decide whether unsigned plugins are admitted (ADF B5): re-read the folder under the new rule.
+            if (action.key === 'publisher_checks_off') await services.pluginsRefresh();
             // The host's switch (Tynn #820): the listener starts or stops with it, now.
             if (action.key === 'remote_access') await ports.remoteAccess?.apply();
             break;
@@ -1748,6 +1748,9 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'plugins.setEnabled':
             await services.plugins.setEnabled(action.id, action.enabled);
+            break;
+        case 'plugins.setNetworkAllowed':
+            await services.plugins.setNetworkAllowed(action.id, action.allowed);
             break;
         case 'workspace.syncAgentFiles':
             // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.

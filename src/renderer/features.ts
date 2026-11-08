@@ -223,7 +223,8 @@ import type { ClaimingEditor } from '../core/plugin-editors.js';
 
 export interface PluginsSection {
     readonly dir: string;
-    readonly developerMode: boolean;
+    /** ADF B5: "Turn off publisher checks" is on: unsigned packages run, Unverified. */
+    readonly publisherChecksOff: boolean;
     readonly entries: readonly PluginEntry[];
     /** The panels ENABLED plugins contribute (§6.7), with their plugin's name — what `+plugin` offers. */
     readonly panels: readonly PluginPanelView[];
@@ -576,7 +577,8 @@ export type FeatureAction =
     /** The person's yes to what a workspace would run. */
     | { kind: 'workspace.trust'; workspaceId: string; workspacePath: string }
     /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
-    | { kind: 'plugins.setEnabled'; id: string; enabled: boolean };
+    | { kind: 'plugins.setEnabled'; id: string; enabled: boolean }
+    | { kind: 'plugins.setNetworkAllowed'; id: string; allowed: boolean };
 
 /**
  * The refusal THIS toolchain action left on its row, if any — what the renderer also writes to its console, so the
