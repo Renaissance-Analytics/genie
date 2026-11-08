@@ -132,6 +132,7 @@ import { dialTynnSocket } from './tynn-socket.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
+import { setThreadStoreSlowLog } from '../core/thread-store.js';
 import { repoStatus } from './repo-git.js';
 
 /**
@@ -170,6 +171,8 @@ const tokenFile = join(runtime, 'host.token');
 mkdirSync(runtime, { recursive: true });
 // Off the host's thread (Tynn #548): a line is queued and written in order; an exit writes what is left.
 const lifecycleLog = openLifecycleLog(runtime, { async: true });
+// A thread-store step past STORE_SLOW_MS names itself here (Tynn #557): the next stall says which await it was.
+setThreadStoreSlowLog(lifecycleLog);
 const say = (line: string): void => {
     console.log(`[genie-host] ${new Date().toISOString()} ${line}`);
 };
