@@ -54,6 +54,13 @@ async function tlsServer(ca: IssuedPem, handler: Handler): Promise<string> {
 const answers = (status: number, body: unknown, headers: Record<string, string> = {}): Handler => (_req, res) => { res.writeHead(status, { 'Content-Type': 'application/json', ...headers }); res.end(JSON.stringify(body)); };
 const GET = { method: 'GET' as const, headers: {}, credentials: 'omit' as const, redirect: 'error' as const, signal: new AbortController().signal };
 
+it('caps the registry transport body while receiving it, before JSON parsing', async () => {
+    const url = await tlsServer(GENIE_CA, (_req, res) => { res.writeHead(200); res.write('a'.repeat(2048)); res.end('b'.repeat(2048)); });
+    const options = { machineRoots: trusted, env: {}, maxResponseBytes: 1024 };
+    const answer = await hostHttpsFetch(options)(`${url}/`, GET);
+    await expect(answer.text()).rejects.toThrow(/response.*(?:limit|large|size)/i);
+});
+
 describe('what it trusts', () => {
     it('CONTROL, the failure: Node’s own fetch refuses a server signed by Genie’s CA', async () => {
         const url = await tlsServer(GENIE_CA, answers(200, { ok: true }));
