@@ -10,6 +10,7 @@ import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
 import type { HostingApproval, ServiceExec } from './mcp-tools-hosting.js';
 import type { ProcessApproval, ProcessesPort } from './mcp-tools-processes.js';
 import type { FlowsPort } from './mcp-tools-flows.js';
+import type { MailPort } from './mcp-tools-mail.js';
 import type { InboxStore } from './inbox-store.js';
 import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import type { KnowledgeStore } from './knowledge-store.js';
@@ -65,6 +66,8 @@ export interface GenieToolParts {
     readonly processes?: ProcessesPort;
     /** The flows the agents' `flows` tool acts on — the Flows tab's store and the scheduler's Run now. Absent = none (doctor mode), and the tool says so. */
     readonly flows?: FlowsPort;
+    /** Genie Mail's inboxes and the shared Mailpit the agents' `mail` tool acts on (G6). Absent = none (doctor mode), and the tool says so. */
+    readonly mail?: MailPort;
     /** Runs `services exec` commands (main/service-exec.ts). Absent = none (doctor mode), and the tool says so. */
     readonly serviceExec?: ServiceExec;
     readonly plugins: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
@@ -123,6 +126,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             processes: p.processes ?? null,
         },
         flows: { resolveCaller: p.resolveCaller, flows: p.flows ?? null },
+        mail: { resolveCaller: p.resolveCaller, mail: p.mail ?? null },
         attention: { resolveCaller: p.resolveCaller, openFile: p.openFile, ...(p.reportPlan ? { reportPlan: p.reportPlan } : {}), ...(p.readPlan ? { readPlan: p.readPlan } : {}) },
         plugins: {
             plugins: { tools: () => p.plugins.tools(), guard: (id) => p.plugins.guard(id) },

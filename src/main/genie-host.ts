@@ -1004,6 +1004,8 @@ async function main(): Promise<void> {
             return { ...engine.serviceEnvFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
         },
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
+        // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.
+        ...(hostingStack?.mail ? { mail: hostingStack.mail } : {}),
         // THE AGENTS' `sites` AND `services` (Tynn #444): this host's own hosting (P5a) under its own supervisor — what the
         // Hosting and Services tabs show. Only `sites open` and `services exec` still go to a window.
         ...(hostingStack ? {

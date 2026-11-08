@@ -1,5 +1,6 @@
 import { bcryptHash } from './mail-bcrypt.js';
 import { MailService, type MailServicePorts } from './mail-service.js';
+import { mailToolPort, type MailPort } from './mcp-tools-mail.js';
 import { phpWorkerEnvWithTrust } from './php-trust-host.js';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -188,6 +189,8 @@ export interface HostingStack extends HostingApi {
     readonly frontDoor: GenRouterServer;
     /** The workspaces' trust (genie#1519): its record and verdicts, owned where the hosting is. */
     readonly trust: TrustApi;
+    /** Genie Mail's inboxes and the shared Mailpit, for the agents' `mail` tool (G6); null where there is no inbox book. */
+    readonly mail: MailPort | null;
     /** Nothing more is started or synced: the hosts sync and the port probe, the docker watch, the workspace watch. */
     quiesce(): void;
     /** The `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short. */
@@ -784,10 +787,13 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     };
     let down: Promise<void> | null = null;
 
+    const mailPort = mail ? mailToolPort({ service: mail, envFor: (ws) => engines.envFor(ws), apiUrl: () => engines.mailApiUrl() }) : null;
+
     return {
         sites,
         envelopeSites,
         engines,
+        mail: mailPort,
         engineReconcile,
         envFiles,
         engineStatuses: () => engineStatusesOf(enginePorts),

@@ -6,6 +6,7 @@ import { AGENT_TOOLS } from './mcp-tools-agents.js';
 import { ATTENTION_TOOLS } from './mcp-tools-attention.js';
 import { FLOWS_TOOLS } from './mcp-tools-flows.js';
 import { HOSTING_TOOLS } from './mcp-tools-hosting.js';
+import { MAIL_TOOLS } from './mcp-tools-mail.js';
 import { MORE_TOOLS } from './mcp-tools-more.js';
 import { PAGES_TOOLS } from './mcp-tools-pages.js';
 import { pluginToolOffer } from './mcp-tools-plugins.js';
@@ -26,7 +27,7 @@ const BUILTIN_VERSION = '2.0.0';
 
 /** The 17 builtin tools, in the order agents have always been offered them. */
 export const BUILTIN_TOOLS: readonly BuiltinTool[] = [
-    ...GENIE_TOOLS, ...MORE_TOOLS, ...ATTENTION_TOOLS, ...HOSTING_TOOLS, ...PROCESS_TOOLS, ...FLOWS_TOOLS,
+    ...GENIE_TOOLS, ...MORE_TOOLS, ...ATTENTION_TOOLS, ...HOSTING_TOOLS, ...PROCESS_TOOLS, ...FLOWS_TOOLS, ...MAIL_TOOLS,
     ...AGENT_TOOLS, ...WORKSPACE_TABS_TOOLS, ...PAGES_TOOLS,
 ];
 

@@ -571,6 +571,12 @@ export class ServiceRegistry {
         return this.choices(workspaceId).some((c) => c.kind === 'mailpit' && c.chosen?.id === shared.id) && !shared.detached?.includes(workspaceId);
     }
 
+    /** Genie Mail G6: the shared Mailpit's API, on loopback (its `ui` surface), for the `mail` tool; null when there is none. */
+    mailApiUrl(): string | null {
+        const port = this.#sharedMail()?.publishedPorts?.ui;
+        return typeof port === 'number' ? `http://127.0.0.1:${port}` : null;
+    }
+
     /** Does Genie's shared Mailpit read the inbox book (its container has the auth directory)? */
     mailWired(): boolean {
         return this.#sharedMail()?.mailAuth === true;
