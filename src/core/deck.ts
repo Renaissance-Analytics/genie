@@ -221,6 +221,14 @@ export function needsYouCount(items: readonly DeckItem[]): number {
     return deckBand(items).filter((i) => !isStale(i)).length;
 }
 
+/** The heading of the stale questions' own band (the owner, 2026-11-08: greyed at the bottom read as "nowhere"). */
+export const EARLIER_RUNS_HEADING = 'Earlier runs: still unanswered';
+
+/** The questions asked by an earlier run, or whose agent is gone, still unanswered: their own band, in rank order. */
+export function earlierRuns(items: readonly DeckItem[]): DeckItem[] {
+    return deckBand(items).filter(isStale);
+}
+
 /**
  * ONE WORKSPACE'S PART OF THE DECK (the owner, 2026-10-15: "Grouped by workspace" — sections per workspace, then rows).
  * `workspaceId` null is Genie's own section: its items (a main-process error, trusting the certificate) belong to no

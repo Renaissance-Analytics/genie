@@ -9,6 +9,11 @@ import {
     deckPreview,
     deckSections,
     dismissableOlderThan,
+    earlierRuns,
+    EARLIER_RUNS_HEADING,
+    GENIE_SECTION,
+    isStale,
+    UNNAMED_WORKSPACE,
     dismissableStale,
     isDismissable,
     needsYouCount,
@@ -102,7 +107,9 @@ const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text
 
 export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, focusId = null, onDismiss, onDismissOlder, onDismissStale, now = Date.now() }: DeckProps) {
     const band = deckBand(items);
-    const sections = deckSections(items);
+    // The workspace sections hold what waits; the stale questions have their own band below (2026-11-08).
+    const sections = deckSections(items.filter((i) => !isStale(i)));
+    const earlier = earlierRuns(items);
     const waiting = needsYouCount(items);
     const staleItems = dismissableStale(band);
     const staleCount = band.length - waiting;
@@ -224,6 +231,23 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                     ))}
                 </div>
 
+                {/*
+                  * EARLIER RUNS: STILL UNANSWERED (the owner, 2026-11-08). A question its agent no longer waits for — an
+                  * earlier run asked it, or the agent is gone — is never invisible: its own band, under its own heading,
+                  * each said in full with its workspace, Answer and Dismiss.
+                  */}
+                {earlier.length > 0 ? (
+                    <div data-deck-band="earlier-runs" className="mt-2">
+                        <h2 className="px-7 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-3)]">{EARLIER_RUNS_HEADING}</h2>
+                        {earlier.map((item) => (
+                            <div key={item.id}>
+                                <span data-deck-earlier-workspace={item.workspaceId ?? ''} className="block px-7 pt-2 text-[11px] text-[var(--fg-3)]">{item.workspaceId === null ? GENIE_SECTION : (item.workspaceName ?? UNNAMED_WORKSPACE)}</span>
+                                <DeckRow item={item} answering={answering} onAnswer={onAnswer} onOpenItem={onOpenItem} onAnswerForm={onAnswerForm} formRefusal={formRefusal} focusId={focusId} focusRef={focusRef} onDismiss={onDismiss} now={now} />
+                            </div>
+                        ))}
+                    </div>
+                ) : null}
+
                 {looked.length > 0 ? (
                     <div data-deck-band="since-you-looked" className="mt-2">
                         <h2 className="px-7 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Since you looked</h2>
@@ -296,7 +320,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
             {...(stale ? { 'data-deck-item-stale': stale } : {})}
             data-blocking={item.blocking && !stale ? 'true' : 'false'}
             data-priority={item.priority}
-            className={`border-b border-[var(--border-1)] px-7 py-3 ${focused ? 'bg-[var(--bg-1)] shadow-[inset_2px_0_0_var(--accent)]' : ''} ${stale && !opened ? 'opacity-60' : ''}`}
+            className={`border-b border-[var(--border-1)] px-7 py-3 ${focused ? 'bg-[var(--bg-1)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
         >
             <div className="flex items-center gap-2 text-[13px]">
                 {/* Blocking is the most important bit on the item, so it is the first thing on the row. An agent has
@@ -375,7 +399,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
             {item.answer.kind === 'form' && questions && stale && !opened ? (
                 <div className="mt-2">
                     <Button size="xs" type="button" data-action="deck-answer-anyway" data-deck-answer-anyway={item.id} onClick={() => setOpened(true)} className="rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
-                        Answer anyway
+                        Answer
                     </Button>
                 </div>
             ) : null}
