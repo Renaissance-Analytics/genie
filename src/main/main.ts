@@ -793,7 +793,8 @@ function openTakeOverWindow(route: string, activation: Activation): void {
     for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed() && !remoteTakeOverWindows.has(w) && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
     }
-    takeOverWindow(route, request, null).on('closed', () => {
+    const win = takeOverWindow(route, request, null);
+    win.on('closed', () => {
         takeOvers?.windowClosed(terminalId);
         scratchTerminals?.windowClosed(terminalId);
     });
