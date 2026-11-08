@@ -202,7 +202,12 @@ export class MarketplaceClient implements PublisherKeyRegistry {
             }
             aborted(controller.signal);
             await this.#commit(rows);
-        } finally { clearTimeout(deadline); this.#controller = null; }
+        } finally {
+            clearTimeout(deadline);
+            // Status/length rejection can leave an unread body; release its transport on EVERY exit.
+            controller.abort();
+            this.#controller = null;
+        }
     }
 
     async #readCache(): Promise<void> {
