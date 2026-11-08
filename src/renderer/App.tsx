@@ -25,7 +25,8 @@ import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute,
 import { takeOverTerminalOf } from '../core/take-over-route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
-import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
+import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
+import { rewrittenAddress, routeFor, windowBridge } from './window-address.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
@@ -872,7 +873,9 @@ function DesktopApp({ bridge }: AppProps) {
     reconnectNow.current = remote.reconnect;
     useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
-    const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)));
+    // A window BOUND to another host reads that host's Genie, and nothing of this machine's while it connects (window-address.ts).
+    const resolvedBridge = windowBridge({ bound: remote.bound, connected: remote.state?.connected === true, remote: remote.client?.bridge ?? null,
+        local: bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)) });
     const local = resolvedBridge?.localProtocol;
     const localState = useSyncExternalStore(local?.onState ?? noLocalSubscription, local?.state ?? noLocalState, local?.state ?? noLocalState);
     const localRevision = localState?.revision ?? 0;
@@ -896,9 +899,7 @@ function DesktopApp({ bridge }: AppProps) {
         ? { workstation: snapshot.workstation.name, workspaces: snapshot.workspaces, agents: snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents, tabsOf: (id) => tabsByWorkspace.get(id) }
         : null;
     // Not readable yet (no snapshot): an old internal route is used as it is; an address waits on the Dashboard.
-    const route = addressContext
-        ? routeOfAddress(address, addressContext) ?? DEFAULT_ROUTE
-        : isInternalRoute(address) ? address : DEFAULT_ROUTE;
+    const route = routeFor(address, addressContext);
     /*
      * WHERE AN AGENT ACTED (genie#1265; the owner, 2026-10-27): an agent's file, tab or site never moves this window — its
      * workspace is marked, and the rail row (and the Dashboard's header) pulses until the person ARRIVES there; the arrival
@@ -923,8 +924,8 @@ function DesktopApp({ bridge }: AppProps) {
     // An OLD address (genie://workspace/<id>?chat=…, a link, a host navigation) is rewritten in place to the new form.
     const shownAddress = addressContext ? addressOf(route, addressContext) : address;
     useEffect(() => {
-        if (!addressContext || shownAddress === address || !isInternalRoute(address)) return;
-        window.location.replace(`#${shownAddress}`);
+        const next = rewrittenAddress(address, addressContext);
+        if (next !== null) window.location.replace(`#${next}`);
     }, [address, shownAddress, addressContext !== null]);
     // LEAVING A REMOTE HOST (the two-VM proof, 2026-10-20): the address named that machine; once this window's own snapshot
     // names this one, the same page comes back here — Disconnect on the host's Remote access lands on this machine's Remote
