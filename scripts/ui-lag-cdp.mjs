@@ -117,7 +117,7 @@ function uiLagControlSpawnHost() {
 
 /** The page's gauges: timer lateness, long tasks, frame gaps, input delays, the Files pushes. Serialized into the page. */
 function installPageGauge(create) {
-    const s = window.__uiLag = { gauge: create({ intervalMs: 10, thresholdMs: 16, now: () => performance.now() }), longtasks: [], frames: [], inputs: [], files: [], lastFrame: null };
+    const s = window.__uiLag = { gauge: create({ intervalMs: 10, thresholdMs: 16, now: () => performance.now() }), longtasks: [], frames: [], frameTimes: [], inputs: [], files: [], lastFrame: null };
     s.timer = setInterval(() => s.gauge.beat(), 10);
     if (typeof PerformanceObserver === 'function' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
         new PerformanceObserver((list) => { for (const e of list.getEntries()) if (s.longtasks.length < 20000) s.longtasks.push({ startedMs: e.startTime, endedMs: e.startTime + e.duration, ms: e.duration }); }).observe({ type: 'longtask' });
@@ -125,7 +125,7 @@ function installPageGauge(create) {
     }
     const frame = (t) => {
         if (document.visibilityState !== 'visible') s.lastFrame = null;
-        else { if (s.lastFrame !== null && t - s.lastFrame > 50 && s.frames.length < 20000) s.frames.push({ startedMs: s.lastFrame, endedMs: t, ms: t - s.lastFrame }); s.lastFrame = t; }
+        else { if (s.lastFrame !== null && t - s.lastFrame > 50 && s.frames.length < 20000) s.frames.push({ startedMs: s.lastFrame, endedMs: t, ms: t - s.lastFrame }); s.lastFrame = t; if (s.frameTimes.length < 100000) s.frameTimes.push(t); }
         requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
@@ -337,7 +337,7 @@ try {
         const pass = await runPass(label, profiled);
         const mainState = await main.evaluate('({ gauge: globalThis.__uiLag.gauge.snapshot(), calls: globalThis.__uiLag.calls.splice(0) })');
         const hostState = await hostCdp.evaluate('({ gauge: globalThis.__uiLagHost.gauge.snapshot(), spawns: globalThis.__uiLagHost.spawns.splice(0) })');
-        const pageState = await page.evaluate('(() => { const s = window.__uiLag; return { gauge: s.gauge.snapshot(), longtasks: s.longtasks.splice(0), frames: s.frames.splice(0), inputs: s.inputs.splice(0), files: s.files.splice(0) }; })()');
+        const pageState = await page.evaluate('(() => { const s = window.__uiLag; return { gauge: s.gauge.snapshot(), longtasks: s.longtasks.splice(0), frames: s.frames.splice(0), frameTimes: s.frameTimes.splice(0), inputs: s.inputs.splice(0), files: s.files.splice(0) }; })()');
         await main.evaluate('globalThis.__uiLag.gauge.reset(); true'); await hostCdp.evaluate('globalThis.__uiLagHost.gauge.reset(); true'); await page.evaluate('window.__uiLag.gauge.reset(); true');
         passes.push({ ...pass, mainState, hostState, pageState });
     }
@@ -374,7 +374,8 @@ try {
                 ...(ph.slices ? { slices: ph.slices.map((sl) => {
                     const own = pass.pageState.inputs.filter((x) => x.kind === 'mouse' && x.at >= sl.from && x.at <= sl.to).map((x) => x.frameMs);
                     const gaps = pass.pageState.frames.filter((g) => g.endedMs >= sl.from && g.startedMs <= sl.to).map((g) => g.ms);
-                    return { cond: sl.cond, count: own.length, p95: summarize(own).p95, worstGapMs: Math.round(Math.max(0, ...gaps)) };
+                    const frames = pass.pageState.frameTimes.filter((t) => t >= sl.from && t <= sl.to).length;
+                    return { cond: sl.cond, count: own.length, p95: summarize(own).p95, worstGapMs: Math.round(Math.max(0, ...gaps)), fps: Math.round(frames / ((sl.to - sl.from) / 1000)) };
                 }) } : {}),
                 filesPushes: { count: files.length, bytes: files.reduce((a, [, n]) => a + n, 0), maxBytes: Math.max(0, ...files.map(([, n]) => n)), sizes: files.map(([, n]) => n) },
                 calls,
@@ -474,7 +475,7 @@ finally {
     // What a person reads in the log: each phase's numbers, then what each of the worst gaps was.
     for (const p of out.passes) for (const r of p.rows ?? []) {
         console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${r.host.worstMs} over50=${r.host.over50} spawns=${r.host.spawns.count} ${JSON.stringify(r.host.spawns.by)} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
-        if (r.slices) console.log(`UI_LAG_SLICES ${p.label}/${r.phase} ${JSON.stringify(r.slices.map((x) => [x.cond, x.count, x.p95, x.worstGapMs]))}`);
+        if (r.slices) console.log(`UI_LAG_SLICES ${p.label}/${r.phase} ${JSON.stringify(r.slices.map((x) => [x.cond, x.count, x.p95, x.worstGapMs, x.fps]))}`);
         if (r.sliceProfiles) {
             console.log(`UI_LAG_SLICE_PROFILE on ${JSON.stringify(r.sliceProfiles.on)}`.slice(0, 3000));
             console.log(`UI_LAG_SLICE_PROFILE off ${JSON.stringify(r.sliceProfiles.off)}`.slice(0, 3000));
