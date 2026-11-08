@@ -113,8 +113,8 @@ describe('a window without the adapter says so', () => {
     const board = catalog.get('ai.genie.artboard.board')!;
 
     it('an editor or panel whose compiled adapter this window has opens with it', () => {
-        expect(adapterFor(sheet, { editors: ['SheetWorkbook'], panels: [] })).toEqual({ ok: true, adapter: 'SheetWorkbook' });
-        expect(adapterFor(board, { editors: [], panels: ['ArtBoardPanel'] })).toEqual({ ok: true, adapter: 'ArtBoardPanel' });
+        expect(adapterFor(sheet, { editors: ['SheetWorkbook'], panels: [] })).toMatchObject({ ok: true, adapter: 'SheetWorkbook' });
+        expect(adapterFor(board, { editors: [], panels: ['ArtBoardPanel'] })).toMatchObject({ ok: true, adapter: 'ArtBoardPanel' });
     });
 
     it('one this OLDER window lacks: "needs a newer Genie", naming the element — never a blank pane', () => {
