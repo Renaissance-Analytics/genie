@@ -30,7 +30,7 @@ function onDisk(): Map<string, string> {
 const envelope = (spec: KindSpec) => ({
     id: `com.example.docs.${spec.kind.replace(/-/g, '_')}`, kind: spec.kind, version: '1.0.0', packageId: 'com.example.docs', source: 'plugin',
     docs: { name: spec.kind, description: `An example ${spec.kind}.` },
-    reach: { scopes: ['workspace'], side: 'host', requiresWindow: false, remote: 'local' },
+    reach: { scopes: ['workspace'], side: (spec.kind === 'panel' || spec.kind === 'editor' ? 'client' : 'host') as string, requiresWindow: false, remote: 'local' },
     permissions: { capabilities: [] },
     payload: structuredClone(spec.example),
 });
@@ -93,6 +93,57 @@ describe('what the docs say', () => {
         for (const f of ENVELOPE_FIELDS) expect(page, f.name).toContain(`| \`${f.name}\` |`);
         expect(ENVELOPE_FIELDS.find((f) => f.name === 'aliases')?.default).toEqual([]);
         expect(ENVELOPE_FIELDS.find((f) => f.name === 'permissions.network')?.default).toEqual([]);
+    });
+});
+
+describe('each element\'s side: the host, a client, or (not yet expressible) both', () => {
+    // The owner's ruling (2026-11-08): the ADF models the client/host relationship. A1's envelope carries one side per
+    // definition (`reach.side`: host or client). A family Genie runs today has a fixed side, enforced; the others leave
+    // it to each definition; "both" cannot be said yet and the docs say it comes with A4.
+    const FIXED: Record<string, 'host' | 'client'> = { tool: 'host', panel: 'client', editor: 'client' };
+
+    it('the index shows every family\'s side', () => {
+        const index = renderSdkDocs().get('README.md')!;
+        expect(index).toContain('| Family | Status | Side | What it is |');
+        for (const spec of KIND_SPECS) {
+            const side = FIXED[spec.kind] ?? 'per definition';
+            expect(index, spec.kind).toContain(`| [${spec.kind}](kinds/${spec.kind}.md) | ${spec.status} | ${side} |`);
+        }
+    });
+
+    it('each family\'s page says its side; the envelope page says "both" is not expressible yet and comes with A4', () => {
+        const docs = renderSdkDocs();
+        for (const spec of KIND_SPECS) {
+            const page = docs.get(`kinds/${spec.kind}.md`)!;
+            const side = FIXED[spec.kind];
+            if (side) expect(page, spec.kind).toContain(`Side: **${side}**`);
+            else expect(page, spec.kind).toContain('Side: set by each definition\'s `reach.side`');
+        }
+        const envelope = docs.get('envelope.md')!;
+        expect(envelope).toMatch(/both[\s\S]*A4/);
+    });
+
+    it('a definition of a fixed-side family on the other side is refused, naming the side it must be', () => {
+        for (const [kind, side] of Object.entries(FIXED)) {
+            const spec = KIND_SPECS.find((k) => k.kind === kind)!;
+            const right = envelope(spec);
+            right.reach.side = side;
+            expect(validateDefinition(right).ok, `${kind} on ${side}`).toBe(true);
+            const wrong = envelope(spec);
+            wrong.reach.side = side === 'host' ? 'client' : 'host';
+            const r = validateDefinition(wrong);
+            expect(r.ok, `${kind} on the wrong side`).toBe(false);
+            if (!r.ok) expect(r.problems.join('\n')).toContain(`reach.side must be "${side}"`);
+        }
+    });
+
+    it('CONTROL: a family that leaves the side to its definitions accepts either', () => {
+        const spec = KIND_SPECS.find((k) => k.kind === 'recipe')!;
+        for (const side of ['host', 'client']) {
+            const def = envelope(spec);
+            def.reach.side = side;
+            expect(validateDefinition(def).ok, side).toBe(true);
+        }
     });
 });
 
