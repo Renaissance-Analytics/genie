@@ -1,4 +1,6 @@
-import { Terminal } from '@particle-academy/fancy-term';
+import { Terminal, type TerminalHandle } from '@particle-academy/fancy-term';
+import { useCallback, useEffect, useRef } from 'react';
+import { outputStep, type OutputView } from '../../core/terminal-output-stream.js';
 
 /**
  * THE XTERM PANE — the one module in the renderer that imports `fancy-term`.
@@ -19,6 +21,12 @@ import { Terminal } from '@particle-academy/fancy-term';
 export interface TerminalPaneProps {
     paneId: string;
     output: string;
+    /**
+     * Where the output stream is (Tynn #542): characters appended in this epoch, and the epoch (a new one when the output
+     * is replaced). With them the pane writes only what was appended, even once `output` is trimmed at the view's cap.
+     */
+    outputEnd?: number;
+    outputEpoch?: number;
     readOnly: boolean;
     onData: (data: string) => void;
     onResize: (size: { cols: number; rows: number }) => void;
@@ -28,12 +36,33 @@ export interface TerminalPaneProps {
     onOpenFile?: (file: { path: string; line?: number; column?: number; absolutePath?: string }) => void;
 }
 
-export function TerminalPane({ paneId, output, readOnly, onData, onResize, root, onOpenFile }: TerminalPaneProps) {
+export function TerminalPane({ paneId, output, outputEnd, outputEpoch, readOnly, onData, onResize, root, onOpenFile }: TerminalPaneProps) {
+    /*
+     * WRITTEN, NOT DIFFED (Tynn #542). fancy-term's controlled `output` compares each new string with the one it wrote, and
+     * resets the terminal for anything that is not an extension. Past the view's cap every batch is trimmed from the front,
+     * so the terminal was reset and given all 2 MB again on every batch. The terminal is uncontrolled here, and the pane
+     * writes what `outputStep` says: what was appended, from the stream position; a reset only for a new stream.
+     */
+    const term = useRef<TerminalHandle | null>(null);
+    const shown = useRef<OutputView | null>(null);
+    const latest = useRef<OutputView>({ text: output });
+    latest.current = { text: output, ...(outputEnd !== undefined ? { end: outputEnd } : {}), ...(outputEpoch !== undefined ? { epoch: outputEpoch } : {}) };
+    const apply = useCallback((): boolean => {
+        const handle = term.current;
+        if (!handle?.xterm) return false;
+        const next = latest.current, step = outputStep(shown.current, next);
+        if (step) { if (step.reset) handle.reset(); if (step.write) handle.write(step.write); }
+        shown.current = next;
+        return true;
+    }, []);
+    // A terminal made again (a remount) starts empty: it is given everything again.
+    useEffect(() => () => { shown.current = null; }, []);
+    useEffect(() => { if (!apply()) void term.current?.ready.then(() => apply()); }, [output, outputEnd, outputEpoch, apply]);
     return (
         <Terminal
+            ref={term}
             data-terminal-pane={paneId}
             className="h-full w-full"
-            output={output}
             readOnly={readOnly}
             onData={onData}
             onResize={onResize}

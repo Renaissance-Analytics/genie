@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, capVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -191,6 +191,28 @@ describe('the throughput budget: input the page keeps up with, terminal on again
         expect(throughputVerdict({ on: [slice(1), slice(1), slice(1)], off: [slice(1), slice(0), slice(1)] }).reasons).toEqual(['too few pairs with input off screen: 2 (need 3)']);
         // An "on" slice with NO input is the worst case, not a missing one: it counts, as 0.
         expect(throughputVerdict({ on: [slice(0), slice(0), slice(70)], off: [slice(70), slice(70), slice(70)] }).ratio).toBe(0);
+    });
+});
+
+describe('the terminal past its output cap, against below it (Tynn #542)', () => {
+    const slice = (count: number, worstGapMs = 0, scriptMsPerS = 60) => ({ count, p95: 20, worstGapMs, scriptMsPerS });
+    it('fails a page whose script time past the cap is far over below it, though its input keeps up (run 0d892cff)', () => {
+        // Run 0d892cff, profiled pass: past the cap the page ran 4385 ms of script in 9.7 s (xterm parsing the whole kept
+        // output again every batch); below it about 5%. Its input kept up at 0.88.
+        const busy = capVerdict({ below: [slice(73, 0, 50), slice(72, 0, 55), slice(73, 0, 48)], past: [slice(64, 0, 450), slice(66, 0, 430), slice(63, 0, 470)] }, { minRatio: 0.85 });
+        expect(busy.reasons).toEqual(['page script time past the output cap: 400 ms per second over below it, median (bound 50; past 450, below 50)']);
+        expect(capVerdict({ below: [slice(73, 0, 50), slice(72, 0, 55), slice(73, 0, 48)], past: [slice(72, 0, 70), slice(73, 0, 90), slice(72, 0, 60)] }).ok).toBe(true);
+        // A slice whose script time was not measured is not a pass.
+        expect(capVerdict({ below: [slice(73), slice(72), slice(73)], past: [{ count: 72, p95: 20, worstGapMs: 0 }, slice(73), slice(72)] }).reasons).toEqual(['page script time not measured in every slice']);
+    });
+    it('passes a terminal that keeps up past the cap, fails one that falls behind or drops frames, and needs enough slices', () => {
+        expect(capVerdict({ below: [slice(72), slice(73), slice(71)], past: [slice(72), slice(70), slice(73)] }).ok).toBe(true);
+        const behind = capVerdict({ below: [slice(72), slice(73), slice(71)], past: [slice(20), slice(25), slice(18)] });
+        expect(behind.ok).toBe(false);
+        expect(behind.ratio).toBe(0.28);
+        expect(behind.reasons).toEqual(['mouse events acknowledged past the output cap: 0.28 of the slices below it (bound 0.9; past 20, below 72)']);
+        expect(capVerdict({ below: [slice(72), slice(73), slice(71)], past: [slice(72, 150), slice(70, 160), slice(73, 0)] }).reasons).toEqual(['worst frame gap past the output cap, median of 3 slices: 150 ms (bound 100)']);
+        expect(capVerdict({ below: [slice(72), slice(73)], past: [slice(72), slice(70), slice(73)] }).reasons).toEqual(['too few slices: 2 below the cap and 3 past it (need 3 each)']);
     });
 });
 
