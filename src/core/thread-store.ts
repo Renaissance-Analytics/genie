@@ -218,6 +218,8 @@ export class ThreadStore extends FileSessionStore {
             try { expires = Number.parseInt((await readFile(path, 'utf8')).trim(), 10); } catch { /* gone, or unreadable: below */ }
             // A torn or unreadable stamp is bounded by the file's age, with 0.8.0's lock TTL.
             if (!Number.isFinite(expires)) expires = info.mtimeMs + LEGACY_LOCK_TTL_MS;
+            // And no stamp outlives the longest lock 0.8.0 was ever asked for: a corrupt one must not hang the write.
+            expires = Math.min(expires, info.mtimeMs + LEGACY_LOCK_MAX_MS);
             const now = Date.now();
             if (expires > now) {
                 await new Promise((resolve) => setTimeout(resolve, Math.min(expires - now, 1000)));
@@ -430,6 +432,8 @@ export async function* linesFromEndOf(path: string): AsyncGenerator<Buffer[]> {
 const LOG_SIDECAR = '.index.json';
 /** prism-harness 0.8.0's lock TTL: what bounds a legacy lock file whose stamp cannot be read. */
 const LEGACY_LOCK_TTL_MS = 10_000;
+/** The most a legacy stamp is believed, from the file's own time. */
+const LEGACY_LOCK_MAX_MS = 60_000;
 /** How big a thread log grows before it rotates (Tynn #557). */
 export const THREAD_ROTATE_BYTES = 64 * 1024 * 1024;
 /** A store step this slow is logged by name. */
