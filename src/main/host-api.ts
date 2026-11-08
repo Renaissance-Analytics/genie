@@ -539,12 +539,14 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.confirmAdd':
                 if (typeof args[0] !== 'string') return { ok: false, reason: 'confirmAdd names a folder' };
                 return deps.workspaceOps.confirmAdd(args[0]);
+            // P4 family 10 (Tynn #559): the window's own calls now come this way; a call that names no workspace is
+            // refused in the words the IPC path used, never run on a made-up id.
             case 'workspaces.hibernate':
-                return deps.workspaceOps.hibernate(str(args[0]));
+                return typeof args[0] === 'string' ? deps.workspaceOps.hibernate(args[0]) : { ok: false, reason: 'hibernate names a workspace' };
             case 'workspaces.wake':
-                return deps.workspaceOps.wake(str(args[0]));
+                return typeof args[0] === 'string' ? deps.workspaceOps.wake(args[0]) : { ok: false, reason: 'wake names a workspace' };
             case 'workspaces.remove':
-                return deps.workspaceOps.remove(str(args[0]));
+                return typeof args[0] === 'string' ? deps.workspaceOps.remove(args[0]) : { ok: false, reason: 'remove names a workspace' };
             // THE TYNN TAB (P4 family 12, Tynn #561): the window's own calls come this way now, with the IPC path's refusals.
             case 'workspaces.tynnBoard':
                 if (!deps.workspaceOps.tynnBoard) throw new Error('this host has no Tynn tab');
@@ -638,9 +640,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'features.act':
                 return deps.features.act(args[0] as FeatureAction);
             case 'host.listDir':
-                return listHostDir(str(args[0]));
+                return listHostDir(typeof args[0] === 'string' ? args[0] : '/');
             case 'host.mkdir':
-                return makeHostDir(str(args[0]), str(args[1]));
+                return typeof args[0] === 'string' && typeof args[1] === 'string' ? makeHostDir(args[0], args[1]) : { ok: false, reason: 'name a folder and where to make it' };
             case 'host.home':
                 return homedir();
             case 'updates.state':

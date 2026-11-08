@@ -114,13 +114,13 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const source = serve(deps); vi.stubGlobal('window', { genieLocalProtocol: source.framePort() });
         const oldInvoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         const snapshot = vi.fn(async () => ({ workspaces: null })), hibernate = vi.fn(async () => ({ ok: false, reason: 'agent still working' }));
-        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { hibernate }, agents: oldAgents(oldInvoke) } as unknown as PreloadBridge;
+        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: {}, takeOver: hibernate, agents: oldAgents(oldInvoke) } as unknown as PreloadBridge;
         const bridge = pageBridge(preload); expect(pageBridge(preload)).toBe(bridge);
         expect(await call(bridge.agents, row)).toEqual(row.result);
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args);
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args); expect(oldInvoke).not.toHaveBeenCalled();
         expect(await bridge.snapshot()).toEqual({ workspaces: null });
-        expect(await bridge.workspaces.hibernate('work')).toEqual({ ok: false, reason: 'agent still working' });
+        expect(await bridge.takeOver('work')).toEqual({ ok: false, reason: 'agent still working' });
         expect(snapshot).toHaveBeenCalledTimes(1); expect(hibernate).toHaveBeenCalledExactlyOnceWith('work');
     });
     it.each(rows)('$name retires its native handler, preload forwarding and inventory row', (row) => {

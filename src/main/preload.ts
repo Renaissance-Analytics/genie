@@ -121,9 +121,6 @@ const bridge: PreloadBridge = {
         ipcRenderer.invoke('genie:restart-with-handoff', agentId, finishedId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     workspaces: {
-        hibernate: (workspaceId) => ipcRenderer.invoke('genie:workspace-hibernate', workspaceId) as never,
-        wake: (workspaceId) => ipcRenderer.invoke('genie:workspace-wake', workspaceId) as never,
-        remove: (workspaceId) => ipcRenderer.invoke('genie:workspace-remove', workspaceId) as never,
     },
 
     addWorkspace: () => {
@@ -180,7 +177,6 @@ const bridge: PreloadBridge = {
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
     browserWindow: { open: (address, hosts) => ipcRenderer.invoke('genie:browser-window-open', address, hosts) as Promise<never> },
     // This machine's disk, one folder at a time, for every picker (Tynn #835).
-    host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, mkdir: (parent, name) => ipcRenderer.invoke('genie:host-mkdir', parent, name) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
     // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
     // P5 retains outgoing channel ownership in main; device memory and Tynn reads/actions use the local client.
     deviceLink: {
