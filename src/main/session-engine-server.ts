@@ -94,6 +94,8 @@ export interface EngineServerOptions {
     readonly workstation?: WorkstationService;
     /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
     readonly deviceLink?: DeviceLinkService;
+    /** Remote access's host side (Tynn #409, P5d.1): driven from a LOCAL window only; a window leaving ends its bridged connections. */
+    readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown; dropOwner(owner: string): void };
     /** A workspace's agent config (P3.4): one writer, here. */
     readonly configSync?: (asked: WorkspaceConfigRequest) => Promise<readonly SyncResult[]>;
     /** The keyring card, as the host found it (P3.4 cut c). */
@@ -376,6 +378,21 @@ export class SessionEngineServer {
         return this.#reverse('client.elevate', [steps], { localOnly: true }) as Promise<ElevationOutcome>;
     }
 
+    /** A remote method genie-host does not own yet, done by the newest LOCAL window (Tynn #409). Rejects with none. */
+    remoteInvoke(method: string, args: unknown[]): Promise<unknown> {
+        return this.#reverse('client.remoteInvoke', [method, args], { localOnly: true });
+    }
+
+    /** The newest local window's connection: the one remote calls go to, and whose events remote connections follow. */
+    newestLocalWindow(): string | null {
+        return [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1)?.id ?? null;
+    }
+
+    /** Remote access's status (to every local window) or a bridged connection's frame (to the window that owns it). */
+    remoteAccessEvent(owner: string | null, event: unknown): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local && (owner === null || conn.id === owner)) this.#event(conn, 'remoteAccess.event', event);
+    }
+
     /** Whether a LOCAL window is connected now: the only kind asked to elevate (P5a.2). */
     localWindowConnected(): boolean {
         return [...this.#connections].some((c) => c.authed && c.window && c.local);
@@ -427,6 +444,7 @@ export class SessionEngineServer {
             if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
+            if (was) this.#options.remoteAccess?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
         });
     }
@@ -538,6 +556,12 @@ export class SessionEngineServer {
             if (!this.#options.crash || !conn.local) throw new Error('This window is not told about crashes here.');
             if (args[0] !== 'dismiss') throw new Error('engine.crash takes dismiss');
             return this.#options.crash.dismiss();
+        }
+        // Remote access is the host's own too (Tynn #409), up before any agent engine: a phone may already be connected.
+        if (method === 'engine.remoteAccess') {
+            if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
+            if (!conn.local) throw new Error('Remote access is driven from a local window only.');
+            return this.#options.remoteAccess.call(conn.id, typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
         }
         // The catalog is the host's own, ready before any agent engine is (ADF A4): answered here.
         if (method === 'catalog.snapshot' || method === 'catalog.docs') {

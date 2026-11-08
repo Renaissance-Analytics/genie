@@ -1657,22 +1657,22 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'remote.issuePin':
             // `replaces`: Re-pair on a device's row — the device that pairs (and is allowed) takes that one's place.
-            services.remote.issuePin(action.replaces ? { replaces: action.replaces } : {});
+            await services.remote.issuePin(action.replaces ? { replaces: action.replaces } : {});
             break;
         case 'remote.answerPair': {
             // Allow or Deny on "Pair this device?", from this machine's own window (a remote connection is refused upstream).
-            const r = services.pairing.answer(action.id, action.allow);
+            const r = await services.pairing.answer(action.id, action.allow);
             if (!r.ok) throw new Error(r.reason);
             break;
         }
         case 'remote.revokeDevice':
-            if (!services.remote.revokeDevice(action.deviceId)) throw new Error(`no device ${action.deviceId}`);
+            if (!(await services.remote.revokeDevice(action.deviceId))) throw new Error(`no device ${action.deviceId}`);
             break;
         case 'remote.lock':
-            services.remote.lock();
+            await services.remote.lock();
             break;
         case 'remote.unlock':
-            services.remote.unlock();
+            await services.remote.unlock();
             break;
         case 'remote.restart':
             await ports.remoteAccess?.restart();

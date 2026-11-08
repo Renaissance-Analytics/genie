@@ -1588,6 +1588,8 @@ async function boot(): Promise<void> {
         mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
         // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
         // raised them; the host never prompts on its own.
+        // A REMOTE METHOD GENIE-HOST DOES NOT OWN YET (Tynn #409): done here, by this window's own host API.
+        onRemoteInvoke: (method: string, args: unknown[]) => (remoteApiNow ? remoteApiNow.invoke(method as Parameters<ReturnType<typeof buildHostApi>['invoke']>[0], args) : Promise.reject(new Error('Genie’s window is still starting; try again in a moment.'))),
         elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
         // Which php-cgi a site's pin runs, for the hosting replica's synchronous check: the same toolchain as the host's.
         phpCgiFor: (pin: string | undefined) => resolvePhpCgi(pin, phpCgiBase()),
@@ -2711,7 +2713,13 @@ async function boot(): Promise<void> {
     let requestFeaturePush = (): void => {};
     const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
-    const remoteSocket = remoteListener({
+    /*
+     * REMOTE ACCESS IS GENIE-HOST'S (Tynn #409, host split P5d.1): with genie-host linked, IT listens on the tailnet, pairs,
+     * and holds the baton and the lock; this window starts no listener, opens no device store, and drives it through the
+     * replica. Its own remote host then serves its protocol door only. The emergency path (no genie-host) keeps all of it here.
+     */
+    const linkedRemote = agentEngineLink ? agentEngineLink.client.remoteAccess() : null;
+    const remoteSocket = linkedRemote ? null : remoteListener({
         tailscale: () => execFileText(resolveProgram('tailscale'), ['status', '--json']),
         port: REMOTE_PORT,
         attach: attachWebSocketServer,
@@ -2738,7 +2746,7 @@ async function boot(): Promise<void> {
         },
     });
     remoteSocketNow = remoteSocket;
-    const remoteHub = transportHub(remoteSocket.transport);
+    const remoteHub = transportHub(remoteSocket?.transport ?? { onConnection: () => () => {} });
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
@@ -2919,7 +2927,8 @@ async function boot(): Promise<void> {
          * The common API for remote connections and migrated local families (§6.8, P4).
          * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
          */
-        remoteApi: buildHostApi({
+        ...(linkedRemote ? { remoteAccess: linkedRemote } : {}),
+        remoteApi: (remoteApiNow = buildHostApi({
             localTerminals: createNativeTerminalPort({
                 terminals: () => terminals,
                 workspaces: () => registry?.snapshot().workspaces ?? [],
@@ -3116,9 +3125,15 @@ async function boot(): Promise<void> {
                       onChange: (cb) => updates!.onChange(cb),
                   }
                 : null,
-        }),
+        })),
     });
     services = composed;
+    // Genie-host's remote connections follow this window's events (the snapshot, features…) while it is the newest window.
+    if (linkedRemote && remoteApiNow) {
+        const api = remoteApiNow;
+        linkedRemote.forwardEvents((listener) => api.onEvent(listener));
+        void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
+    }
     // What an emergency agent's launch was waiting for: its workspace's verdict (genie#1519). Until now nothing is trusted.
     composedNow = composed;
     servicesComposed(composed);
@@ -3315,7 +3330,8 @@ async function boot(): Promise<void> {
             workstationId: identity.workstationId,
             fingerprint: identity.fingerprint,
             sign: (data) => machineIdentity.sign(registered.host, data),
-            attach: (transport) => remoteHub.add(transport),
+            // Linked: each relay connection it admits is bridged into genie-host's remote host (one baton, one lock; Tynn #409).
+            attach: (transport) => (linkedRemote ? linkedRemote.bridge(transport) : remoteHub.add(transport)),
             onStatus: (status) => { relayStatusNow = status; pushFeatures(); },
             log: (message) => console.log(`[tynn relay] ${message}`),
             // The owner's windows on other workstations browse this one's `.gen` sites through its own front door.
@@ -3643,7 +3659,9 @@ async function boot(): Promise<void> {
     // Listening (or the reason not) reaches Settings → Workstation as soon as it is known.
     // OFF BY DEFAULT (Tynn #820; the owner, 2026-10-19): the listener runs only while `remote_access` is on — applied now and
     // whenever the setting changes (feature-ipc's settings.set). Listening, or why not, reaches Settings as soon as known.
-    remoteAccessNow = remoteAccess({ listener: remoteSocket, enabled: () => composed.settings.get('remote_access') === true, onChange: () => { relayAfterSwitch?.(); pushFeatures(); } });
+    remoteAccessNow = linkedRemote
+        ? { apply: () => linkedRemote.apply(), restart: () => linkedRemote.restart() }
+        : remoteAccess({ listener: remoteSocket!, enabled: () => composed.settings.get('remote_access') === true, onChange: () => { relayAfterSwitch?.(); pushFeatures(); } });
     void remoteAccessNow.apply().catch((error: unknown) => { console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`); pushFeatures(); });
     // The Deck's signal strip, MEASURED (§4.5): flows in flight, mail agents have not collected, GitHub blocking (what the GitHub
     // sign-in read from GitHub), the OS agent working.
@@ -4368,6 +4386,8 @@ function recordShutdownNow(): Promise<unknown> {
 }
 
 let remoteSocketNow: ReturnType<typeof remoteListener> | null = null;
+/** This window's host API (§6.8, P4), for what genie-host asks it to do for a remote connection (Tynn #409). */
+let remoteApiNow: ReturnType<typeof buildHostApi> | null = null;
 let remoteAccessNow: ReturnType<typeof remoteAccess> | null = null;
 /** Tailscale on this machine as last read (Tynn #821): at boot and after every Connect or Install. */
 let tailscaleNow: TailscaleStatus | null = null;
