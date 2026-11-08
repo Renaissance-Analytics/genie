@@ -95,6 +95,7 @@ import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedg
 import { AgentStoresService } from './agent-stores-host.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
+import { attentionLimitsFrom } from './attention-store.js';
 import { startHostMcp, type HostMcp } from './host-mcp.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -247,9 +248,10 @@ async function main(): Promise<void> {
      */
     // AgentInbox's automatic reply to a paused recipient (genie#1515) reads this host's live sessions: bound once they exist.
     let sessionsForInbox: SessionHost | null = null;
-    const own = await openAgentStores(home, () => new Date().toISOString(), (id) => sessionsForInbox?.probe(id) ?? null);
     // THE SETTINGS AND THE CHAT DRAFTS (P3.2): one file each, one writer — this host. Every window a replica; hot-swap kept.
+    // Opened before the stores: attention keeps as much finished history as they say (Tynn #549).
     const settings = await SettingsStore.open(home);
+    const own = await openAgentStores(home, () => new Date().toISOString(), (id) => sessionsForInbox?.probe(id) ?? null, () => attentionLimitsFrom(settings.snapshot()));
     const drafts = await ChatDraftStore.open(home);
     // THE REGISTRY'S FILES (P3.2): this host writes them (windows through it) and reads them for its own tools and approvals.
     const registryStore = new Store(home);

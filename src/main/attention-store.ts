@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, rename } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
     addToList,
     questionKey,
@@ -193,8 +193,64 @@ export interface AskedRecord {
 /** How many decided questions are kept (oldest go first): a year of heavy use, a few hundred kB. */
 export const ASKED_KEPT = 2_000;
 
-/** What attention keeps (its file), and what genie-host sends the window's replica whole (P3.1: it is bounded). */
+/** What attention keeps (its files), and what genie-host sends the window's replica whole (P3.1: it is bounded). */
 export type AttentionData = AttentionFile;
+
+/**
+ * HOW MUCH FINISHED HISTORY IS KEPT (Tynn #549; settings `finished_kept_per_agent`, `finished_seen_days`, `handoff_kept_kb`).
+ * The owner's history on 2026-11-08 was 713 handoffs, 8.1 MB, rewritten whole on every question asked. An unseen handoff
+ * is always kept; a seen one goes past the agent's newest `keptPerAgent` or `seenDays` old; a handoff's text is kept up to
+ * `handoffKb` (the whole text is the agent's handoff file, `.ai/handoff/<agent>.md`).
+ */
+export interface AttentionLimits {
+    readonly keptPerAgent: number;
+    readonly seenDays: number;
+    readonly handoffKb: number;
+}
+export const DEFAULT_ATTENTION_LIMITS: AttentionLimits = { keptPerAgent: 20, seenDays: 14, handoffKb: 8 };
+
+/** The limits from the settings' values (strings, as their enums are); a missing or odd value is its default. */
+export function attentionLimitsFrom(values: Readonly<Record<string, unknown>>): AttentionLimits {
+    const num = (key: string, fallback: number): number => {
+        const n = Number(values[key]);
+        return Number.isFinite(n) && n > 0 ? n : fallback;
+    };
+    return {
+        keptPerAgent: num('finished_kept_per_agent', DEFAULT_ATTENTION_LIMITS.keptPerAgent),
+        seenDays: num('finished_seen_days', DEFAULT_ATTENTION_LIMITS.seenDays),
+        handoffKb: num('handoff_kept_kb', DEFAULT_ATTENTION_LIMITS.handoffKb),
+    };
+}
+
+/** A handoff's text kept up to `kb`; a longer one is cut on a character and says where the whole text is. */
+export function cutHandoff(text: string | null, kb: number): string | null {
+    if (text === null) return null;
+    const cap = Math.floor(kb * 1024);
+    if (Buffer.byteLength(text, 'utf8') <= cap) return text;
+    const kept = Buffer.from(text, 'utf8').subarray(0, cap).toString('utf8').replace(/\uFFFD+$/, '');
+    return `${kept}\n… (cut at ${kb} KB; the whole handoff is in the agent's handoff file)`;
+}
+
+/** The finished history within the limits: unseen always kept; a seen one only among its agent's newest, and not too old. */
+export function boundFinished(finished: readonly Finished[], limits: AttentionLimits, nowMs: number): Finished[] {
+    const rank = new Map<string, number>();
+    const perAgent = new Map<string, number>();
+    for (let i = finished.length - 1; i >= 0; i -= 1) {
+        const f = finished[i]!;
+        const n = perAgent.get(f.agentId) ?? 0;
+        rank.set(f.id, n);
+        perAgent.set(f.agentId, n + 1);
+    }
+    const maxAge = limits.seenDays * 86_400_000;
+    const kept: Finished[] = [];
+    for (const f of finished) {
+        const keep = !f.seen || ((rank.get(f.id) ?? 0) < limits.keptPerAgent && nowMs - Date.parse(f.at) <= maxAge);
+        if (!keep) continue;
+        const handoff = cutHandoff(f.handoff, limits.handoffKb);
+        kept.push(handoff === f.handoff ? f : { ...f, handoff });
+    }
+    return kept;
+}
 
 interface AttentionFile {
     lists: ListRecord[];
@@ -210,7 +266,13 @@ export type ListAddResult =
     | { kind: 'question'; reason: string };
 
 export class AttentionStore {
+    /** Questions and lists: what a question asked rewrites (Tynn #549: kilobytes, not the history's megabytes). */
     readonly #file: string;
+    /** The history — finished handoffs and decided questions — written only when it changes. */
+    readonly #historyFile: string;
+    /** What each file last held, by part: a part that is the same array did not change (every change makes a new one). */
+    #written: Partial<Record<keyof AttentionFile, unknown>> = {};
+    #limits: () => AttentionLimits = () => DEFAULT_ATTENTION_LIMITS;
     readonly #inbox: InboxStore;
     readonly #now: () => string;
     #data: AttentionFile;
@@ -229,6 +291,7 @@ export class AttentionStore {
 
     private constructor(file: string, inbox: InboxStore, data: AttentionFile, now: () => string) {
         this.#file = file;
+        this.#historyFile = join(dirname(file), 'attention-history.json');
         this.#inbox = inbox;
         this.#data = data;
         this.#now = now;
@@ -255,23 +318,56 @@ export class AttentionStore {
         };
     }
 
-    static async open(userData: string, inbox: InboxStore, now: () => string = () => new Date().toISOString()): Promise<AttentionStore> {
+    static async open(userData: string, inbox: InboxStore, now: () => string = () => new Date().toISOString(), limits?: () => AttentionLimits): Promise<AttentionStore> {
         const file = join(runtimeDir(userData), 'attention.json');
-        const data = await readJson<AttentionFile>(file, { lists: [], questions: [], finished: [] });
-        return new AttentionStore(file, inbox, data, now);
+        const main = await readJson<Partial<AttentionFile>>(file, {});
+        // The history file, once there, is the history; an older Genie's single file still holds it until the first write here.
+        const history = await readJson<Partial<Pick<AttentionFile, 'finished' | 'asked'>> | null>(join(dirname(file), 'attention-history.json'), null);
+        const data: AttentionFile = {
+            lists: main.lists ?? [],
+            questions: main.questions ?? [],
+            finished: history?.finished ?? main.finished ?? [],
+            asked: history?.asked ?? main.asked ?? [],
+        };
+        const store = new AttentionStore(file, inbox, data, now);
+        // The owner's limits BEFORE the first bound: a default must never drop what a larger setting keeps.
+        if (limits) store.useLimits(limits);
+        await store.#bound(history === null || main.finished !== undefined || main.asked !== undefined);
+        return store;
+    }
+
+    /**
+     * The limits, read at each bound (genie-host hands in its settings: `finished_kept_per_agent`, `finished_seen_days`,
+     * `handoff_kept_kb`). A changed setting is what the next handoff, or the next open, keeps.
+     */
+    useLimits(limits: () => AttentionLimits): void {
+        this.#limits = limits;
+    }
+
+    /** The finished history within the limits; written (both files) when it changed, or when `rewrite` (a split to make). */
+    async #bound(rewrite = false): Promise<void> {
+        const bounded = boundFinished(this.#data.finished, this.#limits(), Date.parse(this.#now()));
+        const changed = bounded.length !== this.#data.finished.length || bounded.some((f, i) => f !== this.#data.finished[i]);
+        if (changed) this.#data.finished = bounded;
+        if (changed || rewrite) {
+            this.#written = {};
+            await this.#write();
+        } else {
+            this.#written = { lists: this.#data.lists, questions: this.#data.questions, finished: this.#data.finished, asked: this.#data.asked };
+        }
     }
 
     async imDone(input: ImDoneInput): Promise<ImDoneResult> {
         const handoff = await this.#saveHandoff(input);
-        // A NEW array, never a push (Tynn #546): genie-host sends a window only the parts whose array changed.
-        this.#data.finished = [...this.#data.finished, {
+        // A new array, never a push in place: a part that is the same array did not change (#flush writes what did).
+        this.#data.finished = boundFinished([...this.#data.finished, {
             id: `fin_${randomUUID()}`,
             agentId: input.agentId,
             agentName: input.agentName,
             handoff: input.handoff ?? null,
             at: this.#now(),
             seen: false,
-        }];
+        }], this.#limits(), Date.parse(this.#now()));
         await this.#flush();
 
         const checklist = this.#data.lists
@@ -300,7 +396,8 @@ export class AttentionStore {
     }
 
     markSeen(id: string): void {
-        this.#data.finished = this.#data.finished.map((f) => (f.id === id ? { ...f, seen: true } : f));
+        const seen = this.#data.finished.map((f) => (f.id === id ? { ...f, seen: true } : f));
+        this.#data.finished = boundFinished(seen, this.#limits(), Date.parse(this.#now()));
         reportFlush(this.#flush(), 'the attention store');
     }
 
@@ -550,11 +647,25 @@ export class AttentionStore {
     }
 
     async #flush(): Promise<void> {
-        await writeJsonAtomic(this.#file, this.#data);
+        await this.#write();
         // Every change lands here, so here is where it is announced: the Deck reads questions, the person's list and
         // finished agents from this store, and a Deck that is not told shows nothing (the owner, 2026-10-14: "I have not
         // seen FTQ modals pop up at all").
         for (const listener of this.#changeListeners) listener();
+    }
+
+    /**
+     * Each file only when a part of it changed (Tynn #549): a question asked writes `attention.json` (questions and lists,
+     * kilobytes); a handoff or a decided question writes `attention-history.json`. The history first, so a crash between
+     * the two leaves the history whole and the older single file's copy of it unread.
+     */
+    async #write(): Promise<void> {
+        const d = this.#data;
+        const historyChanged = this.#written.finished !== d.finished || this.#written.asked !== d.asked;
+        const mainChanged = this.#written.lists !== d.lists || this.#written.questions !== d.questions || historyChanged && this.#written.finished === undefined;
+        if (historyChanged) await writeJsonAtomic(this.#historyFile, { finished: d.finished, asked: d.asked ?? [] });
+        if (mainChanged) await writeJsonAtomic(this.#file, { lists: d.lists, questions: d.questions });
+        this.#written = { lists: d.lists, questions: d.questions, finished: d.finished, asked: d.asked };
     }
 
     readonly #changeListeners = new Set<() => void>();
