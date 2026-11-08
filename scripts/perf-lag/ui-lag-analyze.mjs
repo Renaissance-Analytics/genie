@@ -210,7 +210,7 @@ export function sliceVerdict({ on, off }, { p95SlackMs = 10, maxFrameGapMs = 100
  * re-attaches it with a short snapshot, under the cap again. The median input acknowledged past the cap at least
  * `minRatio` of below it, and the median worst frame gap past it within `maxFrameGapMs`.
  */
-export function capVerdict({ below, past }, { minRatio = 0.9, maxFrameGapMs = 100, minSlices = 3 } = {}) {
+export function capVerdict({ below, past }, { minRatio = 0.9, maxFrameGapMs = 100, maxScriptOverMsPerS = 50, minSlices = 3 } = {}) {
     const reasons = [], r2 = (v) => (v === null ? null : Math.round(v * 100) / 100);
     const belowCount = median(below.map((x) => x.count)), pastCount = median(past.map((x) => x.count)), pastGap = median(past.map((x) => x.worstGapMs));
     const ratio = belowCount ? pastCount / belowCount : null;
@@ -218,8 +218,15 @@ export function capVerdict({ below, past }, { minRatio = 0.9, maxFrameGapMs = 10
     else {
         if (ratio === null || ratio < minRatio) reasons.push(`mouse events acknowledged past the output cap: ${r2(ratio)} of the slices below it (bound ${minRatio}; past ${pastCount}, below ${belowCount})`);
         if (pastGap > maxFrameGapMs) reasons.push(`worst frame gap past the output cap, median of ${past.length} slices: ${pastGap} ms (bound ${maxFrameGapMs})`);
+        // THE PAGE'S SCRIPT TIME (run 0d892cff): xterm parses a rewrite in slices of its own, so input can keep up while the
+        // page burns its thread. Past the cap within `maxScriptOverMsPerS` (ms of script per second) of below it.
+        if (![...below, ...past].every((x) => Number.isFinite(x.scriptMsPerS))) reasons.push('page script time not measured in every slice');
+        else {
+            const pastScript = median(past.map((x) => x.scriptMsPerS)), belowScript = median(below.map((x) => x.scriptMsPerS));
+            if (pastScript - belowScript > maxScriptOverMsPerS) reasons.push(`page script time past the output cap: ${Math.round(pastScript - belowScript)} ms per second over below it, median (bound ${maxScriptOverMsPerS}; past ${pastScript}, below ${belowScript})`);
+        }
     }
-    return { ok: reasons.length === 0, minRatio, maxFrameGapMs, ratio: r2(ratio), belowCount, pastCount, pastWorstGapMs: pastGap, reasons };
+    return { ok: reasons.length === 0, minRatio, maxFrameGapMs, maxScriptOverMsPerS, ratio: r2(ratio), belowCount, pastCount, pastWorstGapMs: pastGap, pastScriptMsPerS: median(past.map((x) => x.scriptMsPerS)), belowScriptMsPerS: median(below.map((x) => x.scriptMsPerS)), reasons };
 }
 
 export function throughputVerdict({ on, off }, { minRatio = 0.9, minSlices = 3 } = {}) {

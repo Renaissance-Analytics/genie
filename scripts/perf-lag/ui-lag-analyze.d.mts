@@ -45,8 +45,9 @@ export function sliceVerdict(input: { on: Slice[]; off: Slice[] }, options?: { p
     ok: boolean; p95SlackMs: number; maxFrameGapMs: number; pairs: number; diffP95: number | null; diffs: Array<number | null>; onP95: number | null; offP95: number | null; onWorstGapMs: number | null; reasons: string[];
 };
 export function retryOnTimeout<T>(run: (attempt: number) => T, options?: { attempts?: number; reset?: (attempt: number) => void }): { value: T; tries: Array<{ attempt: number; ms: number; ok: boolean; timedOut?: boolean }> };
-export function capVerdict(input: { below: Slice[]; past: Slice[] }, options?: { minRatio?: number; maxFrameGapMs?: number; minSlices?: number }): {
-    ok: boolean; minRatio: number; maxFrameGapMs: number; ratio: number | null; belowCount: number | null; pastCount: number | null; pastWorstGapMs: number | null; reasons: string[];
+export function capVerdict(input: { below: Array<Slice & { scriptMsPerS?: number }>; past: Array<Slice & { scriptMsPerS?: number }> }, options?: { minRatio?: number; maxFrameGapMs?: number; maxScriptOverMsPerS?: number; minSlices?: number }): {
+    ok: boolean; minRatio: number; maxFrameGapMs: number; maxScriptOverMsPerS: number; ratio: number | null; belowCount: number | null; pastCount: number | null; pastWorstGapMs: number | null;
+    pastScriptMsPerS: number | null; belowScriptMsPerS: number | null; reasons: string[];
 };
 export function throughputVerdict(input: { on: Slice[]; off: Slice[] }, options?: { minRatio?: number; minSlices?: number }): {
     ok: boolean; minRatio: number; pairs: number; ratio: number | null; ratios: Array<number | null>; reasons: string[];

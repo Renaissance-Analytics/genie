@@ -38,6 +38,8 @@ const FLOOD_BYTES = 2_500_000, PAST_SLICES = 6, PAST_STREAM_MS = PAST_SLICES * (
 // One pair traced in the profiled pass (Tynn #537): what every thread of the window did, terminal on against off.
 const TRACE_PAIR = 4, TRACE_CATEGORIES = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'blink', 'cc', 'gpu', 'viz', 'benchmark', 'renderer.scheduler', 'v8.execute'];
 const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, HOST_BUDGET_MS = 100, IDLE_MS = 6000, BUILD_MS = 52000, CONTROL_MS = 120;
+/** The page's script time so far, in ms (Chromium's own ScriptDuration); NaN when it cannot be read. */
+const scriptMs = async (c) => { try { const m = await c.request('Performance.getMetrics', {}); const v = m.metrics.find((x) => x.name === 'ScriptDuration')?.value; return typeof v === 'number' ? v * 1000 : NaN; } catch { return NaN; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
 const json = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
@@ -268,6 +270,8 @@ try {
     const target = await until('owned app page', async () => { hostRecord ??= json(join(runtime, 'host.json')); return (await targets(PORT)).find((t) => t.type === 'page' && /index\.html/.test(t.url)); }, 240000);
     page = await Cdp.connect(target.webSocketDebuggerUrl);
     await waitForPageProbe(page);
+    // The page's script time, cumulative (Tynn #542): read around each slice, so a slice says how busy the page was.
+    await page.request('Performance.enable', {});
     await until('ready page connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 60000);
     hostRecord ??= json(join(runtime, 'host.json'));
     hostCdp = await Cdp.connect((await until('owned genie-host inspector', async () => (await targets(HOST_INSPECT))[0], 30000)).webSocketDebuggerUrl);
@@ -373,16 +377,17 @@ try {
                 await sleep(SETTLE_MS);
                 await focusField();
                 const slice = async () => {
-                    const from = await page.evaluate('performance.now()');
+                    const script0 = await scriptMs(page), from = await page.evaluate('performance.now()');
                     const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
-                    return { d, from, to: await page.evaluate('performance.now()') };
+                    const to = await page.evaluate('performance.now()');
+                    return { d, from, to, scriptMs: (await scriptMs(page)) - script0 };
                 };
                 let s, trace = null;
                 if (profiled && k === TRACE_PAIR) { const t = await traced(slice); s = t.value; trace = t.events; } else s = await slice();
                 mouse.push(...s.d.mouse); keys.push(...s.d.keys);
                 if (profiled && k === TRACE_PAIR) console.log(`UI_LAG_COMPOSITED ${cond} ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
                 if (trace?.length) { writeFileSync(join(OUT, `ui-lag-trace-${cond}.json`), JSON.stringify({ traceEvents: trace })); traces[cond] = traceSummary(trace); }
-                slices.push({ cond, from: s.from, to: s.to });
+                slices.push({ cond, from: s.from, to: s.to, scriptMs: s.scriptMs });
             }
         }
         await show(termTab);
@@ -415,10 +420,11 @@ try {
         for (let k = 0; k < PAST_SLICES; k += 1) {
             await sleep(SETTLE_MS);
             await focusField();
-            const from = await page.evaluate('performance.now()');
+            const script0 = await scriptMs(page), from = await page.evaluate('performance.now()');
             const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
             pastMouse.push(...d.mouse); pastKeys.push(...d.keys);
-            pastSlices.push({ cond: 'past', from, to: await page.evaluate('performance.now()') });
+            const to = await page.evaluate('performance.now()');
+            pastSlices.push({ cond: 'past', from, to, scriptMs: (await scriptMs(page)) - script0 });
         }
         await noDialog(`after the ${label} pass's slices past the output cap`);
         phases.push({ ...p, end: await mark('terminal-past-cap-end'), input: { mouse: pastMouse, keys: pastKeys }, slices: pastSlices, flooded });
@@ -471,7 +477,7 @@ try {
                     const own = pass.pageState.inputs.filter((x) => x.kind === 'mouse' && x.at >= sl.from && x.at <= sl.to).map((x) => x.frameMs);
                     const gaps = pass.pageState.frames.filter((g) => g.endedMs >= sl.from && g.startedMs <= sl.to).map((g) => g.ms);
                     const frames = pass.pageState.frameTimes.filter((t) => t >= sl.from && t <= sl.to).length;
-                    return { cond: sl.cond, count: own.length, p95: summarize(own).p95, worstGapMs: Math.round(Math.max(0, ...gaps)), fps: Math.round(frames / ((sl.to - sl.from) / 1000)) };
+                    return { cond: sl.cond, count: own.length, p95: summarize(own).p95, worstGapMs: Math.round(Math.max(0, ...gaps)), fps: Math.round(frames / ((sl.to - sl.from) / 1000)), ...(Number.isFinite(sl.scriptMs) ? { scriptMsPerS: Math.round(sl.scriptMs / ((sl.to - sl.from) / 1000)) } : {}) };
                 }) } : {}),
                 filesPushes: { count: files.length, bytes: files.reduce((a, [, n]) => a + n, 0), maxBytes: Math.max(0, ...files.map(([, n]) => n)), sizes: files.map(([, n]) => n) },
                 calls,
@@ -578,7 +584,7 @@ finally {
     // What a person reads in the log: each phase's numbers, then what each of the worst gaps was.
     for (const p of out.passes) for (const r of p.rows ?? []) {
         console.log(`UI_LAG ${p.label}/${r.phase} ${r.ms}ms | main worst=${r.main.worstMs} over50=${r.main.over50} | page worst=${r.page.worstMs} longtasks=${r.page.longtasks.count}/${r.page.longtasks.totalMs}ms frames-worst=${Math.round(r.page.frameGaps[0]?.ms ?? 0)} | mouse rtt p95=${r.input.mouseRtt.p95} max=${r.input.mouseRtt.max} to-frame p95=${r.input.mouseToFrame.p95} | key rtt p95=${r.input.keyRtt.p95} to-frame p95=${r.input.keyToFrame.p95} | host worst=${r.host.worstMs} over50=${r.host.over50} spawns=${r.host.spawns.count} ${JSON.stringify(r.host.spawns.by)} | files pushes=${r.filesPushes.count} ${r.filesPushes.bytes}B max=${r.filesPushes.maxBytes}B | calls=${JSON.stringify(r.calls)}`);
-        if (r.slices) console.log(`UI_LAG_SLICES ${p.label}/${r.phase} ${JSON.stringify(r.slices.map((x) => [x.cond, x.count, x.p95, x.worstGapMs, x.fps]))}`);
+        if (r.slices) console.log(`UI_LAG_SLICES ${p.label}/${r.phase} ${JSON.stringify(r.slices.map((x) => [x.cond, x.count, x.p95, x.worstGapMs, x.fps, x.scriptMsPerS ?? null]))}`);
         for (const [cond, t] of Object.entries(r.traces ?? {})) console.log(`UI_LAG_TRACE ${cond} ${JSON.stringify(t)}`.slice(0, 4000));
         if (r.sliceProfiles) {
             console.log(`UI_LAG_SLICE_PROFILE on ${JSON.stringify(r.sliceProfiles.on)}`.slice(0, 3000));
