@@ -102,6 +102,8 @@ import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { startHostMcp, type HostMcp } from './host-mcp.js';
 import { hostPluginTools, PluginsService } from './plugins-host.js';
+import { CatalogService } from './catalog-host.js';
+import { hostCatalog } from './genie-catalog.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -674,6 +676,12 @@ async function main(): Promise<void> {
      * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
      */
     const pluginsService = await PluginsService.open({ dir: join(home, 'plugins'), keys: PUBLISHER_KEYS, developerMode: () => settings.snapshot().developer_mode === true });
+    /*
+     * THE CATALOG (ADF A4, Tynn #448): Genie's own elements and every ENABLED installed plugin's, revisioned. Built again
+     * whenever the plugins change; every window follows it over the engine connection (catalog.snapshot, catalog.changed).
+     */
+    const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins()));
+    pluginsService.onEvent(() => catalogService.rebuild());
     const engine = new SessionEngineServer({
         token,
         build,
@@ -701,6 +709,7 @@ async function main(): Promise<void> {
         appInbox: appInboxDoor,
         processes: processesService,
         plugins: pluginsService,
+        catalog: catalogService,
         flows: flowsService,
         browser: browserService,
         updates: updatesService,
