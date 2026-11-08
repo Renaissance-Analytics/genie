@@ -34,6 +34,8 @@ import { McpPreparationError } from './mcp-preparation-error.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import type { PluginsApi } from './plugins-replica.js';
 import { LocalPlugins } from './plugins-host.js';
+import { hostCatalog } from './genie-catalog.js';
+import type { ElementDefinition } from '../core/catalog.js';
 import { PluginHost } from './plugin-host.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
@@ -138,6 +140,8 @@ export interface ComposeInput extends HostingOptions {
     readonly hosting?: HostingApi;
     /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
     readonly plugins?: PluginsApi;
+    /** genie-host's catalog, through this window's replica (ADF A4/A5). Absent = this window builds its own from its plugins. */
+    readonly catalog?: { list(): ElementDefinition[] };
     /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
     readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
     /**
@@ -320,6 +324,11 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly plugins: PluginsApi;
     /** This window's OWN plugins, opened only with no genie-host (the emergency path); `null` when the host owns them. */
     readonly ownPlugins: LocalPlugins | null;
+    /**
+     * Every element the catalog holds now (ADF A5): what the window's editors, panels and flow palette are projected from.
+     * genie-host's through the replica; with no host, this window's own plugins' catalog.
+     */
+    catalogDefinitions(): readonly ElementDefinition[];
     readonly pluginsDir: string;
     /** Re-read the plugins folder (after developer mode flips, or a plugin was dropped in). */
     pluginsRefresh(): Promise<void>;
@@ -683,6 +692,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         },
         plugins,
         ownPlugins,
+        catalogDefinitions: () => (input.catalog ? input.catalog.list() : hostCatalog(ownPlugins ?? { tools: () => [] }).list()),
         pluginsDir,
         pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {

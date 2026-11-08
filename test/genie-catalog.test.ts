@@ -29,12 +29,13 @@ describe('the catalog alone lists today’s MCP tools', () => {
 
     it('the five official plugins are there whole: their editors and panels too, each in its own package', () => {
         const catalog = genieCatalog();
-        expect(catalog.packages().map((p) => p.id)).toEqual(['ai.genie.core', 'ai.genie.document', 'ai.genie.spreadsheet', 'ai.genie.presentation', 'ai.genie.repository', 'ai.genie.artboard']);
+        expect(catalog.packages().map((p) => p.id)).toEqual(['ai.genie.core', 'ai.genie.flows', 'ai.genie.document', 'ai.genie.spreadsheet', 'ai.genie.presentation', 'ai.genie.repository', 'ai.genie.artboard']);
         expect(catalog.list('editor').map((d) => d.id)).toEqual(['ai.genie.document.document', 'ai.genie.spreadsheet.sheet', 'ai.genie.presentation.deck']);
         expect(catalog.list('panel').map((d) => d.id)).toEqual(['ai.genie.repository.changes', 'ai.genie.artboard.board']);
         expect(catalog.get('ai.genie.spreadsheet.sheet')?.payload).toMatchObject({ extensions: ['.xlsx', '.csv', '.ods'], fancyEditor: 'SheetWorkbook' });
         expect(catalog.packages().every((p) => p.source === 'builtin')).toBe(true);
-        expect(catalog.revision).toBe(6);
+        // 7 since ADF A5: Genie's flow steps are their own builtin package (ai.genie.flows).
+        expect(catalog.revision).toBe(7);
     });
 
     it('CONTROL: there are 18 builtin tool declarations and three official plugin tools (18 + 3 = 21)', () => {
