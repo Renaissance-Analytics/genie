@@ -1,5 +1,6 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import { unreadableFile, type MigrationSource, type OldRead } from './keychain-migration.js';
 import type { KeychainRead, KeychainResult, SecretName } from './keychain.js';
@@ -181,7 +182,7 @@ async function saveIdentities(file: string, all: IdentityFile): Promise<void> {
     await mkdir(dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
     await writeFile(tmp, JSON.stringify(all, null, 2), { mode: 0o600 });
-    await rename(tmp, file);
+    await renameOver(tmp, file);
 }
 
 /** Electron's safeStorage, as a port. */

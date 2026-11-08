@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { renameOverSync } from '../core/atomic-rename.js';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { Keychain, KeychainRead, KeychainResult, SecretName } from './keychain.js';
 
@@ -30,7 +31,7 @@ export function deviceTokenStore(file: string, keychain: Pick<Keychain, 'get' | 
         mkdirSync(dirname(file), { recursive: true });
         const fresh = `${file}.tmp`;
         writeFileSync(fresh, JSON.stringify({ hosts }, null, 2), { mode: 0o600 });
-        renameSync(fresh, file);
+        renameOverSync(fresh, file);
     };
     return {
         tokenFor: (url) => keychain.get(nameOf(url)),

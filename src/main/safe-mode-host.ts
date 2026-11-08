@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { rename, rm, writeFile } from 'node:fs/promises';
+import { renameOver, renameOverSync } from '../core/atomic-rename.js';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
     ALIVE_FILE, ALIVE_PREV_FILE, CLEAN_EXIT_FILE, NOT_SAFE, SAFE_MODE_FILE, UNKNOWN_CAUSE,
@@ -154,7 +155,7 @@ export class SafeMode {
         const temp = `${file}.${this.#pid}.${this.#temp}.tmp`;
         try {
             await writeFile(temp, JSON.stringify(value), 'utf8');
-            await rename(temp, file);
+            await renameOver(temp, file);
         } catch (error) {
             await rm(temp, { force: true }).catch(() => {});
             this.#log(`safe mode: ${name} could not be written: ${error instanceof Error ? error.message : String(error)}`);
@@ -179,7 +180,7 @@ export class SafeMode {
         const temp = `${file}.${this.#pid}.tmp`;
         try {
             writeFileSync(temp, JSON.stringify(value), 'utf8');
-            renameSync(temp, file);
+            renameOverSync(temp, file);
         } catch (error) {
             rmSync(temp, { force: true });
             this.#log(`safe mode: ${name} could not be written: ${error instanceof Error ? error.message : String(error)}`);
