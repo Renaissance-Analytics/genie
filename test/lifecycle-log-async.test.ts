@@ -71,7 +71,7 @@ describe('an exit writes every line queued before it', () => {
 });
 
 describe('a host killed outright leaves whole lines, in order', () => {
-    it('killed 12 times while logging without pause: every time, only whole lines, a prefix of what it logged', async () => {
+    it('killed 12 times while logging in fast bursts: every time, only whole lines, a prefix of what it logged', async () => {
         for (let i = 0; i < 12; i += 1) {
             const dir = runtimeDir();
             const child = run(dir, 'stream');
@@ -85,14 +85,18 @@ describe('a host killed outright leaves whole lines, in order', () => {
             const gone = new Promise((r) => child.once('exit', r));
             child.kill('SIGKILL');
             await gone;
+            // The rotated file (past 1 MiB) and the current one, read as one run.
+            const rotated = text(dir, 'lifecycle.log.1');
             const body = text(dir);
-            // Whole lines only: the file ends with a newline, and every line is a stamped, numbered line.
+            // Whole lines only: each file ends with a newline, and every line is a stamped, numbered line.
             expect(body.endsWith('\n'), `kill ${i + 1}: a torn last line`).toBe(true);
-            for (const line of body.split('\n').filter(Boolean)) expect(line).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z seq=\d+ x*$/);
-            const got = seqs(body);
+            for (const line of `${rotated}${body}`.split('\n').filter(Boolean)) expect(line).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z seq=\d+ x*$/);
+            const got = [...seqs(rotated), ...seqs(body)];
             // CONTROL: it got far enough to write lines at all.
             expect(got.length, `kill ${i + 1}: nothing written`).toBeGreaterThan(0);
-            expect(got).toEqual(Array.from({ length: got.length }, (_, n) => n + 1));
+            // In order, none missing: from 1 when nothing rotated away, else a run with no gap.
+            const first = rotated === '' ? 1 : got[0]!;
+            expect(got).toEqual(Array.from({ length: got.length }, (_, n) => first + n));
         }
     }, 180_000);
 });
