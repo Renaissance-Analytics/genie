@@ -183,9 +183,12 @@ describe('the archive: every byte the bound drops or cuts', () => {
         expect(dropped.length).toBeGreaterThan(0);
         expect(cut.length).toBeGreaterThan(0);
         for (const f of [...dropped, ...cut]) expect(archived.get(f.id), f.id).toBe(f.handoff);
-        // CONTROL: one kept whole is not archived.
-        const whole = original.finished.find((f) => kept.get(f.id) === f.handoff)!;
-        expect(archived.has(whole.id)).toBe(false);
+        // CONTROL: a handoff kept whole (every one in this history is over 8 KB, so a new short one) is not archived.
+        await store.imDone({ agentId: agents[0]!, agentName: 'a', workspacePath: null, workspaceId: 'ws', handoff: 'short and whole' });
+        await (store as unknown as { archived(): Promise<void> }).archived();
+        const short = store.finished().at(-1)!;
+        expect(short.handoff).toBe('short and whole');
+        expect((await archiveOf()).some((x) => x.id === short.id)).toBe(false);
     });
 
     it('a handoff over the cap, and a seen one dropped at an imDone, are archived whole before they go', async () => {
