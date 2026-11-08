@@ -15,6 +15,7 @@ A panel in the workspace grid. It mounts one vetted Fancy component, drawn by Ge
 | `fancyComponent` | one of ContentRenderer, JsonEditor, Callout, RepoChangesPanel, ArtBoardPanel | yes | — | The vetted Fancy component the panel mounts. |
 | `title` | string | no | — | The panel's title. |
 | `props` | object | no | `{}` | The component's props, as plain JSON. |
+| `grantable` | boolean | no | `true` | Whether a GApp may be granted it. `false` for what only the person may do: an app that lists it is refused at install. |
 
 ## Example payload
 

@@ -18,6 +18,7 @@ An MCP tool agents call. The host runs it with the handler the payload names; it
 | `annotations` | object | no | — | MCP tool annotations (read-only, destructive…) passed to agents as declared. |
 | `process` | `"worker"` or `"subprocess"` | no | `"worker"` | A plugin tool: where its handler runs, isolated from Genie. |
 | `gated` | boolean | no | `false` | Each call waits for the person's approval first. |
+| `grantable` | boolean | no | `true` | Whether a GApp may be granted it. `false` for what only the person may do: an app that lists it is refused at install. |
 
 ## Example payload
 

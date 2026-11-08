@@ -20,7 +20,7 @@ import { VETTED_FANCY_EXPORTS } from './plugin-panels.js';
 /** The envelope's own version; a client that reads a newer one says it needs a newer Genie. */
 export const CATALOG_SCHEMA_VERSION = 1;
 
-export const ELEMENT_KINDS = ['tool', 'panel', 'editor', 'recipe', 'flow-node', 'host-service', 'page', 'overlay', 'provider', 'service-engine'] as const;
+export const ELEMENT_KINDS = ['tool', 'panel', 'editor', 'recipe', 'flow-node', 'host-service', 'app', 'page', 'overlay', 'provider', 'service-engine'] as const;
 /** Declared by Genie 1, never run there: accepted and documented, executable one story each later (decision 3). */
 export const RESERVED_KINDS = ['flyout', 'modal', 'wizard', 'workstation-page', 'workspace-settings-page'] as const;
 export const ELEMENT_SOURCES = ['builtin', 'plugin', 'gapp'] as const;
@@ -46,7 +46,7 @@ export type ElementSource = (typeof ELEMENT_SOURCES)[number];
  */
 
 /** How a payload field is checked. Each rule's refusal names the field. */
-export const FIELD_RULES = ['nonEmptyString', 'string', 'boolean', 'object', 'objectSchema', 'stringList', 'extensions', 'vettedEditor', 'vettedComponent', 'process', 'steps'] as const;
+export const FIELD_RULES = ['nonEmptyString', 'string', 'boolean', 'object', 'objectSchema', 'stringList', 'extensions', 'vettedEditor', 'vettedComponent', 'process', 'steps', 'packagePath', 'elementIds', 'oneOf'] as const;
 export type FieldRule = (typeof FIELD_RULES)[number];
 
 export interface FieldSpec {
@@ -60,6 +60,8 @@ export interface FieldSpec {
     readonly rule: FieldRule;
     /** The refusal, when the rule's own words are not the clearest for this field. */
     readonly problem?: string;
+    /** Rule `oneOf`: the values it may take. */
+    readonly options?: readonly string[];
 }
 
 export interface KindSpec {
@@ -73,6 +75,11 @@ export interface KindSpec {
      * `reach.side`. `null`: each definition says its own side.
      */
     readonly sides: readonly ElementSide[] | null;
+    /**
+     * A family whose halves talk over a FIXED channel (GApps v2: an `app` talks over the bridge, `APP_BRIDGE`): its
+     * definitions' `reach.link` must be exactly this, no call or event more or fewer. Absent: each definition names its own.
+     */
+    readonly link?: { readonly calls: readonly string[]; readonly events: readonly string[] };
     readonly summary: string;
     readonly fields: readonly FieldSpec[];
     /** A payload that validates, shown in the docs (and checked: test/adf-b7-sdk-docs.test.ts). */
@@ -87,6 +94,23 @@ export interface EnvelopeField {
     readonly default?: unknown;
     readonly description: string;
 }
+
+/**
+ * THE APP BRIDGE (GApps v2, Tynn #566; spec .ai/plans/specs/gapps-v2.md): the only channel between an app's window and
+ * genie-host — what `@genie/app-sdk` wraps. An `app` element's `reach.link` is exactly this.
+ */
+export const APP_BRIDGE = {
+    calls: ['app.me', 'app.call', 'app.storage.get', 'app.storage.set', 'app.storage.delete', 'app.storage.list'],
+    events: ['app.grantChanged', 'app.catalogChanged'],
+} as const;
+
+/**
+ * Fields EVERY element's payload may carry, whatever its kind. `grantable` (GApps v2 decision 3, approved 2026-11-08):
+ * `false` = a GApp may never be granted this element; an app that lists it is refused at install, naming it.
+ */
+export const COMMON_PAYLOAD_FIELDS: readonly FieldSpec[] = [
+    { name: 'grantable', type: 'boolean', required: false, default: true, description: 'Whether a GApp may be granted it. `false` for what only the person may do: an app that lists it is refused at install.', rule: 'boolean' },
+];
 
 const RESERVED_SUMMARY = 'Reserved: accepted and registered, so a package that declares one loads, and nothing runs it yet. A later Genie release makes it run and adds its fields here.';
 
@@ -152,6 +176,17 @@ export const KIND_SPECS: readonly KindSpec[] = [
             { name: 'settingsSection', type: 'string', required: true, description: 'The settings section it owns: its switches live there and nowhere else.', rule: 'nonEmptyString', problem: 'payload.settingsSection must name the settings section it owns' },
         ],
         example: { start: 'com.example.relay.start', stop: 'com.example.relay.stop', health: 'com.example.relay.health', settingsSection: 'relay' },
+    },
+    {
+        kind: 'app', status: 'active', sides: ['both'], link: APP_BRIDGE,
+        summary: 'A GApp: a UI that runs in its own window and talks to Genie only through the host, over the bridge, within what the person granted it. Its window draws it; its grant, storage and calls live in genie-host.',
+        fields: [
+            { name: 'entry', type: 'path inside the package, like `app/index.html`', required: true, description: 'The app\'s first page, one of the package\'s own signed files.', rule: 'packagePath' },
+            { name: 'window', type: '`{ width?, height?, minWidth?, minHeight?, resizable? }`', required: false, default: { width: 1024, height: 720, resizable: true }, description: 'How its window opens.', rule: 'object', problem: 'payload.window must be an object: { width?, height?, minWidth?, minHeight?, resizable? }' },
+            { name: 'uses', type: 'list of element ids', required: false, default: [], description: 'The catalog elements it may call. Each is a grant the person sees at install, by its catalog name.', rule: 'elementIds' },
+            { name: 'storage', type: '`"none"` or `"app"`', required: false, default: 'app', description: 'Whether it keeps data in its own isolated store (50 MB).', rule: 'oneOf', options: ['none', 'app'] },
+        ],
+        example: { entry: 'app/index.html', window: { width: 1024, height: 720 }, uses: ['com.example.notes.append'], storage: 'app' },
     },
     ...(['page', 'overlay', 'provider', 'service-engine'] as const).map((kind): KindSpec => ({
         kind, status: 'active', sides: null,
@@ -281,7 +316,17 @@ function fieldProblem(f: FieldSpec, v: unknown): string | null {
             return v.every((x) => EXTENSION.test(x)) ? null : `${at}: a dot, then letters or digits, like ".md"`;
         case 'vettedEditor': return oneOf(VETTED_FANCY_EDITORS, v) ? null : `${at} "${String(v)}" is not a vetted Fancy editor (one of ${VETTED_FANCY_EDITORS.join(', ')})`;
         case 'vettedComponent': return oneOf(VETTED_FANCY_EXPORTS, v) ? null : `${at} "${String(v)}" is not a vetted Fancy component (one of ${VETTED_FANCY_EXPORTS.join(', ')})`;
+        case 'packagePath': return packagePathOk(v) ? null : say(`${at} must be a plain path inside the package, like "app/index.html": no leading "/", no "..", no "\\", no drive`);
+        case 'elementIds': return isStringList(v) && v.every((x) => ELEMENT_ID.test(x)) ? null : say(`${at} must be a list of element ids, like "com.example.notes.append"`);
+        case 'oneOf': return typeof v === 'string' && (f.options ?? []).includes(v) ? null : say(`${at} must be ${(f.options ?? []).map((o) => `"${o}"`).join(' or ')}`);
     }
+}
+
+/** A plain path inside a package: `/` between non-empty segments, none `.` or `..`, no `\`, no drive, no control character. */
+function packagePathOk(v: unknown): boolean {
+    if (typeof v !== 'string' || v.length === 0) return false;
+    if (/[\u0000-\u001f\u007f\\]/.test(v) || /^[A-Za-z]:/.test(v)) return false;
+    return v.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
 /** The kind's payload, checked field by field against its schema (KIND_SPECS). A family with no fields needs only an object. */
@@ -289,7 +334,7 @@ function payloadProblems(kind: CatalogKind, payload: Record<string, unknown>): s
     const spec = KIND_SPECS.find((k) => k.kind === kind);
     if (!spec) return [];
     const out: string[] = [];
-    for (const f of spec.fields) {
+    for (const f of [...spec.fields, ...COMMON_PAYLOAD_FIELDS]) {
         const v = payload[f.name];
         if (v === undefined && !f.required) continue;
         const problem = fieldProblem(f, v);
@@ -338,6 +383,18 @@ export function validateDefinition(raw: unknown): DefinitionCheck {
                 problems.push(...unknownKeys(r.link, LINK_KEYS, `${where} reach.link`));
                 if (!isStringList(r.link.calls) || !isStringList(r.link.events)) say('reach.link.calls and reach.link.events must be lists of names');
                 else if (r.link.calls.length + r.link.events.length === 0) say('reach.link must name at least one call or event: an element on both sides talks across');
+                else {
+                    // A family with a FIXED channel (an app's bridge): exactly it, nothing more, nothing left out.
+                    const fixed = KIND_SPECS.find((k) => k.kind === raw.kind)?.link;
+                    if (fixed) {
+                        const named = [...r.link.calls, ...r.link.events];
+                        const bridge = [...fixed.calls, ...fixed.events];
+                        const list = `${fixed.calls.join(', ')}; events ${fixed.events.join(', ')}`;
+                        for (const n of r.link.calls) if (!fixed.calls.includes(n)) say(`reach.link "${n}" is not in the ${String(raw.kind)} bridge (calls ${list})`);
+                        for (const n of r.link.events) if (!fixed.events.includes(n)) say(`reach.link "${n}" is not in the ${String(raw.kind)} bridge (calls ${list})`);
+                        for (const n of bridge) if (!named.includes(n)) say(`reach.link misses "${n}": a ${String(raw.kind)}'s link is exactly its bridge`);
+                    }
+                }
             }
         } else if (r.link !== undefined) say('reach.link is for an element on both sides; one side alone has no link');
         if (typeof r.requiresWindow !== 'boolean') say('reach.requiresWindow must be true or false');

@@ -144,8 +144,11 @@ describe('the wiring these steps stand for', () => {
     const app = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
 
+    // The expression moved, unchanged, into window-address.ts `routeFor` (Tynn #529 part A, pair run check 3): App calls it.
     it('App.tsx resolves its hash with exactly the expression windowRoute() mirrors, and renders FlowEditorWindow for `flow`', () => {
-        expect(app).toMatch(/const route = addressContext\s*\?\s*routeOfAddress\(address, addressContext\) \?\? DEFAULT_ROUTE\s*:\s*isInternalRoute\(address\) \? address : DEFAULT_ROUTE;/);
+        expect(app).toMatch(/const route = routeFor\(address, addressContext\);/);
+        const helper = readFileSync(new URL('../src/renderer/window-address.ts', import.meta.url), 'utf8');
+        expect(helper).toMatch(/return ctx \? routeOfAddress\(address, ctx\) \?\? DEFAULT_ROUTE : isInternalRoute\(address\) \? address : DEFAULT_ROUTE;/);
         expect(app).toMatch(/if \(parsed\.surface === 'flow'\) \{\s*return \(\s*<FlowEditorWindow/);
     });
 

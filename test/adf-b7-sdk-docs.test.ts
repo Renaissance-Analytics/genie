@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ELEMENT_KINDS, ENVELOPE_FIELDS, KIND_SPECS, RESERVED_KINDS, validateDefinition, type KindSpec } from '../src/core/catalog.js';
+import { APP_BRIDGE, ELEMENT_KINDS, ENVELOPE_FIELDS, KIND_SPECS, RESERVED_KINDS, validateDefinition, type KindSpec } from '../src/core/catalog.js';
 import { renderSdkDocs } from '../src/core/sdk-docs.js';
 
 /**
@@ -31,8 +31,10 @@ const envelope = (spec: KindSpec) => ({
     id: `com.example.docs.${spec.kind.replace(/-/g, '_')}`, kind: spec.kind, version: '1.0.0', packageId: 'com.example.docs', source: 'plugin',
     docs: { name: spec.kind, description: `An example ${spec.kind}.` },
     reach: {
-        scopes: ['workspace'], side: (spec.kind === 'panel' ? 'client' : spec.kind === 'editor' ? 'both' : 'host') as string, requiresWindow: false, remote: 'local',
+        scopes: ['workspace'], side: (spec.kind === 'panel' ? 'client' : spec.kind === 'editor' || spec.kind === 'app' ? 'both' : 'host') as string, requiresWindow: false, remote: 'local',
         ...(spec.kind === 'editor' ? { link: { calls: ['files.readBytes', 'files.writeBytes'], events: [] } } : {}),
+        // GApps v2 V1: an app's link is exactly the bridge.
+        ...(spec.kind === 'app' ? { link: { calls: [...APP_BRIDGE.calls], events: [...APP_BRIDGE.events] } } : {}),
     } as Record<string, unknown>,
     permissions: { capabilities: [] },
     payload: structuredClone(spec.example),
@@ -103,11 +105,11 @@ describe('what the docs say', () => {
 describe('each element\'s side: the host, a client, or both (the owner\'s ruling q_d71981d6)', () => {
     // The ADF models the client/host relationship: every element declares where it runs, and an element on both sides
     // declares how its halves talk (`reach.link`). A family Genie runs today allows only the sides it can run on.
-    const ALLOWED: Record<string, readonly string[]> = { tool: ['host'], panel: ['client', 'both'], editor: ['both'], 'host-service': ['host', 'both'] };
+    const ALLOWED: Record<string, readonly string[]> = { tool: ['host'], panel: ['client', 'both'], editor: ['both'], 'host-service': ['host', 'both'], app: ['both'] };
     const onSide = (spec: KindSpec, side: string) => {
         const def = envelope(spec);
         def.reach = { ...def.reach, side };
-        if (side === 'both') def.reach.link = { calls: ['files.readBytes'], events: [] };
+        if (side === 'both') def.reach.link = spec.kind === 'app' ? { calls: [...APP_BRIDGE.calls], events: [...APP_BRIDGE.events] } : { calls: ['files.readBytes'], events: [] };
         else delete def.reach.link;
         return def;
     };

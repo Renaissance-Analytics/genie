@@ -153,6 +153,8 @@ export const ENGINE_METHODS = [
     'engine.workstation',
     // Another machine's socket, dialled by the host; the window holds a channel (P3.4 cut e): `[method, args]`.
     'engine.deviceLink',
+    // Remote access's host side (Tynn #409, P5d.1): its status, the PIN, devices, lock, pair answers, and the relay bridge.
+    'engine.remoteAccess',
     // A workspace's agent config: the host writes it, under the lock its agent preparation holds.
     'engine.configSync',
     // The keyring card, as the host found it: `[method, args]`.
@@ -174,6 +176,8 @@ export const ENGINE_METHODS = [
     // An elevation the host's hosting needs (the hosts file, the trust store), run by the window as a window always has:
     // `[steps]`. The host never raises a prompt itself; with no window it waits (hosting-host.ts WindowElevation).
     'client.elevate',
+    // A remote method genie-host does not own yet, done by the newest local window (Tynn #409): `[method, args]`.
+    'client.remoteInvoke',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];

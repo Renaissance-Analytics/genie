@@ -71,7 +71,7 @@ describe('the wiring', () => {
         expect(src('src/main/preload.ts').includes('genie:agent-set-manage-tabs')).toBe(false);
         expect(src('src/main/host-api.ts')).toContain('return deps.agentOps.setManageTabs(args[0], args[1]);');
         expect(src('src/renderer/local-session.ts')).toContain('setManageTabs: (id, on) => requestAgent((agents) => agents.setManageTabs(id, on))');
-        expect(main).toMatch(/manageTabs: record\.manageTabs === true/);
+        expect(src('src/main/agent-detail.ts')).toMatch(/manageTabs: record\.manageTabs === true/);
     });
 
     it('a workspace setting changed in main reaches the windows (the tabs an agent made show at once)', () => {
