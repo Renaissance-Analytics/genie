@@ -75,16 +75,14 @@ describe('a Features write', () => {
     });
 });
 
+// P4 family 12 (Tynn #561): following Features is the local door's `tynn.watch`, by subscription (p4-family12-tynn.test.ts).
 describe('the window follows Features live through the host, like Issues', () => {
-    it('has its watch rows, IPC handlers, live broadcast and preload door', () => {
-        expect(IPC_INVENTORY).toContainEqual(['genie:workspace-tynn-features-watch', 'protocol:workspaces.tynnFeaturesWatch']);
-        expect(IPC_INVENTORY).toContainEqual(['genie:workspace-tynn-features-unwatch', 'protocol:workspaces.tynnFeaturesUnwatch']);
+    it('its signals go to the door\'s watch port, never broadcast; the host door is unchanged; no IPC is left', () => {
+        expect(IPC_INVENTORY.map(([c]) => c)).not.toContain('genie:workspace-tynn-features-watch');
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        expect(main).toMatch(/ipcMain\.handle\('genie:workspace-tynn-features-watch'[\s\S]{0,200}watchTynnFeatures\(/);
-        expect(main).toMatch(/engineClient\.onTynnFeaturesEvent\(\(event\) => \{ broadcast\('genie:workspace-tynn-features-live'/);
+        expect(main).toMatch(/engineClient\.onTynnFeaturesEvent\(\(event\) => \{ emitTynn\('features', event\.workspaceId, event\.signal\); \}\);/);
         expect(main).toMatch(/tynnFeaturesDoor = \{ watch: \(viewId, workspaceId\) => engineClient\.tynnFeaturesWatch\(viewId, workspaceId\)/);
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
-        expect(preload).toContain("ipcRenderer.invoke('genie:workspace-tynn-features-watch'");
-        expect(preload).toContain("ipcRenderer.on('genie:workspace-tynn-features-live'");
+        expect(preload).not.toContain('genie:workspace-tynn-features');
     });
 });

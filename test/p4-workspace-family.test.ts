@@ -128,13 +128,13 @@ describe('all twelve workspace bridge calls reach the real API with the old prel
         const oldInvoke = vi.fn(async (_channel: string, ..._args: unknown[]) => row.result);
         const snapshot = vi.fn(async () => ({ workspaces: null }));
         const hibernate = vi.fn(async () => ({ ok: false, reason: 'agent still working' }));
-        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWorkspacePreload(oldInvoke), tynnBoard: hibernate } } as unknown as PreloadBridge;
+        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { ...oldWorkspacePreload(oldInvoke) }, takeOver: hibernate } as unknown as PreloadBridge;
         const bridge = pageBridge(preload);
         expect(pageBridge(preload)).toBe(bridge);
         expect(await bridge.snapshot()).toEqual({ workspaces: null });
-        expect(await bridge.workspaces.tynnBoard!('work', undefined as never)).toEqual({ ok: false, reason: 'agent still working' });
+        expect(await bridge.takeOver('work')).toEqual({ ok: false, reason: 'agent still working' });
         expect(snapshot).toHaveBeenCalledTimes(1);
-        expect(hibernate).toHaveBeenCalledExactlyOnceWith('work', undefined);
+        expect(hibernate).toHaveBeenCalledExactlyOnceWith('work');
         expect(await row.call(bridge.workspaces)).toEqual(row.result);
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`workspaces.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args);

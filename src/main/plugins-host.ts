@@ -3,7 +3,9 @@ import type { ClaimingEditor } from '../core/plugin-editors.js';
 import type { PluginCapabilities, PluginManifest } from '../core/plugins.js';
 import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 import { runOfficialTool } from './official-tools.js';
-import { PluginHost, type PluginEntry } from './plugin-host.js';
+import { OFFICIAL_LABEL, PluginHost, type PluginEntry } from './plugin-host.js';
+import { rm } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { launchSubprocessIn, runPluginTool } from './plugin-runner.js';
 import type { EditorBytesDecision } from '../core/plugin-editors.js';
 import type { PluginsApi } from './plugins-replica.js';
@@ -81,6 +83,8 @@ export class PluginsService {
             case 'refresh':
                 this.#refreshing ??= this.#refresh().finally(() => { this.#refreshing = null; });
                 return this.#refreshing;
+            case 'uninstall':
+                return this.#uninstall(String(args[0] ?? ''));
             case 'setNetworkAllowed': {
                 // ADF B5: an Unverified package's network, allowed or taken back by the person; kept.
                 const changed = await this.#plugins.setNetworkAllowed(String(args[0] ?? ''), args[1] === true);
@@ -90,6 +94,23 @@ export class PluginsService {
             default:
                 throw new Error(`the plugins have no ${method}`);
         }
+    }
+
+    /**
+     * UNINSTALL (ADF A6): an installed plugin's folder goes, then the plugins are read again and told. Genie's own ship
+     * with Genie and are refused; so is anything that is not a folder directly inside the plugins directory.
+     */
+    async #uninstall(pluginId: string): Promise<boolean> {
+        const entry = this.#plugins.list().find((e) => e.id === pluginId);
+        if (!entry) throw new Error(`no plugin ${pluginId} is installed`);
+        if (entry.label === OFFICIAL_LABEL) throw new Error(`${pluginId} ships with Genie; turn it off instead`);
+        const dir = this.#plugins.dir();
+        const folder = resolve(dir, entry.folder);
+        if (dirname(folder) !== resolve(dir) || entry.folder.length === 0) throw new Error(`${pluginId} is not a folder of the plugins directory`);
+        await rm(folder, { recursive: true, force: true });
+        this.#plugins = await this.#open();
+        this.#emit();
+        return true;
     }
 
     async #refresh(): Promise<boolean> {

@@ -93,10 +93,9 @@ describe('Issues reads use the host-owned page door', () => {
 
 describe('the window delegates both Issues entry points', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    it('native IPC and HostApi use one host-backed Issues adapter', () => {
-        const ipc = main.slice(main.indexOf("ipcMain.handle('genie:workspace-tynn-issues'"), main.indexOf("ipcMain.handle('genie:workspace-tynn-issue-action'"));
-        expect(ipc).toContain('readWorkspaceTynnIssues(');
-        expect(ipc).not.toContain('readTynnIssues(tynnBoardPorts()');
+    // P4 family 12 (Tynn #561): the HostApi is the one way in; the native IPC handler is gone.
+    it('the HostApi uses the host-backed Issues adapter, and no native IPC handler is left', () => {
+        expect(main).not.toContain("'genie:workspace-tynn-issues'");
         expect(main.match(/tynnIssues: ([^\n]+)/)?.[1]).toContain('readWorkspaceTynnIssues(');
     });
     it('the Issues adapter calls the same host-backed page door as WIP', () => {

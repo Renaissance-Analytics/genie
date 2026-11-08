@@ -10,6 +10,9 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
     | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn'
+    // P4 family 12 (Tynn #561): the Tynn tab.
+    | 'tynnBoard' | 'tynnBoardAction' | 'tynnPage' | 'tynnPageAction' | 'tynnBoardChanges' | 'tynnBoardWatch'
+    | 'tynnIssues' | 'tynnIssueAction' | 'tynnIssueChanges' | 'tynnIssuesWatch' | 'tynnFeaturesWatch'
     // P4 family 10 (Tynn #559): the workspace lifecycle.
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
@@ -251,6 +254,18 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setDefaultAgent: (id, agentId) => request((ws) => ws.setDefaultAgent(id, agentId)),
             setColor: (id, color) => request((ws) => ws.setColor!(id, color)),
             onSettingsChanged: (listener) => { settingsListeners.add(listener); return () => { settingsListeners.delete(listener); }; },
+            // The Tynn tab (P4 family 12): reads and actions reject on a failed connection, as the IPC calls did.
+            tynnBoard: (id, scope) => read((b) => b.workspaces.tynnBoard!(id, scope)),
+            tynnBoardAction: (id, input) => read((b) => b.workspaces.tynnBoardAction!(id, input)),
+            tynnPage: (id, page, query) => read((b) => b.workspaces.tynnPage!(id, page, query)),
+            tynnPageAction: (id, input) => read((b) => b.workspaces.tynnPageAction!(id, input)),
+            tynnBoardChanges: (id, scope, cursor, ids) => read((b) => b.workspaces.tynnBoardChanges!(id, scope, cursor, ids)),
+            tynnIssues: (id, filters) => read((b) => b.workspaces.tynnIssues!(id, filters)),
+            tynnIssueAction: (id, input) => read((b) => b.workspaces.tynnIssueAction!(id, input)),
+            tynnIssueChanges: (id, filters, cursor, ids) => read((b) => b.workspaces.tynnIssueChanges!(id, filters, cursor, ids)),
+            tynnBoardWatch: (id, listener) => subscribe((b) => b.workspaces.tynnBoardWatch!(id, listener)),
+            tynnIssuesWatch: (id, listener) => subscribe((b) => b.workspaces.tynnIssuesWatch!(id, listener)),
+            tynnFeaturesWatch: (id, listener) => subscribe((b) => b.workspaces.tynnFeaturesWatch!(id, listener)),
             hibernate: (id) => request((ws) => ws.hibernate(id)),
             wake: (id) => request((ws) => ws.wake(id)),
             remove: (id) => request((ws) => ws.remove(id)),
