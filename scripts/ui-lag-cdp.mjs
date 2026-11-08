@@ -28,11 +28,13 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, capVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
 // Ten pairs (the coordinator's (b), Tynn #536): a stable median of paired differences on the Linux runner.
 const SLICE_PAIRS = 10, SLICE_MS = 1200, SETTLE_MS = 400;
+// PAST THE OUTPUT CAP (Tynn #542): more than the view keeps per terminal (OUTPUT_CAP, 2,000,000), then slices while it streams.
+const FLOOD_BYTES = 2_500_000, PAST_SLICES = 6, PAST_STREAM_MS = PAST_SLICES * (SLICE_MS + SETTLE_MS) + 4000;
 // One pair traced in the profiled pass (Tynn #537): what every thread of the window did, terminal on against off.
 const TRACE_PAIR = 4, TRACE_CATEGORIES = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'blink', 'cc', 'gpu', 'viz', 'benchmark', 'renderer.scheduler', 'v8.execute'];
 const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, HOST_BUDGET_MS = 100, IDLE_MS = 6000, BUILD_MS = 52000, CONTROL_MS = 120;
@@ -241,6 +243,7 @@ try {
     for (let d = 0; d < 30; d += 1) { mkdirSync(join(workspace, 'src', `m${d}`), { recursive: true }); for (let f = 0; f < 50; f += 1) writeFileSync(join(workspace, 'src', `m${d}`, `s${f}.js`), `export const s${d}_${f} = ${f};\n`); }
     writeFileSync(join(workspace, '.gitignore'), 'dist/\n');
     copyFileSync(resolve('scripts/perf-lag/ui-lag-build.mjs'), join(workspace, 'build.mjs'));
+    copyFileSync(resolve('scripts/perf-lag/ui-lag-flood.mjs'), join(workspace, 'flood.mjs'));
     const git = (args) => execFileSync('git', ['-c', 'user.name=UI lag fixture', '-c', 'user.email=ui-lag@example.test', ...args], { cwd: workspace, stdio: 'pipe', timeout: 90000, windowsHide: true });
     // THE FIXTURE GIT, BOUNDED (Tynn #536): spawnSync git ETIMEDOUT on the Windows runner (genie#1718). A timed-out try is
     // started again from no repository, at most twice; how long each took is in the result.
@@ -394,6 +397,32 @@ try {
         demand(build?.run === run && build.writes > 0, `the ${label} build ran to its end (${JSON.stringify(build)})`);
         await toggleFiles(false);
         await until('the terminal again', () => page.evaluate(`Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-pane] .xterm-rows'))`), 30000);
+        /*
+         * PAST THE OUTPUT CAP (Tynn #542): the terminal stays on screen while more than the view keeps per terminal streams
+         * through it, then the slices, while it goes on streaming with its kept output trimmed from the front every batch.
+         * Not switched off between slices: a re-attach starts again from a short snapshot, under the cap.
+         */
+        const pastFile = join(workspace, 'flood-past.json');
+        rmSync(pastFile, { force: true });
+        await page.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
+        await page.request('Input.insertText', { text: `node flood.mjs ${FLOOD_BYTES} ${PAST_STREAM_MS} ${run}` });
+        await page.request('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+        await page.request('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+        const flooded = await until('the flood past the output cap', async () => json(pastFile), 90000);
+        await focusField();
+        p = await mark('terminal-past-cap');
+        const pastSlices = [], pastMouse = [], pastKeys = [];
+        for (let k = 0; k < PAST_SLICES; k += 1) {
+            await sleep(SETTLE_MS);
+            await focusField();
+            const from = await page.evaluate('performance.now()');
+            const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
+            pastMouse.push(...d.mouse); pastKeys.push(...d.keys);
+            pastSlices.push({ cond: 'past', from, to: await page.evaluate('performance.now()') });
+        }
+        await noDialog(`after the ${label} pass's slices past the output cap`);
+        phases.push({ ...p, end: await mark('terminal-past-cap-end'), input: { mouse: pastMouse, keys: pastKeys }, slices: pastSlices, flooded });
+        await until('the flood to end', () => page.evaluate(`${rowsText}.includes('UI_LAG_FLOOD_DONE ${run}')`), 60000).catch(() => null);
         const profiles = {};
         for (const [name, c] of profiled ? [['main', main], ['page', page], ['host', hostCdp]] : [['host', hostCdp]]) { profiles[name] = (await c.request('Profiler.stop', {})).profile; await c.request('Profiler.disable', {}); }
         return { label, profiled, run, build, phases, profiles };
@@ -528,9 +557,11 @@ try {
     const pageBudget = sliceVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
     // THE THROUGHPUT BUDGET (Tynn #537): the input the page keeps up with, terminal on screen against off, the same slices.
     const throughput = throughputVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
-    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput };
+    // PAST THE OUTPUT CAP (Tynn #542): the terminal on screen with its output trimmed every batch, against it on screen below.
+    const capBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: passes[0].rows.find((r) => r.phase === 'terminal-past-cap')?.slices ?? [] });
+    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok && capBudget.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput, cap: capBudget };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread (${JSON.stringify(h.by)})`)].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...capBudget.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread (${JSON.stringify(h.by)})`)].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
