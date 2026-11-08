@@ -156,7 +156,7 @@ export function genieCatalog(opts: { builtins?: readonly BuiltinTool[] } = {}): 
  * THE HOST'S CATALOG NOW (ADF A4): Genie's own, then every ENABLED installed plugin as its own package. One that does not
  * register (it does not validate, or it poses as a package already there) is left out, as allGenieTools leaves it out.
  */
-export function hostCatalog(plugins: { tools(): readonly { pluginId: string; manifest: PluginManifest; official?: boolean }[]; manifests?(): Readonly<Record<string, PluginManifest>>; list?(): readonly { id: string; state: string }[] }): Catalog {
+export function hostCatalog(plugins: { tools(): readonly { pluginId: string; manifest: PluginManifest; official?: boolean }[]; manifests?(): Readonly<Record<string, PluginManifest>>; list?(): readonly { id: string; state: string }[] }, gapps?: { packages(): readonly PackageDeclaration[] }): Catalog {
     const catalog = genieCatalog();
     const enabled = new Map<string, PluginManifest>();
     for (const ref of plugins.tools()) if (ref.official !== true) enabled.set(ref.pluginId, ref.manifest);
@@ -167,5 +167,8 @@ export function hostCatalog(plugins: { tools(): readonly { pluginId: string; man
         if (entry.state === 'enabled' && m && !catalog.packages().some((p) => p.id === entry.id)) enabled.set(entry.id, m);
     }
     for (const manifest of enabled.values()) catalog.register(pluginPackage(manifest, 'plugin'));
+    // GApps v2 V3: every installed, turned-on app's package (main/gapps-host.ts). One that no longer fits (an id another
+    // package took since) is left out: its entry stays in the book, and the store says it offers nothing until reinstalled.
+    for (const pkg of gapps?.packages() ?? []) catalog.register(pkg);
     return catalog;
 }
