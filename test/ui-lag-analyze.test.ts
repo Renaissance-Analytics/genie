@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -170,6 +170,48 @@ describe('the page budget from interleaved slices (Tynn #536)', () => {
         expect(sliceVerdict({ on: [slice(30), slice(50), slice(70)], off: [slice(25), slice(45), slice(65)] }).ok).toBe(true);
         // A pair with no input on one side does not count.
         expect(sliceVerdict({ on: [slice(1), slice(1, 0, 0), slice(1)], off: [slice(1), slice(1), slice(1)] }).reasons).toEqual(['too few pairs with input on both sides: 2 (need 3)']);
+    });
+});
+
+describe('the throughput budget: input the page keeps up with, terminal on against off (Tynn #537)', () => {
+    const slice = (count: number) => ({ count, p95: 20, worstGapMs: 0 });
+    it('passes pairs that keep up, fails the halved throughput Linux measured, and needs enough pairs', () => {
+        // Windows, run 42488024371: 67-72 events acknowledged on against 71-74 off.
+        expect(throughputVerdict({ on: [slice(70), slice(72), slice(67)], off: [slice(73), slice(72), slice(72)] }).ok).toBe(true);
+        // Linux, the same run: 29-41 on against 55-59 off.
+        const linux = throughputVerdict({ on: [slice(29), slice(36), slice(30)], off: [slice(55), slice(56), slice(57)] });
+        expect(linux.ok).toBe(false);
+        expect(linux.ratio).toBe(0.53);
+        expect(linux.reasons).toEqual(['mouse events acknowledged, median of 3 paired ratios: the terminal on screen 0.53 of off (bound 0.9; on 30, off 56)']);
+        // ONE slow pair among good ones does not fail it; the median of the ratios decides.
+        expect(throughputVerdict({ on: [slice(70), slice(20), slice(70)], off: [slice(72), slice(72), slice(72)] }).ok).toBe(true);
+        // PAIRED: a runner that slows down during the build moves both slices of a pair.
+        expect(throughputVerdict({ on: [slice(60), slice(40), slice(20)], off: [slice(62), slice(41), slice(21)] }).ok).toBe(true);
+        // An "off" slice with no input says nothing about the pair.
+        expect(throughputVerdict({ on: [slice(1), slice(1), slice(1)], off: [slice(1), slice(0), slice(1)] }).reasons).toEqual(['too few pairs with input off screen: 2 (need 3)']);
+        // An "on" slice with NO input is the worst case, not a missing one: it counts, as 0.
+        expect(throughputVerdict({ on: [slice(0), slice(0), slice(70)], off: [slice(70), slice(70), slice(70)] }).ratio).toBe(0);
+    });
+});
+
+describe('a trace, summarised by thread and by event (Tynn #537)', () => {
+    it('names threads, sums each event, and counts a thread\'s time once when events nest', () => {
+        const events = [
+            { ph: 'M', name: 'thread_name', pid: 1, tid: 10, args: { name: 'CrRendererMain' } },
+            { ph: 'M', name: 'thread_name', pid: 2, tid: 20, args: { name: 'VizCompositorThread' } },
+            { ph: 'X', name: 'Paint', pid: 1, tid: 10, ts: 1000, dur: 4000 },
+            // Nested inside the Paint: its own row, but not the thread's time twice.
+            { ph: 'X', name: 'PaintImage', pid: 1, tid: 10, ts: 2000, dur: 1000 },
+            { ph: 'X', name: 'Paint', pid: 1, tid: 10, ts: 10000, dur: 2000 },
+            { ph: 'X', name: 'Draw', pid: 2, tid: 20, ts: 0, dur: 3000 },
+            // No duration: not time.
+            { ph: 'I', name: 'Mark', pid: 1, tid: 10, ts: 1 },
+        ];
+        const s = traceSummary(events, { top: 2 });
+        expect(s.threads).toEqual([{ thread: 'CrRendererMain', ms: 6 }, { thread: 'VizCompositorThread', ms: 3 }]);
+        expect(s.top).toEqual([{ thread: 'CrRendererMain', name: 'Paint', ms: 6, count: 2 }, { thread: 'VizCompositorThread', name: 'Draw', ms: 3, count: 1 }]);
+        // A thread without a name event keeps its ids.
+        expect(traceSummary([{ ph: 'X', name: 'Task', pid: 3, tid: 30, ts: 0, dur: 500 }]).threads).toEqual([{ thread: '3:30', ms: 0.5 }]);
     });
 });
 
