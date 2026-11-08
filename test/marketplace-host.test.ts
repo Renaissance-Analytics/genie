@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ZipFile } from 'yazl';
@@ -218,6 +218,34 @@ describe('C4 host-owned Marketplace review and installation', () => {
         await expect(host.install(review.token, true)).rejects.toThrow();
         expect(installed()).toBeUndefined();
         expect(await readdir(pluginsDir)).toEqual([]);
+    });
+
+    it.each([false, true])('recovers a process-interrupted update with the new directory activated=%s', async activated => {
+        const first = await fixture(); const host = await open();
+        await host.install((await host.prepare(id, '1.0.0')).token, true);
+        const previous = JSON.parse(await readFile(grantsFile, 'utf8')) as { grants: unknown[] };
+        const next = await fixture('1.1.0'); await host.prepare(id, '1.1.0');
+        const session = (await readdir(stagingDir)).find(name => name.startsWith('reviews-'))!;
+        const packageDir = (await readdir(join(stagingDir, session))).find(name => name.startsWith('package-'))!;
+        const transaction = `${session}/${packageDir}`, folder = join(stagingDir, transaction);
+        // Filesystem state left by death after the journal was persisted, before or after the final rename.
+        await writeFile(join(stagingDir, 'activation.json'), JSON.stringify({ version: 1, origin: 'https://tynn.ai', id, folder: id, transaction, previousDigest: first.package.version.digest, nextDigest: next.package.version.digest, previousGrants: previous.grants }));
+        await rename(join(pluginsDir, id), join(folder, 'previous'));
+        if (activated) await rename(join(folder, 'contents'), join(pluginsDir, id));
+        await writeFile(grantsFile, JSON.stringify({ version: 1, origin: 'https://tynn.ai', grants: [] }));
+        const recovered = await open();
+        expect(installed()).toMatchObject({ version: '1.0.0', state: 'enabled' });
+        expect(JSON.parse(await readFile(grantsFile, 'utf8'))).toMatchObject({ grants: previous.grants });
+        expect(await readdir(stagingDir)).not.toContain('activation.json');
+        expect((await recovered.prepare(id, '1.1.0')).needsConsent).toBe(false);
+    });
+
+    it('refuses an invalid recovery journal without touching unrelated directories', async () => {
+        const host = await open(); const marker = join(dir, 'outside-marker'); await writeFile(marker, 'keep me');
+        await writeFile(join(stagingDir, 'activation.json'), JSON.stringify({ version: 1, origin: 'https://tynn.ai', id, folder: '../../outside-marker', transaction: '../../outside', previousDigest: null, nextDigest: 'a'.repeat(64), previousGrants: [] }));
+        await expect(open()).rejects.toThrow(/recovery|journal|path/i);
+        expect(await readFile(marker, 'utf8')).toBe('keep me');
+        await host.close();
     });
 
     it('bounds actual streamed archive bytes without relying on Content-Length', async () => {
