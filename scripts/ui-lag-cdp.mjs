@@ -413,11 +413,11 @@ try {
     // THE PAGE WHILE A TERMINAL STREAMS (Tynn #525): the mouse's delay to a frame against this run's idle, and no long frame gap.
     const pageRow = (name) => passes[0].rows.find((r) => r.phase === name);
     const idleRow = pageRow('idle'), termRow = pageRow('build-terminal');
-    const page = pageVerdict({ idle: idleRow ? { count: idleRow.input.mouseToFrame.count, p95: idleRow.input.mouseToFrame.p95 } : null,
+    const pageBudget = pageVerdict({ idle: idleRow ? { count: idleRow.input.mouseToFrame.count, p95: idleRow.input.mouseToFrame.p95 } : null,
         streaming: termRow ? { count: termRow.input.mouseToFrame.count, p95: termRow.input.mouseToFrame.p95, worstFrameGapMs: termRow.page.frameGaps[0]?.ms ?? 0 } : null });
-    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && page.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page };
+    result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...page.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread during the build (${JSON.stringify(h.by)})`)].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread during the build (${JSON.stringify(h.by)})`)].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}
