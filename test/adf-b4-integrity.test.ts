@@ -45,8 +45,8 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-const open = (developerMode: boolean) => PluginHost.open({ dir: plugins, keys, developerMode });
-const stateOf = async (developerMode: boolean) => (await open(developerMode)).list().find((p) => p.id === 'com.example.notes' || p.folder === 'notes');
+const open = (publisherChecksOff: boolean) => PluginHost.open({ dir: plugins, keys, publisherChecksOff });
+const stateOf = async (publisherChecksOff: boolean) => (await open(publisherChecksOff)).list().find((p) => p.id === 'com.example.notes' || p.folder === 'notes');
 const flipOneByte = async (file: string) => {
     const bytes = await readFile(file);
     bytes[0] = bytes[0]! ^ 1;
@@ -62,9 +62,9 @@ describe('a signed package: the signature covers every file', () => {
     it('ONE BYTE of tools.cjs changed after signing: refused as tampered, with publisher checks on AND off', async () => {
         await signPackage(pkg, pair.privateKey);
         await flipOneByte(join(pkg, 'tools.cjs'));
-        for (const developerMode of [false, true]) {
-            const entry = await stateOf(developerMode);
-            expect(entry, `developerMode ${developerMode}`).toMatchObject({ state: 'refused', label: null });
+        for (const publisherChecksOff of [false, true]) {
+            const entry = await stateOf(publisherChecksOff);
+            expect(entry, `publisherChecksOff ${publisherChecksOff}`).toMatchObject({ state: 'refused', label: null });
             expect(entry!.reason).toMatch(/tampered/);
         }
     });
@@ -85,11 +85,11 @@ describe('a signed package: the signature covers every file', () => {
 
     it('a signature over the manifest bytes alone (the old form) does not cover the package: refused as tampered', async () => {
         await writeFile(join(pkg, PACKAGE_SIGNATURE_FILE), sign(null, Buffer.from(MANIFEST), pair.privateKey).toString('base64'));
-        for (const developerMode of [false, true]) expect((await stateOf(developerMode))!.reason, `developerMode ${developerMode}`).toMatch(/tampered/);
+        for (const publisherChecksOff of [false, true]) expect((await stateOf(publisherChecksOff))!.reason, `publisherChecksOff ${publisherChecksOff}`).toMatch(/tampered/);
     });
 
     it('CONTROL: unsigned under developer mode loads, labelled UNSIGNED; without it, refused as unsigned, not as tampered', async () => {
-        expect(await stateOf(true)).toMatchObject({ state: 'enabled', label: 'UNSIGNED — developer mode' });
+        expect(await stateOf(true)).toMatchObject({ state: 'enabled', label: 'Unverified' });
         const refused = await stateOf(false);
         expect(refused!.state).toBe('refused');
         expect(refused!.reason).toMatch(/^unsigned plugins are not installed/);
@@ -151,7 +151,7 @@ describe('the format (genie-package/1), as the Tynn marketplace checks it too', 
         const other = generateKeyPairSync('ed25519');
         const mislabelled = { [KEY_ID]: other.publicKey.export({ type: 'spki', format: 'pem' }).toString() };
         await signPackage(pkg, other.privateKey);
-        const host = await PluginHost.open({ dir: plugins, keys: mislabelled, developerMode: false });
+        const host = await PluginHost.open({ dir: plugins, keys: mislabelled, publisherChecksOff: false });
         const entry = host.list().find((p) => p.id === 'com.example.notes');
         expect(entry!.state).toBe('refused');
         expect(entry!.reason).toMatch(/is not the fingerprint of the key/);
@@ -231,11 +231,14 @@ describe('the digest', () => {
         expect(packageDigest([file('a.cjs', 'onet'), file('b.cjs', 'wo')])).not.toBe(packageDigest(base));
     });
 
-    it('a package holding a link is refused: a package is plain files only', async () => {
+    it('a package holding a link is refused: a package is plain files only', async (ctx) => {
         try {
             await symlink(join(dir, 'elsewhere'), join(pkg, 'lib', 'link'));
-        } catch {
-            return; // This machine does not let a test make links (Windows without the privilege): nothing to check here.
+        } catch (error) {
+            // This machine does not let a test make links (Windows without the privilege). SKIPPED, visibly, so a run says
+            // it did not prove this, rather than passing as if it had.
+            ctx.skip(`no link could be made here: ${(error as Error).message}`);
+            return;
         }
         await signPackage(pkg, pair.privateKey).catch(() => undefined);
         const entry = await stateOf(true);

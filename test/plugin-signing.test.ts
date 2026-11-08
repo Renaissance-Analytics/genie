@@ -28,11 +28,11 @@ describe('verifyPluginSignature', () => {
 
 describe('installDecision', () => {
     it('signed installs; unsigned is refused unless developer mode is on, and then it is labelled; tampered is refused either way', () => {
-        expect(installDecision({ signed: true, keyId: KEY_ID }, { developerMode: false })).toEqual({ install: true, label: `signed by ${KEY_ID}` });
-        expect(installDecision({ signed: false, tampered: false, reason: 'no signature file (genie-plugin.sig) beside the manifest' }, { developerMode: false })).toEqual({ install: false, reason: 'unsigned plugins are not installed: no signature file (genie-plugin.sig) beside the manifest. Turn on developer mode to run a local unsigned plugin, labelled as such.' });
-        expect(installDecision({ signed: false, tampered: false, reason: 'x' }, { developerMode: true })).toEqual({ install: true, label: 'UNSIGNED — developer mode' });
-        for (const developerMode of [false, true]) {
-            expect(installDecision({ signed: false, tampered: true, reason: 'the signature does not match the package' }, { developerMode })).toEqual({ install: false, reason: 'refused as tampered: the signature does not match the package. A package changed after it was signed never runs, with publisher checks on or off.' });
+        expect(installDecision({ signed: true, keyId: KEY_ID }, { publisherChecksOff: false })).toEqual({ install: true, label: `signed by ${KEY_ID}` });
+        expect(installDecision({ signed: false, tampered: false, reason: 'no signature file (genie-plugin.sig) beside the manifest' }, { publisherChecksOff: false })).toEqual({ install: false, reason: 'unsigned plugins are not installed: no signature file (genie-plugin.sig) beside the manifest. Turn off publisher checks (Settings → Plugins) to run it at your own risk; it is then labelled Unverified.' });
+        expect(installDecision({ signed: false, tampered: false, reason: 'x' }, { publisherChecksOff: true })).toEqual({ install: true, label: 'Unverified' });
+        for (const publisherChecksOff of [false, true]) {
+            expect(installDecision({ signed: false, tampered: true, reason: 'the signature does not match the package' }, { publisherChecksOff })).toEqual({ install: false, reason: 'refused as tampered: the signature does not match the package. A package changed after it was signed never runs, with publisher checks on or off.' });
         }
     });
 });

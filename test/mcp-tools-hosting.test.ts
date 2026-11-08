@@ -175,7 +175,7 @@ describe('services: reading', () => {
         try {
             observed = await composeServices({ userData: ownDir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
                 onComposeStage: () => { throw new Error('synthetic observer'); } });
-            expect(observed.engines.list()).toEqual([]); expect(observed.settings.snapshot().developer_mode).toBe(false);
+            expect(observed.engines.list()).toEqual([]); expect(observed.settings.snapshot().publisher_checks_off).toBe(false);
         } finally { await observed?.shutdown(); await rm(ownDir, { recursive: true, force: true }); }
     });
 

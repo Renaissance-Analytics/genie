@@ -93,7 +93,7 @@ const facts = { version: '2', platform: 'win32', installDir: 'I', genieHome: 'H'
 
 /** Normal Genie's registrations the way main.ts builds them: every part, and the REAL plugin host with the official plugins. */
 async function normalGenie(): Promise<Registration[]> {
-    const plugins = await PluginHost.open({ dir: join(home, 'plugins'), keys: {}, developerMode: false, official: OFFICIAL_PLUGINS });
+    const plugins = await PluginHost.open({ dir: join(home, 'plugins'), keys: {}, publisherChecksOff: false, official: OFFICIAL_PLUGINS });
     return allGenieTools(genieToolDeps({
         inbox: never, attention: never, knowledge: never, settings: never, approve: never, roster: () => [], resolveCaller: () => null,
         userActive: () => true, glow: () => false, thumbsUp: () => {}, openFile: never, terminals: never,

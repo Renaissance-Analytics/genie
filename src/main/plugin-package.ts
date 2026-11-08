@@ -54,13 +54,13 @@ export async function readPackageFiles(dir: string, options: { onRead?: (path: s
  * A package's verdict: its files read, its digest taken, its signature checked against the publisher keys Genie holds,
  * and the install decision. `digest` is set only for a package signed as it is now, which is re-checked before each run.
  */
-export async function checkPackage(dir: string, input: { keyId: string; keys: Readonly<Record<string, string>>; developerMode: boolean }): Promise<{ decision: InstallDecision; digest: string | null }> {
+export async function checkPackage(dir: string, input: { keyId: string; keys: Readonly<Record<string, string>>; publisherChecksOff: boolean }): Promise<{ decision: InstallDecision; digest: string | null }> {
     const read = await readPackageFiles(dir);
     if (!read.ok) return { decision: { install: false, reason: `refused: ${read.reason}` }, digest: null };
     const digest = packageDigest(read.files);
     const sig = read.files.find((f) => f.path === PACKAGE_SIGNATURE_FILE);
     const check = verifyPluginSignature({ bytes: packageSigningBytes(digest), signature: sig ? sig.bytes.toString('utf8') : null, keyId: input.keyId }, input.keys);
-    return { decision: installDecision(check, { developerMode: input.developerMode }), digest: check.signed ? digest : null };
+    return { decision: installDecision(check, { publisherChecksOff: input.publisherChecksOff }), digest: check.signed ? digest : null };
 }
 
 /** The digest of a package as it is on disk now, or why it cannot be read. */

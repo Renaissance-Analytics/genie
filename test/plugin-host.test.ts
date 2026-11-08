@@ -38,7 +38,7 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 describe('PluginHost', () => {
     it('lists every manifest folder with its state and reason; signed+valid is installable, unsigned and invalid are refused (not dropped); folders without a manifest are not plugins', async () => {
-        const host = await PluginHost.open({ dir: plugins, keys, developerMode: false });
+        const host = await PluginHost.open({ dir: plugins, keys, publisherChecksOff: false });
         expect(host.list().map((p) => ({ id: p.id, state: p.state }))).toEqual([
             { id: 'com.example.presentation', state: 'enabled' },
             { id: 'com.example.localdev', state: 'refused' },
@@ -49,13 +49,13 @@ describe('PluginHost', () => {
         expect(host.list()[0]!.label).toBe(`signed by ${KEY_ID}`);
     });
 
-    it('developer mode admits the unsigned one, labelled UNSIGNED', async () => {
-        const host = await PluginHost.open({ dir: plugins, keys, developerMode: true });
-        expect(host.list().find((p) => p.id === 'com.example.localdev')).toMatchObject({ state: 'enabled', label: 'UNSIGNED — developer mode' });
+    it('publisher checks off admit the unsigned one, labelled Unverified', async () => {
+        const host = await PluginHost.open({ dir: plugins, keys, publisherChecksOff: true });
+        expect(host.list().find((p) => p.id === 'com.example.localdev')).toMatchObject({ state: 'enabled', label: 'Unverified' });
     });
 
     it('disable is persisted across a reopen; the guard exists only for an enabled plugin and enforces the declared capabilities by name', async () => {
-        const host = await PluginHost.open({ dir: plugins, keys, developerMode: false });
+        const host = await PluginHost.open({ dir: plugins, keys, publisherChecksOff: false });
         expect(host.guard('com.example.presentation')!({ kind: 'genieApi', name: 'openFileForUser' })).toEqual({ allowed: true });
         expect(host.guard('com.example.presentation')!({ kind: 'genieApi', name: 'manageTerminals' })).toMatchObject({ allowed: false, reason: expect.stringMatching(/did not declare genieApi "manageTerminals"/) });
         expect(host.guard('com.example.localdev')).toBeNull();
@@ -63,13 +63,13 @@ describe('PluginHost', () => {
 
         await host.setEnabled('com.example.presentation', false);
         expect(host.guard('com.example.presentation')).toBeNull();
-        const again = await PluginHost.open({ dir: plugins, keys, developerMode: false });
+        const again = await PluginHost.open({ dir: plugins, keys, publisherChecksOff: false });
         expect(again.list()[0]).toMatchObject({ id: 'com.example.presentation', state: 'disabled' });
         expect(await again.setEnabled('com.example.localdev', true)).toBe(false);
     });
 
     it('an empty or missing plugins directory lists nothing and is not an error', async () => {
-        const host = await PluginHost.open({ dir: join(dir, 'does-not-exist'), keys, developerMode: false });
+        const host = await PluginHost.open({ dir: join(dir, 'does-not-exist'), keys, publisherChecksOff: false });
         expect(host.list()).toEqual([]);
     });
 });
