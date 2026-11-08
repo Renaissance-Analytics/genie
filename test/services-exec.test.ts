@@ -37,6 +37,13 @@ function fakeDocker(): DockerRunner {
     };
 }
 
+// ---- PROBE (throwaway, never merged): time each phase of the services' setup and teardown on the Windows runner.
+const probeT = () => performance.now();
+const probeName = () => String(expect.getState().currentTestName ?? '?');
+const probeStages: string[] = [];
+const probeStage = (s: { stage: string; elapsedMs: number }) => { if (!s.stage.endsWith(':begin')) probeStages.push(`${s.stage}=${Math.round(s.elapsedMs)}`); };
+const probeLog = (file: string, phase: string, ms: number, extra = '') => console.log(`GENIE-PROBE file=${file} phase=${phase} ms=${Math.round(ms)} test="${probeName()}" ${extra}`);
+
 let dir: string;
 let services: ComposedServices;
 let ran: Array<{ command: string; cwd: string; env: Readonly<Record<string, string>> }>;
@@ -51,7 +58,10 @@ beforeEach(async () => {
     await mkdir(join(dir, 'example'), { recursive: true });
     await writeFile(join(dir, 'example', 'project.json'), `${JSON.stringify({ name: 'example', repos: [] })}\n`, 'utf8');
     (caller as { workspacePath: string }).workspacePath = join(dir, 'example');
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: fakeDocker(), portFree: async () => true, workspaces: () => [{ id: 'example', path: join(dir, 'example') }] });
+    probeStages.length = 0;
+    const t0 = probeT();
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: fakeDocker(), portFree: async () => true, workspaces: () => [{ id: 'example', path: join(dir, 'example') }], onComposeStage: probeStage });
+    probeLog('services-exec', 'compose', probeT() - t0, `plugins=${services.plugins.list().length} stages=${probeStages.join(',')}`);
     ran = [];
     approvals = [];
     decision = 'allowed';
@@ -60,8 +70,12 @@ beforeEach(async () => {
     tools = hostingTools({ resolveCaller: (id) => (id === 't-example' ? caller : null), approve: async (_c, action, detail) => { approvals.push(`${action}: ${detail}`); return decision; }, services, exec });
 });
 afterEach(async () => {
+    const t0 = probeT();
     await services.shutdown();
+    const t1 = probeT();
     await rm(dir, { recursive: true, force: true });
+    probeLog('services-exec', 'shutdown', t1 - t0);
+    probeLog('services-exec', 'rm', probeT() - t1);
 });
 
 async function call(args: Record<string, unknown>) {
