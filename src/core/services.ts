@@ -1,3 +1,4 @@
+import { MAILPIT_AUTH_MOUNT, MAILPIT_SMTP_AUTH_FILE } from './mail.js';
 import { mailpitNameOf } from './mailpit-name.js';
 import { assertGeneratedPassword, seaweedEntrypointScript } from './service-provision.js';
 import { APP_ENGINES, SOCKUDO_COMMAND, SOCKUDO_CONFIG_TARGET, SOCKUDO_IMAGE, SOCKUDO_PORT, SOCKUDO_VERSION, websocketHostEnv } from './websockets.js';
@@ -703,6 +704,11 @@ export function containerPlan(input: {
     configFile?: string;
     /** The engine's variant (`pgvector`): its image, everything else the engine's. */
     variant?: string;
+    /**
+     * Mailpit only (Genie Mail G3): the host directory holding the inbox book's SMTP auth file (main/mail-host.ts). Mounted
+     * as a directory, so the host's rename-in-place is seen; Mailpit reads it only at start (G1's finding 7).
+     */
+    smtpAuthDir?: string;
 }): ContainerPlan {
     const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
     if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
@@ -713,6 +719,8 @@ export function containerPlan(input: {
     // shared ones are refused where they are ADDED (service-registry.ts), not ones already on a machine.
     if (def.custom && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — an arbitrary image has no multi-tenant story to share`);
     if (input.variant !== undefined && !def.variants?.[input.variant]) throw new Error(`${input.engine} has no variant ${JSON.stringify(input.variant)}`);
+    if (input.smtpAuthDir !== undefined && input.engine !== 'mailpit') throw new Error(`${input.engine} reads no SMTP auth file; only Mailpit does`);
+    const mailAuth = input.engine === 'mailpit' ? input.smtpAuthDir : undefined;
     const key = `${input.scope.kind === 'shared' ? 'shared' : input.scope.workspaceId}-${input.engine}${input.variant ? `-${input.variant}` : ''}-${input.major}`;
     if (def.custom) {
         const c = input.custom;
@@ -746,10 +754,15 @@ export function containerPlan(input: {
         // A stateless engine (Sockudo) has nothing to keep: no volume is created, and none is there for "delete data".
         volume: def.stateless ? null : `genie-${key}-data`,
         publish,
-        env: tenancy && input.admin ? tenancy.containerEnv(input.admin.password) : def.containerEnv(input.credentials ?? {}),
+        env: {
+            ...(tenancy && input.admin ? tenancy.containerEnv(input.admin.password) : def.containerEnv(input.credentials ?? {})),
+            // The inbox book's auth file: an inbox's SMTP user and password, plain AUTH over loopback (as G1 measured it).
+            ...(mailAuth ? { MP_SMTP_AUTH_FILE: `${MAILPIT_AUTH_MOUNT}/${MAILPIT_SMTP_AUTH_FILE}`, MP_SMTP_AUTH_ALLOW_INSECURE: 'true' } : {}),
+        },
         ...(launch ? { entrypoint: launch.entrypoint } : {}),
         ...(command ? { command } : {}),
         ...(def.config && input.configFile ? { mounts: [{ source: input.configFile, target: def.config.target }] } : {}),
+        ...(mailAuth ? { mounts: [{ source: mailAuth, target: MAILPIT_AUTH_MOUNT }] } : {}),
     };
 }
 
