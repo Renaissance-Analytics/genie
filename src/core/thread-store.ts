@@ -205,7 +205,21 @@ export class ThreadStore extends FileSessionStore {
      */
     override async withLock<T>(key: string, callback: () => T | Promise<T>, ttlSeconds?: number, waitSeconds?: number): Promise<T> {
         await this.#clearLegacyLock(key);
-        return super.withLock(key, callback, ttlSeconds, waitSeconds);
+        /*
+         * A RELEASE THAT FAILS AFTER THE WORK is not a failed write (prism-harness 0.10): the callback ran, its rows are in
+         * the log, and the SDK keeps the release for the next lock. Rejecting here would send the session's retry to append
+         * the same rows again. A lock never taken, or a callback that threw, still rejects.
+         */
+        let done = false;
+        let value: T;
+        try {
+            return await super.withLock(key, async () => { value = await callback(); done = true; return value; }, ttlSeconds, waitSeconds);
+        } catch (error) {
+            if (!done) throw error;
+            const log = this.#onSlow ?? slowLog;
+            if (log !== null) { try { log(`thread-store lock release failed log=${ledgerName(key)} reason=${error instanceof Error ? error.message : String(error)}`); } catch { /* nothing */ } }
+            return value!;
+        }
     }
 
     async #clearLegacyLock(key: string): Promise<void> {
