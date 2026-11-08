@@ -85,20 +85,17 @@ describe('atomic package registration with revisions (the acceptance test)', () 
         expect(catalog.get('ai.genie.spreadsheet.createWorkbook')?.version).toBe('1.0.0');
     });
 
-    it('another package claiming an id (or alias) that is taken is refused whole; the owner keeps it', () => {
+    it('another package claiming an id that is taken is refused whole; the owner keeps it', () => {
         const catalog = new Catalog();
-        catalog.register(pkg([tool({ aliases: ['spreadsheet.createWorkbook'] })]));
+        catalog.register(pkg([tool()]));
         const other = 'com.example.sheets';
         const theirs = (over: Record<string, unknown>) => tool({ packageId: other, source: 'plugin', ...over });
         const takesId = catalog.register({ id: other, version: '1.0.0', source: 'plugin', contributions: [theirs({ id: 'com.example.sheets.fine' }), theirs({})] });
         expect(takesId.ok).toBe(false);
         if (!takesId.ok) expect(takesId.problems.join('\n')).toMatch(/ai\.genie\.spreadsheet\.createWorkbook.*ai\.genie\.spreadsheet/);
-        const takesAlias = catalog.register({ id: other, version: '1.0.0', source: 'plugin', contributions: [theirs({ id: 'com.example.sheets.make', aliases: ['spreadsheet.createWorkbook'] })] });
-        expect(takesAlias.ok).toBe(false);
         expect(catalog.get('com.example.sheets.fine')).toBeNull();
         expect(catalog.revision).toBe(1);
         expect(catalog.get('ai.genie.spreadsheet.createWorkbook')?.packageId).toBe(PKG);
-        expect(catalog.get('spreadsheet.createWorkbook')?.id).toBe('ai.genie.spreadsheet.createWorkbook');
     });
 
     it('a contribution must belong to its package: its packageId and source are the package’s, its id appears once', () => {
@@ -133,10 +130,10 @@ describe('atomic package registration with revisions (the acceptance test)', () 
 });
 
 describe('one envelope, one validator', () => {
-    it('a complete definition passes, with defaults filled (no aliases, no network)', () => {
+    it('a complete definition passes, with defaults filled (no network)', () => {
         const r = validateDefinition(tool({ permissions: { capabilities: [] } }));
         expect(r.ok).toBe(true);
-        if (r.ok) expect(r.definition).toMatchObject({ aliases: [], permissions: { capabilities: [], network: [] } });
+        if (r.ok) expect(r.definition).toMatchObject({ permissions: { capabilities: [], network: [] } });
     });
 
     it.each([
@@ -169,7 +166,6 @@ describe('one envelope, one validator', () => {
             { reach: { scopes: ['workspace'], side: 'host', requiresWindow: false, remote: 'anyone' } },
             { permissions: { capabilities: [3], network: [] } },
             { permissions: { capabilities: [], network: 'everywhere' } },
-            { aliases: ['has space'] },
             { id: 'has space' },
         ]) expect(validateDefinition(tool(bad)).ok, JSON.stringify(bad)).toBe(false);
     });
