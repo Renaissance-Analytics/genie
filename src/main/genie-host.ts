@@ -113,6 +113,7 @@ import { dialTynnSocket } from './tynn-socket.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
+import { setThreadStoreSlowLog } from '../core/thread-store.js';
 import { repoStatus } from './repo-git.js';
 
 /**
@@ -149,7 +150,10 @@ const recordFile = join(runtime, 'host.json');
 const tokenFile = join(runtime, 'host.token');
 
 mkdirSync(runtime, { recursive: true });
-const lifecycleLog = openLifecycleLog(runtime);
+// Off the host's thread (Tynn #548): a line is queued and written in order; an exit writes what is left.
+const lifecycleLog = openLifecycleLog(runtime, { async: true });
+// A thread-store step past STORE_SLOW_MS names itself here (Tynn #557): the next stall says which await it was.
+setThreadStoreSlowLog(lifecycleLog);
 const say = (line: string): void => {
     console.log(`[genie-host] ${new Date().toISOString()} ${line}`);
 };
@@ -199,7 +203,8 @@ async function main(): Promise<void> {
      * flows, the scheduled tasks, the kept processes, the sites, the engines; and the window's boot restore, over the link.
      */
     // Its cause (cut 3): the newest crash record since the previous host started — its host.json is still here until this one writes its own.
-    const safeMode = SafeMode.open(runtime, { log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
+    // Its beat written off this host's thread (Tynn #538): a synchronous one held it 233 ms under a build's disk load.
+    const safeMode = SafeMode.open(runtime, { asyncBeat: true, log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
     const safeNow = () => safeMode.active();
     // THE CRASH STATE (Tynn #386): the previous run's newest record (its host.json is still the old one here) and, after a
     // hang, the reopened window's notice; local windows are told both (crash-state-host.ts).
