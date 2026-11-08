@@ -1,4 +1,5 @@
-import { execFile, type ChildProcess, type ExecFileOptions } from 'node:child_process';
+import type { ExecFileOptions } from 'node:child_process';
+import { gitExecFile, type GitChild } from './git-exec.js';
 import { join } from 'node:path';
 import { redactSecrets } from '../core/github.js';
 import { commitIdentityConfig } from '../core/add-workspace.js';
@@ -23,7 +24,7 @@ export class GitDidNotAnswer extends Error {
 /** A read inside the limit runs its git through this, so the limit knows what to end. */
 export interface GitLimit {
     /** The child, for what writes to it; `null` when the limit has already passed and `callback` has been told. */
-    git(args: readonly string[], options: ExecFileOptions, callback: (error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => void): ChildProcess | null;
+    git(args: readonly string[], options: ExecFileOptions, callback: (error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => void): GitChild | null;
 }
 
 /**
@@ -70,7 +71,7 @@ const GIT_JOB_END_WAIT_MS = 5_000;
  * name, no `/T`. A child that a hook detached before the first reading is not found. A job object would close even that
  * (noted for #1628's launcher).
  */
-async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree, platform: NodeJS.Platform = process.platform, jobs: ReadonlySet<ChildProcess> = new Set()): Promise<void> {
+async function endGitTrees(children: readonly GitChild[], tree: ProcessTree, platform: NodeJS.Platform = process.platform, jobs: ReadonlySet<GitChild> = new Set()): Promise<void> {
     const running = children.filter((child) => child.exitCode === null && child.signalCode === null && child.pid !== undefined);
     if (running.length === 0) return;
     // THE JOB FIRST, before anything in it (Windows, genie-launch.exe `job`). The launcher keeps its job's kill only while
@@ -126,9 +127,9 @@ async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree,
 
 /** The read, or a {@link GitDidNotAnswer} at the limit, and then what it started is ended. */
 export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: ProcessTree = systemProcessTree): Promise<T> {
-    const children: ChildProcess[] = [];
+    const children: GitChild[] = [];
     /** The children that are a launcher holding a job: ended first, before anything in their job (endGitTrees). */
-    const jobs = new Set<ChildProcess>();
+    const jobs = new Set<GitChild>();
     let over = false;
     const limit: GitLimit = {
         git: (args, options, callback) => {
@@ -136,9 +137,10 @@ export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: Pr
             // On Windows inside a kill-on-close job (genie-launch.exe, #1639): what git or a hook starts — MSYS background
             // children whose fork parent is gone included — is in the job, and ending the read ends the job.
             const launcher = winLauncherPath();
+            // Created where git-exec.ts routes it: genie-host's spawn-host child (Tynn #532), or here.
             const child = launcher !== null
-                ? execFile(launcher, ['job', resolveProgram('git'), ...args], { windowsHide: true, ...options }, callback)
-                : execFile(resolveProgram('git'), [...args], { windowsHide: true, ...options }, callback);
+                ? gitExecFile(launcher, ['job', resolveProgram('git'), ...args], { windowsHide: true, ...options }, callback)
+                : gitExecFile(resolveProgram('git'), [...args], { windowsHide: true, ...options }, callback);
             children.push(child);
             if (launcher !== null) jobs.add(child);
             return child;
@@ -165,14 +167,14 @@ export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: Pr
 
 export function gitInit(path: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-        execFile(resolveProgram('git'), ['init'], { cwd: path, windowsHide: true }, (error, _stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve()));
+        gitExecFile(resolveProgram('git'), ['init'], { cwd: path, windowsHide: true }, (error, _stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve()));
     });
 }
 
 /** One git command in a folder; rejects with git's own words. */
 function git(cwd: string, args: readonly string[]): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-        execFile(resolveProgram('git'), [...args], { cwd, windowsHide: true }, (error, stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve(String(stdout))));
+        gitExecFile(resolveProgram('git'), [...args], { cwd, windowsHide: true }, (error, stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve(String(stdout))));
     });
 }
 
@@ -208,7 +210,7 @@ function gitWithAuth(cwd: string | undefined, args: readonly string[], auth?: Gi
     const env: NodeJS.ProcessEnv | undefined = auth && auth.config.length > 0 ? { ...process.env, ...gitConfigEnv(auth.config) } : undefined;
     const scrub = (text: string) => redactSecrets(text, auth?.secrets ?? []);
     return new Promise<string>((resolve, reject) => {
-        execFile(resolveProgram('git'), [...args], { windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(cwd ? { cwd } : {}), ...(env ? { env } : {}) }, (error, stdout, stderr) =>
+        gitExecFile(resolveProgram('git'), [...args], { windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(cwd ? { cwd } : {}), ...(env ? { env } : {}) }, (error, stdout, stderr) =>
             (error ? reject(new Error(scrub(String(stderr ?? error.message).trim() || error.message))) : resolve(String(stdout))));
     });
 }
