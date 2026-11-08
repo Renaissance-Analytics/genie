@@ -1,3 +1,4 @@
+import { isOsAgent } from '../core/os-agent.js';
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
@@ -946,6 +947,8 @@ export class SessionHost {
         const session: AgentSession = new AgentSession({
             agentId: record.id,
             cwd,
+            // The OS agent is never told to continue after a rate limit (Tynn #543).
+            limitNudge: !isOsAgent(record),
             store: this.#store(),
             driverFactory,
             runId,
