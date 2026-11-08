@@ -40,6 +40,18 @@ jobs:
       # `npm ci` and not `npm install`: the lockfile is the contract. prism-acp is ESM-only
       # and prism-harness pins the durability layer we build on, so a silent resolution drift
       # is a behaviour change, not a version bump.
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
       - run: npm ci
 
       # Typecheck is a first-class gate, not a lint. The no-pty rule is enforced IN THE TYPE
@@ -180,6 +192,18 @@ jobs:
           echo "flows=$flows" >> "$GITHUB_OUTPUT"
           echo "Flows changed: $flows"
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
       - run: npm ci
         if: steps.changed.outputs.flows == 'true'
 
@@ -204,6 +228,18 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
 
       - run: npm ci
       # Native staging tests exercise the same built worker that the packaged app loads.
@@ -298,6 +334,18 @@ jobs:
           echo "zip64=$zip64" >> "$GITHUB_OUTPUT"
           echo "Zip writer changed: $zip64"
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
       - run: npm ci
         if: steps.changed.outputs.zip64 == 'true'
 
@@ -321,6 +369,18 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
 
       - run: npm ci
       - run: npm run verify:mailpit
@@ -364,6 +424,18 @@ jobs:
         run: |
           sudo cp scripts/smoke-fonts.conf /etc/fonts/local.conf
           sudo fc-cache -f
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
 
       - run: npm ci
 
@@ -567,6 +639,18 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
       - run: npm ci
 
       # The bundles first. `electron-builder` packs `dist/` — it does not produce it — so
@@ -664,6 +748,18 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
 
       - run: npm ci
       - run: npm run build
