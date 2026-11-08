@@ -196,3 +196,69 @@ describe('the host’s sites in Genie’s browser (browser rebuild step 4)', () 
         expect((remote.bridge as { browserWindow?: unknown }).browserWindow).toBeUndefined();
     });
 });
+
+/**
+ * A WINDOW DRIVING ANOTHER MACHINE (Tynn #529). The owner connected a Pilot's window to a drone and nothing answered:
+ * the desktop window never asked for the baton (only the phone did), and had no way to. A window that drives (`drive`)
+ * takes the baton the moment the host welcomes it — unless another window holds it, which it is told by name — hears
+ * who takes control from it, at once, and keeps every refusal it was given for the person to see, with what to do.
+ */
+describe('driving: two windows on one host (Tynn #529)', () => {
+    const settle = async () => { for (let i = 0; i < 5; i++) await tick(); };
+
+    it('the first window drives at once; the second is told who drives, takes control, and the first is told by whom; a disconnect releases', async () => {
+        host.issuePin();
+        const a = dial({ kind: 'pin', code: '482913', label: 'laptop' }, 'laptop', { drive: true });
+        expect(await a.ready).toEqual({ ok: true });
+        await settle();
+        expect(a.state()).toMatchObject({ driving: true, driver: 'laptop' });
+        // Full control with no extra step: a write goes straight through.
+        a.bridge.openAgent('agent_a');
+        await settle();
+        expect(api.calls.filter((c) => c.method === 'openAgent')).toEqual([{ method: 'openAgent', args: ['agent_a'] }]);
+        expect(a.state().lastRefusal).toBeNull();
+
+        // A second window: it does not take control silently; it sees who is driving.
+        const b = dial({ kind: 'token', token: 'tok', label: 'desk' }, 'desk', { drive: true });
+        expect(await b.ready).toEqual({ ok: true });
+        await settle();
+        expect(b.state()).toMatchObject({ driving: false, driver: 'laptop' });
+        expect(a.state()).toMatchObject({ driving: true, driver: 'laptop' });
+
+        // A write it cannot do yet says why, and that taking control is what it needs.
+        b.bridge.prompt('agent_a', 'hi');
+        await settle();
+        expect(b.state()).toMatchObject({ lastRefusal: 'laptop is driving; take the baton to make changes', needsBaton: true });
+
+        // Take control: the second drives, and the first is told at once, and by whom.
+        expect(await (b.takeBaton as (o?: { force?: boolean }) => Promise<unknown>)({ force: true })).toEqual({ ok: true });
+        await settle();
+        expect(b.state()).toMatchObject({ driving: true, driver: 'desk', needsBaton: false, lastRefusal: null });
+        expect(a.state()).toMatchObject({ driving: false, driver: 'desk', batonLostTo: 'desk' });
+
+        // The driver leaves: the baton is released and the window left sees nobody driving.
+        b.close();
+        await settle();
+        expect(a.state()).toMatchObject({ driving: false, driver: null });
+        expect(await a.takeBaton()).toEqual({ ok: true });
+        await settle();
+        expect(a.state()).toMatchObject({ driving: true, driver: 'laptop', batonLostTo: null });
+    });
+
+    it('Take over refused by the host is kept for the person to see, never a dead click', async () => {
+        host.issuePin();
+        const a = dial({ kind: 'pin', code: '482913', label: 'laptop' }, 'laptop', { drive: true });
+        await a.ready;
+        await settle();
+        expect(await a.bridge.takeOver('agent_a')).toEqual({ ok: false, reason: 'takeOver opens a window on alphar; do it there' });
+        expect(a.state().lastRefusal).toBe('takeOver opens a window on alphar; do it there');
+    });
+
+    it('CONTROL: a window that does not drive (no `drive`) holds no baton after the welcome, as before', async () => {
+        host.issuePin();
+        const a = dial({ kind: 'pin', code: '482913', label: 'laptop' }, 'laptop');
+        await a.ready;
+        await settle();
+        expect(a.state()).toMatchObject({ driving: false, driver: null });
+    });
+});
