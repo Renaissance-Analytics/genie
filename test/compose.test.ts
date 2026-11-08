@@ -31,6 +31,13 @@ function fakePty() {
     return { port, opened, killed };
 }
 
+// ---- PROBE (throwaway, never merged): time each phase of the services' setup and teardown on the Windows runner.
+const probeT = () => performance.now();
+const probeName = () => String(expect.getState().currentTestName ?? '?');
+const probeStages: string[] = [];
+const probeStage = (s: { stage: string; elapsedMs: number }) => { if (!s.stage.endsWith(':begin')) probeStages.push(`${s.stage}=${Math.round(s.elapsedMs)}`); };
+const probeLog = (file: string, phase: string, ms: number, extra = '') => console.log(`GENIE-PROBE file=${file} phase=${phase} ms=${Math.round(ms)} test="${probeName()}" ${extra}`);
+
 let dir: string;
 let pty: ReturnType<typeof fakePty>;
 let services: ComposedServices;
@@ -44,12 +51,19 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-compose-'));
     pty = fakePty();
     roster = [];
-    services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster });
+    probeStages.length = 0;
+    const t0 = probeT();
+    services = await composeServices({ userData: dir, pty: pty.port, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster, onComposeStage: probeStage });
+    probeLog('compose', 'compose', probeT() - t0, `plugins=${services.plugins.list().length} stages=${probeStages.join(',')}`);
 });
 
 afterEach(async () => {
+    const t0 = probeT();
     await services.shutdown();
+    const t1 = probeT();
     await rm(dir, { recursive: true, force: true });
+    probeLog('compose', 'shutdown', t1 - t0);
+    probeLog('compose', 'rm', probeT() - t1);
 });
 
 describe('boot', () => {
