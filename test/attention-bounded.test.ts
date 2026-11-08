@@ -153,3 +153,65 @@ describe('the file is split, and an older one is read', () => {
         expect(reopened.asked('q_old_3')).not.toBeNull();
     });
 });
+
+/*
+ * NOTHING THE BOUND DROPS IS LOST (the coordinator, before merge). Whatever the bound drops (a seen handoff past the limits)
+ * or cuts (a handoff's text past the cap) is first appended, whole, to `attention-archive.jsonl` — written off the host's
+ * thread, never read at start, readable on demand. The migration of an older single file archives first too.
+ */
+describe('the archive: every byte the bound drops or cuts', () => {
+    type Archived = { id: string; handoff: string | null; reason: string };
+    const archiveOf = async (): Promise<Archived[]> => {
+        const text = await readFile(join(runtimeDir(dir), 'attention-archive.jsonl'), 'utf8').catch(() => '');
+        return text.split('\n').filter(Boolean).map((l) => JSON.parse(l) as Archived);
+    };
+
+    it('the migration of the owner\'s history: every finished handoff is whole either in the history or in the archive', async () => {
+        await ownersHistory();
+        const original = JSON.parse(await readFile(join(runtimeDir(dir), 'attention.json'), 'utf8')) as { finished: { id: string; handoff: string }[] };
+        const store = await AttentionStore.open(dir, await InboxStore.open(dir, now), now);
+        const archive = await archiveOf();
+        const kept = new Map(store.finished().map((f) => [f.id, f.handoff]));
+        const archived = new Map(archive.map((a) => [a.id, a.handoff]));
+        for (const f of original.finished) {
+            const whole = kept.get(f.id) === f.handoff || archived.get(f.id) === f.handoff;
+            expect(whole, `${f.id}: its whole handoff is neither kept nor archived`).toBe(true);
+        }
+        // Every byte: the archive holds the whole text of each one dropped or cut (counted).
+        const dropped = original.finished.filter((f) => !kept.has(f.id));
+        const cut = original.finished.filter((f) => kept.has(f.id) && kept.get(f.id) !== f.handoff);
+        expect(dropped.length).toBeGreaterThan(0);
+        expect(cut.length).toBeGreaterThan(0);
+        for (const f of [...dropped, ...cut]) expect(archived.get(f.id), f.id).toBe(f.handoff);
+        // CONTROL: one kept whole is not archived.
+        const whole = original.finished.find((f) => kept.get(f.id) === f.handoff)!;
+        expect(archived.has(whole.id)).toBe(false);
+    });
+
+    it('a handoff over the cap, and a seen one dropped at an imDone, are archived whole before they go', async () => {
+        const store = await AttentionStore.open(dir, await InboxStore.open(dir, now), now);
+        const a = agents[0]!;
+        const long = `run long ${'z'.repeat(20_000)}`;
+        for (let i = 0; i < 22; i += 1) {
+            await store.imDone({ agentId: a, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: i === 0 ? long : `run ${i}` });
+            store.markSeen(store.finished().at(-1)!.id);
+            clock += 1_000;
+        }
+        await (store as unknown as { archived(): Promise<void> }).archived?.();
+        const archive = await archiveOf();
+        expect(archive.find((x) => x.handoff === long)).toBeDefined();
+        const ids = new Set(store.finished().map((f) => f.id));
+        expect(archive.some((x) => !ids.has(x.id) && x.handoff === 'run 1')).toBe(true);
+    });
+
+    it('never read at start (a broken archive opens fine), and readable on demand', async () => {
+        await ownersHistory();
+        await AttentionStore.open(dir, await InboxStore.open(dir, now), now);
+        await writeFile(join(runtimeDir(dir), 'attention-archive.jsonl'), 'not json\n', { flag: 'a' });
+        const store = await AttentionStore.open(dir, await InboxStore.open(dir, now), now);
+        expect(store.finished().length).toBeGreaterThan(0);
+        const read = await (store as unknown as { readArchive(): Promise<Archived[]> }).readArchive();
+        expect(read.length).toBeGreaterThan(100);
+        expect(read.every((r) => typeof r.id === 'string')).toBe(true);
+    });
+});
