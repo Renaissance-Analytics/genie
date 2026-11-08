@@ -1,4 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { resolveProgram } from '../core/program-lookup.js';
 
 /**
@@ -93,3 +95,23 @@ export const streamInProcess: LineStream = (binary, args, onLine, onEnd) => {
         },
     };
 };
+
+/**
+ * A process of Genie's own that runs on by itself (the Genie browser: a real Electron, so the env has no
+ * ELECTRON_RUN_AS_NODE), detached, its output appended to `logFile`. Its pid, or null. Created by the spawn host for
+ * genie-host (Tynn #535), and by genie-host itself only between that child's lives.
+ */
+export function spawnDetachedProcess(file: string, args: readonly string[], env: Readonly<Record<string, string>>, logFile: string): number | null {
+    mkdirSync(dirname(logFile), { recursive: true });
+    const out = openSync(logFile, 'a');
+    try {
+        const own: Record<string, string> = { ...env };
+        for (const k of Object.keys(own)) if (k.toUpperCase() === 'ELECTRON_RUN_AS_NODE') delete own[k];
+        const child = spawn(file, [...args], { detached: true, windowsHide: false, stdio: ['ignore', out, out], env: own });
+        child.on('error', () => {});
+        child.unref();
+        return child.pid ?? null;
+    } finally {
+        closeSync(out);
+    }
+}

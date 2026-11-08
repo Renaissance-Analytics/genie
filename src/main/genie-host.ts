@@ -520,7 +520,21 @@ async function main(): Promise<void> {
     let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
-    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => {
+        /*
+         * THE GENIE BROWSER IS NOT CREATED ON THIS HOST'S THREAD (Tynn #535): its start held this host 238 ms on the Linux runner
+         * (Windows creates a process synchronously on the calling thread). The supervised spawn-host child creates it,
+         * detached, while it is up; between its lives, here, as before.
+         */
+        const logsDir = join(home, 'logs');
+        const here = () => { spawnBrowserProcess(launch, { logsDir, env: process.env }); };
+        if (!supervisedLink.up()) { here(); return; }
+        const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => typeof e[1] === 'string'));
+        supervisedClient.spawnDetached(launch.file, launch.args, env, join(logsDir, 'genie-browser.log')).catch((error: unknown) => {
+            lifecycleLog(`genie browser: its spawn host could not start it (${error instanceof Error ? error.message : String(error)}); starting it here`);
+            here();
+        });
+    } });
     // A keyring unlocked while the Genie browser runs (Tynn story #388): that browser is restarted to use it, and the SCREEN says so.
     const keyringNotices: Array<(text: string | null) => void> = [];
     void keychainOpening.then(({ keyring }) => {
