@@ -37,3 +37,11 @@ export function pushVerdict(passes: Array<{ pass: string; sizes: number[] }>, op
     ok: boolean; p95Bytes: number; meanBytes: number;
     rows: Array<{ pass: string; count: number; meanBytes: number | null; p95Bytes: number | null; maxBytes: number | null }>; reasons: string[];
 };
+export function pageVerdict(input: { idle: { count: number; p95: number } | null; streaming: { count: number; p95: number; worstFrameGapMs: number } | null }, options?: { p95SlackMs?: number; maxFrameGapMs?: number }): {
+    ok: boolean; p95SlackMs: number; maxFrameGapMs: number; idleP95: number | null; streamingP95: number | null; worstFrameGapMs: number | null; reasons: string[];
+};
+export interface Slice { count: number; p95: number; worstGapMs: number }
+export function sliceVerdict(input: { on: Slice[]; off: Slice[] }, options?: { p95SlackMs?: number; maxFrameGapMs?: number; minSlices?: number }): {
+    ok: boolean; p95SlackMs: number; maxFrameGapMs: number; pairs: number; diffP95: number | null; diffs: Array<number | null>; onP95: number | null; offP95: number | null; onWorstGapMs: number | null; reasons: string[];
+};
+export function retryOnTimeout<T>(run: (attempt: number) => T, options?: { attempts?: number; reset?: (attempt: number) => void }): { value: T; tries: Array<{ attempt: number; ms: number; ok: boolean; timedOut?: boolean }> };

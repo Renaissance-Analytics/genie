@@ -40,6 +40,21 @@ jobs:
       # `npm ci` and not `npm install`: the lockfile is the contract. prism-acp is ESM-only
       # and prism-harness pins the durability layer we build on, so a silent resolution drift
       # is a behaviour change, not a version bump.
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
       - run: npm ci
 
       # Typecheck is a first-class gate, not a lint. The no-pty rule is enforced IN THE TYPE
@@ -93,6 +108,12 @@ jobs:
           grep -q "150px_minmax" "$css"
           grep -q "280px" "$css"
           grep -q "30px" "$css"
+
+      # EVERY ALERT SOUND IS IN THE BUILT RENDERER (Tynn #441; test/alert-sound-library.test.ts): each sound file under
+      # src/renderer/sounds/ was emitted under dist/renderer/assets/, which electron-builder packs whole (dist/**). The unit
+      # test holds every choice to a file in that folder; this holds the folder to what the build shipped.
+      - name: every alert sound is in the built renderer
+        run: node scripts/sound-assets-check.mjs dist/renderer src/renderer/sounds
 
   # GENIE-HOST ON PLAIN NODE (the host split, P10.1b). genie-cloud runs `node dist/main/host.js` in a container with
   # Node 22 and no Electron (P10.3), so the host bundle has to boot and serve there. Node 22.16.0 exactly: the oldest
@@ -174,6 +195,21 @@ jobs:
           echo "flows=$flows" >> "$GITHUB_OUTPUT"
           echo "Flows changed: $flows"
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
       - run: npm ci
         if: steps.changed.outputs.flows == 'true'
 
@@ -198,6 +234,21 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
       # Native staging tests exercise the same built worker that the packaged app loads.
@@ -292,6 +343,21 @@ jobs:
           echo "zip64=$zip64" >> "$GITHUB_OUTPUT"
           echo "Zip writer changed: $zip64"
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
       - run: npm ci
         if: steps.changed.outputs.zip64 == 'true'
 
@@ -315,6 +381,21 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
       - run: npm run verify:mailpit
@@ -358,6 +439,21 @@ jobs:
         run: |
           sudo cp scripts/smoke-fonts.conf /etc/fonts/local.conf
           sudo fc-cache -f
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
 
@@ -561,6 +657,21 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
       - run: npm ci
 
       # The bundles first. `electron-builder` packs `dist/` — it does not produce it — so
@@ -658,6 +769,21 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
       - run: npm run build

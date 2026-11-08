@@ -156,3 +156,61 @@ export function pushVerdict(passes, { p95Bytes = 32 * 1024, meanBytes = 24 * 102
     }
     return { ok: reasons.length === 0, p95Bytes, meanBytes, rows, reasons };
 }
+
+/**
+ * THE PAGE BUDGET WHILE A TERMINAL STREAMS (Tynn #525, L5): against the same run's idle phase, so a slower runner is not a
+ * failure of its own. The mouse's delay to the next frame (p95) no more than `p95SlackMs` over idle's, and no frame gap
+ * over `maxFrameGapMs`. A phase the mouse never reached fails: nothing measured.
+ */
+export function pageVerdict({ idle, streaming }, { p95SlackMs = 10, maxFrameGapMs = 100 } = {}) {
+    const reasons = [];
+    if (!(idle?.count > 0) || !(streaming?.count > 0)) reasons.push('the mouse reached no frame in the idle or the streaming phase');
+    else if (streaming.p95 > idle.p95 + p95SlackMs) reasons.push(`mouse to frame p95 ${streaming.p95} ms while the terminal streams, idle ${idle.p95} ms (bound idle + ${p95SlackMs})`);
+    if (streaming?.worstFrameGapMs > maxFrameGapMs) reasons.push(`a frame gap of ${Math.round(streaming.worstFrameGapMs)} ms while the terminal streams (bound ${maxFrameGapMs})`);
+    return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, idleP95: idle?.p95 ?? null, streamingP95: streaming?.p95 ?? null, worstFrameGapMs: streaming?.worstFrameGapMs ?? null, reasons };
+}
+
+const median = (values) => { const v = values.filter(Number.isFinite).sort((a, b) => a - b); if (v.length === 0) return null; const m = Math.floor(v.length / 2); return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+
+/**
+ * THE PAGE BUDGET, FROM A DISTRIBUTION (Tynn #536). The terminal's cost to the page, under the SAME build load: slices with
+ * the terminal on screen against slices with it off screen, interleaved, each slice's mouse-to-frame p95 and worst frame
+ * gap. The median of the "on" slices' p95 within `p95SlackMs` of the "off" slices' median, and the median of their worst
+ * frame gaps within `maxFrameGapMs`. Too few slices with input on either side fails: nothing measured.
+ *
+ * Against the idle phase (Tynn #525's first form) it was a comparison with NO build running: on a slow runner the build's
+ * own load was counted against the terminal (run 42450996960: 65 ms streaming, 45.1 idle, and 63.7 in the Files phase with
+ * no terminal at all).
+ */
+export function sliceVerdict({ on, off }, { p95SlackMs = 10, maxFrameGapMs = 100, minSlices = 3 } = {}) {
+    // PAIRED (the coordinator's (b)): slice k "on" against slice k "off", next to it in time, so a runner that slows down or
+    // speeds up during the build moves both. Only pairs where both slices had input count.
+    const pairs = on.map((x, k) => [x, off[k]]).filter(([a, b]) => a && b && a.count > 0 && b.count > 0);
+    const diffs = pairs.map(([a, b]) => a.p95 - b.p95), reasons = [];
+    const diff = median(diffs), onP95 = median(pairs.map(([a]) => a.p95)), offP95 = median(pairs.map(([, b]) => b.p95)), onGap = median(pairs.map(([a]) => a.worstGapMs));
+    const r = (v) => (v === null ? null : Math.round(v * 10) / 10);
+    if (pairs.length < minSlices) reasons.push(`too few pairs with input on both sides: ${pairs.length} (need ${minSlices})`);
+    else {
+        if (diff > p95SlackMs) reasons.push(`mouse to frame p95, median of ${pairs.length} paired differences: the terminal on screen ${r(diff)} ms over off (bound ${p95SlackMs}; on ${r(onP95)}, off ${r(offP95)})`);
+        if (onGap > maxFrameGapMs) reasons.push(`worst frame gap, median of ${pairs.length} slices with the terminal on screen: ${r(onGap)} ms (bound ${maxFrameGapMs})`);
+    }
+    return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, pairs: pairs.length, diffP95: r(diff), diffs: diffs.map(r), onP95: r(onP95), offP95: r(offP95), onWorstGapMs: r(onGap), reasons };
+}
+
+/**
+ * The row's own fixture git, bounded (Tynn #536: spawnSync git ETIMEDOUT on the Windows runner, genie#1718). `run` is
+ * tried up to `attempts` times while it times out, `reset` between tries; any other failure is thrown at once.
+ */
+export function retryOnTimeout(run, { attempts = 2, reset = () => {} } = {}) {
+    const tries = [];
+    for (let i = 1; ; i += 1) {
+        const started = Date.now();
+        try { const value = run(i); tries.push({ attempt: i, ms: Date.now() - started, ok: true }); return { value, tries }; }
+        catch (error) {
+            const timedOut = error?.code === 'ETIMEDOUT' || /ETIMEDOUT/.test(String(error?.message ?? ''));
+            tries.push({ attempt: i, ms: Date.now() - started, ok: false, timedOut });
+            if (!timedOut || i >= attempts) { error.tries = tries; throw error; }
+            reset(i);
+        }
+    }
+}

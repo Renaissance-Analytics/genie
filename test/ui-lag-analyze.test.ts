@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { describe, expect, it, vi } from 'vitest';
+import { budgetVerdict, createGapGauge, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -138,5 +138,52 @@ describe('the Files push budget (Tynn #523)', () => {
         expect(before.reasons).toEqual(['a: p95 140000 bytes per Files push (bound 32768)', 'a: mean 140000 bytes per Files push (bound 24576)']);
         expect(pushVerdict([{ pass: 'a', sizes: [30_000, 30_000, 30_000] }]).reasons).toEqual(['a: mean 30000 bytes per Files push (bound 24576)']);
         expect(pushVerdict([{ pass: 'a', sizes: [] }]).reasons).toEqual(['a: no Files push during the build']);
+    });
+});
+
+describe('the page budget while a terminal streams (Tynn #525)', () => {
+    it('passes within the slack of idle, and names each way it fails', () => {
+        expect(pageVerdict({ idle: { count: 50, p95: 45 }, streaming: { count: 50, p95: 52, worstFrameGapMs: 83 } }).ok).toBe(true);
+        // The measured page before (Linux): p95 66.5 against idle 45.2, a 117 ms frame gap.
+        expect(pageVerdict({ idle: { count: 50, p95: 45.2 }, streaming: { count: 50, p95: 66.5, worstFrameGapMs: 117 } }).reasons).toEqual([
+            'mouse to frame p95 66.5 ms while the terminal streams, idle 45.2 ms (bound idle + 10)',
+            'a frame gap of 117 ms while the terminal streams (bound 100)',
+        ]);
+        expect(pageVerdict({ idle: { count: 0, p95: 0 }, streaming: { count: 50, p95: 10, worstFrameGapMs: 0 } }).ok).toBe(false);
+    });
+});
+
+describe('the page budget from interleaved slices (Tynn #536)', () => {
+    const slice = (p95: number, worstGapMs = 0, count = 30) => ({ count, p95, worstGapMs });
+    it('the terminal\'s cost under the same load: medians, so one bad slice is not a verdict', () => {
+        // A slow runner: everything is slow, on and off alike. Not the terminal's cost.
+        expect(sliceVerdict({ on: [slice(64), slice(66), slice(65)], off: [slice(63), slice(62), slice(64)] }).ok).toBe(true);
+        // One bad slice among good ones does not fail it.
+        expect(sliceVerdict({ on: [slice(20), slice(90, 120), slice(21)], off: [slice(18), slice(19), slice(18)] }).ok).toBe(true);
+        // The old per-chunk render: every "on" slice slower than the "off" slice beside it.
+        expect(sliceVerdict({ on: [slice(60, 100), slice(62, 117), slice(66, 117)], off: [slice(44), slice(45), slice(46)] }).reasons).toEqual([
+            'mouse to frame p95, median of 3 paired differences: the terminal on screen 17 ms over off (bound 10; on 62, off 45)',
+            'worst frame gap, median of 3 slices with the terminal on screen: 117 ms (bound 100)',
+        ]);
+        // PAIRED: a runner that slows down during the build moves both slices of a pair, not the verdict.
+        expect(sliceVerdict({ on: [slice(30), slice(50), slice(70)], off: [slice(25), slice(45), slice(65)] }).diffs).toEqual([5, 5, 5]);
+        expect(sliceVerdict({ on: [slice(30), slice(50), slice(70)], off: [slice(25), slice(45), slice(65)] }).ok).toBe(true);
+        // A pair with no input on one side does not count.
+        expect(sliceVerdict({ on: [slice(1), slice(1, 0, 0), slice(1)], off: [slice(1), slice(1), slice(1)] }).reasons).toEqual(['too few pairs with input on both sides: 2 (need 3)']);
+    });
+});
+
+describe('the fixture git, bounded (Tynn #536)', () => {
+    it('retries a timeout, resets between tries, and stops at the bound; any other failure at once', () => {
+        const reset = vi.fn();
+        let n = 0;
+        const ok = retryOnTimeout(() => { n += 1; if (n === 1) throw Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }); return 'done'; }, { attempts: 2, reset });
+        expect(ok.value).toBe('done');
+        expect(ok.tries.map((t) => t.ok)).toEqual([false, true]);
+        expect(reset).toHaveBeenCalledOnce();
+        expect(() => retryOnTimeout(() => { throw Object.assign(new Error('x'), { code: 'ETIMEDOUT' }); }, { attempts: 2 })).toThrow('x');
+        let calls = 0;
+        expect(() => retryOnTimeout(() => { calls += 1; throw new Error('not a repository'); }, { attempts: 3 })).toThrow('not a repository');
+        expect(calls).toBe(1);
     });
 });
