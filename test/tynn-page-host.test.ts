@@ -157,10 +157,9 @@ describe('the VIP lane is read on genie-host, through the same page door', () =>
 
 describe('the window delegates the WIP door', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    it('both native IPC and the HostApi use the host-backed door', () => {
-        const ipc = main.slice(main.indexOf("ipcMain.handle('genie:workspace-tynn-page'"), main.indexOf("ipcMain.handle('genie:workspace-tynn-board-action'"));
-        expect(ipc).toContain('readWorkspaceTynnPage(');
-        expect(ipc).not.toContain('readTynnPage(tynnBoardPorts()');
+    // P4 family 12 (Tynn #561): the HostApi is the one way in; the native IPC handler is gone.
+    it('the HostApi uses the host-backed door, and no native IPC handler is left', () => {
+        expect(main).not.toContain("'genie:workspace-tynn-page'");
         const api = main.match(/tynnPage: ([^\n]+)/)?.[1];
         expect(api).toContain('readWorkspaceTynnPage(');
     });

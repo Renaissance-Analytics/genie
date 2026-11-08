@@ -2,6 +2,7 @@ import { BLOB_METHODS } from './local-blobs.js';
 import { LOCAL_TERMINAL_METHODS, type LocalTerminalMethod } from './local-terminals.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
 import { FILES_WATCH_METHODS } from './local-files-watch.js';
+import { TYNN_WATCH_METHODS } from './local-tynn-watch.js';
 import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
 import { LOCAL_DRAFT_METHODS, type LocalDraftMethod } from './local-drafts.js';
 import { LOCAL_ARTBOARD_METHODS, type LocalArtboardMethod } from './local-artboard.js';
@@ -85,6 +86,9 @@ export const REMOTE_METHODS = [
     'workspaces.tynnIssues',
     'workspaces.tynnIssueAction',
     'workspaces.tynnPageAction',
+    // P4 family 12 (Tynn #561): what changed on the board or the issue queue since a cursor — the live tab's reads.
+    'workspaces.tynnBoardChanges',
+    'workspaces.tynnIssueChanges',
     'workspaces.addRepo',
     'workspaces.removeRepo',
     'workspaces.removeRepoLock',
@@ -151,7 +155,7 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -166,7 +170,7 @@ export const COMPANION_EVENT = 'remote-companion';
 export interface CompanionEvent { readonly revoked: string }
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
@@ -256,6 +260,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.tynnIssueAction': 'write',
     // The Home's Details save (genie#1295 H1) writes on Tynn.
     'workspaces.tynnPageAction': 'write',
+    'workspaces.tynnBoardChanges': 'local',
+    'workspaces.tynnIssueChanges': 'local',
     'workspaces.addRepo': 'write',
     'workspaces.removeRepo': 'write',
     'workspaces.removeRepoLock': 'write',
