@@ -306,6 +306,12 @@ export const COOLING_MS = 15_000;
 export interface AgentSessionOptions {
     agentId: AgentId;
     cwd: string;
+    /**
+     * Told to continue when its provider's rate limit resets (LIMIT_RESUME_PROMPT), if the limit cut its turn off. `false`
+     * for the OS agent (Tynn #543, the owner: it "is mostly used for diagnostics and system setup, it doesn't do work, so
+     * it does not need to be nudged"). Default true.
+     */
+    limitNudge?: boolean;
     store: SessionStore;
     driverFactory: SessionDriverFactory;
     /** Resume this provider-side conversation instead of starting a fresh one. */
@@ -424,6 +430,12 @@ export class AgentSession {
 
     #driver: SessionDriver | null = null;
     #held = false;
+    /**
+     * The limit CUT OFF this agent's last turn (it ended on the limit), and it has not been told to continue since (Tynn
+     * #543). Holding an agent because another on its login hit the limit does not set it: that agent was interrupted by
+     * nothing, so at the reset it is told nothing. Cleared when the reset is told, so it is told at most once per reset.
+     */
+    #cutByLimit = false;
     /** A non-allowed rate-limit reading arrived during the turn now running. */
     #limitThisTurn = false;
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
@@ -643,20 +655,27 @@ export class AgentSession {
         this.#changed();
     }
 
-    /** The limit has reset (the gate's timer, or the person's Resume now): what waited goes out in order; nothing waited -> continue. */
+    /**
+     * The limit has reset (the gate's timer, or the person's Resume now): what waited goes out in order. Nothing waited ->
+     * "continue", but ONLY to an agent whose last turn the limit cut off, once, and never to the OS agent (Tynn #543); any
+     * other held agent is simply released.
+     */
     resumeAfterLimit(): void {
-        this.#resumeHeld(LIMIT_RESUME_PROMPT);
+        const nudge = this.#cutByLimit && this.#options.limitNudge !== false;
+        if (this.#held && this.running) this.#cutByLimit = false;
+        this.#resumeHeld(nudge ? LIMIT_RESUME_PROMPT : null);
     }
 
-    /** What waited goes out in order; nothing waited -> `nothingWaited`, as Genie's. */
-    #resumeHeld(nothingWaited: string): void {
+    /** What waited goes out in order; nothing waited -> `nothingWaited`, as Genie's (`null`: nothing is sent). */
+    #resumeHeld(nothingWaited: string | null): void {
         if (!this.#held || !this.running) return;
         this.#held = false;
         this.#overloadCancel?.();
         this.#overloadCancel = null;
         // A prompt steered into the held turn and not yet settled is not waiting to go (Tynn #440).
         if (!this.#afterTurn.some((p) => p.steer === undefined)) {
-            this.prompt(nothingWaited, 'genie');
+            if (nothingWaited !== null) this.prompt(nothingWaited, 'genie');
+            else this.#changed();
             return;
         }
         this.#flushAfterTurn();
@@ -1371,6 +1390,8 @@ export class AgentSession {
                         this.#failure = null;
                         this.#failedAt = null;
                         this.#held = true;
+                        // ITS turn was cut off: at the reset it is told to continue, once (Tynn #543).
+                        this.#cutByLimit = true;
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
                         // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
                         if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
