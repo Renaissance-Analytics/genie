@@ -46,6 +46,8 @@ export interface GenieMcpServer {
     /** `null` until started and after stopped — config sync and terminals read this, never a stale URL. */
     endpoint(): { url: string; token: string } | null;
     verify(): Promise<Verification>;
+    /** RED-RUN STUB (ADF A6): replaced in the next commit. */
+    setRegistrations(registrations: readonly Registration[]): void;
 }
 
 const NOT_LISTENING = 'the MCP server is not listening';
@@ -103,6 +105,7 @@ export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
             await server.close();
         },
         endpoint: () => endpoint,
+        setRegistrations: () => {},
         verify: async () => {
             try {
                 const result = (await discover()) as { supportedVersions?: unknown };

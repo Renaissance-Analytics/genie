@@ -85,6 +85,8 @@ export interface HostMcpPorts {
 }
 
 export interface HostMcp {
+    /** RED-RUN STUB (ADF A6): replaced in the next commit. */
+    refreshTools(): void;
     /** What the window said. The server is already starting (it does not wait for a window). */
     setView(view: WindowView): Promise<void>;
     /** A session's Genie MCP entry: the endpoint, its token and this agent's caller key. */
@@ -207,6 +209,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         endpoint: () => server?.endpoint() ?? null,
         status: () => ({ endpoint: server?.endpoint() ?? null, verified, tools }),
         stop: async () => { await server?.stop().catch(() => undefined); },
+        refreshTools: () => {},
         registrations: () => servedNow,
         runNative: async (call) => {
             const r = native.get(call.name);
