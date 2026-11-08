@@ -168,7 +168,9 @@ function uiLagComposited() {
             out.push({ tag: el.tagName.toLowerCase(), backdrop: cs.backdropFilter, filter: cs.filter, rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)], visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden', data, owner, cls: String(el.className).slice(0, 160), text: (el.textContent ?? '').trim().slice(0, 120) });
         }
     }
-    return out.slice(0, 20);
+    // And every dialog open, with what it says: the element over the window belongs to one.
+    const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')].map((d) => ({ data: Object.fromEntries([...d.attributes].filter((a) => a.name.startsWith('data-') || a.name.startsWith('aria-')).map((a) => [a.name, a.value.slice(0, 60)])), text: (d.textContent ?? '').trim().split(String.fromCharCode(10)).join(' ').slice(0, 300) }));
+    return { filtered: out.slice(0, 20), dialogs: dialogs.slice(0, 5) };
 }
 
 /** A deliberate block, the gauges' positive control and the profiles' alignment marker. Serialized into each thread. */
@@ -265,6 +267,7 @@ try {
     hostRecord ??= json(join(runtime, 'host.json'));
     hostCdp = await Cdp.connect((await until('owned genie-host inspector', async () => (await targets(HOST_INSPECT))[0], 30000)).webSocketDebuggerUrl);
     const box = await page.evaluate('({ width: innerWidth, height: innerHeight })');
+    console.log(`UI_LAG_COMPOSITED ready ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
 
     // The workspace, and a Terminals panel in a tab of its own (as smoke-cdp's check 49 places one).
     await page.evaluate(`window.location.hash = '#genie://workspace/tynn'; true`);
@@ -274,6 +277,7 @@ try {
     await page.evaluate(`document.querySelector('[data-designed-tab] [data-add-panel="terminal"]').click(); true`);
     await until('the terminal pane', () => page.evaluate(`Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-pane] .xterm-rows'))`), 30000);
     await sleep(1500);
+    console.log(`UI_LAG_COMPOSITED terminal-placed ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
     const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
 
     await main.evaluate(`(${installMainGauge.toString()})((${createGapGauge.toString()}))`);
