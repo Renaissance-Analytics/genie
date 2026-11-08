@@ -334,6 +334,16 @@ export function newestSnapshot(current: FeatureData, next: FeatureData): Feature
     return next.seq >= current.seq ? next : current;
 }
 
+/**
+ * The window now drives ANOTHER host: what of the previous host's snapshot is kept until the new host's first one lands.
+ * Another host numbers its snapshots from its own start, so this one's number is forgotten and the new host's first is taken.
+ */
+export function forgetHost(current: FeatureData): FeatureData {
+    if (current.seq === undefined) return current;
+    const { seq: _previousHost, ...rest } = current;
+    return rest;
+}
+
 /** What a feature action came to, for a control that shows its progress (renderer/site-actions.ts). */
 export type ActOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
