@@ -7,6 +7,7 @@ import { PACKAGE_LIMITS, PACKAGE_SIGNATURE_FILE, packageDigest, packageLimitProb
 import { readPackageFiles } from '../src/main/plugin-package.js';
 import { pluginTools } from '../src/main/mcp-tools-plugins.js';
 import { PluginHost } from '../src/main/plugin-host.js';
+import { renderSdkDocs } from '../src/core/sdk-docs.js';
 import type { Caller } from '../src/main/mcp-tools.js';
 import { signPackage } from './plugin-sign-helper.js';
 
@@ -190,6 +191,26 @@ describe('the limits (approved with the format): refused before any hashing, in 
         const entry = await stateOf(true);
         expect(entry!.state).toBe('refused');
         expect(entry!.reason).toMatch(/at most 50 MB a file/);
+    });
+});
+
+describe('docs/sdk/packages.md: the format, generated from the code that checks it', () => {
+    it('states the files, the order, the line, the signed bytes, the key id and the limits; the index links to it', () => {
+        const docs = renderSdkDocs();
+        const page = docs.get('packages.md');
+        expect(page).toBeDefined();
+        expect(page).toContain('genie-package/1');
+        expect(page).toContain(PACKAGE_SIGNATURE_FILE);
+        expect(page).toContain('<lowercase hex SHA-256 of the file\'s bytes><two spaces><path>');
+        expect(page).toContain('genie-package/1 sha256:<digest>');
+        expect(page).toMatch(/UTF-8 bytes of their paths/);
+        expect(page).toMatch(/`sha256:` followed by the lowercase hex SHA-256 of the key's whole SPKI DER/);
+        expect(page).toContain('at most 10,000 files');
+        expect(page).toContain('at most 200 MB in all');
+        expect(page).toContain('at most 50 MB a file');
+        expect(page).toContain('at most 1,024 bytes');
+        expect(page).toMatch(/tampered/);
+        expect(docs.get('README.md')).toContain('(packages.md)');
     });
 });
 
