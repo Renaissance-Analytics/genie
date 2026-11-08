@@ -1,4 +1,5 @@
-import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
+import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
+import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import { registerNavigationBridge } from '@particle-academy/agent-integrations/bridges/navigation';
 import { createRemoteNavigationAdapter } from '@particle-academy/agent-integrations/dom-navigation';
 import type { AgentRecord } from '../core/identity.js';
@@ -127,22 +128,7 @@ export function pagesTools(deps: PagesToolDeps): Registration[] {
     };
 
     const tool: Registration = {
-        definition: new ToolDefinition(
-            'pages',
-            'Drive this workspace’s open Genie site pages — a Genie browser tab or a site panel the person has open. `list` shows them. `call {page, tool, args}` runs a page tool on one: `page_describe` first (it lists the page’s fields and buttons by handle), then `page_read`, `page_set_field {handle, value}`, `page_click {handle}`, `page_submit {handle}`, `nav_visit {url}`, `nav_back`, `nav_forward`, `nav_scroll_to`, `nav_scroll_by`. A submit, or a click that changes or deletes something, asks the person first — unless your “May drive pages” switch is on.',
-            {
-                type: 'object',
-                properties: {
-                    action: { type: 'string', enum: ['list', 'call'] },
-                    page: { type: 'string', description: 'A page id from list.' },
-                    tool: { type: 'string', description: 'The page tool to run: page_describe, page_read, page_set_field, page_click, page_submit, nav_visit, nav_back, nav_forward, nav_scroll_to, nav_scroll_by.' },
-                    args: { type: 'object', description: 'The page tool’s arguments, e.g. {"handle": "save"}.' },
-                    terminalId: MIRRORED_TERMINAL_ID,
-                },
-                required: ['action'],
-            },
-            'Pages',
-        ),
+        definition: builtinToolDefinition(PAGES_TOOL),
         visible: ({ headers }) => {
             const key = headers['mcp-param-genie-session'] ?? headers['genie-session'];
             return typeof key === 'string' && mayDrive(deps.resolveCaller(key));
@@ -181,3 +167,25 @@ export function pagesTools(deps: PagesToolDeps): Registration[] {
     };
     return [tool];
 }
+
+
+// ---------------------------------------------------------------- compiled declarations (ADF A2, Tynn #446)
+// What these tools ARE, as data: the catalog registers them (main/genie-catalog.ts); the factory above binds handlers.
+export const PAGES_TOOL: BuiltinTool = declareBuiltinTool(
+    'pages',
+    'Drive this workspace’s open Genie site pages — a Genie browser tab or a site panel the person has open. `list` shows them. `call {page, tool, args}` runs a page tool on one: `page_describe` first (it lists the page’s fields and buttons by handle), then `page_read`, `page_set_field {handle, value}`, `page_click {handle}`, `page_submit {handle}`, `nav_visit {url}`, `nav_back`, `nav_forward`, `nav_scroll_to`, `nav_scroll_by`. A submit, or a click that changes or deletes something, asks the person first — unless your “May drive pages” switch is on.',
+    {
+        type: 'object',
+        properties: {
+            action: { type: 'string', enum: ['list', 'call'] },
+            page: { type: 'string', description: 'A page id from list.' },
+            tool: { type: 'string', description: 'The page tool to run: page_describe, page_read, page_set_field, page_click, page_submit, nav_visit, nav_back, nav_forward, nav_scroll_to, nav_scroll_by.' },
+            args: { type: 'object', description: 'The page tool’s arguments, e.g. {"handle": "save"}.' },
+            terminalId: MIRRORED_TERMINAL_ID,
+        },
+        required: ['action'],
+    },
+    'Pages'
+);
+/** This module's tools, in the order its factory returns them. */
+export const PAGES_TOOLS: readonly BuiltinTool[] = [PAGES_TOOL];

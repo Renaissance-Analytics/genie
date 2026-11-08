@@ -1,4 +1,5 @@
-import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
+import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
+import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import type { ProcessLog } from '../core/output-tail.js';
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
@@ -91,37 +92,7 @@ function view(p: HostedProcess): Record<string, unknown> {
 
 export function processTools(deps: ProcessToolsDeps): Registration[] {
     const tool: Registration = {
-        definition: new ToolDefinition(
-            'processes',
-            'Your workspace’s background processes — queue workers, watchers, dev servers — kept running by GENIE: never leave one running in a terminal or with `nohup`/`&`. '
-                + 'Genie starts it in the workspace with the workspace’s service variables, restarts it by its policy, brings it back on every launch until it is stopped, and keeps its log after it exits or crashes. '
-                + 'Actions: `list` — this workspace’s processes, including its sites’ servers. '
-                + '`logs` {process, lines?} — the end of its output (default 200 lines), still there after a crash. '
-                + '`add` {name, command, folder? (inside the workspace; default its root), restart? on-failure (default) | always | never} — the person approves it first and sees the command. '
-                + '`start` / `stop` / `restart` {process} — a process this workspace keeps (a site’s server is the `sites` tool’s). '
-                + '`remove` {process} — the person approves it; it is stopped and no longer brought back. '
-                + 'A SCHEDULED TASK is a process with a `schedule` (five-field cron, this machine’s local time): `add` {name, schedule, command, folder?} runs the command at each due, once (never restarted); with `scheduleKind: agent-nudge` {name, schedule, prompt, agent (an inbox address)} each due hands the prompt to that agent (delivered when its turn ends). The person approves it and sees the recurrence; then it is enabled. '
-                + '`run-now` {process} — run a scheduled task once now. `enable` / `disable` {process} — arm or pause its schedule.',
-            {
-                type: 'object',
-                properties: {
-                    terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['list', 'logs', 'add', 'start', 'stop', 'restart', 'remove', 'run-now', 'enable', 'disable'] },
-                    process: { type: 'string', description: 'logs / start / stop / restart / remove: the process’s id or name, from `list`.' },
-                    lines: { type: 'number', description: 'logs: how many lines from the end (default 200).' },
-                    name: { type: 'string', description: 'add: what to call it (queue worker).' },
-                    command: { type: 'string', description: 'add: the command Genie runs (php artisan queue:work).' },
-                    folder: { type: 'string', description: 'add: a folder inside this workspace, relative to its root (repos/app); default the root.' },
-                    restart: { type: 'string', enum: ['on-failure', 'always', 'never'], description: 'add: when Genie restarts it by itself; default on-failure.' },
-                    schedule: { type: 'string', description: 'add: a five-field cron (minute hour day-of-month month day-of-week, local time), e.g. "0 3 * * *" — makes it a scheduled task.' },
-                    scheduleKind: { type: 'string', enum: ['command', 'agent-nudge'], description: 'add with schedule: run the command (default), or nudge an agent.' },
-                    prompt: { type: 'string', description: 'add agent-nudge: the text delivered to the agent at each due.' },
-                    agent: { type: 'string', description: 'add agent-nudge: whom to nudge — an inbox address (atlas@workspace).' },
-                },
-                required: ['action'],
-            },
-            'Processes',
-        ),
+        definition: builtinToolDefinition(PROCESSES_TOOL),
         handler: async (args: JsonObject, context) => {
             const caller = callerFrom(args, context.headers, deps.resolveCaller);
             if (typeof caller === 'string') return err(caller);
@@ -250,3 +221,40 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
     };
     return [tool];
 }
+
+
+// ---------------------------------------------------------------- compiled declarations (ADF A2, Tynn #446)
+// What these tools ARE, as data: the catalog registers them (main/genie-catalog.ts); the factory above binds handlers.
+export const PROCESSES_TOOL: BuiltinTool = declareBuiltinTool(
+    'processes',
+    'Your workspace’s background processes — queue workers, watchers, dev servers — kept running by GENIE: never leave one running in a terminal or with `nohup`/`&`. '
+        + 'Genie starts it in the workspace with the workspace’s service variables, restarts it by its policy, brings it back on every launch until it is stopped, and keeps its log after it exits or crashes. '
+        + 'Actions: `list` — this workspace’s processes, including its sites’ servers. '
+        + '`logs` {process, lines?} — the end of its output (default 200 lines), still there after a crash. '
+        + '`add` {name, command, folder? (inside the workspace; default its root), restart? on-failure (default) | always | never} — the person approves it first and sees the command. '
+        + '`start` / `stop` / `restart` {process} — a process this workspace keeps (a site’s server is the `sites` tool’s). '
+        + '`remove` {process} — the person approves it; it is stopped and no longer brought back. '
+        + 'A SCHEDULED TASK is a process with a `schedule` (five-field cron, this machine’s local time): `add` {name, schedule, command, folder?} runs the command at each due, once (never restarted); with `scheduleKind: agent-nudge` {name, schedule, prompt, agent (an inbox address)} each due hands the prompt to that agent (delivered when its turn ends). The person approves it and sees the recurrence; then it is enabled. '
+        + '`run-now` {process} — run a scheduled task once now. `enable` / `disable` {process} — arm or pause its schedule.',
+    {
+        type: 'object',
+        properties: {
+            terminalId: MIRRORED_TERMINAL_ID,
+            action: { type: 'string', enum: ['list', 'logs', 'add', 'start', 'stop', 'restart', 'remove', 'run-now', 'enable', 'disable'] },
+            process: { type: 'string', description: 'logs / start / stop / restart / remove: the process’s id or name, from `list`.' },
+            lines: { type: 'number', description: 'logs: how many lines from the end (default 200).' },
+            name: { type: 'string', description: 'add: what to call it (queue worker).' },
+            command: { type: 'string', description: 'add: the command Genie runs (php artisan queue:work).' },
+            folder: { type: 'string', description: 'add: a folder inside this workspace, relative to its root (repos/app); default the root.' },
+            restart: { type: 'string', enum: ['on-failure', 'always', 'never'], description: 'add: when Genie restarts it by itself; default on-failure.' },
+            schedule: { type: 'string', description: 'add: a five-field cron (minute hour day-of-month month day-of-week, local time), e.g. "0 3 * * *" — makes it a scheduled task.' },
+            scheduleKind: { type: 'string', enum: ['command', 'agent-nudge'], description: 'add with schedule: run the command (default), or nudge an agent.' },
+            prompt: { type: 'string', description: 'add agent-nudge: the text delivered to the agent at each due.' },
+            agent: { type: 'string', description: 'add agent-nudge: whom to nudge — an inbox address (atlas@workspace).' },
+        },
+        required: ['action'],
+    },
+    'Processes'
+);
+/** This module's tools, in the order its factory returns them. */
+export const PROCESS_TOOLS: readonly BuiltinTool[] = [PROCESSES_TOOL];

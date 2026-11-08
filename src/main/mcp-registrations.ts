@@ -8,11 +8,16 @@ import { processTools, type ProcessToolsDeps } from './mcp-tools-processes.js';
 import { flowTools, type FlowToolsDeps } from './mcp-tools-flows.js';
 import { workspaceTabsTools, type WorkspaceTabsToolDeps } from './mcp-tools-workspace-tabs.js';
 import { pagesTools, type PagesToolDeps } from './mcp-tools-pages.js';
+import type { Catalog } from '../core/catalog.js';
+import { genieCatalog, pluginPackage } from './genie-catalog.js';
 
 /**
- * EVERY GENIE TOOL, ONCE (§6.9). The six tool modules compose into the one list the server registers:
- * the Genie tools in a stable order, then every enabled plugin's tools under their plugin's namespace.
- * Names are unique or `Server.register` refuses — so this is also where a collision would surface.
+ * EVERY GENIE TOOL, ONCE (§6.9), AS THE CATALOG HOLDS THEM (ADF A2, Tynn #446). What is offered is the catalog's tools,
+ * in the catalog's order (main/genie-catalog.ts): the builtin tools, the official plugins' tools, then each enabled
+ * installed plugin's, registered as its own package through the same validator. The tool modules supply HANDLERS, bound
+ * by name; a tool the catalog does not hold is not offered, and a part that is absent (doctor mode has no agents) offers
+ * nothing for its tools. A plugin that does not register — it does not validate, or it poses as a package already
+ * there — offers nothing.
  */
 
 export interface AllToolsDeps {
@@ -31,6 +36,34 @@ export interface AllToolsDeps {
     readonly pages?: PagesToolDeps;
 }
 
-export function allGenieTools(deps: AllToolsDeps): Registration[] {
-    return [...genieTools(deps.genie), ...moreGenieTools(deps.more), ...attentionTools(deps.attention), ...hostingTools(deps.hosting), ...processTools(deps.processes), ...flowTools(deps.flows), ...(deps.agents ? agentTools(deps.agents) : []), ...(deps.workspaceTabs ? workspaceTabsTools(deps.workspaceTabs) : []), ...(deps.pages ? pagesTools(deps.pages) : []), ...pluginTools(deps.plugins)];
+export function allGenieTools(deps: AllToolsDeps, catalog: Catalog = genieCatalog()): Registration[] {
+    const refs = deps.plugins.plugins.tools();
+    // Each plugin's package, once: Genie's own are already in the catalog; an installed one registers here.
+    const admitted = new Set<string>();
+    const seen = new Set<string>();
+    for (const ref of refs) {
+        if (seen.has(ref.pluginId)) continue;
+        seen.add(ref.pluginId);
+        if (ref.official === true) {
+            if (catalog.packages().some((p) => p.id === ref.pluginId && p.source === 'builtin')) admitted.add(ref.pluginId);
+            continue;
+        }
+        if (ref.manifest.id === ref.pluginId && catalog.register(pluginPackage(ref.manifest, 'plugin')).ok) admitted.add(ref.pluginId);
+    }
+    const handlers = new Map<string, Registration>();
+    const bind = (registrations: readonly Registration[]) => { for (const r of registrations) handlers.set(r.definition.name, r); };
+    bind(genieTools(deps.genie));
+    bind(moreGenieTools(deps.more));
+    bind(attentionTools(deps.attention));
+    bind(hostingTools(deps.hosting));
+    bind(processTools(deps.processes));
+    bind(flowTools(deps.flows));
+    if (deps.agents) bind(agentTools(deps.agents));
+    if (deps.workspaceTabs) bind(workspaceTabsTools(deps.workspaceTabs));
+    if (deps.pages) bind(pagesTools(deps.pages));
+    bind(pluginTools({ ...deps.plugins, plugins: { ...deps.plugins.plugins, tools: () => refs.filter((ref) => admitted.has(ref.pluginId)) } }));
+    return catalog.list('tool').flatMap((d) => {
+        const r = handlers.get(String(d.payload.handler));
+        return r ? [r] : [];
+    });
 }

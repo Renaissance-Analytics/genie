@@ -72,8 +72,11 @@ const DOCS_KEYS = new Set(['name', 'description', 'guide']);
 const REACH_KEYS = new Set(['scopes', 'side', 'requiresWindow', 'remote']);
 const PERMISSION_KEYS = new Set(['capabilities', 'network']);
 const PACKAGE_KEYS = new Set(['id', 'version', 'source', 'contributions']);
-/** A dotted name: `ai.genie.spreadsheet.createWorkbook`, or a bare one like `imDone` for a builtin tool. */
-const ELEMENT_ID = /^[A-Za-z][A-Za-z0-9-]*(\.[A-Za-z0-9-]+)*$/;
+/**
+ * A dotted name: `ai.genie.spreadsheet.createWorkbook`, or a bare one like `imDone` for a builtin tool. Each part holds
+ * what an MCP tool name may (letters, digits, `_`, `-`), so a plugin tool like `run_lint` keeps its name.
+ */
+const ELEMENT_ID = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*$/;
 const PACKAGE_ID = /^[a-z0-9]+(\.[a-z0-9-]+)+$/;
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const EXTENSION = /^\.[A-Za-z0-9]+$/;
@@ -234,8 +237,11 @@ export class Catalog {
         const check = validatePackage(raw);
         if (!check.ok) return check;
         const { pkg } = check;
-        // Collisions are checked against every OTHER package; the package's own previous version is being replaced.
+        // Collisions are checked against every OTHER package; the package's own previous version is being replaced — by
+        // the same source only: an installed plugin never replaces one of Genie's own (ADF A2, Tynn #446).
         const problems: string[] = [];
+        const previous = this.#packages.get(pkg.id);
+        if (previous && previous.source !== pkg.source) problems.push(`package ${pkg.id} is already registered as a ${previous.source} package; a ${pkg.source} package cannot replace it`);
         for (const d of pkg.contributions) {
             for (const name of [d.id, ...d.aliases]) {
                 const holder = this.#names.get(name);
