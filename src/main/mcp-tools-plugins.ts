@@ -47,17 +47,27 @@ export function pluginToolTitle(pluginName: string, toolName: string): string {
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
 
+/**
+ * What a plugin's tool goes out as (ADF A2, Tynn #446): its name under the plugin's namespace, its words with the plugin
+ * named, its schema with `terminalId`. The catalog registers exactly this (main/genie-catalog.ts), so the definition an
+ * agent is offered is the catalog's.
+ */
+export function pluginToolOffer(pluginId: string, manifest: Pick<PluginManifest, 'name' | 'version'>, tool: PluginTool): { name: string; description: string; inputSchema: JsonObject; title: string } {
+    const schema = tool.inputSchema;
+    const properties = { ...((schema.properties as Record<string, unknown> | undefined) ?? {}), terminalId: MIRRORED_TERMINAL_ID };
+    return {
+        name: `${pluginId}.${tool.name}`,
+        description: `${tool.description} (plugin ${manifest.name} ${manifest.version}${tool.gated ? '; approval-gated' : ''})`,
+        inputSchema: { ...schema, type: 'object', properties } as JsonObject,
+        title: pluginToolTitle(manifest.name, tool.name),
+    };
+}
+
 export function pluginTools(deps: PluginToolsDeps): Registration[] {
     return deps.plugins.tools().map((ref) => {
-        const name = `${ref.pluginId}.${ref.tool.name}`;
-        const schema = ref.tool.inputSchema;
-        const properties = { ...((schema.properties as Record<string, unknown> | undefined) ?? {}), terminalId: MIRRORED_TERMINAL_ID };
-        const definition = new ToolDefinition(
-            name,
-            `${ref.tool.description} (plugin ${ref.manifest.name} ${ref.manifest.version}${ref.tool.gated ? '; approval-gated' : ''})`,
-            { ...schema, type: 'object', properties } as JsonObject,
-            pluginToolTitle(ref.manifest.name, ref.tool.name),
-        );
+        const offer = pluginToolOffer(ref.pluginId, ref.manifest, ref.tool);
+        const name = offer.name;
+        const definition = new ToolDefinition(offer.name, offer.description, offer.inputSchema, offer.title);
         const handler = async (args: JsonObject, context: { headers: Record<string, string> } & McpCall): Promise<McpToolResult> => {
             const caller = callerFrom(args, context.headers, deps.resolveCaller);
             if (typeof caller === 'string') return err(caller);

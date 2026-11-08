@@ -1,4 +1,5 @@
-import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
+import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
+import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import { flowNodes } from '../core/flow-form.js';
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
@@ -84,33 +85,7 @@ function strayStep(document: unknown, workspaceId: string): string | null {
 
 export function flowTools(deps: FlowToolsDeps): Registration[] {
     const tool: Registration = {
-        definition: new ToolDefinition(
-            'flows',
-            'Your workspace’s flows — scheduled and repeating work Genie runs for you: a watcher (“every 30 minutes run this check; if it exits 10, prompt an agent”), a nightly job. '
-                + 'A flow is a fancy-flow document `{ version: 1, graph: { nodes, edges } }`: triggers `schedule_trigger` {cron, timezone?}, `manual_trigger`, or `genie/file_added` {workspace, folder?, extensions? ("png, jpg"), minSizeBytes?} — runs when a matching file lands in the workspace (never .git, node_modules or vendor) and hands on {path, relPath, name, extension, sizeBytes}; steps `genie/terminal_run` {workspace, command, cwd?, allowFailure?} (its output is {exitCode, output, ok}), '
-                + '`genie/agent_prompt` {agent (an inbox address), prompt}, `genie/knowledge_add` {workspace, title, body?}, `genie/file_move` {workspace, from: "{{in.path}}", to (a folder in the workspace)} — no shell, never overwrites. In a flow a file starts, a command never templates a value (a file name can carry shell syntax): move files with genie/file_move. `branch` {conditions: [{left: "{{in.exitCode}}", operator: "eq", right: "10"}]} routes on its `true`/`false` port (an edge’s sourceHandle). '
-                + 'A flow you create is created DISARMED and does not run: the person arms it in Genie’s Flows tab — an agent can never arm one, and `arm` only records that you asked. '
-                + 'Actions: `list` — this workspace’s flows, armed or not, with their schedules and last runs. '
-                + '`get` {id} — one flow: its document, refusals and every run’s outcome. '
-                + '`create` {name, document} — every step in your own workspace. '
-                + '`update` {id, name?, document?} — an armed flow’s document cannot change: disarm it first, and the person arms it again. '
-                + '`arm` {id} — refused to agents and recorded on the flow, so the person sees it. '
-                + '`disarm` {id}. '
-                + '`runNow` {id} — one run of an ARMED flow, now; its outcome lands in its runs (`get`). '
-                + '`remove` {id} — only a flow you created.',
-            {
-                type: 'object',
-                properties: {
-                    terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['list', 'get', 'create', 'update', 'arm', 'disarm', 'runNow', 'remove'] },
-                    id: { type: 'string', description: 'get / update / arm / disarm / runNow / remove: the flow’s id, from `list`.' },
-                    name: { type: 'string', description: 'create / update: what to call it (queue watcher).' },
-                    document: { type: 'object', description: 'create / update: the fancy-flow document, { version: 1, graph: { nodes, edges } }.' },
-                },
-                required: ['action'],
-            },
-            'Flows',
-        ),
+        definition: builtinToolDefinition(FLOWS_TOOL),
         handler: async (args: JsonObject, context) => {
             const caller = callerFrom(args, context.headers, deps.resolveCaller);
             if (typeof caller === 'string') return err(caller);
@@ -198,3 +173,36 @@ export function flowTools(deps: FlowToolsDeps): Registration[] {
     };
     return [tool];
 }
+
+
+// ---------------------------------------------------------------- compiled declarations (ADF A2, Tynn #446)
+// What these tools ARE, as data: the catalog registers them (main/genie-catalog.ts); the factory above binds handlers.
+export const FLOWS_TOOL: BuiltinTool = declareBuiltinTool(
+    'flows',
+    'Your workspace’s flows — scheduled and repeating work Genie runs for you: a watcher (“every 30 minutes run this check; if it exits 10, prompt an agent”), a nightly job. '
+        + 'A flow is a fancy-flow document `{ version: 1, graph: { nodes, edges } }`: triggers `schedule_trigger` {cron, timezone?}, `manual_trigger`, or `genie/file_added` {workspace, folder?, extensions? ("png, jpg"), minSizeBytes?} — runs when a matching file lands in the workspace (never .git, node_modules or vendor) and hands on {path, relPath, name, extension, sizeBytes}; steps `genie/terminal_run` {workspace, command, cwd?, allowFailure?} (its output is {exitCode, output, ok}), '
+        + '`genie/agent_prompt` {agent (an inbox address), prompt}, `genie/knowledge_add` {workspace, title, body?}, `genie/file_move` {workspace, from: "{{in.path}}", to (a folder in the workspace)} — no shell, never overwrites. In a flow a file starts, a command never templates a value (a file name can carry shell syntax): move files with genie/file_move. `branch` {conditions: [{left: "{{in.exitCode}}", operator: "eq", right: "10"}]} routes on its `true`/`false` port (an edge’s sourceHandle). '
+        + 'A flow you create is created DISARMED and does not run: the person arms it in Genie’s Flows tab — an agent can never arm one, and `arm` only records that you asked. '
+        + 'Actions: `list` — this workspace’s flows, armed or not, with their schedules and last runs. '
+        + '`get` {id} — one flow: its document, refusals and every run’s outcome. '
+        + '`create` {name, document} — every step in your own workspace. '
+        + '`update` {id, name?, document?} — an armed flow’s document cannot change: disarm it first, and the person arms it again. '
+        + '`arm` {id} — refused to agents and recorded on the flow, so the person sees it. '
+        + '`disarm` {id}. '
+        + '`runNow` {id} — one run of an ARMED flow, now; its outcome lands in its runs (`get`). '
+        + '`remove` {id} — only a flow you created.',
+    {
+        type: 'object',
+        properties: {
+            terminalId: MIRRORED_TERMINAL_ID,
+            action: { type: 'string', enum: ['list', 'get', 'create', 'update', 'arm', 'disarm', 'runNow', 'remove'] },
+            id: { type: 'string', description: 'get / update / arm / disarm / runNow / remove: the flow’s id, from `list`.' },
+            name: { type: 'string', description: 'create / update: what to call it (queue watcher).' },
+            document: { type: 'object', description: 'create / update: the fancy-flow document, { version: 1, graph: { nodes, edges } }.' },
+        },
+        required: ['action'],
+    },
+    'Flows'
+);
+/** This module's tools, in the order its factory returns them. */
+export const FLOWS_TOOLS: readonly BuiltinTool[] = [FLOWS_TOOL];

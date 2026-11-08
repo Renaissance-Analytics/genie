@@ -1,7 +1,8 @@
 import { callerFrom } from './mcp-callers.js';
 import { relative, resolve } from 'node:path';
 import { confinePath, OutsideWorkspaceError } from './workspace-confine.js';
-import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
+import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
+import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
 
 /**
@@ -42,12 +43,7 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
     };
 
     const openFileForUser: Registration = {
-        definition: new ToolDefinition(
-            'openFileForUser',
-            'Open a file from your workspace for the person in your workspace’s file panel, optionally at a line. It never moves their view or keyboard: your workspace’s row pulses, and the file is open when they go there. The path must be inside your workspace; anything outside is refused.',
-            { type: 'object', properties: { terminalId: MIRRORED_TERMINAL_ID, path: { type: 'string' }, line: { type: 'number' } }, required: ['path'] },
-            'Open file for user',
-        ),
+        definition: builtinToolDefinition(OPEN_FILE_FOR_USER_TOOL),
         handler: withCaller(async (caller, args) => {
             const requested = str(args.path);
             if (!requested) return err('openFileForUser needs `path`');
@@ -76,18 +72,7 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
      * agents know what to pick up on."): the plan Genie keeps for the caller, across relaunches and fresh conversations.
      */
     const plan: Registration = {
-        definition: new ToolDefinition(
-            'plan',
-            'Show your plan in your Active Plan column: the WHOLE list each time, every step with a status — pending, in_progress (the one you are on) or completed. Call it when you start work with more than one step, and again as each step starts or finishes. Genie keeps your latest plan across restarts and new conversations: call it without `steps` to read that plan back — do this when you start, to pick up where you left off.',
-            {
-                type: 'object',
-                properties: {
-                    terminalId: MIRRORED_TERMINAL_ID,
-                    steps: { type: 'array', items: { type: 'object', properties: { content: { type: 'string' }, status: { type: 'string', enum: [...PLAN_STATUSES] } }, required: ['content', 'status'] } },
-                },
-            },
-            'Plan',
-        ),
+        definition: builtinToolDefinition(PLAN_TOOL),
         handler: withCaller(async (caller, args) => {
             // No `steps` at all: a READ of the kept plan. An empty or malformed `steps` is still a write, and refused below.
             if (args.steps === undefined) {
@@ -115,3 +100,27 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
 
     return [openFileForUser, plan];
 }
+
+
+// ---------------------------------------------------------------- compiled declarations (ADF A2, Tynn #446)
+// What these tools ARE, as data: the catalog registers them (main/genie-catalog.ts); the factory above binds handlers.
+export const OPEN_FILE_FOR_USER_TOOL: BuiltinTool = declareBuiltinTool(
+    'openFileForUser',
+    'Open a file from your workspace for the person in your workspace’s file panel, optionally at a line. It never moves their view or keyboard: your workspace’s row pulses, and the file is open when they go there. The path must be inside your workspace; anything outside is refused.',
+    { type: 'object', properties: { terminalId: MIRRORED_TERMINAL_ID, path: { type: 'string' }, line: { type: 'number' } }, required: ['path'] },
+    'Open file for user'
+);
+export const PLAN_TOOL: BuiltinTool = declareBuiltinTool(
+    'plan',
+    'Show your plan in your Active Plan column: the WHOLE list each time, every step with a status — pending, in_progress (the one you are on) or completed. Call it when you start work with more than one step, and again as each step starts or finishes. Genie keeps your latest plan across restarts and new conversations: call it without `steps` to read that plan back — do this when you start, to pick up where you left off.',
+    {
+        type: 'object',
+        properties: {
+            terminalId: MIRRORED_TERMINAL_ID,
+            steps: { type: 'array', items: { type: 'object', properties: { content: { type: 'string' }, status: { type: 'string', enum: [...PLAN_STATUSES] } }, required: ['content', 'status'] } },
+        },
+    },
+    'Plan'
+);
+/** This module's tools, in the order its factory returns them. */
+export const ATTENTION_TOOLS: readonly BuiltinTool[] = [OPEN_FILE_FOR_USER_TOOL, PLAN_TOOL];
