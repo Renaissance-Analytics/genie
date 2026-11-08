@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile, rename } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
     addToList,
@@ -233,6 +233,26 @@ export function cutHandoff(text: string | null, kb: number): string | null {
 
 /** The finished history within the limits: unseen always kept; a seen one only among its agent's newest, and not too old. */
 export function boundFinished(finished: readonly Finished[], limits: AttentionLimits, nowMs: number): Finished[] {
+    return boundWithArchive(finished, limits, nowMs).kept;
+}
+
+/**
+ * The bound, and what it takes away: every record it DROPS, and every record whose handoff it CUTS, whole as it was —
+ * what is archived before the history that no longer has it is written (nothing the bound takes is lost).
+ */
+export function boundWithArchive(finished: readonly Finished[], limits: AttentionLimits, nowMs: number): { kept: Finished[]; archive: Array<{ record: Finished; reason: 'dropped' | 'cut' }> } {
+    const kept = boundKept(finished, limits, nowMs);
+    const keptById = new Map(kept.map((f) => [f.id, f]));
+    const archive: Array<{ record: Finished; reason: 'dropped' | 'cut' }> = [];
+    for (const f of finished) {
+        const k = keptById.get(f.id);
+        if (!k) archive.push({ record: f, reason: 'dropped' });
+        else if (k.handoff !== f.handoff) archive.push({ record: f, reason: 'cut' });
+    }
+    return { kept, archive };
+}
+
+function boundKept(finished: readonly Finished[], limits: AttentionLimits, nowMs: number): Finished[] {
     const rank = new Map<string, number>();
     const perAgent = new Map<string, number>();
     for (let i = finished.length - 1; i >= 0; i -= 1) {
@@ -273,6 +293,14 @@ export class AttentionStore {
     /** What each file last held, by part: a part that is the same array did not change (every change makes a new one). */
     #written: Partial<Record<keyof AttentionFile, unknown>> = {};
     #limits: () => AttentionLimits = () => DEFAULT_ATTENTION_LIMITS;
+    /**
+     * What the bound took, whole (`attention-archive.jsonl`): appended off the thread, never read at start, read on
+     * demand (`readArchive`). Every history write waits for the appends before it, so a record leaves the history only
+     * once it is in the archive.
+     */
+    readonly #archiveFile: string;
+    #archiving: Promise<void> = Promise.resolve();
+    #archiveFailed = false;
     readonly #inbox: InboxStore;
     readonly #now: () => string;
     #data: AttentionFile;
@@ -292,6 +320,7 @@ export class AttentionStore {
     private constructor(file: string, inbox: InboxStore, data: AttentionFile, now: () => string) {
         this.#file = file;
         this.#historyFile = join(dirname(file), 'attention-history.json');
+        this.#archiveFile = join(dirname(file), 'attention-archive.jsonl');
         this.#inbox = inbox;
         this.#data = data;
         this.#now = now;
@@ -346,28 +375,32 @@ export class AttentionStore {
 
     /** The finished history within the limits; written (both files) when it changed, or when `rewrite` (a split to make). */
     async #bound(rewrite = false): Promise<void> {
-        const bounded = boundFinished(this.#data.finished, this.#limits(), Date.parse(this.#now()));
-        const changed = bounded.length !== this.#data.finished.length || bounded.some((f, i) => f !== this.#data.finished[i]);
-        if (changed) this.#data.finished = bounded;
-        if (changed || rewrite) {
+        // The split of an older single file comes FIRST and loses nothing: the history as it was, then the questions and
+        // lists without it. Only then is anything bounded (and archived before the history without it is written).
+        if (rewrite) {
             this.#written = {};
             await this.#write();
-        } else {
-            this.#written = { lists: this.#data.lists, questions: this.#data.questions, finished: this.#data.finished, asked: this.#data.asked };
         }
+        this.#written = { lists: this.#data.lists, questions: this.#data.questions, finished: this.#data.finished, asked: this.#data.asked };
+        const { kept: bounded, archive } = boundWithArchive(this.#data.finished, this.#limits(), Date.parse(this.#now()));
+        const changed = bounded.length !== this.#data.finished.length || bounded.some((f, i) => f !== this.#data.finished[i]);
+        if (!changed) return;
+        this.#archive(archive);
+        this.#data.finished = bounded;
+        await this.#write();
     }
 
     async imDone(input: ImDoneInput): Promise<ImDoneResult> {
         const handoff = await this.#saveHandoff(input);
         // A new array, never a push in place: a part that is the same array did not change (#flush writes what did).
-        this.#data.finished = boundFinished([...this.#data.finished, {
+        this.#data.finished = this.#boundArchiving([...this.#data.finished, {
             id: `fin_${randomUUID()}`,
             agentId: input.agentId,
             agentName: input.agentName,
             handoff: input.handoff ?? null,
             at: this.#now(),
             seen: false,
-        }], this.#limits(), Date.parse(this.#now()));
+        }]);
         await this.#flush();
 
         const checklist = this.#data.lists
@@ -397,7 +430,7 @@ export class AttentionStore {
 
     markSeen(id: string): void {
         const seen = this.#data.finished.map((f) => (f.id === id ? { ...f, seen: true } : f));
-        this.#data.finished = boundFinished(seen, this.#limits(), Date.parse(this.#now()));
+        this.#data.finished = this.#boundArchiving(seen);
         reportFlush(this.#flush(), 'the attention store');
     }
 
@@ -659,11 +692,56 @@ export class AttentionStore {
      * kilobytes); a handoff or a decided question writes `attention-history.json`. The history first, so a crash between
      * the two leaves the history whole and the older single file's copy of it unread.
      */
+    /** The bound of `finished`, its takings queued for the archive first. */
+    #boundArchiving(finished: readonly Finished[]): Finished[] {
+        const { kept, archive } = boundWithArchive(finished, this.#limits(), Date.parse(this.#now()));
+        this.#archive(archive);
+        return kept;
+    }
+
+    /** Appended in order, off the thread; a history write waits for it (#write). */
+    #archive(records: ReadonlyArray<{ record: Finished; reason: 'dropped' | 'cut' }>): void {
+        if (records.length === 0) return;
+        const at = this.#now();
+        const lines = records.map(({ record, reason }) => `${JSON.stringify({ ...record, reason, archivedAt: at })}\n`).join('');
+        const file = this.#archiveFile;
+        this.#archiving = this.#archiving.then(async () => {
+            await mkdir(dirname(file), { recursive: true });
+            await appendFile(file, lines, 'utf8');
+        }).catch((error: unknown) => {
+            // Not archived: the history keeps what it has on disk (#write writes it no more until a restart), so nothing
+            // the bound took is lost; the questions and lists are still written.
+            this.#archiveFailed = true;
+            console.error(`[genie] the attention archive could not be written, so the history is not trimmed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+    }
+
+    /** Every archive append so far has landed (or failed: then the history is not trimmed on disk until a restart). */
+    archived(): Promise<void> {
+        return this.#archiving;
+    }
+
+    /** What the bound took, read on demand (never at start); a line that is not a record is skipped. */
+    async readArchive(): Promise<Array<Finished & { reason: 'dropped' | 'cut'; archivedAt: string }>> {
+        const text = await readFile(this.#archiveFile, 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return ''; throw error; });
+        const out: Array<Finished & { reason: 'dropped' | 'cut'; archivedAt: string }> = [];
+        for (const line of text.split('\n')) {
+            if (!line.trim()) continue;
+            try {
+                const r = JSON.parse(line) as Finished & { reason: 'dropped' | 'cut'; archivedAt: string };
+                if (r && typeof r.id === 'string') out.push(r);
+            } catch { /* a torn or foreign line: skipped */ }
+        }
+        return out;
+    }
+
     async #write(): Promise<void> {
         const d = this.#data;
+        // A record leaves the history only once it is in the archive; an archive that failed leaves the history as it is.
+        await this.#archiving;
         const historyChanged = this.#written.finished !== d.finished || this.#written.asked !== d.asked;
         const mainChanged = this.#written.lists !== d.lists || this.#written.questions !== d.questions || historyChanged && this.#written.finished === undefined;
-        if (historyChanged) await writeJsonAtomic(this.#historyFile, { finished: d.finished, asked: d.asked ?? [] });
+        if (historyChanged && !this.#archiveFailed) await writeJsonAtomic(this.#historyFile, { finished: d.finished, asked: d.asked ?? [] });
         if (mainChanged) await writeJsonAtomic(this.#file, { lists: d.lists, questions: d.questions });
         this.#written = { lists: d.lists, questions: d.questions, finished: d.finished, asked: d.asked };
     }
