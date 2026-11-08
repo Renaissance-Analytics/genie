@@ -60,6 +60,8 @@ import { TrustVerdicts } from './trust-verdict.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessAgents, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import type { WatchedReposView } from '../core/issue-watch.js';
+import { isAcpProvider } from '../core/engine.js';
+import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
@@ -1469,6 +1471,7 @@ async function boot(): Promise<void> {
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
     const lifecycleLog = openLifecycleLog(runtimeDir(genieRoot()));
+    setProviderChoiceFile(join(runtimeDir(genieRoot()), 'provider-programs.json'));
     rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
@@ -2563,6 +2566,17 @@ async function boot(): Promise<void> {
             return sacredNameOf(await tynnAccount.projects(), projectId);
         },
     };
+
+    // The person's own answer to a provider hidden behind a batch wrapper (Tynn #577): an .exe, kept per provider.
+    ipcMain.handle('genie:provider-choose-program', async (_event, raw: unknown) => {
+        if (!window || typeof raw !== 'string' || !isAcpProvider(raw)) return { ok: false, reason: 'No provider named.' };
+        const picked = await dialog.showOpenDialog(window, { title: `Choose ${raw}'s program`, properties: ['openFile'], filters: [{ name: 'Programs', extensions: ['exe', 'com'] }] });
+        const path = picked.filePaths[0];
+        if (picked.canceled || !path) return { ok: false };
+        const file = providerChoiceFile();
+        if (file === null) return { ok: false, reason: 'Genie has nowhere to keep the choice yet.' };
+        return writeProviderChoice(file, raw, path);
+    });
 
     ipcMain.handle('genie:add-workspace', async () => {
         if (!window || !registry) return { ok: false };

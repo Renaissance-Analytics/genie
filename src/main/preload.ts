@@ -142,6 +142,9 @@ const bridge: PreloadBridge = {
             { ok: true; terminalId: string } | { ok: false; reason: string }
         >,
 
+    chooseProviderProgram: (provider) =>
+        ipcRenderer.invoke('genie:provider-choose-program', provider) as Promise<{ ok: true } | { ok: false; reason?: string }>,
+
     scratchTerminal: (workspaceId) =>
         ipcRenderer.invoke('genie:scratch-terminal-open', workspaceId) as Promise<
             { ok: true; terminalId: string } | { ok: false; reason: string }

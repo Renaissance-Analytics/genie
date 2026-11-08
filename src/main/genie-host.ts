@@ -150,6 +150,7 @@ import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
 import { setThreadStoreSlowLog } from '../core/thread-store.js';
+import { setProviderChoiceFile } from './provider-choice.js';
 import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 
@@ -191,6 +192,7 @@ mkdirSync(runtime, { recursive: true });
 const lifecycleLog = openLifecycleLog(runtime, { async: true });
 // A thread-store step past STORE_SLOW_MS names itself here (Tynn #557): the next stall says which await it was.
 setThreadStoreSlowLog(lifecycleLog);
+setProviderChoiceFile(join(runtime, 'provider-programs.json'));
 const say = (line: string): void => {
     console.log(`[genie-host] ${new Date().toISOString()} ${line}`);
 };

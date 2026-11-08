@@ -317,6 +317,8 @@ export interface GenieBridge {
      * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
      * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
      */
+    /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). This machine's own window only. */
+    chooseProviderProgram?(provider: string): Promise<{ ok: true } | { ok: false; reason?: string }>;
     scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
 
     /** WORKSPACE OPERATIONS (§6.1). Add is preview-then-confirm: nothing is written before the plan was shown. */
