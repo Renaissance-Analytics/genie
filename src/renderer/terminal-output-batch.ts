@@ -47,7 +47,7 @@ export function outputBatch(ports: OutputBatchPorts): OutputBatch {
         data(id, text) {
             if (closed) return;
             const joined = (held.get(id) ?? '') + text;
-            held.set(id, joined.length > ports.cap ? joined.slice(joined.length - ports.cap) : joined);
+            held.set(id, joined); // PROBE
             cancel ??= later(flush, BATCH_MS);
         },
         flush,
