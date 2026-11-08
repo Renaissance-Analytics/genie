@@ -308,14 +308,14 @@ describe('reads, writes, the baton', () => {
     it('a workspace guest cannot use the owner pairing to read or triage Issues (CONTROL: the owner)', async () => {
         const guest = await tynnLinkGuest('tynn');
         expect(await guest.call('baton.take')).toMatchObject({ ok: true });
-        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction'] as const) {
+        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction'] as const) {
             expect(await guest.call(method, 'tynn', {})).toMatchObject({ ok: false, reason: expect.stringContaining('only its owner can') });
             expect(api.calls.map((c) => c.method)).not.toContain(method);
         }
         expect(await guest.call('baton.release')).toMatchObject({ ok: true });
         const o = await owner('laptop');
         expect(await o.call('baton.take')).toMatchObject({ ok: true });
-        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction'] as const) {
+        for (const method of ['workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPageAction'] as const) {
             expect(await o.call(method, 'tynn', {})).toMatchObject({ ok: true });
             expect(api.calls.map((c) => c.method)).toContain(method);
         }
