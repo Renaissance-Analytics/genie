@@ -18,9 +18,10 @@
 
 /** v1 was implicit. v2 carries authoritative UTF-16 positions and producer epochs. */
 export const SPAWN_PROTOCOL = 2;
-// `git.exec [id, file, args, options]` → `{pid}`, then one `git.exit {id, error, stdout, stderr, exitCode, signalCode}`; `git.kill [id]`
+// `spawn.detached [file, args, env, logFile, hide]` → `{pid}`: a process of Genie's own (the Genie browser) that runs on by itself,
+// its output to `logFile` (Tynn #535). `git.exec [id, file, args, options]` → `{pid}`, then one `git.exit {id, error, stdout, stderr, exitCode, signalCode}`; `git.kill [id]`
 // and `git.stdin [id, input]` act on it (Tynn #532: genie-host's git, created here, its limit and kill-tree still genie-host's).
-export const SPAWN_METHODS = ['host.env', 'spawn.exec', 'spawn.stream', 'spawn.unstream', 'pty.open', 'pty.write', 'pty.resize', 'pty.kill', 'pty.list', 'spawn.unstreamAll', 'host.shutdown', 'git.exec', 'git.kill', 'git.stdin'] as const;
+export const SPAWN_METHODS = ['host.env', 'spawn.exec', 'spawn.stream', 'spawn.unstream', 'pty.open', 'pty.write', 'pty.resize', 'pty.kill', 'pty.list', 'spawn.unstreamAll', 'host.shutdown', 'git.exec', 'git.kill', 'git.stdin', 'spawn.detached'] as const;
 export type SpawnMethod = (typeof SPAWN_METHODS)[number];
 
 /**

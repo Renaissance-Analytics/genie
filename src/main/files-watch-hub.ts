@@ -6,6 +6,7 @@ import type { GitTreeState } from './git-ports.js';
 import type { RepoResult } from './repo-git.js';
 import type { RepoStatus } from './repo-model.js';
 import { IGNORED_NAMES } from './files-host.js';
+import { treeChangesOf } from '../core/local-files-watch.js';
 
 /**
  * THE FILE WATCHER AND GIT, BEHIND PER-VIEW SUBSCRIPTIONS (the host split, P2.2: plan §11b).
@@ -38,6 +39,13 @@ export type FilesHubEvent =
         readonly kind: 'git';
         readonly workspaceId: string;
         readonly tree?: Readonly<Record<string, GitTreeState>>;
+        /**
+         * Instead of `tree` (Tynn #524): what changed since the tree this connection was last sent. A connection is sent
+         * the whole tree first, and again whenever it is new to the workspace; then only this.
+         */
+        readonly treeChanges?: { readonly set: Readonly<Record<string, GitTreeState>>; readonly removed: readonly string[] };
+        /** In the window only (files-tree-keeper.ts): the tree before this one, and what changed, for its views' pushes. */
+        readonly changes?: { readonly prev: Readonly<Record<string, GitTreeState>>; readonly set: Readonly<Record<string, GitTreeState>>; readonly removed: readonly string[] };
         readonly repos?: Readonly<Record<string, RepoResult<RepoStatus>>>;
     };
 
@@ -69,6 +77,9 @@ interface Watched {
     cancel: (() => void) | null;
     gitRunning: boolean;
     gitDirty: boolean;
+    /** The tree last sent, and the connections that hold it (Tynn #524): those are sent only its changes. */
+    tree: Readonly<Record<string, GitTreeState>> | null;
+    holders: Set<string>;
 }
 
 const viewKey = (owner: string, viewId: string) => `${owner}\u0000${viewId}`;
@@ -93,7 +104,7 @@ export class FilesWatchHub {
         if (this.#watched.has(workspace.id)) return;
         const source = this.#options.source ?? nodeWatchSource;
         const handle = source(workspace.path, (rel) => this.#seen(workspace.id, rel));
-        this.#watched.set(workspace.id, { root: workspace.path, handle, pending: null, cancel: null, gitRunning: false, gitDirty: false });
+        this.#watched.set(workspace.id, { root: workspace.path, handle, pending: null, cancel: null, gitRunning: false, gitDirty: false, tree: null, holders: new Set() });
     }
 
     /** Keep view intentions as metadata; close all IO while hidden and reopen live views on redock. */
@@ -136,6 +147,9 @@ export class FilesWatchHub {
     }
 
     #release(workspaceId: string): void {
+        // A connection with no view of this workspace left no longer holds its tree: if it comes back, it is sent it whole.
+        const held = this.#watched.get(workspaceId);
+        if (held) for (const owner of [...held.holders]) if (![...this.#views.values()].some((v) => v.workspaceId === workspaceId && v.owner === owner)) held.holders.delete(owner);
         if ([...this.#views.values()].some((v) => v.workspaceId === workspaceId)) return;
         const w = this.#watched.get(workspaceId);
         if (!w) return;
@@ -189,13 +203,19 @@ export class FilesWatchHub {
                 Promise.all(repos.map(async (rel) => [rel, await this.#options.repoStatus!(w.root, rel).catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }))] as const)),
             ]);
             if (this.#watched.get(workspaceId) !== w) return; // nobody watches it any more
-            const event: FilesHubEvent = {
-                kind: 'git',
-                workspaceId,
-                ...(treeState ? { tree: treeState } : {}),
-                ...(repoStates.length > 0 ? { repos: Object.fromEntries(repoStates) } : {}),
-            };
-            for (const owner of this.#ownersOf(workspaceId, (v) => v.want.git === true || (v.want.repos?.length ?? 0) > 0)) this.#options.send(owner, event);
+            const repoPart = repoStates.length > 0 ? { repos: Object.fromEntries(repoStates) } : {};
+            const owners = this.#ownersOf(workspaceId, (v) => v.want.git === true || (v.want.repos?.length ?? 0) > 0);
+            /*
+             * ONLY WHAT CHANGED (Tynn #524): a connection that holds the last tree is sent what changed since it; one that
+             * does not (new to the workspace) the whole tree. Whole for everyone when the changes are more than the tree.
+             */
+            const changes = treeState && w.tree ? treeChangesOf(w.tree, treeState) : null;
+            const small = changes !== null && Object.keys(changes.set).length + changes.removed.length <= Object.keys(treeState!).length;
+            for (const owner of owners) {
+                const treePart = !treeState ? {} : small && w.holders.has(owner) ? { treeChanges: changes! } : { tree: treeState };
+                this.#options.send(owner, { kind: 'git', workspaceId, ...treePart, ...repoPart });
+            }
+            if (treeState) { w.tree = treeState; w.holders = new Set(owners); }
         } finally {
             w.gitRunning = false;
             if (w.gitDirty && this.#watched.get(workspaceId) === w) {

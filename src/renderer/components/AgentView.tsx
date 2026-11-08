@@ -46,7 +46,7 @@ import { ChipsRow, TimelineStrip } from './TimelineStrip.js';
 import { chipRow, sessionTimeline } from '../../core/session-timeline.js';
 import { nextEditAfter, rowsInRange, type TimeRange } from '../../core/lanes.js';
 import { findRows, ledgerRow, visibleRows } from '../../core/stream-view.js';
-import { editPathIn, revertEdit } from '../../core/revert-edit.js';
+import { revertToolEdit, toolEditPathIn } from '../../core/revert-edit.js';
 import type { RepoCommit } from '../../core/commits.js';
 import { agentViewAction, approvalChoice, inspectorOnEnter, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
 import { Stream } from './Stream.js';
@@ -635,15 +635,15 @@ function AgentViewBody({
     // this view has the file panel's bridge and the edit names a file inside the workspace.
     const [revertOutcome, setRevertOutcome] = useState<string | null>(null);
     useEffect(() => { setRevertOutcome(null); }, [selectedId]);
-    const revertPath = selectedRow && selectedRow.event.kind === 'tool' && workspace ? editPathIn(selectedRow.event.rawInput, workspace.path) : null;
-    const revertSelected = inspector?.kind === 'diff' && files && workspace && revertPath !== null && selectedRow && selectedRow.event.kind === 'tool'
+    const revertPath = selectedRow && selectedRow.event.kind === 'tool' && workspace ? toolEditPathIn(selectedRow.event, workspace.path) : null;
+    const revertSelected = (inspector?.kind === 'diff' || inspector?.kind === 'unified') && files && workspace && revertPath !== null && selectedRow && selectedRow.event.kind === 'tool'
         ? () => {
               const event = selectedRow.event;
               if (event.kind !== 'tool') return;
               void (async () => {
                   const opened = await files.open(workspace.id, revertPath);
                   if (!opened.ok) { setRevertOutcome(opened.error); return; }
-                  const reverted = revertEdit(opened.text, event.rawInput);
+                  const reverted = revertToolEdit(opened.text, event);
                   if (!reverted.ok) { setRevertOutcome(reverted.reason); return; }
                   const written = await files.write(workspace.id, revertPath, reverted.text, opened.sha);
                   setRevertOutcome(written.ok ? `reverted ${revertPath}` : written.reason);

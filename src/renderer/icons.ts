@@ -45,6 +45,8 @@ export const ICON_NAMES: readonly string[] = [
     'home', 'trending-up', 'trending-down', 'octagon-alert', 'clipboard-check',
     // Its Features page (row F1): the nav's grid, an empty Features tab, Repositories' heading and the kinds, Models.
     'layout-grid', 'puzzle', 'folder-git-2', 'code', 'database',
+    // Its VIP lane (row V1): the nav's flame, a story's one-click move on.
+    'flame', 'chevrons-right',
     // Its claims (row B3): Claim + Start and Assign to.
     'hand', 'user-plus',
     'settings', 'folder', 'x', 'square-terminal', 'pin',

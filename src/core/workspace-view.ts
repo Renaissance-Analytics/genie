@@ -22,6 +22,9 @@ export interface TerminalTab {
     droppedWhileSuspended?: number;
 }
 
+/** A terminal's stream position: see {@link WorkspaceState.outputAt}. */
+export interface OutputAt { readonly epoch: number; readonly end: number }
+
 /** A CODE PANE (§4.6 `+code`): one file open in the grid beside the shells. The id is the path under a prefix: one pane per file. */
 export interface CodeTab {
     id: string;
@@ -49,6 +52,12 @@ export interface WorkspaceState {
     active: string | null;
     /** Output per terminal, as one growing string — the shape `fancy-term`'s `output` prop wants. */
     output: Readonly<Record<string, string>>;
+    /**
+     * Where each terminal's output stream is (Tynn #542): its epoch (a new one each time the output is replaced) and every
+     * character appended in it, the ones since trimmed from the front of `output` included. The pane writes only what was
+     * appended from these numbers. Absent on an older state = none yet.
+     */
+    outputAt?: Readonly<Record<string, OutputAt>>;
     /** Hidden terminals (§6.5): still running, off the strip, shown again on request. */
     hidden?: readonly TerminalTab[];
     /** A RUNNING terminal whose close is waiting on the person's confirm (Tynn #763); absent/`null` = none. */
@@ -80,7 +89,24 @@ export function terminalOpened(
         terminals: [...state.terminals, tab],
         active: tab.id,
         output: { ...state.output, [tab.id]: scrollback },
+        outputAt: { ...state.outputAt, [tab.id]: { epoch: (state.outputAt?.[tab.id]?.epoch ?? 0) + 1, end: scrollback.length } },
     };
+}
+
+/** The output REPLACED (a snapshot on attach: what was shown before is in it). A new stream: the pane starts it clean. */
+export function terminalReplaced(state: WorkspaceState, id: string, scrollback: string): WorkspaceState {
+    return {
+        ...state,
+        output: { ...state.output, [id]: scrollback },
+        outputAt: { ...state.outputAt, [id]: { epoch: (state.outputAt?.[id]?.epoch ?? 0) + 1, end: scrollback.length } },
+    };
+}
+
+/** A terminal's output and its stream position, as its pane takes them. A terminal not held: empty, epoch 0. */
+export function terminalOutput(state: WorkspaceState, id: string): { text: string; end: number; epoch: number } {
+    const at = state.outputAt?.[id];
+    const text = state.output[id] ?? '';
+    return { text, end: at?.end ?? text.length, epoch: at?.epoch ?? 0 };
 }
 
 /**
@@ -100,7 +126,10 @@ export function terminalData(state: WorkspaceState, id: string, data: string): W
 
     const joined = (state.output[id] ?? '') + data;
     const kept = joined.length > OUTPUT_CAP ? joined.slice(joined.length - OUTPUT_CAP) : joined;
-    return { ...state, output: { ...state.output, [id]: kept } };
+    const at = state.outputAt?.[id];
+    // Counted in full, trimmed or not: the pane writes what was appended, which the trimmed text alone cannot say.
+    const end = (at?.end ?? (state.output[id] ?? '').length) + data.length;
+    return { ...state, output: { ...state.output, [id]: kept }, outputAt: { ...state.outputAt, [id]: { epoch: at?.epoch ?? 0, end } } };
 }
 
 /**
@@ -136,18 +165,20 @@ export function terminalClosed(state: WorkspaceState, id: string): WorkspaceStat
     if (state.closing === id) state = { ...state, closing: null };
     if ((state.hidden ?? []).some((t) => t.id === id)) {
         const { [id]: _droppedHidden, ...output } = state.output;
-        return { ...state, hidden: (state.hidden ?? []).filter((t) => t.id !== id), output };
+        const { [id]: _droppedHiddenAt, ...outputAt } = state.outputAt ?? {};
+        return { ...state, hidden: (state.hidden ?? []).filter((t) => t.id !== id), output, outputAt };
     }
     const index = state.terminals.findIndex((t) => t.id === id);
     if (index === -1) return state;
 
     const terminals = state.terminals.filter((t) => t.id !== id);
     const { [id]: _dropped, ...output } = state.output;
+    const { [id]: _droppedAt, ...outputAt } = state.outputAt ?? {};
     const active =
         state.active !== id
             ? state.active
             : (terminals[Math.min(index, terminals.length - 1)]?.id ?? null);
-    return { ...state, terminals, active, output };
+    return { ...state, terminals, active, output, outputAt };
 }
 
 /** HIDE (§6.5): the shell keeps running; the tab leaves the strip and is listed as hidden; a neighbour becomes active. */

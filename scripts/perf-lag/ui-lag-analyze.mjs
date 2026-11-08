@@ -156,3 +156,128 @@ export function pushVerdict(passes, { p95Bytes = 32 * 1024, meanBytes = 24 * 102
     }
     return { ok: reasons.length === 0, p95Bytes, meanBytes, rows, reasons };
 }
+
+/**
+ * THE PAGE BUDGET WHILE A TERMINAL STREAMS (Tynn #525, L5): against the same run's idle phase, so a slower runner is not a
+ * failure of its own. The mouse's delay to the next frame (p95) no more than `p95SlackMs` over idle's, and no frame gap
+ * over `maxFrameGapMs`. A phase the mouse never reached fails: nothing measured.
+ */
+export function pageVerdict({ idle, streaming }, { p95SlackMs = 10, maxFrameGapMs = 100 } = {}) {
+    const reasons = [];
+    if (!(idle?.count > 0) || !(streaming?.count > 0)) reasons.push('the mouse reached no frame in the idle or the streaming phase');
+    else if (streaming.p95 > idle.p95 + p95SlackMs) reasons.push(`mouse to frame p95 ${streaming.p95} ms while the terminal streams, idle ${idle.p95} ms (bound idle + ${p95SlackMs})`);
+    if (streaming?.worstFrameGapMs > maxFrameGapMs) reasons.push(`a frame gap of ${Math.round(streaming.worstFrameGapMs)} ms while the terminal streams (bound ${maxFrameGapMs})`);
+    return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, idleP95: idle?.p95 ?? null, streamingP95: streaming?.p95 ?? null, worstFrameGapMs: streaming?.worstFrameGapMs ?? null, reasons };
+}
+
+const median = (values) => { const v = values.filter(Number.isFinite).sort((a, b) => a - b); if (v.length === 0) return null; const m = Math.floor(v.length / 2); return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+
+/**
+ * THE PAGE BUDGET, FROM A DISTRIBUTION (Tynn #536). The terminal's cost to the page, under the SAME build load: slices with
+ * the terminal on screen against slices with it off screen, interleaved, each slice's mouse-to-frame p95 and worst frame
+ * gap. The median of the "on" slices' p95 within `p95SlackMs` of the "off" slices' median, and the median of their worst
+ * frame gaps within `maxFrameGapMs`. Too few slices with input on either side fails: nothing measured.
+ *
+ * Against the idle phase (Tynn #525's first form) it was a comparison with NO build running: on a slow runner the build's
+ * own load was counted against the terminal (run 42450996960: 65 ms streaming, 45.1 idle, and 63.7 in the Files phase with
+ * no terminal at all).
+ */
+export function sliceVerdict({ on, off }, { p95SlackMs = 10, maxFrameGapMs = 100, minSlices = 3 } = {}) {
+    // PAIRED (the coordinator's (b)): slice k "on" against slice k "off", next to it in time, so a runner that slows down or
+    // speeds up during the build moves both. Only pairs where both slices had input count.
+    const pairs = on.map((x, k) => [x, off[k]]).filter(([a, b]) => a && b && a.count > 0 && b.count > 0);
+    const diffs = pairs.map(([a, b]) => a.p95 - b.p95), reasons = [];
+    const diff = median(diffs), onP95 = median(pairs.map(([a]) => a.p95)), offP95 = median(pairs.map(([, b]) => b.p95)), onGap = median(pairs.map(([a]) => a.worstGapMs));
+    const r = (v) => (v === null ? null : Math.round(v * 10) / 10);
+    if (pairs.length < minSlices) reasons.push(`too few pairs with input on both sides: ${pairs.length} (need ${minSlices})`);
+    else {
+        if (diff > p95SlackMs) reasons.push(`mouse to frame p95, median of ${pairs.length} paired differences: the terminal on screen ${r(diff)} ms over off (bound ${p95SlackMs}; on ${r(onP95)}, off ${r(offP95)})`);
+        if (onGap > maxFrameGapMs) reasons.push(`worst frame gap, median of ${pairs.length} slices with the terminal on screen: ${r(onGap)} ms (bound ${maxFrameGapMs})`);
+    }
+    return { ok: reasons.length === 0, p95SlackMs, maxFrameGapMs, pairs: pairs.length, diffP95: r(diff), diffs: diffs.map(r), onP95: r(onP95), offP95: r(offP95), onWorstGapMs: r(onGap), reasons };
+}
+
+/**
+ * THE THROUGHPUT BUDGET (Tynn #537): how much of the input the page keeps up with while the terminal is on screen, against
+ * the slice beside it with it off. `count` is the mouse events whose frame came within the slice; the median of the paired
+ * ratios on/off at least `minRatio`. The bound is from the Windows runner's recorded runs (run 42488024371: paired ratios
+ * 0.92-0.99, median 0.96); the Linux runner in the same run kept up with about half (0.49-0.69). An "off" slice with no
+ * input says nothing, and its pair is left out; an "on" slice with none is the worst case and counts as 0.
+ */
+/**
+ * THE TERMINAL PAST ITS OUTPUT CAP (Tynn #542): slices with the terminal on screen while its output streams PAST the view's
+ * cap, against the slices with it on screen below the cap in the same pass. Not paired: switching the terminal off and on
+ * re-attaches it with a short snapshot, under the cap again. The median input acknowledged past the cap at least
+ * `minRatio` of below it, and the median worst frame gap past it within `maxFrameGapMs`.
+ */
+export function capVerdict({ below, past }, { minRatio = 0.9, maxFrameGapMs = 100, maxScriptOverMsPerS = 50, minSlices = 3 } = {}) {
+    const reasons = [], r2 = (v) => (v === null ? null : Math.round(v * 100) / 100);
+    const belowCount = median(below.map((x) => x.count)), pastCount = median(past.map((x) => x.count)), pastGap = median(past.map((x) => x.worstGapMs));
+    const ratio = belowCount ? pastCount / belowCount : null;
+    if (below.length < minSlices || past.length < minSlices) reasons.push(`too few slices: ${below.length} below the cap and ${past.length} past it (need ${minSlices} each)`);
+    else {
+        if (ratio === null || ratio < minRatio) reasons.push(`mouse events acknowledged past the output cap: ${r2(ratio)} of the slices below it (bound ${minRatio}; past ${pastCount}, below ${belowCount})`);
+        if (pastGap > maxFrameGapMs) reasons.push(`worst frame gap past the output cap, median of ${past.length} slices: ${pastGap} ms (bound ${maxFrameGapMs})`);
+        // THE PAGE'S SCRIPT TIME (run 0d892cff): xterm parses a rewrite in slices of its own, so input can keep up while the
+        // page burns its thread. Past the cap within `maxScriptOverMsPerS` (ms of script per second) of below it.
+        if (![...below, ...past].every((x) => Number.isFinite(x.scriptMsPerS))) reasons.push('page script time not measured in every slice');
+        else {
+            const pastScript = median(past.map((x) => x.scriptMsPerS)), belowScript = median(below.map((x) => x.scriptMsPerS));
+            if (pastScript - belowScript > maxScriptOverMsPerS) reasons.push(`page script time past the output cap: ${Math.round(pastScript - belowScript)} ms per second over below it, median (bound ${maxScriptOverMsPerS}; past ${pastScript}, below ${belowScript})`);
+        }
+    }
+    return { ok: reasons.length === 0, minRatio, maxFrameGapMs, maxScriptOverMsPerS, ratio: r2(ratio), belowCount, pastCount, pastWorstGapMs: pastGap, pastScriptMsPerS: median(past.map((x) => x.scriptMsPerS)), belowScriptMsPerS: median(below.map((x) => x.scriptMsPerS)), reasons };
+}
+
+export function throughputVerdict({ on, off }, { minRatio = 0.9, minSlices = 3 } = {}) {
+    const pairs = on.map((x, k) => [x, off[k]]).filter(([a, b]) => a && b && b.count > 0);
+    const ratios = pairs.map(([a, b]) => a.count / b.count), reasons = [];
+    const ratio = median(ratios), r2 = (v) => (v === null ? null : Math.round(v * 100) / 100);
+    if (pairs.length < minSlices) reasons.push(`too few pairs with input off screen: ${pairs.length} (need ${minSlices})`);
+    else if (ratio < minRatio) reasons.push(`mouse events acknowledged, median of ${pairs.length} paired ratios: the terminal on screen ${r2(ratio)} of off (bound ${minRatio}; on ${median(pairs.map(([a]) => a.count))}, off ${median(pairs.map(([, b]) => b.count))})`);
+    return { ok: reasons.length === 0, minRatio, pairs: pairs.length, ratio: r2(ratio), ratios: ratios.map(r2), reasons };
+}
+
+/**
+ * A CHROMIUM TRACE, SUMMARISED (Tynn #537): what each thread spent its time on during one slice. Threads are named from the
+ * trace's own `thread_name` events (else `pid:tid`). `threads` is each thread's time with nested events counted once;
+ * `top` the events by their summed duration, nested ones included as their own rows. Only complete events (`X`) count.
+ */
+export function traceSummary(events, { top = 15 } = {}) {
+    const names = new Map(), perThread = new Map(), perEvent = new Map();
+    for (const e of events) if (e.ph === 'M' && e.name === 'thread_name') names.set(`${e.pid}:${e.tid}`, e.args?.name ?? `${e.pid}:${e.tid}`);
+    const complete = events.filter((e) => e.ph === 'X' && typeof e.dur === 'number' && typeof e.ts === 'number').sort((a, b) => a.ts - b.ts || b.dur - a.dur);
+    const reach = new Map();
+    for (const e of complete) {
+        const id = `${e.pid}:${e.tid}`, thread = names.get(id) ?? id, key = `${thread}\u0000${e.name}`;
+        const row = perEvent.get(key) ?? { thread, name: e.name, us: 0, count: 0 };
+        row.us += e.dur; row.count += 1; perEvent.set(key, row);
+        // Top-level on its thread when it starts after the last top-level event there ended.
+        const end = reach.get(id) ?? -Infinity;
+        if (e.ts >= end) { perThread.set(thread, (perThread.get(thread) ?? 0) + e.dur); reach.set(id, e.ts + e.dur); }
+        else if (e.ts + e.dur > end) { perThread.set(thread, perThread.get(thread) + (e.ts + e.dur - end)); reach.set(id, e.ts + e.dur); }
+    }
+    const ms = (us) => Math.round(us / 100) / 10;
+    return {
+        threads: [...perThread].sort((a, b) => b[1] - a[1]).map(([thread, us]) => ({ thread, ms: ms(us) })),
+        top: [...perEvent.values()].sort((a, b) => b.us - a.us).slice(0, top).map((x) => ({ thread: x.thread, name: x.name, ms: ms(x.us), count: x.count })),
+    };
+}
+
+/**
+ * The row's own fixture git, bounded (Tynn #536: spawnSync git ETIMEDOUT on the Windows runner, genie#1718). `run` is
+ * tried up to `attempts` times while it times out, `reset` between tries; any other failure is thrown at once.
+ */
+export function retryOnTimeout(run, { attempts = 2, reset = () => {} } = {}) {
+    const tries = [];
+    for (let i = 1; ; i += 1) {
+        const started = Date.now();
+        try { const value = run(i); tries.push({ attempt: i, ms: Date.now() - started, ok: true }); return { value, tries }; }
+        catch (error) {
+            const timedOut = error?.code === 'ETIMEDOUT' || /ETIMEDOUT/.test(String(error?.message ?? ''));
+            tries.push({ attempt: i, ms: Date.now() - started, ok: false, timedOut });
+            if (!timedOut || i >= attempts) { error.tries = tries; throw error; }
+            reset(i);
+        }
+    }
+}

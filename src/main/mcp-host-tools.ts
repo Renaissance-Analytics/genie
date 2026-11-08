@@ -18,7 +18,8 @@ import { NO_PAGES_HERE, notAvailableHere, type HostCapabilities } from '../core/
 // `processes` since P3.3c (the book, its scheduler and the supervisor are the host's), `flows` since P3.3d,
 // `manageTerminals` since P3.3e (the terminals are the host's), `sites` and `services` since Tynn #444 (P5a moved the sites,
 // the supervisor and the service engines here; until then every call went to the window, and on beta.60 none arrived).
-export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals', 'sites', 'services']);
+// `mail` from its start (Genie Mail G6, Tynn #492): the inbox book and the shared Mailpit are the host's.
+export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals', 'sites', 'services', 'mail']);
 
 /**
  * The actions of a host tool that still need the WINDOW: forwarded to it like a window tool, the rest answered here.

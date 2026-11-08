@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createDatabaseSteps, databaseExistsStep, databaseNameProblem, NAMESPACE_SLICED_ENGINES, provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
 import { deleteDataVerdict } from '../core/service-tenancy.js';
-import { chooseEngines, containerNameOf, CUSTOM_KINDS, dataVolumeOf, engineKindOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, sliceIsDroppable, switchActiveWarning, variantExtensions, type AdoptedSlice, type Credentials, type CustomEngineSpec, type EngineAdmin, type EngineChoice, type ServiceInstance, type ServiceScope } from '../core/services.js';
+import { chooseEngines, containerNameOf, CUSTOM_KINDS, dataVolumeOf, engineKindOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, sliceIsDroppable, switchActiveWarning, variantExtensions, type AdoptedSlice, type MailCredentials, type Credentials, type CustomEngineSpec, type EngineAdmin, type EngineChoice, type ServiceInstance, type ServiceScope } from '../core/services.js';
 import { renderSockudoConfig, websocketAppOf } from '../core/websockets.js';
 import { workspaceDnsName, workspaceSqlIdentifier } from '../core/v1-services.js';
 import { runtimeDir } from './paths.js';
@@ -72,6 +72,11 @@ export interface RegistryDeps {
     readonly files?: ConfigFiles;
     /** Is a remembered port still free on 127.0.0.1? Absent = trusted (the record reserved it for this name). */
     readonly portFree?: (port: number) => Promise<boolean>;
+    /**
+     * Genie Mail (G5, Tynn #491): the inbox book's auth directory, which Genie's shared Mailpit reads, and each workspace's
+     * default inbox credentials for its env. Absent = no book (the emergency path, tests): the address alone.
+     */
+    readonly mail?: { readonly authDir: string; readonly credentialsFor: (workspaceId: string) => MailCredentials | null };
 }
 
 /** The ports an engine had, kept under its container name after it was removed. */
@@ -178,7 +183,8 @@ export class ServiceRegistry {
     /** A workspace's own engines plus the shared ones — what its processes and terminals get. */
     envFor(workspaceId: string): Record<string, string> {
         // The namespace engines' tag and prefix are the workspace's derived name — the same `ws_<slug>` its slices use.
-        return serviceEnvFor(this.#visibleTo(workspaceId), workspaceId, { namespace: workspaceSqlIdentifier(workspaceId) });
+        const mail = this.#deps.mail?.credentialsFor(workspaceId) ?? undefined;
+        return serviceEnvFor(this.#visibleTo(workspaceId), workspaceId, { namespace: workspaceSqlIdentifier(workspaceId), ...(mail ? { mail } : {}) });
     }
 
     /** Per kind: the engines this workspace could use and the one it does — what `envFor` emits from (core/services.ts `chooseEngines`). */
@@ -245,7 +251,7 @@ export class ServiceRegistry {
     async #add(input: { engine: string; major: string; scope: ServiceScope; consent: boolean; workspaceId?: string; custom?: CustomEngineSpec; variant?: string }): Promise<AddResult> {
         const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
         if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
-        if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
+        if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace${def.sharedBecause ? `. ${def.sharedBecause}` : ''}`);
         if (def.sharing === 'dedicated-only' && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — ${def.dedicatedBecause ?? 'an arbitrary image has no multi-tenant story to share'}`);
         if (def.custom && !input.custom) throw new Error(`${input.engine} needs its image, port and env`);
         if (input.variant !== undefined && !def.variants?.[input.variant]) throw new Error(`${input.engine} has no variant ${JSON.stringify(input.variant)}`);
@@ -288,8 +294,11 @@ export class ServiceRegistry {
             configFile = this.#configPath(name);
             await this.#files.writeText(configFile, renderSockudoConfig({ port: def.internalPort, apps: Object.values(appSlices).map(websocketAppOf) }));
         }
+        // Genie Mail G5: a NEW shared Mailpit reads the inbox book from the start (an empty book asks no one for credentials).
+        const mailAuthDir = input.engine === 'mailpit' && input.scope.kind === 'shared' ? this.#deps.mail?.authDir : undefined;
         const created = await this.#driver.create({
             engine: input.engine, major: input.major, scope: input.scope, publishedPort, credentials,
+            ...(mailAuthDir ? { smtpAuthDir: mailAuthDir } : {}),
             ...(admin ? { admin } : {}),
             ...(def.surfaces ? { surfacePorts } : {}),
             ...(input.custom ? { custom: input.custom } : {}),
@@ -315,6 +324,7 @@ export class ServiceRegistry {
             ...(admin ? { admin, slices: kept?.slices ? { ...kept.slices } : {} } : {}),
             ...(appSlices ? { slices: appSlices } : {}),
             ...(def.surfaces ? { publishedPorts: surfacePorts } : {}),
+            ...(mailAuthDir ? { mailAuth: true } : {}),
             ...(input.custom ? { image: input.custom.image, internalPort: input.custom.internalPort, env: { ...input.custom.env }, ...(input.custom.kind !== undefined ? { kind: input.custom.kind } : {}) } : {}),
         };
         this.#data.instances.push(instance);
@@ -547,6 +557,70 @@ export class ServiceRegistry {
         const r = await this.#driver.exec(this.#nameOf(i.id), step.argv);
         if (r.exitCode !== 0) throw new Error(`${i.engine} ${i.version}: asking whether ${database} exists failed: ${r.stdout.trim() || `exit ${r.exitCode}`}; nothing was created`);
         return r.stdout.trim() === '1';
+    }
+
+    /** Genie's own shared Mailpit (Genie Mail): one per workstation; never one taken over from Genie 1. */
+    #sharedMail(): ServiceInstance | undefined {
+        return this.#data.instances.find((i) => i.engine === 'mailpit' && i.scope.kind === 'shared' && i.adopted !== 'v1');
+    }
+
+    /** Does this workspace's env come from Genie's shared Mailpit (its engine of the kind, not detached)? */
+    usesSharedMail(workspaceId: string): boolean {
+        const shared = this.#sharedMail();
+        if (!shared) return false;
+        return this.choices(workspaceId).some((c) => c.kind === 'mailpit' && c.chosen?.id === shared.id) && !shared.detached?.includes(workspaceId);
+    }
+
+    /** Genie Mail G6: the shared Mailpit's API, on loopback (its `ui` surface), for the `mail` tool; null when there is none. */
+    mailApiUrl(): string | null {
+        const port = this.#sharedMail()?.publishedPorts?.ui;
+        return typeof port === 'number' ? `http://127.0.0.1:${port}` : null;
+    }
+
+    /** Does Genie's shared Mailpit read the inbox book (its container has the auth directory)? */
+    mailWired(): boolean {
+        return this.#sharedMail()?.mailAuth === true;
+    }
+
+    /**
+     * Wire Genie's shared Mailpit to the inbox book (Genie Mail G5): a Mailpit made before G5 is recreated from its plan
+     * WITH the auth directory, keeping its name, ports, credentials, data volume and every workspace's slice; started
+     * again if it was running. The caller (main/mail-service.ts) does this only once every workspace using it has its
+     * credentials in its env: the book is read at start, and an inbox in it refuses anyone without them. Answers whether
+     * anything was done; nothing when it already reads the book, there is none, or there is no book.
+     */
+    async wireMail(): Promise<boolean> {
+        const shared = this.#sharedMail();
+        const authDir = this.#deps.mail?.authDir;
+        if (!shared || shared.mailAuth === true || !authDir) return false;
+        const name = this.#nameOf(shared.id);
+        const running = (await this.#driver.status(name)).state === 'running';
+        await this.#driver.remove(name, { deleteData: false, volume: dataVolumeOf(shared) });
+        const created = await this.#driver.create({
+            engine: shared.engine, major: shared.version, scope: shared.scope, publishedPort: shared.publishedPort, credentials: shared.credentials,
+            ...(shared.publishedPorts ? { surfacePorts: shared.publishedPorts } : {}),
+            smtpAuthDir: authDir,
+        });
+        if (!created.ok) throw new Error(`${shared.engine} ${shared.version}: wiring it to the inbox book failed: ${created.reason}`);
+        if (running) await this.#driver.start(created.name);
+        this.#data = { ...this.#data, instances: this.#data.instances.map((i) => (i.id === shared.id ? { ...i, mailAuth: true } : i)) };
+        await this.#flush();
+        return true;
+    }
+
+    /** Restart Genie's shared Mailpit so it reads the inbox book again (G1's finding 7). A stopped one reads it when started. */
+    async restartMail(): Promise<void> {
+        const shared = this.#sharedMail();
+        if (!shared) return;
+        const name = this.#nameOf(shared.id);
+        if ((await this.#driver.status(name)).state !== 'running') return;
+        await this.#driver.stop(name);
+        await this.#driver.start(name);
+    }
+
+    /** Tell the env's readers that a workspace's env changed (Genie Mail G5: a default inbox's credentials). */
+    envChanged(): void {
+        this.#changed();
     }
 
     async #step(name: string, what: string, identifier: string, step: ProvisionStep): Promise<void> {

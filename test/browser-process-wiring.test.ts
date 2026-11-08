@@ -88,7 +88,11 @@ describe('the window', () => {
     it('it starts no process for it: the host does (genie#1397)', () => {
         const host = strip('src/main/genie-host.ts');
         // P10.1d: on plain Node (no Electron to start it with) the service has no browser and says why; the start is the host's either way.
-        expect(host).toMatch(/new BrowserService\(\{ \.\.\.\(capabilities\.browser \? \{\} : \{ unavailable: NO_BROWSER_HERE \}\), startBrowser: \(launch\) => \{ spawnBrowserProcess\(/);
+        expect(host).toMatch(/new BrowserService\(\{ \.\.\.\(capabilities\.browser \? \{\} : \{ unavailable: NO_BROWSER_HERE \}\), startBrowser: \(launch\) => \{/);
+        // Tynn #535: through the host's supervised spawn-host child while it is up (never on the host's own thread); between its lives, here.
+        expect(host).toMatch(/supervisedClient\.spawnDetached\(launch\.file, launch\.args,/);
+        expect(host).toMatch(/startOwnDetached\('genie browser', launch,/);
+        expect(host).toMatch(/const here = \(\) => \{ spawnBrowserProcess\(launch,/);
         expect(strip('src/main/engine-launch.ts')).toMatch(/export function spawnBrowserProcess\(/);
     });
 

@@ -23,11 +23,14 @@ import {
     emptyWorkspace,
     terminalClosed,
     terminalData,
+    terminalOutput,
+    terminalReplaced,
     terminalExited,
     terminalOpened,
     type WorkspaceState,
 } from '../../core/workspace-view.js';
-import { closeCancelled, closeRequested, codeClosed, codeOpened, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
+import { closeCancelled, closeRequested, codeClosed, codeOpened, OUTPUT_CAP, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
+import { outputBatch } from '../terminal-output-batch.js';
 import { Badge, Button, Icon, Popover, Select, Switch } from '@particle-academy/react-fancy';
 import { agentFilesLine, agentFilesWhen, type AgentFilesReport } from '../../core/agent-files-health.js';
 import type { SyncResult } from '../../core/integrations.js';
@@ -336,13 +339,17 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
         ? shown.filter(id => state.terminals.some(terminal => terminal.id === id))
         : onScreen.startsWith('tab:') ? (designed.tabs.find(tab => `tab:${tab.id}` === onScreen)?.cells ?? []).flatMap(cell => cell?.kind === 'terminal' && cell.ref !== null ? [cell.ref] : []) : [])]);
     useEffect(() => {
+        // ONE RENDER PER FRAME while a terminal streams (Tynn #525): its chunks are joined and applied at the next frame.
+        const batch = outputBatch({ cap: OUTPUT_CAP, apply: (held) => setState((value) => held.reduce((v, [id, text]) => terminalData(v, id, text), value)) });
         const stops = (JSON.parse(terminalMembership) as string[]).map(id => watchTerminal(terminals, workspace.id, id, {
-            snapshot: joined => flushSync(() => { setState(value => ({ ...value, output: { ...value.output, [id]: joined.scrollback } })); setTerminalError(null); }),
-            data: text => flushSync(() => setState(value => terminalData(value, id, text))),
-            exit: code => flushSync(() => setState(value => terminalExited(value, id, code))),
+            // A snapshot replaces the output: what was held before it is in it.
+            snapshot: joined => { batch.drop(id); flushSync(() => { setState(value => terminalReplaced(value, id, joined.scrollback)); setTerminalError(null); }); },
+            data: text => batch.data(id, text),
+            // The output before an exit is applied first, in the same update.
+            exit: code => flushSync(() => { batch.flush(); setState(value => terminalExited(value, id, code)); }),
             error: error => setTerminalError(error.message),
         }));
-        return () => { for (const stop of stops) stop(); };
+        return () => { batch.close(); for (const stop of stops) stop(); };
     }, [terminals, workspace.id, terminalMembership]);
     // SPLITS (§4.6): remembered per workspace and per arrangement; a stored split that does not fit is equal panes.
     const splits = splitsFrom(ops?.settings?.values ?? {}, layout, shown.length);
@@ -560,6 +567,8 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                             key={id}
                                             paneId={id}
                                             output={state.output[id] ?? ''}
+                                            outputEnd={terminalOutput(state, id).end}
+                                            outputEpoch={terminalOutput(state, id).epoch}
                                             readOnly={t.exited !== null}
                                             onData={(data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
                                             onResize={({ cols, rows }) => {
@@ -946,6 +955,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                         terminalId={p.ref}
                                         terminal={held}
                                         output={p.ref === null ? '' : state.output[p.ref] ?? ''}
+                                        {...(p.ref === null ? {} : { outputEnd: terminalOutput(state, p.ref).end, outputEpoch: terminalOutput(state, p.ref).epoch })}
                                         Pane={Pane}
                                         root={workspace.path}
                                         onData={(id, data) => terminalAction(() => terminals.write(id, data), setTerminalError)}

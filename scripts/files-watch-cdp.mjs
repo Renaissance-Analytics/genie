@@ -82,7 +82,7 @@ try {
         let broke = false; try { demand(value.treeSha256 === '0'.repeat(64), 'intentional watch hash mismatch'); } catch { broke = true; } demand(broke, 'negative watch hash control');
         const wire = await page.evaluate('window.__watchWire'), native = await main.evaluate('({ticks:globalThis.__watchMain.ticks,maxGapMs:globalThis.__watchMain.gap,rssPeak:globalThis.__watchMain.rss,methods:globalThis.__watchMain.methods})');
         demand(wire.maxBytes <= 1048576 && wire.forbidden === 0 && native.ticks > 0, 'actual frame and main heartbeat controls');
-        if (!BASELINE) demand(wire.refetch === 1 && native.methods['files.watchState'] === 1, 'one oversized batch/refetch for all views');
+        if (!BASELINE) demand(wire.refetch === 1 && native.methods['files.watchState'] === 1, `one oversized batch/refetch for all views (${views} views: refetch ${wire.refetch}, files events ${wire.files}, files.watchState ${native.methods['files.watchState'] ?? 0})`);
         const row = { label: `${views}-views`, ...value, wire, native }; reports.push(row); console.log(`FILES_WATCH ${JSON.stringify(row)}`);
     }
     await run({ action: 'stop' }); await sleep(500); const before = await page.evaluate('window.__watchWire.files'); writeFileSync(join(workspace, 'watched.txt'), 'released'); await sleep(1000);

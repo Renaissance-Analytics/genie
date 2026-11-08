@@ -36,6 +36,7 @@ describe('the window publishes its own switches, and only those', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         expect(main).toMatch(/'--updater', \.\.\.windowLaunchFlags\(process\.argv\)\]/);
         const host = readFileSync('src/main/genie-host.ts', 'utf8');
-        expect(host).toMatch(/startHelper: \(launch\) => \{ spawnUpdaterProcess\(helperLaunch\(launch\),/);
+        // Tynn #535: through the host's spawn-host child while it is up, spawnUpdaterProcess between its lives: helperLaunch either way.
+        expect(host).toMatch(/startHelper: \(launch\) => \{ startOwnDetached\('updater', helperLaunch\(launch\),[\s\S]{0,200}spawnUpdaterProcess\(helperLaunch\(launch\),/);
     });
 });

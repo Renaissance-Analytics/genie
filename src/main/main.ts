@@ -213,6 +213,7 @@ import { windowWake } from './window-wake.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
 import { FilesWatchHub, type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
+import { FilesTreeKeeper } from './files-tree-keeper.js';
 import { repoStatus } from './repo-git.js';
 import { fileExporter } from './file-export.js';
 import type { EditorBytesDeps } from './plugin-editor-bytes.js';
@@ -1874,7 +1875,10 @@ async function boot(): Promise<void> {
      * here a batch is recorded for `state()` and handed to the local protocol — the panel re-lists once and re-reads the open file only
      * if it changed (genie#921) — and git's result goes to the views that asked for it, which no longer run git per batch.
      */
-    const onFilesEvent = (event: FilesHubEvent): void => {
+    // genie-host sends a window only the git tree's changes after the first (Tynn #524): the whole tree is kept here.
+    const treeKeeper = new FilesTreeKeeper(lifecycleLog);
+    const onFilesEvent = (received: FilesHubEvent): void => {
+        const event = treeKeeper.accept(received);
         if (event.kind === 'changed') filesHost?.recordDiskChanges(event.workspaceId, event.changes);
         for (const listener of filesEventListeners) listener(event);
     };

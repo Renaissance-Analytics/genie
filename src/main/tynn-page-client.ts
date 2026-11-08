@@ -1,5 +1,5 @@
 import { featuresActionRequest, featuresBody } from '../core/tynn-features.js';
-import { detailsBody, homeActionRequest, parseTynnPage, tynnPagePath, TYNN_PAGES, type TynnPage, type TynnPageActionAnswer, type TynnPageActionInput, type TynnPageView } from '../core/tynn-pages.js';
+import { detailsBody, homeActionRequest, parseTynnPage, vipActionRequest, vipCreateBody, tynnPagePath, TYNN_PAGES, type TynnPage, type TynnPageActionAnswer, type TynnPageActionInput, type TynnPageView } from '../core/tynn-pages.js';
 import { bodyOf, NOT_LINKED, refusal, SIGNED_OUT, type TynnBoardPorts, type TynnBoardRefusal } from './tynn-board-client.js';
 import { readTynnIssues } from './tynn-issues-client.js';
 
@@ -50,6 +50,19 @@ export async function runTynnPageAction(ports: TynnBoardPorts, workspaceId: stri
     const projectId = ports.projectFor(workspaceId);
     if (projectId === null) return NOT_LINKED;
     // Features, Domains and Repositories (row F1): the row's own door; Tynn answers the row, and the tab reads the page again.
+    // Start VIP (row V1): the lane's own write; Tynn answers the lane as it now stands.
+    const vipRequest = typeof input.action === 'string' ? vipActionRequest(projectId, input.action) : null;
+    if (vipRequest !== null) {
+        const body = vipCreateBody(input.body);
+        if (body === null) return { ok: false, state: 'error', reason: 'VIP work needs a title and why it cannot wait.' };
+        if (!ports.signedIn()) return SIGNED_OUT;
+        let res;
+        try { res = await ports.request(vipRequest.path, { method: vipRequest.method, body }); }
+        catch (error) { return { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) }; }
+        if (!res.ok) return refusal(res);
+        const lane = parseTynnPage('vip', await bodyOf(res));
+        return lane ? { ok: true, ...lane } : { ok: false, state: 'error', reason: 'Tynn answered with something that is not the VIP lane.' };
+    }
     const featureRequest = typeof input.action === 'string' ? featuresActionRequest(projectId, input.action, input.id) : null;
     if (featureRequest !== null) {
         const built = featuresBody(input.action, input.body);

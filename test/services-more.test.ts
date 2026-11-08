@@ -182,16 +182,16 @@ describe('Mailpit (H6): its SMTP AND its web inbox, each workspace’s mail tagg
         expect(() => containerPlan({ engine: 'mailpit', major: '1.30', scope: SHARED, publishedPort: 31025 })).toThrow('ui (8025)');
     });
 
-    it('added: two loopback ports allocated, the container created with both, the inbox port recorded; each workspace’s env carries ITS tag (Genie 1’s names)', async () => {
+    it('added: two loopback ports allocated, the container created with both, the inbox port recorded; with no inbox book here, each workspace’s env is the address alone (Genie 1’s tag retired, Genie Mail G5)', async () => {
         const mail = await added({ engine: 'mailpit', major: '1.30', scope: SHARED, consent: true, workspaceId: A });
         expect(docker.published()).toEqual(['127.0.0.1:4101:1025', '127.0.0.1:4102:8025']);
         expect(mail.publishedPorts).toEqual({ ui: 4102 });
-        // The shared Mailpit is reached at mail.gen (core/mailpit-name.ts; the owner, 2026-10-21).
-        expect(registry.envFor(A)).toEqual({ MAIL_MAILER: 'smtp', MAIL_HOST: 'mail.gen', MAIL_PORT: '4101', MAIL_FROM_ADDRESS: 'genie+ws_example_a@mail.gen', GENIE_MAIL_TAG: 'ws_example_a' });
-        const b = registry.envFor(B);
-        expect(b.GENIE_MAIL_TAG).toBe('ws_example_b');
+        // The shared Mailpit is reached at mail.gen (core/mailpit-name.ts; the owner, 2026-10-21). A workspace's credentials
+        // come from its default inbox (test/mail-g5-env.test.ts); this registry has no book, so it is given none.
+        expect(registry.envFor(A)).toEqual({ MAIL_MAILER: 'smtp', MAIL_HOST: 'mail.gen', MAIL_PORT: '4101' });
+        expect(registry.envFor(B)).toEqual({ MAIL_MAILER: 'smtp', MAIL_HOST: 'mail.gen', MAIL_PORT: '4101' });
         // COUNTED: nothing in B's env names A.
-        expect(Object.values(b).filter((v) => v.includes('ws_example_a'))).toHaveLength(0);
+        expect(Object.values(registry.envFor(B)).filter((v) => v.includes('ws_example_a'))).toHaveLength(0);
     });
 });
 

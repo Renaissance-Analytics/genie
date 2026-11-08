@@ -70,6 +70,7 @@ import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
+import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain } from './host-keychain.js';
 import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
@@ -210,7 +211,8 @@ async function main(): Promise<void> {
      * flows, the scheduled tasks, the kept processes, the sites, the engines; and the window's boot restore, over the link.
      */
     // Its cause (cut 3): the newest crash record since the previous host started — its host.json is still here until this one writes its own.
-    const safeMode = SafeMode.open(runtime, { log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
+    // Its beat written off this host's thread (Tynn #538): a synchronous one held it 233 ms under a build's disk load.
+    const safeMode = SafeMode.open(runtime, { asyncBeat: true, log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
     const safeNow = () => safeMode.active();
     // THE CRASH STATE (Tynn #386): the previous run's newest record (its host.json is still the old one here) and, after a
     // hang, the reopened window's notice; local windows are told both (crash-state-host.ts).
@@ -339,6 +341,8 @@ async function main(): Promise<void> {
         void stores.registrySettled().then(() => { for (const l of [...workspacesListeners]) l(); });
     });
     let hosting: HostingStack | null = null;
+    /** Genie Mail G5: the process book, once open, whose running processes restart with new mail credentials. */
+    let mailProcessBook: ProcessBook | null = null;
     /** The running agents compared with their workspace's verdict (genie#1519): bound once the sessions exist. */
     let hostVerdicts: TrustVerdicts | null = null;
     try {
@@ -354,6 +358,19 @@ async function main(): Promise<void> {
             userData: home,
             supervisor: processSupervisor,
             settings,
+            // Genie Mail G5: the workspaces' default inbox passwords live in the host keychain, for env injection only.
+            mailSecrets: {
+                get: async (name) => { const read = await keychain.get(name); return read.kind === 'value' ? read.value : null; },
+                set: async (name, value) => (await keychain.set(name, value)).ok,
+            },
+            // Before Mailpit reads the book, every running process of a workspace getting credentials restarts with them.
+            // None open yet: none is running, and each reads the credentials as it starts.
+            restartWorkspaceProcesses: async (workspaceIds) => {
+                const book = mailProcessBook;
+                if (!book) return { ok: true };
+                const r = await book.restartRunning(workspaceIds);
+                return r.failed.length === 0 ? { ok: true } : { ok: false, reason: r.failed.map((f) => `${f.name}: ${f.reason}`).join('; ') };
+            },
             appEnv: (source) => appInboxDoor.envFor(source),
             elevate: (steps) => hostingElevation.run(steps),
             workspaces: () => hostRegistry.workspaceStates(),
@@ -521,7 +538,23 @@ async function main(): Promise<void> {
     let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
-    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
+    /*
+     * GENIE'S OWN PROCESSES ARE NOT CREATED ON THIS HOST'S THREAD (Tynn #535): the Genie browser's start held this host 238 ms
+     * on the Linux runner, and the updater's is started here too (Windows creates a process synchronously on the calling
+     * thread). The supervised spawn-host child creates them, detached, while it is up; between its lives, here, as before.
+     */
+    const startOwnDetached = (what: string, launch: { readonly file: string; readonly args: readonly string[] }, env: NodeJS.ProcessEnv, logName: string, hide: boolean, here: () => void): void => {
+        if (!supervisedLink.up()) { here(); return; }
+        const vars = Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => typeof e[1] === 'string'));
+        supervisedClient.spawnDetached(launch.file, launch.args, vars, join(home, 'logs', logName), hide).catch((error: unknown) => {
+            lifecycleLog(`${what}: its spawn host could not start it (${error instanceof Error ? error.message : String(error)}); starting it here`);
+            here();
+        });
+    };
+    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => {
+        const here = () => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); };
+        startOwnDetached('genie browser', launch, process.env, 'genie-browser.log', false, here);
+    } });
     // A keyring unlocked while the Genie browser runs (Tynn story #388): that browser is restarted to use it, and the SCREEN says so.
     const keyringNotices: Array<(text: string | null) => void> = [];
     void keychainOpening.then(({ keyring }) => {
@@ -583,7 +616,7 @@ async function main(): Promise<void> {
             // P5a.3's order: the browser told to end, then sites, the front door and kept processes stopped; containers stay up.
             stopHosted: async () => { browserService.quit(); await stopHostedOnce(); },
         },
-        startHelper: (launch) => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); },
+        startHelper: (launch) => { startOwnDetached('updater', helperLaunch(launch), updaterHelperEnv(process.env, home), 'genie-updater.log', true, () => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); }); },
         defaultLaunch: updaterDefaultLaunch(process.env, process.execPath),
         windowConnected: () => engineRef?.windowConnected() ?? false,
         exit: () => { void shutdown('an update is installing'); },
@@ -753,7 +786,8 @@ async function main(): Promise<void> {
         },
     });
     engineRef = engine;
-    files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
+    // The watch runs on a thread of its own (Tynn #524): a build's thousands of changes never hold this host's loop.
+    files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
     const host = new SessionHost({
@@ -964,6 +998,7 @@ async function main(): Promise<void> {
             });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             processBookNow = processBook;
+            mailProcessBook = processBook;
             const restored = processBook.restore();
             if (safeMode.active()) for (const p of processBook.kept()) if (restored.heldBack.includes(p.id)) safeMode.hold('process', { id: p.id, name: p.name });
             lifecycleLog(`process book open: ${restored.started.length} restored, ${restored.heldBack.length} held back`);
@@ -994,6 +1029,8 @@ async function main(): Promise<void> {
             return { ...engine.serviceEnvFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
         },
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
+        // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.
+        ...(hostingStack?.mail ? { mail: hostingStack.mail } : {}),
         // THE AGENTS' `sites` AND `services` (Tynn #444): this host's own hosting (P5a) under its own supervisor — what the
         // Hosting and Services tabs show. Only `sites open` and `services exec` still go to a window.
         ...(hostingStack ? {

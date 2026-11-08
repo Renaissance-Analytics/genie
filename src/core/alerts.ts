@@ -54,6 +54,11 @@ export interface AlertDef {
  * synthesized (core/alert-chime.ts), nothing to load — then the wavs, None last: the escape hatch, not the headline.
  * Each wav is `src/renderer/sounds/<value>.wav`, pinned by test against that directory, so a wav added or removed there
  * and not here fails rather than becoming an option that plays nothing.
+ *
+ * Between them and Custom file, THE LIBRARY (Tynn #441): the 47 Kenney CC0 sounds the owner picked, each
+ * `src/renderer/sounds/<value>.ogg`. Named by family and a name from one theme per family (gems, stars, trees, moons,
+ * birds) so the set reads as words, never as a pack with numbered gaps; which Kenney file each was is in that folder's
+ * CREDITS.md only. test/alert-sound-library.test.ts holds every choice to a file there, and every file there to a choice.
  */
 export const SOUND_CHOICES = [
     { value: 'synth', label: 'Default chime' },
@@ -62,6 +67,53 @@ export const SOUND_CHOICES = [
     { value: 'sparkle', label: 'Sparkle' },
     { value: 'triumphant', label: 'Triumphant' },
     { value: 'winddown', label: 'Wind Down' },
+    { value: 'chime-amber', label: 'Chimes · Amber' },
+    { value: 'chime-beryl', label: 'Chimes · Beryl' },
+    { value: 'chime-coral', label: 'Chimes · Coral' },
+    { value: 'chime-garnet', label: 'Chimes · Garnet' },
+    { value: 'chime-jade', label: 'Chimes · Jade' },
+    { value: 'chime-opal', label: 'Chimes · Opal' },
+    { value: 'chime-pearl', label: 'Chimes · Pearl' },
+    { value: 'chime-topaz', label: 'Chimes · Topaz' },
+    { value: 'alert-altair', label: 'Alerts · Altair' },
+    { value: 'alert-deneb', label: 'Alerts · Deneb' },
+    { value: 'alert-rigel', label: 'Alerts · Rigel' },
+    { value: 'alert-vega', label: 'Alerts · Vega' },
+    { value: 'click-alder', label: 'Clicks · Alder' },
+    { value: 'click-birch', label: 'Clicks · Birch' },
+    { value: 'click-cedar', label: 'Clicks · Cedar' },
+    { value: 'click-elm', label: 'Clicks · Elm' },
+    { value: 'click-hazel', label: 'Clicks · Hazel' },
+    { value: 'click-larch', label: 'Clicks · Larch' },
+    { value: 'click-maple', label: 'Clicks · Maple' },
+    { value: 'click-oak', label: 'Clicks · Oak' },
+    { value: 'click-pine', label: 'Clicks · Pine' },
+    { value: 'click-rowan', label: 'Clicks · Rowan' },
+    { value: 'digital-ariel', label: 'Digital · Ariel' },
+    { value: 'digital-callisto', label: 'Digital · Callisto' },
+    { value: 'digital-deimos', label: 'Digital · Deimos' },
+    { value: 'digital-europa', label: 'Digital · Europa' },
+    { value: 'digital-ganymede', label: 'Digital · Ganymede' },
+    { value: 'digital-io', label: 'Digital · Io' },
+    { value: 'digital-miranda', label: 'Digital · Miranda' },
+    { value: 'digital-oberon', label: 'Digital · Oberon' },
+    { value: 'digital-phobos', label: 'Digital · Phobos' },
+    { value: 'digital-rhea', label: 'Digital · Rhea' },
+    { value: 'digital-titan', label: 'Digital · Titan' },
+    { value: 'digital-triton', label: 'Digital · Triton' },
+    { value: 'jingle-finch', label: 'Jingles · Finch' },
+    { value: 'jingle-heron', label: 'Jingles · Heron' },
+    { value: 'jingle-kestrel', label: 'Jingles · Kestrel' },
+    { value: 'jingle-lark', label: 'Jingles · Lark' },
+    { value: 'jingle-magpie', label: 'Jingles · Magpie' },
+    { value: 'jingle-nightingale', label: 'Jingles · Nightingale' },
+    { value: 'jingle-oriole', label: 'Jingles · Oriole' },
+    { value: 'jingle-plover', label: 'Jingles · Plover' },
+    { value: 'jingle-robin', label: 'Jingles · Robin' },
+    { value: 'jingle-sparrow', label: 'Jingles · Sparrow' },
+    { value: 'jingle-swift', label: 'Jingles · Swift' },
+    { value: 'jingle-thrush', label: 'Jingles · Thrush' },
+    { value: 'jingle-wren', label: 'Jingles · Wren' },
     // Your own file (row B2): main picks it and reads it; its path is `sound_<kind>_custom`.
     { value: 'custom', label: 'Custom file…' },
     { value: 'off', label: 'None' },
@@ -103,6 +155,35 @@ export const ALERT_KINDS: readonly AlertDef[] = [
 
 const OPTION_LABELS: Readonly<Record<string, string>> = Object.fromEntries(SOUND_CHOICES.map((c) => [c.value, c.label]));
 
+/** Not files: the Default chime is synthesized, Custom file is the person's own, None plays nothing. */
+const NOT_A_FILE: ReadonlySet<string> = new Set(['synth', 'custom', 'off']);
+
+/** The library's families (Tynn #441), each the value prefix of its sounds, in the picker's order. */
+const SOUND_FAMILIES: ReadonlyArray<{ prefix: string; label: string }> = [
+    { prefix: 'chime-', label: 'Chimes and confirmations' },
+    { prefix: 'alert-', label: 'Alerts and errors' },
+    { prefix: 'click-', label: 'Clicks and moves' },
+    { prefix: 'digital-', label: 'Digital' },
+    { prefix: 'jingle-', label: 'Jingles' },
+];
+
+/** The file a choice plays, under src/renderer/sounds/: a library sound's `.ogg`, one of Genie's own `.wav`; `null` for the rest. */
+export function soundFile(value: string): string | null {
+    if (NOT_A_FILE.has(value) || !SOUND_CHOICES.some((c) => c.value === value)) return null;
+    return SOUND_FAMILIES.some((f) => value.startsWith(f.prefix)) ? `${value}.ogg` : `${value}.wav`;
+}
+
+/** The sound picker's list, grouped: Genie's own, the library by family, then Custom file and None. */
+export function soundPickerList(): Array<{ label: string; options: Array<{ value: string; label: string }> }> {
+    const option = (c: (typeof SOUND_CHOICES)[number]) => ({ value: c.value as string, label: c.label as string });
+    const family = (value: string) => SOUND_FAMILIES.find((f) => value.startsWith(f.prefix));
+    return [
+        { label: 'Genie', options: SOUND_CHOICES.filter((c) => !family(c.value) && c.value !== 'custom' && c.value !== 'off').map(option) },
+        ...SOUND_FAMILIES.map((f) => ({ label: f.label, options: SOUND_CHOICES.filter((c) => c.value.startsWith(f.prefix)).map(option) })),
+        { label: 'Other', options: SOUND_CHOICES.filter((c) => c.value === 'custom' || c.value === 'off').map(option) },
+    ];
+}
+
 export function alertSoundSettings(): SettingDef[] {
     return ALERT_KINDS.map((k) => ({
         key: `sound_${k.kind}`,
@@ -133,7 +214,7 @@ export function legacySoundChoice(key: string, value: boolean | string): boolean
     return value ? kind.sound : 'off';
 }
 
-/** What to play: one of the shipped wavs, the Default chime's motif, or your own file — read by its setting key, the kind's own sound if it cannot be. */
+/** What to play: one of the shipped sound files (`wav` names that kind: a Genie wav or a library ogg), the Default chime's motif, or your own file — read by its setting key, the kind's own sound if it cannot be. */
 export type AlertSound =
     | { readonly kind: 'wav'; readonly file: string }
     | { readonly kind: 'synth'; readonly motif: ChimeMotif }
@@ -146,7 +227,8 @@ export function isAlertSoundKey(key: string): boolean {
 /** The kind's own sound: what a row never set plays, and what a custom file that cannot be read falls back to. */
 function ownSound(def: AlertDef): AlertSound {
     // A kind that is None by default still sounds when its chosen file cannot be read: the Default chime, not silence.
-    return def.sound === 'synth' || def.sound === 'off' || def.sound === 'custom' ? { kind: 'synth', motif: def.motif } : { kind: 'wav', file: `${def.sound}.wav` };
+    const file = soundFile(def.sound);
+    return file === null ? { kind: 'synth', motif: def.motif } : { kind: 'wav', file };
 }
 
 /** The sound a choice plays for a kind — what Preview plays, and what the alert plays — or `null` for None. */
@@ -159,8 +241,8 @@ export function previewSound(kind: AlertKind, choice: boolean | string | undefin
     // Custom with no file chosen yet is the kind's own sound, not silence.
     if (value === 'custom') return typeof customPath === 'string' && customPath.trim() !== '' ? { kind: 'custom', key: `sound_${kind}`, fallback: ownSound(def) } : ownSound(def);
     // A value Genie does not ship plays the kind's own sound — never a file that is not there.
-    const known = SOUND_CHOICES.some((c) => c.value === value && c.value !== 'off' && c.value !== 'synth' && c.value !== 'custom');
-    return known ? { kind: 'wav', file: `${value as string}.wav` } : ownSound(def);
+    const file = typeof value === 'string' ? soundFile(value) : null;
+    return file !== null ? { kind: 'wav', file } : ownSound(def);
 }
 
 /** What to play for an alert, or `null`: the master switch off, or this alert set to None. */

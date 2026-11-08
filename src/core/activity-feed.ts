@@ -1,5 +1,5 @@
 import type { LiveSession } from './roster.js';
-import { editLineCounts, joinToolCalls, ledgerRow, type TimedEvent } from './stream-view.js';
+import { editCountsFor, editLineCounts, joinToolCalls, ledgerRow, type TimedEvent } from './stream-view.js';
 
 /**
  * AN AGENT'S ACTIVITY FEED — what its lane on the workspace Dashboard draws (beta.33 item 10). No React, no Electron.
@@ -106,7 +106,7 @@ function itemOf(row: TimedEvent): FeedItem | null {
         case 'tool': {
             const status = e.status === 'failed' ? 'failed' : e.status === 'pending' || e.status === 'in_progress' ? 'running' : null;
             if (e.toolKind === 'edit') {
-                const diff = diffOf(e.rawInput);
+                const diff = e.edits !== undefined ? editCountsFor(e) : diffOf(e.rawInput);
                 const line = ledgerRow(row, diff ? { diff } : {});
                 return { ...base, kind: 'edit', text: line.main, plus: line.plus, minus: line.minus, status };
             }

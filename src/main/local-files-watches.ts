@@ -82,7 +82,9 @@ export class LocalFilesWatches {
         const treePart = (tree: NonNullable<FilesWireEvent['git']>['tree']) => {
             if (!tree) return {};
             if (!prevTree || !(old!.gitRevision > 0)) return { tree };
-            const changes = treeChangesOf(prevTree, tree);
+            // The window's tree keeper already knows what changed when this connection holds the tree it changed from.
+            const hinted = event.kind === 'git' && event.changes && event.changes.prev === prevTree ? event.changes : null;
+            const changes = hinted ? { set: hinted.set, removed: [...hinted.removed] } : treeChangesOf(prevTree, tree);
             return Object.keys(changes.set).length + changes.removed.length <= Object.keys(tree).length ? { treeChanges: { base: old!.gitRevision, ...changes } } : { tree };
         };
         const wire: FilesWireEvent = event.kind === 'changed'

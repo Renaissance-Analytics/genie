@@ -322,12 +322,24 @@ describe('the phone’s files, attachments and wanted agents', () => {
         expect(seen).toEqual([]);
     });
 
-    it('a prompt with files goes to promptWith — by YOU — and may carry no text; without files it is the plain prompt (control)', async () => {
+    it('a prompt with files goes to promptWith — by YOU — and may carry no text; without files it goes there too, so a refusal can say why', async () => {
         const { f, seen, api } = withFiles();
         expect(await api.invoke('prompt', ['agent_a', 'what is this?', [{ name: 'IMG_1.jpg', type: 'image/jpeg', bytes: new Uint8Array(12) }]])).toEqual({ ok: true });
         expect(await api.invoke('prompt', ['agent_a', '', [{ name: 'IMG_2.jpg', type: 'image/jpeg', bytes: new Uint8Array(3) }]])).toEqual({ ok: true });
-        expect(seen).toEqual(['promptWith:agent_a:what is this?:IMG_1.jpg/image/jpeg/12:you', 'promptWith:agent_a::IMG_2.jpg/image/jpeg/3:you']);
         expect(await api.invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: true });
+        expect(seen).toEqual(['promptWith:agent_a:what is this?:IMG_1.jpg/image/jpeg/12:you', 'promptWith:agent_a::IMG_2.jpg/image/jpeg/3:you', 'promptWith:agent_a:hi::you']);
+        expect(f.calls).not.toContain('prompt:agent_a:hi');
+    });
+
+    it('the phone’s TEXT-ONLY message refused (a slash command the agent does not offer) comes back with its reason (Tynn #440)', async () => {
+        const { f, api } = withFiles();
+        f.deps.host.promptWith = () => ({ ok: false, reason: '/frobnicate was not sent: this agent does not offer it.' });
+        expect(await api.invoke('prompt', ['agent_a', '/frobnicate'])).toEqual({ ok: false, reason: '/frobnicate was not sent: this agent does not offer it.' });
+    });
+
+    it('control: a host with no promptWith still takes the plain prompt', async () => {
+        const f = fakes();
+        expect(await buildHostApi(f.deps).invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: true });
         expect(f.calls).toContain('prompt:agent_a:hi');
     });
 

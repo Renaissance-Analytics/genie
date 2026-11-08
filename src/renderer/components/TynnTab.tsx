@@ -1,9 +1,10 @@
 import { Icon, Sidebar } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
-import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type HomeView, type ReleasesView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
+import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type HomeView, type ReleasesView, type VipView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
 import { TynnFeaturesPanel } from './TynnFeaturesPanel.js';
+import { TynnVipPanel } from './TynnVipPanel.js';
 import { TynnHomePanel } from './TynnHomePanel.js';
 import type { FeaturesView } from '../../core/tynn-features.js';
 import { TynnReleasesPanel } from './TynnReleasesPanel.js';
@@ -197,6 +198,59 @@ export function TynnFeaturesTab({ workspaceId, host }: { workspaceId: string; ho
     return <TynnFeaturesPanel state={shown} onAct={(input) => { void act(input); }} onRetry={lastInput ? () => { void act(lastInput); } : undefined} live={live} />;
 }
 
+/**
+ * VIP (row V1): the lane read whole through the host's page door, live on the board's rings (one read per burst). A
+ * story's move and the Release are board verbs, through the board's door; Start VIP is the lane's own write. Each says
+ * running, then done, or Tynn's reason with Retry, and the lane is read again.
+ */
+export function TynnVipTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
+    const [state, setState] = useState<TynnPageState<VipView>>({ state: 'loading' });
+    const [op, setOp] = useState<BoardOp | null>(null);
+    const [retry, setRetry] = useState<(() => void) | null>(null);
+    const [live, setLive] = useState<LiveState | undefined>(undefined);
+    const read = useCallback(async () => {
+        if (!host.page) { setState({ state: 'error', reason: 'This Genie cannot read Tynn\'s VIP lane.' }); return; }
+        const r = await host.page(workspaceId, 'vip', {});
+        if (r.ok && r.page === 'vip') setState({ state: 'ready', view: r.view });
+        else if (r.ok) setState({ state: 'error', reason: 'Tynn answered with a different workspace page.' });
+        else setState(r.state === 'not-linked' ? { state: 'not-linked' } : r.state === 'signed-out' ? { state: 'signed-out', reason: r.reason } : { state: 'error', reason: r.reason });
+    }, [host, workspaceId]);
+    useEffect(() => { void read(); }, [read]);
+    useEffect(() => {
+        const { watch } = host;
+        if (!watch) return undefined;
+        const follower = new PageFollower({ read, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } });
+        const stop = watch(workspaceId, (signal) => {
+            if ('state' in signal) setLive(signal.state);
+            else follower.ring();
+        });
+        return () => { stop(); follower.stop(); setLive(undefined); };
+    }, [host, workspaceId, read]);
+    const settled = async (r: { ok: true } | { ok: false; state: string; reason: string }) => {
+        if (!r.ok && (r.state === 'not-linked' || r.state === 'signed-out')) {
+            setOp(null);
+            setState(r.state === 'not-linked' ? { state: 'not-linked' } : { state: 'signed-out', reason: r.reason });
+            return;
+        }
+        await read();
+    };
+    const act = async (input: BoardActionInput) => {
+        setRetry(() => () => { void act(input); });
+        await settled(await performBoardAction(host, workspaceId, input, setOp));
+    };
+    const start = async (input: TynnPageActionInput) => {
+        setRetry(() => () => { void start(input); });
+        if (!host.pageAct) { setOp({ action: input.action, phase: 'failed', reason: 'This Genie cannot start VIP work here.' }); return; }
+        setOp({ action: input.action, phase: 'running' });
+        const r = await host.pageAct(workspaceId, input);
+        if (r.ok) { setOp({ action: input.action, phase: 'done' }); await read(); return; }
+        if (r.state === 'not-linked' || r.state === 'signed-out') { await settled(r); return; }
+        setOp({ action: input.action, phase: 'failed', reason: r.reason });
+    };
+    const shown: TynnPageState<VipView> = state.state === 'ready' ? { ...state, op } : state;
+    return <TynnVipPanel state={shown} onAction={(i) => { void act(i); }} onStart={(i) => { void start(i); }} onRetry={retry ?? undefined} live={live} />;
+}
+
 export function TynnReleasesTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
     const [state, setState] = useState<TynnPageState<ReleasesView>>({ state: 'loading' });
     const [live, setLive] = useState<LiveState | undefined>(undefined);
@@ -236,6 +290,7 @@ export function TynnTab({ workspaceId, host, issues, initialSection }: { workspa
                     : section === 'releases' && host.page ? <TynnReleasesTab workspaceId={workspaceId} host={host} />
                     : section === 'home' && host.page ? <TynnHomeTab workspaceId={workspaceId} host={host} />
                     : section === 'features' && host.page ? <TynnFeaturesTab workspaceId={workspaceId} host={host} />
+                    : section === 'vip' && host.page ? <TynnVipTab workspaceId={workspaceId} host={host} />
                         : <TynnBoardTab workspaceId={workspaceId} host={host} />}
             </div>
         </div>
