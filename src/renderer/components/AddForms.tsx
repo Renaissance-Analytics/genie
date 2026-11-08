@@ -138,6 +138,8 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
     const custom = engine === 'custom';
     // An engine that is never shared (Redis, the owner's D2): the choice is not offered, and the form says why.
     const onlyDedicated = SERVICE_CATALOG.find((d) => d.engine === engine)?.sharing === 'dedicated-only';
+    // An engine that is only ever shared (Mailpit since Genie Mail, WebSockets, S3): "Dedicated" is not offered either.
+    const onlyShared = SERVICE_CATALOG.find((d) => d.engine === engine)?.sharing === 'shared-only';
     // An engine with variants (postgres → pgvector) offers them; the engine's own image is the first choice.
     const variants = Object.entries(SERVICE_CATALOG.find((d) => d.engine === engine)?.variants ?? {});
     return (
@@ -232,13 +234,14 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
             <fieldset className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">Scope</span>
                 <label className="flex items-center gap-2">
-                    <input type="radio" name="scope" value="dedicated" defaultChecked={defaults.scope === 'dedicated' || onlyDedicated} />
+                    <input type="radio" name="scope" value="dedicated" defaultChecked={(defaults.scope === 'dedicated' && !onlyShared) || onlyDedicated} disabled={onlyShared} />
                     Dedicated to {workspaceName ?? defaults.workspaceId} — its own data and port
                 </label>
                 <label className="flex items-center gap-2">
-                    <input type="radio" name="scope" value="shared" defaultChecked={defaults.scope === 'shared' && !onlyDedicated} disabled={onlyDedicated} />
+                    <input type="radio" name="scope" value="shared" defaultChecked={(defaults.scope === 'shared' && !onlyDedicated) || onlyShared} disabled={onlyDedicated} />
                     Shared — one per workstation, every workspace reaches it
                 </label>
+                {onlyShared ? <span data-shared-only="" className="text-xs text-[var(--fg-3)]">{engine} is shared by every workspace{SERVICE_CATALOG.find((d) => d.engine === engine)?.sharedBecause ? `: ${SERVICE_CATALOG.find((d) => d.engine === engine)?.sharedBecause}` : ''}.</span> : null}
                 {onlyDedicated && !custom ? <span data-dedicated-only="" className="text-xs text-[var(--fg-3)]">{engine} is always its own: {SERVICE_CATALOG.find((d) => d.engine === engine)?.dedicatedBecause}.</span> : null}
                 <ProblemLine field="scope" problems={problems} />
             </fieldset>
