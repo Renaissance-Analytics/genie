@@ -194,7 +194,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             onSettingsChanged: () => () => {},
             ...workspaceSettingsOps(() => ports.settings),
             ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor),
-            ...workspaceTynnApi(ports.tynnTab.board, ports.tynnTab.readPage),
+            ...workspaceTynnApi(() => ports.tynnTab.board(), (id, page, query) => ports.tynnTab.readPage(id, page, query)),
         }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
         features: windowOnly<HostApiDeps['features']>('features', {
