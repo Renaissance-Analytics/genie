@@ -603,10 +603,10 @@ if (!approvalEnabled) {
      * not fire, the failure read as "the approval never appeared" rather than "the prompt was
      * never sent". A harness that fails for a reason it does not name costs more than it saves.
      *
-     * `window.genie.prompt` is the real IPC path: preload → main → host → session → driver.
+     * `(window.genieTest ?? window.genie).prompt` is the real IPC path: preload → main → host → session → driver.
      * Everything this check is actually about is downstream of here.
      */
-    await cdp.evaluate(`window.genie.prompt(${JSON.stringify(codexRow)}, 'run the migration'); true`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(codexRow)}, 'run the migration'); true`);
 
     const parked = await waitFor(cdp, `Boolean(document.querySelector('[data-approval]'))`, 'the approval card');
 

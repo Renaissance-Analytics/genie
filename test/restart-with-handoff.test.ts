@@ -65,11 +65,8 @@ describe('restartWithHandoff', () => {
 });
 
 describe('the bridge', () => {
-    it('restartWithHandoff is one channel, named in preload and answered in main — through the one restart', () => {
-        const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
-        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        expect(preload.match(/'genie:restart-with-handoff'/g) ?? []).toHaveLength(1);
-        expect(main.match(/'genie:restart-with-handoff'/g) ?? []).toHaveLength(1);
-        expect(main).toMatch(/restartWithHandoff\(\{ restart: \(id\) => restartAgent\(agentOps, id, 'graceful'\)/);
+    it('restartWithHandoff goes through the one restart, in the host API (P4 family 9b)', () => {
+        const hostApi = readFileSync(new URL('../src/main/host-api.ts', import.meta.url), 'utf8');
+        expect(hostApi).toMatch(/restartWithHandoff\(\{ restart: \(id\) => deps\.agentOps\.restart\(id, 'graceful'\)/);
     });
 });
