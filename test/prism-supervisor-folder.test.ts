@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { removeStaleSupervisorBuilds, supervisorFolder } from '../src/main/prism-supervisor.js';
+import { removeStaleSupervisorBuilds } from '../src/main/prism-supervisor.js';
 
 /**
  * GENIE'S SUPERVISOR FOLDER IS KEYED BY THE SUPERVISOR'S SOURCE (genie#1259).
@@ -21,17 +21,7 @@ let runtime: string;
 beforeEach(async () => { runtime = await mkdtemp(join(tmpdir(), 'genie-supervisor-folder-')); });
 afterEach(async () => { await rm(runtime, { recursive: true, force: true }); });
 
-describe('the folder', () => {
-    it('is keyed by the supervisor source: another source is another folder, the same source the same one', () => {
-        const current = supervisorFolder(runtime);
-        expect(dirname(current)).toBe(join(runtime, 'prism-supervisor'));
-        expect(basename(current)).toMatch(/^supervisor-[0-9a-f]{16}$/);
-        expect(supervisorFolder(runtime, 'class Older {}')).not.toBe(supervisorFolder(runtime, 'class Newer {}'));
-        expect(supervisorFolder(runtime, 'class Same {}')).toBe(supervisorFolder(runtime, 'class Same {}'));
-        // The default is the source prism-acp builds from, not some other text.
-        expect(supervisorFolder(runtime, 'class Older {}')).not.toBe(current);
-    });
-});
+const supervisorFolder = (root: string): string => join(root, 'prism-supervisor', 'supervisor-aaaaaaaaaaaaaaaa');
 
 /** What earlier Genies left in `<runtime>/prism-supervisor`: the flat ≤0.31 build, the 0.32 pointer layout, another key. */
 async function leftovers(): Promise<{ parent: string; current: string; otherKey: string }> {
@@ -82,6 +72,12 @@ describe('stale builds', () => {
         expect((await readdir(parent)).sort()).toEqual(before);
         // The positive control: the same tree, read, is swept.
         expect((await removeStaleSupervisorBuilds(runtime, { current, runningImages: async () => [] })).removed).toHaveLength(5);
+    });
+
+    it('with no current build (Tynn #575: none is compiled any more) every entry goes', async () => {
+        const { parent } = await leftovers();
+        await removeStaleSupervisorBuilds(runtime, { runningImages: async () => [] });
+        expect(await readdir(parent)).toEqual([]);
     });
 
     it('nothing stale (or no folder at all): no process listing is taken', async () => {

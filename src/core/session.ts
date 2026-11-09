@@ -198,6 +198,8 @@ export interface DriverEvents {
      */
     onTurnEnd?: (outcome: TurnOutcomeLike) => void;
     onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
+    /** What the supervisor found when a stop settled (prism-acp): `stop` drops Genie's sweep only for a verified empty tree. */
+    onStopVerdict?: (verdict: NativeStopVerdict) => void;
     /** A steer's record changed (prism-acp 0.38.0, Codex): accepted, observed, ended unobserved, not delivered, unknown. */
     onSteerUpdate?: (update: SteerRecordLike) => void;
 }
@@ -251,6 +253,9 @@ export function cancelIntent(raw: unknown): CancelIntent {
  * How a stop ended (`AgentSession.stop`). `verified` only when a fresh reading shows every process the run was seen to
  * own is gone. Unverified says why, and names what is still running (`survivors`, empty when it could not look).
  */
+/** What prism-acp's supervisor reports of a stop: whether nothing of the tree is left, and whether it counted that itself. */
+export interface NativeStopVerdict { readonly graceful: boolean; readonly empty: boolean; readonly survivors: number | null; readonly verified: boolean }
+
 export type StopVerdict =
     | { readonly verified: true; readonly ended: number }
     | { readonly verified: false; readonly reason: string; readonly survivors: readonly ProcessInfo[] };
@@ -491,6 +496,8 @@ export class AgentSession {
      * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
      */
     #stopAskedBy: string | null = null;
+    /** What the supervisor reported of this run's stop, when it has. */
+    #nativeVerdict: NativeStopVerdict | null = null;
     /** Why the pending cancel was asked (`CancelIntent`): only a Stop latches `#stoppedByYou` (Tynn #672 part 3). */
     #stopIntent: CancelIntent = 'stop';
     /**
@@ -1567,6 +1574,7 @@ export class AgentSession {
                     // Working (found in the first doctor trial, 2026-10-13).
                     this.#changed();
                 },
+                onStopVerdict: (verdict) => { this.#nativeVerdict = verdict; },
                 onExit: (code, signal) => {
                     this.#leaveQueuedAsDrafts();
                     // A retry waiting out an overload has nobody to send to now.
@@ -1924,7 +1932,12 @@ export class AgentSession {
             // on Windows) and reports. Genie's reading then verifies it as before — and reaps anything it still finds.
             const stopDriver = driver.stop.bind(driver);
             const ended = (earlyOffLoop ?? Promise.resolve(earlyOnLoop())).then(() => stopDriver({ graceMs }));
-            this.#stopping = ended.catch(() => undefined).then(() => this.#endTree(tree, signal));
+            // The supervisor counted the tree itself and nothing is left: Genie's own sweep has nothing to add. Anything less
+            // (a count nobody observed, survivors, a failed stop) gets the sweep (Tynn #575).
+            this.#stopping = ended.catch(() => undefined).then((returned): Promise<StopVerdict> | StopVerdict => {
+                const native = this.#nativeVerdict ?? (returned as NativeStopVerdict | undefined);
+                return native?.verified === true && native.empty === true ? { verified: true, ended: this.#members.length } : this.#endTree(tree, signal);
+            });
         } else if (graceMs > 0 && driver?.endInput && this.#alive && !this.#exited) {
             // The tree BEFORE stdin closes: a provider that then ends on its own (on Windows) orphans its children, and
             // a reading after its exit could no longer reach them from the roots.

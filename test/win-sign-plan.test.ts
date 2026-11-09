@@ -105,7 +105,7 @@ describe('the checks that hold it', () => {
     it('the verifier: a file the build does not sign passes with its own publisher\'s signature, and fails signed by us or unsigned', () => {
         if (process.platform !== 'win32') return;
         const dir = mkdtempSync(join(tmpdir(), 'genie-sign-plan-verify-'));
-        const files = ['win-unpacked/Genie.exe', 'win-unpacked/resources/bin/genie-launch.exe', 'win-unpacked/resources/deep/conpty.dll',
+        const files = ['win-unpacked/Genie.exe', 'win-unpacked/resources/bin/genie-launch.exe', 'win-unpacked/resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-x64/prism-acp-supervisor.exe', 'win-unpacked/resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-arm64/prism-acp-supervisor.exe', 'win-unpacked/resources/deep/conpty.dll',
             'Genie-test-setup.exe', 'signature-evidence/nsis-uninstaller.exe'];
         try {
             for (const file of files) {
@@ -114,7 +114,7 @@ describe('the checks that hold it', () => {
                 writeFileSync(dest, 'fixture');
             }
             writeFileSync(join(dir, 'signature-evidence/win-sign-plan.json'), JSON.stringify({ rows: [
-                { file: 'Genie.exe', wouldSign: true }, { file: 'resources/bin/genie-launch.exe', wouldSign: true }, { file: 'resources/deep/conpty.dll', wouldSign: false },
+                { file: 'Genie.exe', wouldSign: true }, { file: 'resources/bin/genie-launch.exe', wouldSign: true }, { file: 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-x64/prism-acp-supervisor.exe', wouldSign: true }, { file: 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-arm64/prism-acp-supervisor.exe', wouldSign: true }, { file: 'resources/deep/conpty.dll', wouldSign: false },
             ] }));
             const quote = (value: string) => "'" + value.replace(/'/g, "''") + "'";
             /** conpty.dll's signature: `microsoft` (its own publisher), `ours` (signed again by us) or `none`. */
