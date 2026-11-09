@@ -140,7 +140,8 @@ describe('every agents.* call is answered with no window', () => {
     });
 
     it.each(family)('%s reaches genie-host, not the "open a window" refusal', async (method) => {
-        const api = gate(hostAloneApi(ports(engine())));
+        // Not running: a change here applies at the next start, so no restart outlives the test and its folder.
+        const api = gate(hostAloneApi(ports(engine({ probe: null }))));
         await expect(api.invoke(method as RemoteMethod, CALLS[method]!(atlas.id))).resolves.toBeDefined();
     });
 });
@@ -216,6 +217,8 @@ describe('they do what the window\'s do', () => {
     });
 
     it('a model change on a busy agent waits for its turn to end, then restarts it, with no window', async () => {
+        // A thread makes the restart graceful: a fresh one writes the registry after the start this test waits for.
+        expect(await registry.recordThread(atlas.id, 'thread_1')).toEqual({ ok: true });
         const state: { probe: Probe | null } = { probe: { ...IDLE, inTurn: true, turnState: 'working' } };
         const e = engine(state);
         const api = gate(hostAloneApi(ports(e)));
