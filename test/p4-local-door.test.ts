@@ -34,6 +34,7 @@ class FakeContents extends EventEmitter {
     destroy() { this.destroyed = true; this.emit('destroyed'); }
 }
 
+const closeReasons: string[] = [];
 let ipc: EventEmitter;
 let door: ReturnType<typeof localProtocolDoor>;
 let host: RemoteHost;
@@ -100,7 +101,8 @@ async function remoteDriver() {
 
 beforeEach(async () => {
     ipc = new EventEmitter();
-    door = localProtocolDoor(ipc);
+    closeReasons.length = 0;
+    door = (localProtocolDoor as unknown as (i: EventEmitter, o: { onClosed(reason: string): void }) => ReturnType<typeof localProtocolDoor>)(ipc, { onClosed: (reason) => closeReasons.push(reason) });
     dir = await mkdtemp(join(tmpdir(), 'genie-p4-local-door-'));
     let tokenSeq = 0;
     devices = await DeviceStore.open(dir, { now: Date.now, random: () => `door-fixture-${++tokenSeq}` });
@@ -295,11 +297,14 @@ describe('door connection ownership and cleanup', () => {
     });
 
     it('every close says why, so the next one can be read in the log', async () => {
-        const reasons: string[] = [];
-        const logged = localProtocolDoor(new EventEmitter(), { onClosed: (reason) => reasons.push(reason) } as never);
-        expect(logged).toBeDefined();
-        const source = readFileSync('src/main/main.ts', 'utf8');
-        expect(source).toMatch(/localProtocolDoor\(ipcMain, \{ onClosed: \(reason\) => rendererErrorLog\?\.\(/);
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        await connected(contents);
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        contents.emit('did-navigate');
+        await settled();
+        expect(closeReasons).toEqual(['the local window reloaded or navigated']);
+        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/localProtocolDoor\(ipcMain, \{ onClosed: \(reason\) => rendererErrorLog\?\.\(/);
     });
 
     it('closing one window keeps the other window and its subscriptions alive', async () => {
