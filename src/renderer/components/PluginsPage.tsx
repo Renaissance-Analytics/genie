@@ -156,7 +156,7 @@ export function PluginsPage({ plugins, onAction, marketplace }: { plugins: Featu
                             <Tabs.Panel value="installed">
                                 <div data-plugins-tab="installed" className="pt-3">
                                     {plugins.entries.length === 0 ? (
-                                        <p className="text-sm text-[var(--fg-3)]">No plugins yet. Drop a package folder into the plugins directory.</p>
+                                        <p className="text-sm text-[var(--fg-3)]">No plugins yet. Drop a package folder, with its genie-package.json, into the plugins directory.</p>
                                     ) : (
                                         <ul className="flex flex-col gap-2">
                                             {plugins.entries.map((p) => <PackageCard key={p.id} p={p} onAction={onAction} />)}

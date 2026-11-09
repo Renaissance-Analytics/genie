@@ -10,7 +10,8 @@ import { appHost } from '../src/core/gapp-origin.js';
 import { GAppBridge, GAppCallers, createGAppToolRunner } from '../src/main/gapp-bridge.js';
 import { GAppServer } from '../src/main/gapp-server.js';
 import { GAPP_STORAGE_QUOTA } from '../src/main/gapp-storage.js';
-import { GAPP_MANIFEST_FILE, GAppBook } from '../src/main/gapps-host.js';
+import { PACKAGE_MANIFEST_FILE } from '../src/core/plugin-integrity.js';
+import { GAppBook } from '../src/main/gapps-host.js';
 import { genieCatalog } from '../src/main/genie-catalog.js';
 import type { Registration } from '../src/main/mcp-tools.js';
 import { signPackage } from './plugin-sign-helper.js';
@@ -42,7 +43,7 @@ const open: WebSocket[] = [];
 async function install(id: string, options: { uses: string[]; storage?: string; scope?: 'workstation' | string[] }): Promise<string> {
     const dir = join(root, 'src', id);
     await mkdir(join(dir, 'app'), { recursive: true });
-    await writeFile(join(dir, GAPP_MANIFEST_FILE), JSON.stringify({
+    await writeFile(join(dir, PACKAGE_MANIFEST_FILE), JSON.stringify({
         id, name: id.split('.').pop(), version: '1.0.0', publisher: { name: 'Example Co', keyId: KEY_ID },
         contributions: [{
             id: `${id}.app`, kind: 'app', docs: { name: 'App', description: 'An app.' },

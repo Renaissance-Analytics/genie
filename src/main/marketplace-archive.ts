@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { crc32 } from 'node:zlib';
 import yauzl from 'yauzl';
 import type { Entry, ZipFile } from 'yauzl';
-import { PACKAGE_LIMITS, PACKAGE_SIGNATURE_FILE, packagePathProblem } from '../core/plugin-integrity.js';
+import { PACKAGE_LIMITS, PACKAGE_MANIFEST_FILE, PACKAGE_SIGNATURE_FILE, packagePathProblem } from '../core/plugin-integrity.js';
 
 export const MARKETPLACE_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MIB = 1024 * 1024;
@@ -49,7 +49,7 @@ async function directory(zip: ZipFile, signal: AbortSignal): Promise<Entry[]> {
                 if (entry.generalPurposeBitFlag & 0x41) throw new Error('Encrypted ZIP entries are refused');
                 if (![0, 8].includes(entry.compressionMethod)) throw new Error('Unsupported ZIP compression method');
                 if (!Number.isSafeInteger(entry.uncompressedSize) || !Number.isSafeInteger(entry.compressedSize) || entry.uncompressedSize < 0 || entry.compressedSize < 0) throw new Error('Invalid ZIP entry size');
-                const cap = name === 'genie-plugin.json' ? MIB : name === PACKAGE_SIGNATURE_FILE ? 4096 : PACKAGE_LIMITS.fileBytes;
+                const cap = name === PACKAGE_MANIFEST_FILE ? MIB : name === PACKAGE_SIGNATURE_FILE ? 4096 : PACKAGE_LIMITS.fileBytes;
                 if (entry.uncompressedSize > cap || (dir && entry.uncompressedSize !== 0)) throw new Error(`${name} exceeds the ZIP file size limit`);
                 if (entry.uncompressedSize > Math.max(MIB, 200 * entry.compressedSize)) throw new Error('ZIP expansion ratio exceeds its limit');
                 const old = paths.get(key);
