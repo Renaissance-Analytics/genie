@@ -54,7 +54,7 @@ export const PERSON_ONLY_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /** Why an app may never be granted this element, or null: `grantable: false`, or gated by the person's approval. */
-function ungrantable(def: ElementDefinition): string | null {
+export function ungrantable(def: ElementDefinition): string | null {
     if (def.payload.grantable === false) return `"${def.id}" (${def.docs.name}) is never granted to an app: only the person may do it`;
     if (def.payload.gated === true) return `"${def.id}" (${def.docs.name}) is never granted to an app: it waits on the person's approval`;
     return null;

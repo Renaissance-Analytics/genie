@@ -6,8 +6,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { startHostMcp, type HostMcp, type HostMcpPorts } from '../src/main/host-mcp.js';
 import { hostPluginTools, PluginsService } from '../src/main/plugins-host.js';
 import { PluginsReplica } from '../src/main/plugins-replica.js';
-import { composeServices } from '../src/main/compose.js';
-import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**
  * ADF A3 (Tynn #447; spec .ai/plans/specs/adf-sdk.md, story A3): THE PLUGINS AND THE CATALOG ARE GENIE-HOST'S. The plugin
@@ -124,15 +122,9 @@ describe('the wiring: composed in genie-host, not in the window', () => {
         expect(host).toMatch(/plugins: hostPluginTools\(/);
     });
 
-    it('the window’s compose opens a plugin host ONLY when no genie-host gave it the plugins; with one it reads the replica', () => {
-        const compose = code('src/main/compose.ts');
-        expect(compose.match(/PluginHost\.open\(/g) ?? []).toHaveLength(1);
-        expect(compose).toMatch(/const ownPlugins = input\.plugins \? null : await openOwnPlugins\(\)/);
+    it('the window’s compose opens no plugin host: it reads the replica (Tynn #415)', () => {
+        expect(code('src/main/compose.ts')).not.toMatch(/PluginHost\.open\(/);
         expect(code('src/main/main.ts')).toMatch(/plugins: agentEngineLink\.client\.plugins\(\)/);
-    });
-
-    it('with no genie-host the window serves its own plugins’ tools, as before; with one it serves none', () => {
-        expect(code('src/main/main.ts')).toMatch(/plugins: composed\.ownPlugins \? localPluginTools\(composed\.ownPlugins,/);
     });
 
     it('the host’s MCP server starts without waiting for a window; the window no longer sends plugin tools', () => {
@@ -142,38 +134,3 @@ describe('the wiring: composed in genie-host, not in the window', () => {
     });
 });
 
-/**
- * THE EMERGENCY PATH KEEPS ITS PLUGINS (the coordinator's ruling for the owner, 2026-11-08: "a window with no genie-host
- * still loads plugins itself, as today, so there's no regression. genie-host owns them whenever it's present").
- */
-describe('a window with no genie-host still has its plugins', () => {
-    const pty: PtyPort = {
-        open: (o) => ({ id: 'term_x', pid: 1, shell: o.command ?? 'sh', scrollback: '' }),
-        write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {},
-    };
-
-    it('composed with no host: it opens its own plugin host — the list, the editors, a change, and the plugins’ tools', async () => {
-        const services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
-        try {
-            expect(services.plugins.list().map((e) => e.id)).toEqual(['ai.genie.document', 'ai.genie.spreadsheet', 'ai.genie.presentation', 'ai.genie.repository', 'ai.genie.artboard']);
-            expect(services.plugins.editors().map((e) => e.id)).toEqual(['document', 'sheet', 'deck']);
-            expect(services.plugins.editorBytes('ai.genie.spreadsheet', '/w/a.xlsx')).toMatchObject({ allowed: true });
-            expect(await services.plugins.setEnabled('ai.genie.document', false)).toBe(true);
-            expect(services.plugins.editors().map((e) => e.id)).toEqual(['sheet', 'deck']);
-            expect(services.ownPlugins?.tools().map((t) => `${t.pluginId}.${t.tool.name}`)).toContain(SHEET);
-        } finally {
-            await services.shutdown();
-        }
-    });
-
-    it('CONTROL: composed with the host’s replica it opens none — the host owns them', async () => {
-        const replica = new PluginsReplica(async () => true);
-        const services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, plugins: replica });
-        try {
-            expect(services.ownPlugins).toBeNull();
-            expect(services.plugins).toBe(replica);
-        } finally {
-            await services.shutdown();
-        }
-    });
-});

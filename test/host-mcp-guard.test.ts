@@ -12,9 +12,9 @@ const code = (path: string) => readFileSync(path, 'utf8').split(/\r?\n/).filter(
 describe('the window', () => {
     const main = code('src/main/main.ts');
 
-    it('builds its own MCP server ONLY when there is no genie-host (the emergency path)', () => {
-        expect(main).toMatch(/if \(!engineLink\) mcp = genieMcpServer\(/);
-        expect(main.match(/genieMcpServer\(/g)).toHaveLength(1);
+    it('builds no MCP server of its own: genie-host serves it (Tynn #415)', () => {
+        expect(main).not.toMatch(/genieMcpServer\(/);
+        expect(main).toMatch(/hostMcpEndpoint = status\?\.endpoint \?\? null/);
     });
 
     it('never reaches the stores agents write to when genie-host owns them: its tools get hostOnly stand-ins', () => {

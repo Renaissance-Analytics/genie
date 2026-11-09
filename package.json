@@ -25,6 +25,7 @@
     "verify:mailpit": "vitest run -c vitest.mailpit.config.mts",
     "verify:app-inbox": "tsx test/live/app-inbox.live.ts",
     "docs:sdk": "tsx scripts/gen-sdk-docs.ts",
+    "check:package": "tsx scripts/check-package.ts",
     "publish:plugin": "tsx scripts/publish-plugin.ts"
   },
   "dependencies": {
