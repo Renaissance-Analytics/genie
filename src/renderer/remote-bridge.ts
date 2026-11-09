@@ -592,6 +592,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         const snapshotNow = (): Promise<FeatureData> => decodeJson<FeatureData>(() => read('features.snapshot'));
         // A frame over the door's cap would end this window's connection, so a call that large is refused here, with a reason.
         const tooLargeForFrame = (args: readonly unknown[]): boolean => new TextEncoder().encode(JSON.stringify(args)).length > LOCAL_FRAME_LIMIT_BYTES - 4 * 1024;
+        // P4 family 9b (Tynn #563): the composer keeps a host's reason (a slash command the agent does not offer, Tynn #440).
+        Object.assign(bridge, {
+            prompt: (agentId: string, text: string, attachments?: readonly { name: string; type: string; bytes: Uint8Array }[]) => (attachments && attachments.length > 0
+                ? promptWithFiles(agentId, text, attachments)
+                : answer<{ ok: boolean; reason?: string }>('prompt', agentId, text)),
+        });
         const featureListeners = new Set<(data: FeatureData) => void>();
         let rereading = false, again = false;
         const reread = async (): Promise<void> => {

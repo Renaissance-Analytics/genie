@@ -29,6 +29,9 @@ import {
     refuseOffTestMachines, running, sleep, step, tickerOn, ticksOf, twoStreamingAgents, until,
 } from './crash-cdp-lib.mjs';
 
+// Agent commands are on the page's own bridge now: window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
+
 refuseOffTestMachines('hang-cdp');
 const PORT = Number(process.env.HANG_CDP_PORT ?? 9356);
 const INSPECT = Number(process.env.HANG_CDP_INSPECT ?? 9357);
@@ -38,7 +41,7 @@ let app = null;
 let session = null;
 const agentIds = [];
 const done = finish('HANG', h, [
-    async () => { if (session) for (const id of agentIds) await session.cdp.evaluate(`window.genie.stopAgent(${JSON.stringify(id)}); true`, 10_000).catch(() => {}); },
+    async () => { if (session) for (const id of agentIds) await session.cdp.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(id)}); true`, 10_000).catch(() => {}); },
     async () => { if (session) { const pid = session.windowPid; await cleanQuit(session.inspector).catch(() => {}); await gone(pid, 30_000); } },
     async () => { if (session && alive(session.windowPid)) killHard(session.windowPid); },
     async () => { const pid = hostPid(h); if (pid !== null && alive(pid)) { killHard(pid); await gone(pid, 10_000); } },

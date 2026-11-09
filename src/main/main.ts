@@ -1,7 +1,6 @@
 import { limitOf } from '../core/shell-limits.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
-import { cancelIntent } from '../core/session.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
 import { readTynnPage, runTynnPageAction } from './tynn-page-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
@@ -98,7 +97,6 @@ import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '..
 import { wordTynnRefusal } from './drone-refusal.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
-import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { featureOriginOf, HostPicks, isWindowCaller } from './host-picks.js';
 import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
@@ -1909,89 +1907,17 @@ async function boot(): Promise<void> {
     }, record);
     // THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): the same rule, and a new driver through the one
     // Restart when the run's own stopped itself. `agentOps` is read when a message comes, never while main is wiring up.
+    // A command before the agent host is up is refused in words, where the caller shows them (Tynn #563).
+    const agentsUp = (): NonNullable<typeof host> => {
+        if (!host) throw new Error('Genie’s agents are not running yet');
+        return host;
+    };
     const startForYours = (record: AgentRecord): Promise<StartForWork> => startForYourMessage({
         startForWork: startOnDemand,
         needsNewDriver: (id) => host?.needsNewDriver(id) ?? false,
         restart: (id) => restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch()),
         notice: (id, message) => host?.notice(id, message) ?? false,
     }, record);
-
-    ipcMain.handle('genie:open-agent', (_event, raw: unknown) => {
-        // The renderer is not trusted to hand over a well-formed id. `asAgentId` returning
-        // `null` is a refusal, not a repair: looking up `''` would find nothing and render an
-        // empty session forever, which is the §0.4 failure reached through the bridge.
-        const record = agentFromRenderer(raw);
-        if (!record || !host) return { ok: false, reason: 'unknown agent' };
-        // OPENING an agent SHOWS it (q_04ce323c) — its history, its settings, its Start. It starts nothing: a session it
-        // has (running, or Broken to be read) is the one the window shows, as it is; one it has not stays stopped until
-        // something sends it work (`startOnDemand`) or the person presses Start (the one restart, genie#1238).
-        return { ok: true };
-    });
-
-    ipcMain.handle('genie:stop-agent', async (_event, raw: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host) return { ok: false };
-        return { ok: await host.stop(record.id) };
-    });
-
-    // `Stop this turn` (the chat's context line, the Agent view's header): the current turn ends, the agent keeps
-    // running. Ending the agent is `genie:stop-agent` above — a separate action, never reached from here.
-    // `Resume now` (Tynn #794): the agent's provider login is opened at once and its held agents go on.
-    ipcMain.handle('genie:resume-limit', (_event, raw: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host) return { ok: false, reason: 'not-running' };
-        host.resumeLimit(record.provider);
-        return { ok: true };
-    });
-
-    ipcMain.handle('genie:cancel-turn', (_event, raw: unknown, intent: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host) return { ok: false, reason: 'not-running' };
-        // Stop this turn latches the session until the person acts; Interrupt and send does not (Tynn #672 part 3).
-        return host.cancel(record.id, 'you', cancelIntent(intent));
-    });
-
-    ipcMain.handle('genie:prompt', async (_event, raw: unknown, text: unknown, files: unknown) => {
-        const record = agentFromRenderer(raw);
-        const attachments = attachmentsFromRenderer(files);
-        if (!record || !host || typeof text !== 'string' || attachments === null || (text.length === 0 && attachments.length === 0)) return { ok: false };
-        // THE FIRST MESSAGE STARTS IT (q_04ce323c): a stopped or never-started agent is started here, and the message
-        // waits in its session's queue for the start (the chat shows it waiting, then sent). A refused start is said. A
-        // run whose driver stopped itself (Claude's uncertain Stop, prism-acp 0.37.0) is started again on its conversation.
-        const started = await startForYours(record);
-        if (!started.ok) return { ok: false, reason: started.reason };
-        if (!host) return { ok: false };
-        // The composer: the turn is started by YOU, and the ledger says so.
-        const sent = await host.promptWith(record.id, text, attachments, 'you');
-        return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
-    });
-
-    ipcMain.handle('genie:resolve-prompt', (_event, raw: unknown, promptId: unknown, action: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host || typeof promptId !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
-        return host.resolvePrompt(record.id, promptId, action);
-    });
-
-    ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown, note: unknown) => {
-        const record = agentFromRenderer(raw);
-        // Every refusal names its reason: the card says it (core/approval-answering.ts). A bare `{ ok: false }` was a
-        // button that did nothing.
-        if (!record) return { ok: false, reason: 'Genie does not know this agent' };
-        if (!host) return { ok: false, reason: 'Genie’s agents are not running yet' };
-        if (typeof optionId !== 'string') return { ok: false, reason: 'no option was chosen' };
-        // The session checks the id against the parked request. A refusal leaves the approval
-        // parked, which is recoverable; answering with something meaningless is not.
-        return host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '');
-    });
-
-    // The New agent form (the owner, 2026-10-23: "it just created an agent with some dumb name and default settings").
-    ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown, rawInput: unknown) => {
-        if (typeof rawWorkspaceId !== 'string' || !registry) return { ok: false, reason: 'no workspace named' };
-        const input = (typeof rawInput === 'object' && rawInput !== null ? rawInput : {}) as Record<string, unknown>;
-        const text = (v: unknown) => (typeof v === 'string' ? v : '');
-        const created = await createAgent(agentCreatePorts(), rawWorkspaceId, { name: text(input['name']), purpose: text(input['purpose']), provider: text(input['provider']) });
-        return created.ok ? { ok: true, id: created.id } : created;
-    });
 
     /*
      * The terminal handlers. Every argument is `unknown` and narrowed here — the renderer is
@@ -2068,17 +1994,6 @@ async function boot(): Promise<void> {
         const started = logins.start(record.provider);
         return started.ok ? { ok: true } : started;
     });
-    ipcMain.handle('genie:restart-with-handoff', async (_event, raw: unknown, finishedId: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
-        // The one restart (genie#1238) → the handoff as the next prompt → seen. The order and the refusals live in
-        // restart-with-handoff.ts; this is the thin call.
-        const live = host;
-        const r = await restartWithHandoff({ restart: (id) => restartAgent(agentOps, id, 'graceful'), prompt: (id, text, by) => live.prompt(id, text, by) }, services.attention, record, finishedId);
-        registry?.touch();
-        return r;
-    });
-
     // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
     const crashReports = crashReportHost({
         view: () => agentEngineLink?.client.safeModeView() ?? null,
@@ -2752,14 +2667,14 @@ async function boot(): Promise<void> {
             startForYourMessage: (record) => startForYours(record),
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
-                stop: (id) => host!.stop(id),
-                cancel: (id, intent) => host!.cancel(id, 'you', intent),
-                resumeLimit: (provider) => host!.resumeLimit(provider),
-                prompt: (id, text, by) => host!.prompt(id, text, by),
-                // A phone's photo in the chat (genie#1346): the composer's own attach path, the same as `genie:prompt`.
-                promptWith: (id, text, attachments, by) => host!.promptWith(id, text, attachments, by),
-                resolvePrompt: (id, promptId, action) => host!.resolvePrompt(id, promptId, action),
-                answerApproval: (id, optionId, note) => host!.answerApproval(id, optionId, note ?? ''),
+                stop: (id) => agentsUp().stop(id),
+                cancel: (id, intent) => agentsUp().cancel(id, 'you', intent),
+                resumeLimit: (provider) => agentsUp().resumeLimit(provider),
+                prompt: (id, text, by) => agentsUp().prompt(id, text, by),
+                // The composer's own attach path, for this window and a phone's photo (genie#1346).
+                promptWith: (id, text, attachments, by) => agentsUp().promptWith(id, text, attachments, by),
+                resolvePrompt: (id, promptId, action) => agentsUp().resolvePrompt(id, promptId, action),
+                answerApproval: (id, optionId, note) => agentsUp().answerApproval(id, optionId, note ?? ''),
                 subscribe: (cb) => host!.subscribe(cb),
             },
             // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
@@ -2773,6 +2688,7 @@ async function boot(): Promise<void> {
                 upload: (workspaceId, dir, name, bytes) => filesHost?.upload(workspaceId, dir, name, bytes) ?? Promise.resolve({ ok: false as const, reason: 'no files host' }),
             },
             registerAgent: (workspaceId, input) => createAgent(agentCreatePorts(), workspaceId, input),
+            rosterChanged: () => registry?.touch(),
             attention: { finished: () => services!.attention.finished(), markSeen: (id) => services!.attention.markSeen(id) },
             terminals: {
                 open: (options) => terminals!.open(options),

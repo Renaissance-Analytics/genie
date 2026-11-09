@@ -409,7 +409,7 @@ async function cleanup(why) {
         for (const s of [b, a]) {
             if (!s?.cdp || s.app.gone) continue;
             for (const ag of agents) {
-                try { await s.cdp.evaluate(`window.genie.stopAgent(${JSON.stringify(ag.id)}); true`, 5_000); console.log(`  stopped ${ag.name}`); } catch (e) { console.log(`  could not stop ${ag.name}: ${e.message}`); }
+                try { await s.cdp.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(ag.id)}); true`, 5_000); console.log(`  stopped ${ag.name}`); } catch (e) { console.log(`  could not stop ${ag.name}: ${e.message}`); }
             }
             break;
         }
@@ -527,7 +527,7 @@ try {
     for (let i = 1; i <= AGENTS; i++) {
         const name = `ticker-${i}-${process.pid}`;
         step(`1.${i}`, `adding the codex agent ${name}`);
-        const added = await a.cdp.evaluate(`window.genie.addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the quit check.', provider: 'codex' })`, 30_000);
+        const added = await a.cdp.evaluate(`(window.genieTest ?? window.genie).addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the quit check.', provider: 'codex' })`, 30_000);
         if (check(added?.ok === true, `1.${i} agent ${name} added`, added?.ok ? added.id : added?.reason)) agents.push({ id: added.id, name });
     }
     for (const ag of agents) await carry(`2-3. ${ag.name}`, async () => {
@@ -537,7 +537,7 @@ try {
         const running = await until(() => a.cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(ag.id)}).then((d) => d?.session?.running === true)`, 5_000), 30_000);
         check(running === true, `2. ${ag.name}'s session is running`);
         step('3', `prompting ${ag.name}`);
-        const sent = await a.cdp.evaluate(`window.genie.prompt(${JSON.stringify(ag.id)}, 'Stream ticks until stopped.')`, 15_000);
+        const sent = await a.cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(ag.id)}, 'Stream ticks until stopped.')`, 15_000);
         check(sent?.ok === true, `3. ${ag.name} took the prompt`, sent?.reason ?? '');
     });
     for (const ag of agents) await carry(`4. ${ag.name}`, async () => {

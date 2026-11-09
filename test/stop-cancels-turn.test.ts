@@ -279,16 +279,17 @@ describe('SessionHost.cancel — the slot stays, the agent keeps running', () =>
 const source = (path: string): string => readFileSync(new URL(path, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
 
 describe('the wiring — every turn Stop reaches cancel; "Stop agent" still stops', () => {
-    it('main handles genie:cancel-turn with host.cancel (never host.stop), and the remote host API maps host.cancel', () => {
+    it('the host API maps cancelTurn to host.cancel (never host.stop), every window through the door (P4 family 9b)', () => {
         const main = source('../src/main/main.ts');
-        const handler = main.match(/ipcMain\.handle\('genie:cancel-turn'[^]*?\n {4}\}\);/)?.[0] ?? '';
+        const api = source('../src/main/host-api.ts');
+        const cancel = api.slice(api.indexOf("case 'cancelTurn':"), api.indexOf("case 'prompt':"));
         // With its intent since Tynn #672 part 3: a Stop latches, an interrupt-and-send does not (test/interrupt-does-not-latch-stop.test.ts).
-        expect(handler).toContain("host.cancel(record.id, 'you', cancelIntent(intent))");
-        expect(handler).not.toContain('.stop(');
-        expect(main.match(/cancel: \(id, intent\) => host!\.cancel\(id, 'you', intent\)/g) ?? []).toHaveLength(1);
-        // Control: the session-ending handler is still there, still stopping.
-        expect(main).toMatch(/ipcMain\.handle\('genie:stop-agent'[^]*?host\.stop\(record\.id\)/);
-        expect(source('../src/main/preload.ts')).toMatch(/cancelTurn: \(agentId, intent\) => ipcRenderer\.invoke\('genie:cancel-turn', agentId, intent\)/);
+        expect(cancel).toContain('deps.host.cancel(r.id, cancelIntent(args[1]))');
+        expect(cancel).not.toContain('.stop(');
+        expect(main.match(/cancel: \(id, intent\) => agentsUp\(\)\.cancel\(id, 'you', intent\)/g) ?? []).toHaveLength(1);
+        // Control: the session-ending case is still there, still stopping.
+        expect(api.slice(api.indexOf("case 'stopAgent':"), api.indexOf("case 'resumeLimit':"))).toContain('deps.host.stop(r.id)');
+        expect(source('../src/renderer/local-session.ts')).toMatch(/cancelTurn: \(id, intent\) => answered\(\(b\) => b\.cancelTurn\(id, intent\)\)/);
         expect(source('../src/renderer/remote-bridge.ts')).toMatch(/cancelTurn: \(agentId, intent\) => answer<[^>]*>\('cancelTurn', agentId, intent\)/);
     });
 
