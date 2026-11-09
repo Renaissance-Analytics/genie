@@ -88,7 +88,7 @@ describe('every plain fetch under src/main', () => {
         expect(named).toEqual([]);
     });
 
-    it('the relay asks Tynn through the window\'s network', () => {
-        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/relayHostPorts\(\{[^\n]*fetch: \(url, init\) => net\.fetch\(url, init\)/);
+    it('the relay is genie-host\'s: the window asks Tynn nothing for it (Tynn #594)', () => {
+        expect(readFileSync('src/main/main.ts', 'utf8')).not.toMatch(/relayHostPorts\(/);
     });
 });
