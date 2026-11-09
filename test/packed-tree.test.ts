@@ -33,12 +33,14 @@ describe('what the Windows install directory holds', () => {
         const extra = new Set(leftovers(beta60).map((f) => f.file));
         const kept = beta60.filter((f) => !extra.has(f));
         expect(leftovers(kept)).toEqual([]);
-        const have = new Set(kept);
+        // beta.60's tree predates the prebuilt supervisors (Tynn #575); nothing else may be missing from it.
+        const have = new Set([...kept, 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-x64/prism-acp-supervisor.exe', 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-arm64/prism-acp-supervisor.exe']);
         expect(required().filter((f) => !have.has(f))).toEqual([]);
     });
 
     it('a tree missing a file the app loads is caught', () => {
-        const without = new Set(beta60.filter((f) => !f.endsWith('prebuilds/win32-x64/conpty.node')));
+        // beta.60's tree predates the prebuilt supervisors (Tynn #575), so they are added: this names the one file removed.
+        const without = new Set([...beta60.filter((f) => !f.endsWith('prebuilds/win32-x64/conpty.node')), 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-x64/prism-acp-supervisor.exe', 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-arm64/prism-acp-supervisor.exe']);
         expect(required().filter((f) => !without.has(f))).toEqual(['resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/conpty.node']);
     });
 

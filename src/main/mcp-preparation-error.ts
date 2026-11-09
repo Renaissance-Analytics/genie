@@ -1,3 +1,5 @@
+import { supervisorFailureWords } from '../core/supervisor-failure.js';
+
 const MESSAGES = {
     offline: 'Tynn could not be reached. Check your connection, then restart this agent. No shared workspace credential was used.',
     inactive: 'This Tynn agent or key is inactive. Review its status and renew its key in Tynn before restarting. No shared workspace credential was used.',
@@ -16,6 +18,9 @@ export class McpPreparationError extends Error {
 }
 
 export function mcpPreparationMessage(error: unknown): string {
+    // The supervisor could not run (Tynn #575): that, naming the file. Its words are fixed, so nothing from the error crosses.
+    const supervisor = supervisorFailureWords(error);
+    if (supervisor !== null) return `${supervisor}.`;
     return error instanceof McpPreparationError && Object.hasOwn(MESSAGES, error.code) ? MESSAGES[error.code]
         : 'The agent could not prepare its private MCP connection. Restart to try again.';
 }

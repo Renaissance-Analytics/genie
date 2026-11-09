@@ -33,6 +33,8 @@ export interface HostRemoteApiPorts {
      * builds it once its session host is up.
      */
     readonly alone?: HostApi | (() => HostApi | null);
+    /** A Pilot's Take Over window closed: the TUI it started goes with it, whoever else is connected. */
+    readonly takeOverEnded?: (terminalId: string) => void;
     /** The workspace an agent is in (a guest is held to its own), from the host's roster. */
     readonly workspaceOfAgent?: (agentId: string) => string | null;
 }
@@ -55,6 +57,7 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             return () => { offWindow(); offAlone(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
+        ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),
     };
 }
 

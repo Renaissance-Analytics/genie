@@ -45,8 +45,11 @@ export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMeth
 /** The Dashboard's lanes and rate limits (Tynn #553, P5d.5b). */
 export const HOST_FEED_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['activity', 'headroom']);
 
+/** A Pilot's Take Over window's own terminal (Tynn #553, P5d.5c). Opening and listing terminals stay the window's. */
+export const HOST_TERMINAL_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['terminals.attach', 'terminals.write', 'terminals.resize', 'terminals.close']);
+
 /** Every method genie-host answers itself while no window is connected. */
-export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS]);
+export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS]);
 
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
@@ -75,6 +78,10 @@ export interface HostAlonePorts {
     readonly windowConnected: () => boolean;
     /** Each provider's latest rate-limit reading, kept by genie-host whether or not a window is open. */
     readonly headroom: NonNullable<HostApiDeps['headroom']>;
+    /** The host's terminals, as a Take Over window on a Pilot reads and types into its own. */
+    readonly terminals: Pick<HostApiDeps['terminals'], 'attach' | 'write' | 'resize' | 'close' | 'list' | 'onData' | 'onExit'>;
+    /** What is known of this agent's Take Over TUI: its Observed row. */
+    readonly takeOver: NonNullable<Parameters<typeof agentDetailFor>[0]['takeOver']>;
     readonly updates?: HostApiDeps['updates'];
     readonly schedule?: HostApiDeps['schedule'];
 }
@@ -124,7 +131,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         subscribeSnapshot: (listener) => registry.subscribe(listener),
         subscribeAgentRecords: (listener) => registry.subscribeAgentRecords(listener),
         find: (id) => registry.find(id as AgentId),
-        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, mail: (agentId, limit) => ports.inbox.involving(agentId, limit) }, id as AgentId),
+        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit) }, id as AgentId),
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
         startForYourMessage: (record) => startForYourMessage({
@@ -146,7 +153,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         },
         registerAgent: async () => { throw new Error(needsWindow('a new agent')); },
         attention: { finished: () => ports.attention.finished(), markSeen: (id) => ports.attention.markSeen(id) },
-        terminals: windowOnly<HostApiDeps['terminals']>('terminals', { onData: () => () => {}, onExit: () => () => {} }),
+        terminals: windowOnly<HostApiDeps['terminals']>('terminals', ports.terminals),
         uploads: windowOnly<HostApiDeps['uploads']>('inbox.sendFile'),
         files: ports.files,
         serviceEnvFor: () => ({}),

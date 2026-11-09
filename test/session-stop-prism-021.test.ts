@@ -99,10 +99,10 @@ describe('the paths that do not change', () => {
     });
 });
 
-describe('the supervisor is prepared at start-up, in Genie’s own runtime folder', () => {
+describe('the supervisor is prepared at start-up (Tynn #575: prebuilt, the unpacked file)', () => {
     const host = readFileSync('src/main/genie-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-    it('prepared by genie-host under Genie’s runtime dir (src/main/prism-supervisor.ts, genie#1259); a failure is logged and said, never swallowed', () => {
-        expect(host).toMatch(/prepareGenieSupervisor\(runtime\)/);
+    it('prepared once, by genie-host (src/main/prism-supervisor.ts); a failure is logged and said, never swallowed', () => {
+        expect(host).toMatch(/prepareGenieSupervisor\(\)/);
         expect(host).toMatch(/prepareGenieSupervisor\([^;]*\)\.catch\(\(error: unknown\) => \{[\s\S]{0,400}lifecycleLog\(/);
     });
 });
