@@ -11,7 +11,6 @@ interface AppWindow {
     on(event: 'closed', listener: () => void): unknown;
     loadURL(url: string): Promise<unknown>;
     close(): void;
-    focus(): void;
     webContents: {
         on(event: 'will-navigate' | 'will-redirect', listener: (event: { preventDefault(): void }, url: string) => void): unknown;
         setWindowOpenHandler(handler: (details: { url: string }) => { action: 'deny' }): unknown;
@@ -56,6 +55,8 @@ export interface GAppWindowsPorts<S> {
     readonly prepareSession: (packageId: string) => Promise<S>;
     readonly create: (options: Record<string, unknown>, session: S) => AppWindow;
     readonly preload: string;
+    /** An app already open comes to the front (core/window-activation.ts: the person's gesture). */
+    readonly bringUp: (window: AppWindow) => void;
 }
 
 export class GAppWindows<S> {
@@ -68,7 +69,7 @@ export class GAppWindows<S> {
 
     async open(packageId: string): Promise<void> {
         const running = this.#open.get(packageId);
-        if (running) { running.focus(); return; }
+        if (running) { this.#ports.bringUp(running); return; }
         if (this.#ports.caPem() === null) throw new Error('This Genie has no certificate for its .gen addresses yet, so the app cannot open safely.');
         const info = await this.#ports.sessions.open(packageId);
         let browserSession: S;

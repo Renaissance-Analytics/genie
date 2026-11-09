@@ -29,12 +29,11 @@ import { signPackage } from './plugin-sign-helper.js';
 const info: GAppSessionInfo = { packageId: 'com.example.notes', url: 'https://com-example-notes.apps.gen/app/index.html', channel: 'wss://com-example-notes.apps.gen/.genie/channel', token: 'tok-1', window: { width: 800, height: 600 } };
 
 function fakeWindow() {
-    const events = new Map<string, () => void>();
+    const events = new Map<string, Array<() => void>>();
     const win = {
-        on: (e: string, fn: () => void) => { events.set(e, fn); },
+        on: (e: string, fn: () => void) => { events.set(e, [...(events.get(e) ?? []), fn]); },
         loadURL: vi.fn(async (_url: string): Promise<void> => undefined),
-        close: vi.fn(() => { events.get('closed')?.(); }),
-        focus: vi.fn(),
+        close: vi.fn(() => { for (const fn of events.get('closed') ?? []) fn(); }),
         webContents: { on: vi.fn(), setWindowOpenHandler: vi.fn() },
     };
     return win;
@@ -47,8 +46,9 @@ describe('the window process opens an app', () => {
         const wins: Array<ReturnType<typeof fakeWindow>> = [];
         const prepareSession = vi.fn(async (id: string) => { log.push(`routed ${id}`); return `session-of-${id}`; });
         const create = vi.fn((options: Record<string, unknown>, session: unknown) => { log.push(`window in ${String(session)}`); void options; const w = fakeWindow(); wins.push(w); return w; });
-        const windows = new GAppWindows({ sessions, caPem: () => (over.caPem === undefined ? 'PEM' : over.caPem), prepareSession, create: create as never, preload: '/dist/gapp-preload.cjs' });
-        return { windows, sessions, wins, create, prepareSession, log };
+        const bringUp = vi.fn();
+        const windows = new GAppWindows({ sessions, caPem: () => (over.caPem === undefined ? 'PEM' : over.caPem), prepareSession, create: create as never, preload: '/dist/gapp-preload.cjs', bringUp });
+        return { windows, sessions, wins, create, prepareSession, log, bringUp };
     }
 
     it('asks the host for a session, routes the app\'s own browser session first, then opens the sealed window on it', async () => {
@@ -68,7 +68,8 @@ describe('the window process opens an app', () => {
         await r.windows.open('com.example.notes');
         expect(r.wins).toHaveLength(1);
         expect(r.sessions.open).toHaveBeenCalledTimes(1);
-        expect(r.wins[0]!.focus).toHaveBeenCalledTimes(1);
+        expect(r.bringUp).toHaveBeenCalledTimes(1);
+        expect(r.bringUp).toHaveBeenCalledWith(r.wins[0]);
     });
 
     it('closing the window ends its session, and it can be opened again', async () => {

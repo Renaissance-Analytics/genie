@@ -3779,7 +3779,7 @@ async function boot(): Promise<void> {
     // THE FRONT DOOR AS IT IS NOW (P5a.2): genie-host's, so it can come back on another port or with another CA. Every
     // browser session reads these, and is routed again when they change.
     frontDoorNow = { port: composed.frontDoorPort, caPem: browserTrust.caPem };
-    gappWindowsNow = gappWindowsElectron({ sessions: () => agentEngineLink?.client.gappSessions() ?? null, frontDoor: () => frontDoorNow, preload: join(here, 'gapp-preload.cjs') });
+    gappWindowsNow = gappWindowsElectron({ sessions: () => agentEngineLink?.client.gappSessions() ?? null, frontDoor: () => frontDoorNow, preload: join(here, 'gapp-preload.cjs'), ledger: activationLedger });
     composed.onFrontDoorChange(() => {
         const trust = composed.browserTrust();
         if (frontDoorNow.port === composed.frontDoorPort && frontDoorNow.caPem === trust.caPem) return;
@@ -3787,8 +3787,8 @@ async function boot(): Promise<void> {
         console.log(`[genie] browser: the front door is on :${frontDoorNow.port} now${trust.caPem === null ? ` with no CA (${trust.reason})` : ''}`);
         followFrontDoorInPanes();
         rerouteGenieBrowserSession({ frontDoorPort: frontDoorNow.port, caPem: frontDoorNow.caPem });
-        gappWindowsNow?.reroute();
         publishBrowserFacts?.();
+        gappWindowsNow?.reroute();
     });
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
     // in the store of the site's own workspace.

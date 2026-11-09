@@ -40,7 +40,8 @@ class Cdp {
         c.socket = new WebSocket(url);
         c.socket.addEventListener('message', (event) => {
             const frame = JSON.parse(event.data);
-            if (frame.id !== undefined) { c.pending.get(frame.id)?.(frame); c.pending.delete(frame.id); }
+            const done = c.pending.get(frame.id);
+            if (typeof done === 'function') { c.pending.delete(frame.id); done(frame); }
         });
         await new Promise((ok, fail) => { c.socket.addEventListener('open', ok, { once: true }); c.socket.addEventListener('error', fail, { once: true }); });
         return c;

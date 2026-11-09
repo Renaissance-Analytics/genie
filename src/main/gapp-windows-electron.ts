@@ -1,5 +1,6 @@
 import { BrowserWindow, session, type Session } from 'electron';
 import { appSlug } from '../core/gapp-origin.js';
+import { bringUp, type ActivationLedger } from '../core/window-activation.js';
 import type { GAppSessionsApi } from '../core/gapps.js';
 import { GAppWindows } from './gapp-window.js';
 import { guardSession, routeSession } from './genie-browser-electron.js';
@@ -20,6 +21,7 @@ export function gappWindowsElectron(deps: {
     readonly sessions: () => GAppSessionsApi | null;
     readonly frontDoor: () => { readonly port: number; readonly caPem: string | null };
     readonly preload: string;
+    readonly ledger: ActivationLedger;
     readonly log?: (line: string) => void;
 }): { open(packageId: string): Promise<void>; reroute(): void } {
     const log = deps.log ?? ((line: string) => console.log(line));
@@ -44,6 +46,7 @@ export function gappWindowsElectron(deps: {
         },
         create: (options, ses) => new BrowserWindow({ ...options, webPreferences: { ...(options.webPreferences as object), session: ses } }),
         preload: deps.preload,
+        bringUp: (win) => { bringUp(win as BrowserWindow, { activation: 'user-gesture', reason: 'GApp window', ledger: deps.ledger, label: 'gapp' }); },
     });
     return {
         open: (packageId) => windows.open(packageId),
