@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -38,7 +38,7 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
@@ -133,6 +133,18 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     });
     return {
         terminals,
+        marketplace: {
+            search: (query, cursor) => read(b => b.marketplace!.search(query, cursor)),
+            prepare: (id, version) => read(b => b.marketplace!.prepare(id, version)),
+            install: (token, consent) => read(b => b.marketplace!.install(token, consent)),
+            discard: token => read(b => b.marketplace!.discard(token)),
+        },
+        // P4 family 11 (Tynn #560): the feature snapshot, its push and a sound's data.
+        features: {
+            snapshot: () => read((b) => b.features.snapshot()),
+            subscribe: (listener) => subscribe((b) => b.features.subscribe(listener)),
+            soundData: (key) => read((b) => b.features.soundData(key)),
+        },
         // P4 family 10 (Tynn #559): the host's folders, for every picker — a failure rejects, as the IPC call did.
         host: {
             listDir: (path) => read((b) => b.host!.listDir(path)),

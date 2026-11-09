@@ -1,7 +1,8 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { InvolvingCache, cursorOf, hasWrittenIn, mailAfter, receiptsOf, unreadOf } from '../core/inbox-read.js';
 import { constants as fsConstants } from 'node:fs';
-import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { appSenderId, isAppSender, readAppSender, type AppMessageMeta } from '../core/app-inbox.js';
 import { ATTACHMENT_LIMITS, HUMAN, attachmentRefusal, isExecutableName, pausedAgentReply, type InboxSessionProbe, type Participant } from '../core/inbox.js';
@@ -614,7 +615,7 @@ export class InboxStore {
         await mkdir(this.attachmentsDir, { recursive: true });
         const tmp = `${target}.${randomUUID()}.tmp`;
         await writeFile(tmp, bytes);
-        await rename(tmp, target);
+        await renameOver(tmp, target);
     }
 
     async #flush(changed: readonly InboxMessage[] = []): Promise<void> {

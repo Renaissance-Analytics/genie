@@ -33,6 +33,7 @@ import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js'
 import { isLocalArtboardMethod } from '../core/local-artboard.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
+import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -72,6 +73,7 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    marketplace?: () => MarketplaceApi | null;
     localTerminals?: NativeTerminalPort;
     artboard?: LocalArtboardPort;
     chatDrafts?: LocalDraftsStore;
@@ -253,6 +255,8 @@ export interface HostApiDeps {
     features: {
         snapshot(): Promise<FeatureData>;
         act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
+        /** An alert's own sound as a data URL, by its setting key; `null` when it cannot be read (P4 family 11). */
+        soundData?(key: string): Promise<string | null>;
         onChange(listener: (data: FeatureData) => void): () => void;
     };
     updates: {
@@ -279,6 +283,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     };
 
     const invoke = async (method: RemoteMethod, args: unknown[], context: CallContext = RESTRICTED_CALL_CONTEXT): Promise<unknown> => {
+        if (isMarketplaceMethod(method)) throw new Error('Marketplace actions require their authenticated local window connection.');
         if (isLocalTerminalMethod(method)) {
             if (!deps.localTerminals) throw new Error('the local terminal service is not available');
             const name = method.slice('terminals.local'.length).toLowerCase();
@@ -637,6 +642,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'features.snapshot':
                 return deps.features.snapshot();
+            case 'features.soundData':
+                return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0]) : null;
             case 'features.act':
                 return deps.features.act(args[0] as FeatureAction, context);
             case 'host.listDir':
@@ -685,6 +692,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     const terminalWorkspaces = new Map<string, string>();
     return {
         invoke,
+        ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
         ...(deps.tynnWatch ? { tynnWatch: deps.tynnWatch } : {}),
         ...(deps.localTerminals ? { localTerminals: deps.localTerminals } : {}),
@@ -698,6 +706,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         },
         workspacePaths: () => Object.fromEntries((deps.snapshot().workspaces ?? []).map((w) => [w.id, w.path])),
         onEvent: (listener, options) => {
+            let featuresRevision = 0;
             /*
              * An agent's detail AT MOST every AGENT_PUSH_INTERVAL_MS, the latest state last (the owner, 2026-10-20: "severe
              * UI lag"): a busy agent changes many times a second and its detail carries its ledger; built and sent per
@@ -713,7 +722,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 () => agents.stop(),
                 deps.terminals.onData((id, data) => listener('terminal-data', { id, data })),
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
-                deps.features.onChange((data) => listener('features', data)),
+                // A remote window hears the snapshot; this machine's own hears that it changed, and re-reads (P4 family 11):
+                // no local event carries a whole snapshot, which has no bound and could end the door's connection.
+                deps.features.onChange((data) => { listener('features', data); listener(LOCAL_EVENTS.features, { revision: ++featuresRevision }); }),
                 deps.updates?.onChange((state) => { listener('updates', state); listener(LOCAL_EVENTS.updates, state); }) ?? (() => {}),
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),

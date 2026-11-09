@@ -44,11 +44,12 @@ export type CatalogLookup = (id: string) => ElementDefinition | null;
 
 /**
  * Genie's own tools a GApp is NEVER granted (decision 3): the ones that act as the person (their question, their handoff,
- * a new agent, their workspace's tabs, mail as them), and the ones that wait on the person's approval (a terminal, a
- * service, a site, a background process, a page). `grantable: false` in Genie's catalog (main/genie-catalog.ts).
+ * a new agent, their workspace's tabs, mail as them, their lists: items there put work in front of the person, the
+ * coordinator's ruling of 2026-11-08, starting conservative), and the ones that wait on the person's approval (a
+ * terminal, a service, a site, a background process, a page). `grantable: false` in Genie's catalog (main/genie-catalog.ts).
  */
 export const PERSON_ONLY_TOOLS: ReadonlySet<string> = new Set([
-    'ForceTheQuestion', 'imDone', 'createAgent', 'workspaceTabs', 'agentinbox',
+    'ForceTheQuestion', 'imDone', 'createAgent', 'workspaceTabs', 'agentinbox', 'lists',
     'manageTerminals', 'services', 'sites', 'processes', 'pages',
 ]);
 

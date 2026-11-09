@@ -5,6 +5,8 @@ import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import { hostname } from 'node:os';
 import { RemoteAccessReplica } from './remote-access-replica.js';
+import { RelayHostReplica } from './relay-host-replica.js';
+import type { RelayHostView } from './relay-host-service.js';
 import type { RemoteAccessEvent } from './remote-access-host.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
@@ -53,6 +55,7 @@ import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { PluginsDump } from './plugins-host.js';
 import { PluginsReplica } from './plugins-replica.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
 import { CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../core/catalog-sync.js';
 import type { CatalogKind, ElementDefinition } from '../core/catalog.js';
 import type { BrowserEvent } from './browser-service.js';
@@ -182,6 +185,7 @@ export class SessionEngineClient {
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #plugins: PluginsReplica | null = null;
+    #marketplace: MarketplaceApi | null = null;
     #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
@@ -191,6 +195,7 @@ export class SessionEngineClient {
     #workstation: WorkstationReplica | null = null;
     #deviceLink: DeviceLinkReplica | null = null;
     #remoteAccess: RemoteAccessReplica | null = null;
+    #relayHost: RelayHostReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -277,7 +282,6 @@ export class SessionEngineClient {
                 this.#hosting?.linkDown();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
                 this.#deviceLink?.lost('the host closed the connection');
-                this.#remoteAccess?.lost();
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
             transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: this.#options.label ?? WINDOW_LINK_LABEL }));
@@ -435,6 +439,9 @@ export class SessionEngineClient {
                 return;
             case 'tynn.event':
                 this.tynn().rebase(payload as TynnAccountDump);
+                return;
+            case 'relayHost.event':
+                this.relayHost().deliver(payload as RelayHostView);
                 return;
             case 'remoteAccess.event':
                 this.remoteAccess().deliver(payload as RemoteAccessEvent);
@@ -713,6 +720,16 @@ export class SessionEngineClient {
         return this.#remoteAccess;
     }
 
+    /** This machine on the Tynn relay, as a host (Tynn #410): genie-host registers it and runs the link. */
+    relayHost(): RelayHostReplica {
+        this.#relayHost ??= new RelayHostReplica(async (method, args) => {
+            const reply = await this.call('engine.relayHost', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#relayHost;
+    }
+
     /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */
     deviceLink(): DeviceLinkReplica {
         this.#deviceLink ??= new DeviceLinkReplica(async (method, args) => {
@@ -802,6 +819,22 @@ export class SessionEngineClient {
         const reply = await this.call('catalog.docs', [kind, id]);
         if (!reply.ok) throw new Error(reply.reason);
         return reply.value as ElementDefinition | null;
+    }
+
+    /** The local window's Marketplace actions. Only the host downloads, verifies and activates packages. */
+    marketplace(): MarketplaceApi {
+        const request = async <T>(operation: keyof MarketplaceApi, args: unknown[]): Promise<T> => {
+            const answer = await this.call('engine.marketplace', [operation, args]);
+            if (!answer.ok) throw new Error(answer.reason);
+            return answer.value as T;
+        };
+        this.#marketplace ??= {
+            search: (query, cursor) => request('search', cursor === undefined ? [query] : [query, cursor]),
+            prepare: (id, version) => request('prepare', [id, version]),
+            install: (token, consent) => request('install', [token, consent]),
+            discard: async token => { await request('discard', [token]); },
+        };
+        return this.#marketplace;
     }
 
     /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */

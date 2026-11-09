@@ -2837,6 +2837,7 @@ async function boot(): Promise<void> {
          */
         ...(linkedRemote ? { remoteAccess: linkedRemote } : {}),
         remoteApi: (remoteApiNow = buildHostApi({
+            marketplace: () => agentEngineLink?.client.marketplace() ?? null,
             // Following the Tynn tab, by subscription (P4 family 12, Tynn #561).
             tynnWatch: tynnWatchPort,
             localTerminals: createNativeTerminalPort({
@@ -2898,7 +2899,7 @@ async function boot(): Promise<void> {
                         list: (id) => listShareLinks(shareRequest, ownWorkstation(), id),
                         mint: (input) => mintShareLink(shareRequest, ownWorkstation(), input),
                         // Keep immediate revalidation of a revoked link's live guest session (audit M-c).
-                        revoke: (id) => revokeShareLink(shareRequest, ownWorkstation(), id, async () => { await relayHostNow?.revalidate(); }),
+                        revoke: (id) => revokeShareLink(shareRequest, ownWorkstation(), id, async () => { await (agentEngineLink ? agentEngineLink.client.relayHost().revalidate() : relayHostNow?.revalidate()); }),
                     },
                 },
             },
@@ -3024,6 +3025,8 @@ async function boot(): Promise<void> {
             features: {
                 snapshot: () => featureSnapshot(services!, featureState, processPorts()),
                 act: (action, context) => handleFeatureAction(services!, action, featureState, featurePorts, featureOriginOf(context, hostPicks)),
+                // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
+                soundData: (key) => customSoundData(services!.settings, key),
                 onChange: (cb) => { featureListeners.add(cb); return () => { featureListeners.delete(cb); }; },
             },
             updates: updates
@@ -3058,8 +3061,7 @@ async function boot(): Promise<void> {
     const featurePush = new LatestPush<FeatureData>({
         build: () => featureSnapshot(composed, featureState, { ...processPorts(), onEngineStatusesLate: () => pushFeatures() }),
         deliver: (data) => {
-            // Every window: a flow editor window draws the flow's runs and armed state from the same snapshot (genie#1204).
-            broadcast(FEATURE_CHANNELS.changed, data);
+            // Every window, a flow editor's too (genie#1204): each hears the local door's revision and re-reads (P4 family 11).
             for (const l of featureListeners) l(data);
         },
     });
@@ -3191,8 +3193,19 @@ async function boot(): Promise<void> {
         exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
     }).then((id) => (id ? machineKeyOf(id) : null));
     // WHAT TYNN SAYS THIS MACHINE IS (genie#1278 W5): Tynn's answer only; signed in, no answer is a drone.
+    /*
+     * THE REGISTRATION, THE ROLE AND THE RELAY LINK ARE GENIE-HOST'S (Tynn #410, P5d.3). This window mirrors them for what it
+     * reads synchronously (fail closed: a drone until the host has answered) and hands over Genie 1's record, which only it
+     * can open. With no host (the emergency path) it does all of this itself, below.
+     */
+    const linkedRelayHost = agentEngineLink ? agentEngineLink.client.relayHost() : null;
+    if (linkedRelayHost) {
+        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
+        void linkedRelayHost.refresh().catch((error: unknown) => console.error(`[tynn relay] ${error instanceof Error ? error.message : String(error)}`));
+    }
     readWorkstationRoleNow = () => readRole();
     const readRole = async (): Promise<void> => {
+        if (linkedRelayHost) { await linkedRelayHost.readRole(); return; }
         const account = tynnAccount;
         const signedIn = account?.status().signedIn === true;
         const role = signedIn && account ? await readWorkstationRole((path, init) => account.request(path, init)) : null;
@@ -3202,13 +3215,14 @@ async function boot(): Promise<void> {
         if (tynnWorkstationNow) tynnWorkstationNow = { ...tynnWorkstationNow, role: next };
         pushFeatures();
     };
-    setInterval(() => { void readRole(); }, 5 * 60_000).unref();
+    if (!linkedRelayHost) setInterval(() => { void readRole(); }, 5 * 60_000).unref();
     let registering: Promise<void> | null = null;
     const registerWorkstation = (): Promise<void> => {
         if (registering) return registering;
         const account = tynnAccount;
         if (!account) return Promise.resolve();
         registering = (async () => {
+            if (linkedRelayHost) { await linkedRelayHost.register(await genie1Identity().catch(() => null)); return; }
             const host = account.host();
             if (!account.status().signedIn) {
                 tynnWorkstationNow = { registered: false, reason: 'sign in to Tynn to register this machine', role: null };
@@ -3220,13 +3234,14 @@ async function boot(): Promise<void> {
             const result = await machineIdentity.ensure({ host, legacy: legacy && legacy.workstationId !== settled ? legacy : null })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
             tynnWorkstationNow = result.ok ? { registered: true, host, workstationId: result.workstationId, role: workstationRoleNow } : { registered: false, reason: result.reason, role: workstationRoleNow };
-        })().finally(() => { registering = null; void applyRelayHost(); void readRole(); pushFeatures(); });
+        })().finally(() => { registering = null; if (!linkedRelayHost) { void applyRelayHost(); void readRole(); } pushFeatures(); });
         return registering;
     };
     // THIS GENIE ON THE TYNN RELAY, AS A HOST (Tynn #838; Genie 1's relay-host-controller): while remote access is on and
     // this machine is registered with the Tynn in use. Off, or registered elsewhere: the link stops.
     let relayFor: string | null = null;
     const applyRelayHost = async (): Promise<void> => {
+        if (linkedRelayHost) return;
         const account = tynnAccount;
         const registered = tynnWorkstationNow?.registered ? tynnWorkstationNow : null;
         const want = registered && account && composed.settings.get('remote_access') === true ? `${registered.host} ${registered.workstationId}` : null;
@@ -3244,8 +3259,7 @@ async function boot(): Promise<void> {
             workstationId: identity.workstationId,
             fingerprint: identity.fingerprint,
             sign: (data) => machineIdentity.sign(registered.host, data),
-            // Linked: each relay connection it admits is bridged into genie-host's remote host (one baton, one lock; Tynn #409).
-            attach: (transport) => (linkedRemote ? linkedRemote.bridge(transport) : remoteHub.add(transport)),
+            attach: (transport) => remoteHub.add(transport),
             onStatus: (status) => { relayStatusNow = status; pushFeatures(); },
             log: (message) => console.log(`[tynn relay] ${message}`),
             // The owner's windows on other workstations browse this one's `.gen` sites through its own front door.
@@ -3997,9 +4011,6 @@ async function boot(): Promise<void> {
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
-    ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState, processPorts()));
-    // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
-    ipcMain.handle(FEATURE_CHANNELS.soundData, (_event, key: unknown) => (typeof key === 'string' ? customSoundData(composed.settings, key) : null));
     /*
      * WHO MAY NAME A HOST PATH (genie#1354, host-picks.ts): this window's own IPC, from a window that is NOT a remote window
      * (one driving another host), is the only local origin; the remote API's `features.act` passes none and is remote.
