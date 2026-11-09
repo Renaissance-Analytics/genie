@@ -68,10 +68,10 @@ describe('another workstation’s browser window goes through the host to the br
     });
 
     it('the host’s word about a door is heard from the device link', () => {
-        const replica = new DeviceLinkReplica(async () => null) as unknown as { onVia(l: (channel: string, port: number, ca: string | null) => void): () => void; apply(event: unknown): void };
+        const replica = new DeviceLinkReplica(async () => null) as unknown as { onVia(l: (channel: string, port: number, ca: string | null) => void): () => void; deliver(event: unknown): void };
         const heard: unknown[] = [];
         replica.onVia((...via) => heard.push(via));
-        replica.apply({ type: 'via', channel: 'c1', port: 6262, ca: 'NEWCA' });
+        replica.deliver({ type: 'via', channel: 'c1', port: 6262, ca: 'NEWCA' });
         expect(heard).toEqual([['c1', 6262, 'NEWCA']]);
     });
 

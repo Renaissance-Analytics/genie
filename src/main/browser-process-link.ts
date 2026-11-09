@@ -1,4 +1,4 @@
-import type { BrowserActivation, BrowserEvent, BrowserFacts } from './browser-service.js';
+import type { BrowserActivation, BrowserEvent, BrowserFacts, BrowserRemote } from './browser-service.js';
 
 /**
  * THE GENIE BROWSER'S PROCESS, ITS LINK TO THE HOST (the host split, P2b). It adopts a running host and never starts or
@@ -18,7 +18,9 @@ export interface BrowserLinkPorts {
     sleep(ms: number): Promise<void>;
     facts(facts: BrowserFacts): void;
     door(up: boolean): void;
-    open(url: string | null, activation: BrowserActivation): void;
+    open(url: string | null, activation: BrowserActivation, remote?: BrowserRemote): void;
+    /** Another workstation's door moved, or learned its CA. */
+    remoteVia?(key: string, port: number, ca: string | null): void;
     openSingle?(panelKey: string, url: string): void;
     closeSingle?(panelKey: string): void;
     /** A call into a page, from the `pages` tool. */
@@ -55,8 +57,11 @@ export function runBrowserLink(ports: BrowserLinkPorts): { readonly linked: Prom
         else if (event.kind === 'closeSingle') ports.closeSingle?.(event.panelKey);
         else if (event.kind === 'openSingle') { if (known) ports.openSingle?.(event.panelKey, event.url); else held.push(() => ports.openSingle?.(event.panelKey, event.url)); }
         else if (event.kind === 'pageCall') { if (client) ports.pageCall?.(event, client); }
-        else if (known) ports.open(event.url, event.activation);
-        else held.push(() => ports.open(event.url, event.activation));
+        else if (event.kind === 'remoteVia') ports.remoteVia?.(event.key, event.port, event.ca);
+        else {
+            const open = (): void => { if (event.remote) ports.open(event.url, event.activation, event.remote); else ports.open(event.url, event.activation); };
+            if (known) open(); else held.push(open);
+        }
     };
 
     const link = async (): Promise<void> => {
