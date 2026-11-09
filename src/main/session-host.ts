@@ -12,7 +12,6 @@ import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-li
 import { resetsIn, type Headroom } from '../core/headroom.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Comms } from '../core/comms.js';
-import { statSync } from 'node:fs';
 import { supervisorFailureWords } from '../core/supervisor-failure.js';
 import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
