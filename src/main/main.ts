@@ -2837,6 +2837,7 @@ async function boot(): Promise<void> {
          */
         ...(linkedRemote ? { remoteAccess: linkedRemote } : {}),
         remoteApi: (remoteApiNow = buildHostApi({
+            marketplace: () => agentEngineLink?.client.marketplace() ?? null,
             // Following the Tynn tab, by subscription (P4 family 12, Tynn #561).
             tynnWatch: tynnWatchPort,
             localTerminals: createNativeTerminalPort({
