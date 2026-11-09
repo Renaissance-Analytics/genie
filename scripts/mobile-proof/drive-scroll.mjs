@@ -41,7 +41,7 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const note = (name, detail) => { checks.push({ name, note: true, detail }); console.log(`NOTE ${name} — ${detail}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const act = (g, action) => g.call((a) => window.genie.features.act(a).then((d) => d.remote), action);
+const act = (g, action) => g.call((a) => (window.genieTest ?? window.genie).features.act(a).then((d) => d.remote), action);
 
 /** Where the target is on screen, the viewport, the document's own scroll, and the scroller's computed style (if any). */
 const measure = (page, target) => page.evaluate((sel) => {

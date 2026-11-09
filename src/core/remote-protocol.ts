@@ -111,6 +111,8 @@ export const REMOTE_METHODS = [
     'features.snapshot',
     // P4 family 11 (Tynn #560): a custom alert sound's data, read by this machine's own window.
     'features.soundData',
+    // Tynn #560: the host's own file picker says what it picked; only this machine's window counts (CallContext).
+    'features.picked',
     'features.act',
     'features.setBrowserBounds',
     'updates.state',
@@ -183,6 +185,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'terminals.attach': 'read',
     'features.snapshot': 'read',
     'features.soundData': 'local',
+    'features.picked': 'local',
     'updates.state': 'read',
     openAgent: 'write',
     stopAgent: 'write',

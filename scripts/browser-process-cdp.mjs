@@ -102,7 +102,7 @@ try {
         if (r.ok) return r;
         const sites = JSON.parse(await cdp.evaluate(`(window.genieTest ?? window.genie).features.snapshot().then((d) => JSON.stringify(d.hosting?.sites ?? []))`) ?? '[]');
         const site = sites.find((x) => x.host === HOST);
-        if (site) await cdp.evaluate(`window.genie.features.act({ kind: 'hosting.startSite', siteId: ${JSON.stringify(site.id)} }).then(() => true, () => false)`);
+        if (site) await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'hosting.startSite', siteId: ${JSON.stringify(site.id)} }).then(() => true, () => false)`);
         return null;
     });
 

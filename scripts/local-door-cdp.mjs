@@ -318,7 +318,7 @@ try {
     const windows = {};
     for (const [kind, open, matches] of [
         ['files', `window.genie.files.windows.popOut('tynn')`, (t) => /genie:\/\/files\//.test(t.url)],
-        ['flow', `window.genie.features.act({kind:'flows.newFlow',workspaceId:'tynn'})`, (t) => /genie:\/\/flow\//.test(t.url)],
+        ['flow', `(window.genieTest ?? window.genie).features.act({kind:'flows.newFlow',workspaceId:'tynn'})`, (t) => /genie:\/\/flow\//.test(t.url)],
     ]) await row(3, `${kind} product window owner welcome`, async () => {
         await main.evaluate(`${open}; true`);
         const target = await pageFor(matches), cdp = await Cdp.connect(target.webSocketDebuggerUrl);
@@ -345,7 +345,7 @@ try {
             try { return await run(); } catch (error) { throw new Error(`${label}: ${error.message}`); }
         };
         const site = await until('declared fixture site', async () => (await main.evaluate('(window.genieTest ?? window.genie).features.snapshot()')).hosting?.sites?.find((s) => s.host === 'doorpanel.gen'), 30_000);
-        await step('start declared fixture site', () => main.evaluate(`window.genie.features.act({kind:'hosting.startSite',siteId:${JSON.stringify(site.id)}})`));
+        await step('start declared fixture site', () => main.evaluate(`(window.genieTest ?? window.genie).features.act({kind:'hosting.startSite',siteId:${JSON.stringify(site.id)}})`));
         const before = await inspector.evaluate(`process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').webContents.getAllWebContents().map((w) => w.id)`);
         const tabs = { tabs: [{ id: 'door-tab', name: 'Door panel', layout: 'single', cells: [{ kind: 'site', ref: 'doorpanel.gen' }] }] };
         const r = await step('write the real site tab', () => call(main, 'workspaces.setSetting', ['tynn', 'workspace_tabs', JSON.stringify(tabs)]));
@@ -500,7 +500,7 @@ try {
         const url = access.url;
         if (!url) throw new Unmeasured(access.unavailable ?? 'no advertised tailnet endpoint');
         const label = `door-native-${process.pid}`;
-        const issued = await main.evaluate(`window.genie.features.act({kind:'remote.issuePin'})`);
+        const issued = await main.evaluate(`(window.genieTest ?? window.genie).features.act({kind:'remote.issuePin'})`);
         demand(issued.remote?.pin?.code, 'native pairing PIN issued (not printed)');
         remote = new WebSocket(url);
         const frames = [];
@@ -509,7 +509,7 @@ try {
         remote.send(JSON.stringify({kind:'hello',auth:{kind:'pin',code:issued.remote.pin.code},label}));
         await until('pairing request', async () => frames.find(f=>f.kind==='pairing'));
         const waiting = await until('own native Allow request', async () => (await main.evaluate('(window.genieTest ?? window.genie).features.snapshot()')).remote.pairRequests.find(p=>p.label===label));
-        await main.evaluate(`window.genie.features.act({kind:'remote.answerPair',id:${JSON.stringify(waiting.id)},allow:true})`);
+        await main.evaluate(`(window.genieTest ?? window.genie).features.act({kind:'remote.answerPair',id:${JSON.stringify(waiting.id)},allow:true})`);
         await until('real remote owner welcome', async () => frames.find(f=>f.kind==='welcome'&&f.isOwner));
         let next=0;
         const rpc = async (method) => { const id=++next; remote.send(JSON.stringify({kind:'call',id,method,args:[]})); return until(method,async()=>frames.find(f=>f.kind==='result'&&f.id===id)); };

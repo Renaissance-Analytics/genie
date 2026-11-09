@@ -3,9 +3,10 @@ import { localTerminalClient } from './local-terminal-client.js';
 import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
 import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js';
+import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
-import type { FeatureData } from './features.js';
+import type { FeatureAction, FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
@@ -574,6 +575,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             finally { await blobRead('content.release', content.ref); }
         });
         const snapshotNow = (): Promise<FeatureData> => decodeJson<FeatureData>(() => read('features.snapshot'));
+        // A frame over the door's cap would end this window's connection, so a call that large is refused here, with a reason.
+        const tooLargeForFrame = (args: readonly unknown[]): boolean => new TextEncoder().encode(JSON.stringify(args)).length > LOCAL_FRAME_LIMIT_BYTES - 4 * 1024;
         const featureListeners = new Set<(data: FeatureData) => void>();
         let rereading = false, again = false;
         const reread = async (): Promise<void> => {
@@ -596,6 +599,17 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             // Reads at once: a subscribe is also a window coming back, and a revision sent while it was away is not sent again.
             subscribe: (listener: (data: FeatureData) => void) => { featureListeners.add(listener); void reread(); return () => { featureListeners.delete(listener); }; },
             soundData: (key: string) => decodeJson<string | null>(() => read('features.soundData', key)),
+            // P4 (Tynn #560): an action and its result. The limiter holds only a result that came as a blob: an action can take long.
+            act: async (action: FeatureAction) => {
+                if (tooLargeForFrame([action])) throw new Error('this is too large to send to Genie in one piece');
+                const result = await read<unknown>('features.act', action);
+                if (!result || typeof result !== 'object' || !('jsonContent' in result)) return result as FeatureData;
+                return decodeJson<FeatureData>(async () => result);
+            },
+            picked: async (paths: readonly string[]) => {
+                if (tooLargeForFrame([paths])) throw new Error('too many files were picked to report in one piece');
+                await read('features.picked', paths);
+            },
         });
         terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });
         bridge.terminals = terminalClient.terminals;
