@@ -100,7 +100,7 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     saved_prompts: 'prompts',
     mcp_sync_claude: 'agent-mcp', mcp_sync_cursor: 'agent-mcp', mcp_sync_codex: 'agent-mcp', mcp_sync_hooks: 'agent-mcp',
     publisher_checks_off: 'plugins',
-    track_cwd: 'terminals', detached_terminals: 'terminals',
+    track_cwd: 'terminals',
 };
 
 /** The page a setting is on, or `null` when it is not drawn. Every alert sound (and its custom file) is under Notifications. */

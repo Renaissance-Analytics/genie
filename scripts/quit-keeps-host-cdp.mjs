@@ -569,9 +569,8 @@ try {
     if (controlFailures.length && !CARRY_ON) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
     if (controlFailures.length) console.log(`  CARRYING ON past ${controlFailures.length} failed setup or control row(s), to answer the quit and tray rows with what is running`);
 
-    // A TERMINAL, with "Keep terminals through a quit" ON (genie#1508: from reading, that setting decides nothing with a host).
-    step('9t', 'the setting on, and a terminal open');
-    await a.cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'settings.set', key: 'detached_terminals', value: true }).then(() => true)`, 15_000);
+    // A TERMINAL: "Shut down everything" must end it (genie#1508).
+    step('9t', 'a terminal open');
     const terminal = await a.cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(workspaceId)}, {}).then((t) => ({ id: t.id, pid: t.pid }))`, 30_000);
     check(alive(terminal?.pid), '9t. CONTROL: a terminal is open, its pid alive', JSON.stringify(terminal));
 
@@ -674,10 +673,9 @@ try {
         const gone = await until(() => !alive(ag.pid), 30_000);
         check(gone === true, `28. and ${ag.name}'s provider (the same gauge reading it dead now)`, `pid ${ag.pid}`);
     }
-    // What the setting is measured by: on, and a real quit. Alive here would mean it keeps them; ended means it decides nothing.
-    step('28t', `waiting for the terminal's pid ${terminal.pid} to end, the setting on (≤ 30 s)`);
+    step('28t', `waiting for the terminal's pid ${terminal.pid} to end (≤ 30 s)`);
     const terminalGone = await until(() => !alive(terminal.pid), 30_000);
-    check(terminalGone === true, '28t. "Shut down everything" ends the terminal even with "Keep terminals through a quit" on (genie#1508)', `pid ${terminal.pid}`);
+    check(terminalGone === true, '28t. "Shut down everything" ends the terminal (genie#1508)', `pid ${terminal.pid}`);
     shutDownProven = hostGone === true;
 } catch (error) {
     if (cannot === null) check(false, `the run stopped in step ${current}`, String(error?.message ?? error));
