@@ -716,8 +716,10 @@ export function tynnIssuesHostOf(bridge: GenieBridge | undefined): TynnIssuesHos
 export function pageBridge(preload: PreloadBridge): GenieBridge {
     const known = pageBridges.get(preload);
     if (known !== undefined) return known;
-    const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(preload.subscribeAgentWire);
     const local = localSession(typeof window === 'undefined' ? undefined : window.genieLocalProtocol);
+    // MEASUREMENT ONLY (Tynn #564): the IPC baseline, on this same build; goes with the IPC path once the VM rows pass.
+    const baseline = typeof window !== 'undefined' && window.genieAgentReadsIpc === true;
+    const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(baseline ? preload.subscribeAgentWire : local.agentWire);
     const { subscribeAgentWire: _wire, ...rest } = preload;
     const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
@@ -727,6 +729,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
         files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
         ...local.agentCommands,
+        ...(baseline ? {} : local.reads),
         terminals: local.terminals, host: local.host, features: { ...preload.features, ...local.features },
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
@@ -738,6 +741,8 @@ declare global {
     interface Window {
         /** Immutable preload value supplied by main's GENIE_PAGE_PROBE flag. */
         readonly genieTestMode?: boolean;
+        /** MEASUREMENT ONLY (Tynn #564): read through the old IPC path. */
+        readonly genieAgentReadsIpc?: boolean;
         /** The app's same local bridge, exposed only for a main-enabled native probe. */
         genieTest?: GenieBridge;
         /**

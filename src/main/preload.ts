@@ -220,6 +220,8 @@ const bridge: PreloadBridge = {
 contextBridge.exposeInMainWorld('genie', bridge);
 // contextBridge makes this main-supplied value immutable in the page, including when false.
 contextBridge.exposeInMainWorld('genieTestMode', process.argv.includes('--genie-page-probe'));
+// MEASUREMENT ONLY (Tynn #564): goes with the IPC path once the VM rows pass.
+contextBridge.exposeInMainWorld('genieAgentReadsIpc', process.argv.includes('--genie-agent-reads-ipc'));
 
 // One string frame pair, separate from the bridge families that have not moved yet. Admission belongs to main.
 contextBridge.exposeInMainWorld('genieLocalProtocol', {

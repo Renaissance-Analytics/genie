@@ -703,6 +703,13 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
 
     const terminalWorkspaces = new Map<string, string>();
     return {
+        localAgents: {
+            detailFor: (agentId) => deps.detailFor(agentId),
+            onChanged: (listener) => {
+                const offHost = deps.host.subscribe(listener), offRecords = deps.subscribeAgentRecords(listener);
+                return () => { offHost(); offRecords(); };
+            },
+        },
         invoke,
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
@@ -728,7 +735,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             const wants = options?.wantsAgent ?? (() => true);
             const agents = new Coalescer<string>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: (agentId) => { if (wants(agentId)) listener(`agent:${agentId}`, deps.detailFor(agentId)); }, schedule: deps.schedule ?? realSchedule, now: deps.now ?? (() => Date.now()) });
             const offs = [
-                deps.subscribeSnapshot((s) => listener('snapshot', s)),
+                // This machine's own windows on their own channel: inline when it fits a frame, else a revision (Tynn #564).
+                deps.subscribeSnapshot((s) => { listener('snapshot', s); listener(LOCAL_EVENTS.snapshot, s); }),
                 deps.host.subscribe((agentId) => agents.request(agentId)),
                 deps.subscribeAgentRecords((agentId) => agents.request(agentId)),
                 () => agents.stop(),

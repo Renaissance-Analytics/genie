@@ -59,6 +59,20 @@ const TICKER = (() => {
     try { process.kill(owner, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 })();
 /**
+ * MEASURE MODE (scripts/agent-reads-measure.mjs, Tynn #564): while `<tmpdir>/genie-stub-codex-measure` names a live pid, a turn
+ * writes `rows` whole messages (each its own ledger row) and then streams `rate` events a second. Read at each turn, so the
+ * measuring script sets what the next agent does. Without the file nothing below changes.
+ */
+function measureScript() {
+    const marker = join(tmpdir(), 'genie-stub-codex-measure');
+    if (!existsSync(marker)) return null;
+    try {
+        const script = JSON.parse(readFileSync(marker, 'utf8'));
+        process.kill(script.owner, 0);
+        return script;
+    } catch { return null; }
+}
+/**
  * RECORD MODE (scripts/agent-key-no-window-cdp.mjs, genie#1457): while `<tmpdir>/genie-stub-codex-record-servers` exists, a
  * thread's start appends the MCP servers this provider was REALLY given, the bearer read from the variable Genie bound it to.
  * The file exists only in a test VM. Without it nothing below changes. With it a turn also ENDS at once, with no approval to ask: a stub parked on a question nobody
@@ -292,6 +306,20 @@ function handle(frame) {
 
             if (existsSync(RECORD_SERVERS)) {
                 send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn: { id: TURN_ID, status: 'completed', items: [], error: null } } });
+                return;
+            }
+
+            const measure = measureScript();
+            if (measure && (measure.rows > 0 || measure.rate > 0)) {
+                let row = 0, tick = 0;
+                const stream = () => { if (measure.rate > 0) setInterval(() => { tick += 1; delta(`tick ${tick} pid ${process.pid}\n`); }, 1000 / measure.rate); };
+                if (measure.rows === 0) { stream(); return; }
+                const burst = setInterval(() => {
+                    for (let n = 0; n < 200 && row < measure.rows; n += 1, row += 1) {
+                        send({ jsonrpc: '2.0', method: 'item/completed', params: { threadId, turnId: TURN_ID, item: { type: 'agentMessage', id: `stub_measure_${row}`, text: `row ${row} of the measured ledger, about as long as a line of a reply` } } });
+                    }
+                    if (row >= measure.rows) { clearInterval(burst); stream(); }
+                }, 10);
                 return;
             }
 

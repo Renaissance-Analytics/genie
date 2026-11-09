@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
+import { AgentPush } from './agent-push.js';
 import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
@@ -58,6 +59,9 @@ import { MarketplaceSession } from './marketplace-session.js';
  * transport is a port — fancy-ws on a real socket, an in-memory pair in tests.
  */
 
+/** An agent's detail as the host builds it: its rows, and whatever else the window shows. */
+export type LocalAgentDetail = { readonly rows: readonly unknown[] };
+
 export interface HostApi {
     readonly marketplace?: () => MarketplaceApi | null;
     readonly filesWatch?: FilesWatchPort;
@@ -76,6 +80,8 @@ export interface HostApi {
     workspaceOfTerminal?(terminalId: string): string | null;
     /** Each workspace's folder on this host — how far a guest may browse (Tynn #835). Absent = a guest browses nothing. */
     workspacePaths?(): Readonly<Record<string, string>>;
+    /** What this machine's own windows watch per view (Tynn #564): a detail is built only for an agent a view shows. */
+    readonly localAgents?: { detailFor(agentId: string): LocalAgentDetail | null; onChanged(listener: (agentId: string) => void): () => void };
     /** A TUI started for another machine's Take Over window is done with: its window closed, or never came (Tynn #529 A). */
     takeOverEnded?(terminalId: string): void;
 }
@@ -131,6 +137,8 @@ interface Connection {
     profile: 'mobile' | null;
     /** Only the local frame door proves this; a hello alone never does. */
     local: boolean;
+    /** The agents this window's views show, and the rows it holds of each (Tynn #564). */
+    agentPush: AgentPush<LocalAgentDetail, unknown> | null;
     /** A phone's windows on the agents it watches (core/mobile-wire.ts). */
     readonly watching: Map<string, WindowState<WireRow>>;
     /** Independent activity views belonging to this admitted local window. */
@@ -217,6 +225,8 @@ export class RemoteHost {
     /** Take over tickets not yet presented (Tynn #529 part A): by ticket, the window that asked and its terminal. */
     readonly #tickets = new Map<string, { parentId: string; terminalId: string; started: boolean; expiresAt: number; cancel: () => void }>();
     readonly #schedule: (ms: number, fn: () => void) => () => void;
+    #stopLocalAgents: (() => void) | null = null;
+    #snapshotRevision = 0;
 
     /**
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
@@ -257,6 +267,8 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        connection.agentPush?.stop();
+        connection.agentPush = null;
         const marketplace = this.#marketplaces.get(connection);
         if (marketplace) { this.#marketplaces.delete(connection); void marketplace.close().catch(() => console.warn('[genie] Marketplace review cleanup failed')); }
         this.#localTerminals?.dropOwner(connection.id);
@@ -279,6 +291,8 @@ export class RemoteHost {
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
         this.#stopListening?.();
         this.#stopListening = null;
+        this.#stopLocalAgents?.();
+        this.#stopLocalAgents = null;
     }
 
     /**
@@ -425,7 +439,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -698,8 +712,10 @@ export class RemoteHost {
                 this.unlock(connection.id);
                 return ok({ locked: false });
             case 'agent.watch':
+                if (connection.local) return this.#watchLocalAgent(connection, String(args[0] ?? ''), true) ? ok({ watching: true }) : refuse('this host does not offer agent details');
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
             case 'agent.unwatch':
+                if (connection.local) return ok({ unwatched: this.#watchLocalAgent(connection, String(args[0] ?? ''), false) });
                 return ok({ unwatched: connection.watching.delete(String(args[0] ?? '')) });
             case 'activity.watch':
             case 'activity.unwatch': {
@@ -812,7 +828,7 @@ export class RemoteHost {
             // paired devices and the connections. Only an owner sees them.
             // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
             // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
-            if (connection.local && (method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
+            if (connection.local && (method === 'snapshot' || method === 'agentDetail' || method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).
@@ -916,7 +932,43 @@ export class RemoteHost {
         return null;
     }
 
+    /** Whether the host offers it. Watching starts with the whole ledger; patches follow (core/agent-push-wire.ts). */
+    #watchLocalAgent(connection: Connection, agentId: string, on: boolean): boolean {
+        const source = this.#api.localAgents;
+        if (!source) return false;
+        connection.agentPush ??= new AgentPush<LocalAgentDetail, unknown>({
+            detailFor: (id) => source.detailFor(id),
+            send: (id, payload) => this.#sendLocalAgent(connection, id, payload),
+            schedule: this.#schedule,
+            now: this.#now,
+        });
+        this.#stopLocalAgents ??= source.onChanged((id) => { for (const c of this.#connections.values()) c.agentPush?.changed(id); });
+        connection.agentPush.watch(agentId, on);
+        return true;
+    }
+
+    /** A patch inline; a full ledger or a huge row through a blob the window reads, so no frame reaches the door's cap. */
+    #sendLocalAgent(connection: Connection, agentId: string, payload: unknown): void {
+        try {
+            this.#send(connection, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.agent, payload: { agentId, payload: this.#content(connection).jsonResult(payload, 'an agent detail') } });
+        } catch (error) {
+            // Nothing it could apply was sent: it starts again from a whole ledger at the next interval.
+            console.warn(`[genie] an agent's detail could not be held for its window: ${error instanceof Error ? error.message : String(error)}`);
+            if (this.#connections.has(connection.id)) connection.agentPush?.watch(agentId, true);
+        }
+    }
+
+    /** The snapshot to this machine's own windows: inline when it fits a frame, else a revision they re-read (Tynn #564). */
+    #pushLocalSnapshot(snapshot: unknown): void {
+        const windows = [...this.#connections.values()].filter((c) => c.auth !== null && c.local);
+        if (windows.length === 0) return;
+        const revision = ++this.#snapshotRevision;
+        const inline = process.env.GENIE_SNAPSHOT_PUSH !== 'revision' && Buffer.byteLength(JSON.stringify(snapshot)) <= LOCAL_EVENT_MAX_BYTES;
+        for (const c of windows) this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.snapshot, payload: inline ? { revision, snapshot } : { revision } });
+    }
+
     #broadcast(channel: string, payload: unknown): void {
+        if (channel === LOCAL_EVENT_CHANNELS.snapshot) return this.#pushLocalSnapshot(payload);
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
             if (c.local ? !LOCAL_EVENTS.has(channel) : LOCAL_EVENTS.has(channel)) continue;

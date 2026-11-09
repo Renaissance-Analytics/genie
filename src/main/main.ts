@@ -1067,7 +1067,7 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
         webPreferences: {
             preload: join(here, 'preload.cjs'),
             // Expose the page's existing bridge to native harnesses; no product behavior changes.
-            additionalArguments: process.env.GENIE_PAGE_PROBE === '1' ? ['--genie-page-probe'] : [],
+            additionalArguments: [...(process.env.GENIE_PAGE_PROBE === '1' ? ['--genie-page-probe'] : []), ...(process.env.GENIE_AGENT_READS === 'ipc' ? ['--genie-agent-reads-ipc'] : [])],
             // The renderer gets `window.genie` and nothing else: no Node, no `require`, no
             // `ipcRenderer`. A renderer with Node integration is a renderer where a prompt
             // injection reaches the filesystem — and this one displays agent-authored text.
