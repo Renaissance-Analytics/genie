@@ -1,9 +1,9 @@
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
-import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
-import { runTynnPageAction, type readTynnPage } from './tynn-page-client.js';
-import type { BoardIds, BoardScope } from '../core/tynn-board.js';
-import { readTynnIssueChanges, readTynnIssues, runTynnIssueAction } from './tynn-issues-client.js';
+import { readTynnBoardChanges, type TynnBoardPorts } from './tynn-board-client.js';
+import type { readTynnPage } from './tynn-page-client.js';
+import type { BoardScope } from '../core/tynn-board.js';
+import { readTynnIssueChanges } from './tynn-issues-client.js';
 import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom } from '../core/headroom.js';
@@ -202,6 +202,7 @@ import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf } from './repo-ops-host.js';
 import { workspaceSettingsOps } from './workspace-reads-api.js';
+import { workspaceTynnApi } from './workspace-tynn-api.js';
 import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
@@ -622,16 +623,9 @@ function tynnBoardPorts(): TynnBoardPorts {
     };
 }
 /** The window delegates page reads to genie-host. */
-async function readWorkspaceTynnPage(workspaceId: unknown, page: unknown, query: unknown): ReturnType<typeof readTynnPage> {
-    if (typeof workspaceId !== 'string' || typeof page !== 'string') return { ok: false, state: 'error', reason: 'name a workspace and a page' };
+async function readWorkspaceTynnPage(workspaceId: string, page: unknown, query: unknown): ReturnType<typeof readTynnPage> {
     if (!agentEngineLink) return { ok: false, state: 'error', reason: 'Genie’s host is not connected' };
     return agentEngineLink.client.tynnPage(workspaceId, page, query);
-}
-/** Preserve the Issues view shape while reading through the same host-owned page door as WIP. */
-async function readWorkspaceTynnIssues(workspaceId: unknown, filters: unknown): ReturnType<typeof readTynnIssues> {
-    const answer = await readWorkspaceTynnPage(workspaceId, 'issues', filters);
-    if (!answer.ok) return answer;
-    return answer.page === 'issues' ? { ok: true, view: answer.view } : { ok: false, state: 'error', reason: 'Tynn answered with a different workspace page.' };
 }
 /**
  * THE LIVE BOARD (genie#1295 row B4; the host split, P5c): genie-host follows each open Tynn tab per view — one socket for
@@ -2441,13 +2435,8 @@ async function boot(): Promise<void> {
             uploads: uploadSender({ resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
+                ...workspaceTynnApi(tynnBoardPorts, readWorkspaceTynnPage),
                 ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry?.touch(), (id, color) => setWorkspaceColor(id, color)),
-                tynnBoard: (id, scope) => readTynnBoard(tynnBoardPorts(), id, (scope ?? {}) as BoardScope),
-                tynnPage: (id, page, query) => readWorkspaceTynnPage(id, page, query),
-                tynnBoardAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnBoardAction(tynnBoardPorts(), id, input as { action: string; ids: BoardIds; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
-                tynnIssues: (id, filters) => readWorkspaceTynnIssues(id, filters ?? {}),
-                tynnIssueAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnIssueAction(tynnBoardPorts(), id, input as { action: string; issueId: string | null; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
-                tynnPageAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnPageAction(tynnBoardPorts(), id, input as { action: string; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name a workspace and an action' })),
                 // The live tab's reads (P4 family 12): what changed since a cursor, never the whole board or queue.
                 tynnBoardChanges: (id, scope, cursor, ids) => readTynnBoardChanges(tynnBoardPorts(), id, (scope ?? {}) as BoardScope, cursor, ids),
                 tynnIssueChanges: (id, filters, cursor, ids) => readTynnIssueChanges(tynnBoardPorts(), id, filters ?? {}, cursor, ids),
