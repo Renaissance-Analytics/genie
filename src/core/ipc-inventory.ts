@@ -92,6 +92,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:workspace-wake', 'protocol:workspaces.wake'],
     ['genie:workspace-remove', 'protocol:workspaces.remove'],
     ['genie:add-workspace', 'window-port'],
+    ['genie:provider-choose-program', 'window-port'],
     ['genie:features-browser-bounds', 'window-port'],
     ['genie:features-snapshot', 'protocol:features.snapshot'],
     ['genie:features-sound-data', 'protocol:features.soundData'],

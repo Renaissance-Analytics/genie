@@ -56,6 +56,8 @@ import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, 
 import { TrustVerdicts } from './trust-verdict.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
+import { isAcpProvider } from '../core/engine.js';
+import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
@@ -1477,6 +1479,7 @@ async function boot(): Promise<void> {
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
     const lifecycleLog = openLifecycleLog(runtimeDir(genieRoot()));
+    setProviderChoiceFile(join(runtimeDir(genieRoot()), 'provider-programs.json'));
     rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
@@ -2614,6 +2617,17 @@ async function boot(): Promise<void> {
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
     ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
     ipcMain.handle('genie:workspace-remove', (_event, raw: unknown) => (typeof raw === 'string' ? removeWorkspace(workspaceOps, raw) : { ok: false, reason: 'remove names a workspace' }));
+
+    // The person's own answer to a provider hidden behind a batch wrapper (Tynn #577): an .exe, kept per provider.
+    ipcMain.handle('genie:provider-choose-program', async (_event, raw: unknown) => {
+        if (!window || typeof raw !== 'string' || !isAcpProvider(raw)) return { ok: false, reason: 'No provider named.' };
+        const picked = await dialog.showOpenDialog(window, { title: `Choose ${raw}'s program`, properties: ['openFile'], filters: [{ name: 'Programs', extensions: ['exe', 'com'] }] });
+        const path = picked.filePaths[0];
+        if (picked.canceled || !path) return { ok: false };
+        const file = providerChoiceFile();
+        if (file === null) return { ok: false, reason: 'Genie has nowhere to keep the choice yet.' };
+        return writeProviderChoice(file, raw, path);
+    });
 
     ipcMain.handle('genie:add-workspace', async () => {
         if (!window || !registry) return { ok: false };

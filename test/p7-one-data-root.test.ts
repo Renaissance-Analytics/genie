@@ -213,7 +213,7 @@ const EXCEPTIONS: Record<string, { lines: string[]; why: string }> = {
     // A provider CLI's model list is asked outside any project, from the person's home, where that CLI's own settings and
     // account live: the spec's "provider CLIs' own homes". A working folder for a short-lived ask, not a write of Genie's.
     'src/main/session-host.ts': {
-        lines: ["import { homedir } from 'node:os';", 'return { ...providerLaunchOptions(providerBinary(provider, env), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };'],
+        lines: ["import { homedir } from 'node:os';", 'return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };'],
         why: 'a provider’s model list is asked from its own home, outside any project',
     },
 };
