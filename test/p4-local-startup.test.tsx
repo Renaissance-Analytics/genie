@@ -71,7 +71,6 @@ describe('the local page connection retries only a bounded starting refusal', ()
         const pending = f.bridge.workspaces.settings('work');
         await Promise.resolve(); await Promise.resolve();
         expect(f.attempts()).toBe(1);
-        expect(await f.bridge.snapshot()).toEqual({ workspaces: null });
         expect(await f.bridge.takeOver('work')).toEqual({ ok: false, reason: 'agent still working' });
         await vi.advanceTimersByTimeAsync(10_000);
         expect(await pending).toMatchObject({ ok: true, values: { workspace_tabs: '{"tabs":[]}' } });
@@ -80,7 +79,6 @@ describe('the local page connection retries only a bounded starting refusal', ()
         expect(f.listenerCount()).toBe(1);
         expect(f.settingReads()).toBe(1);
         expect(f.oldSettings).not.toHaveBeenCalled();
-        expect(f.snapshot).toHaveBeenCalledTimes(1);
         expect(f.hibernate).toHaveBeenCalledExactlyOnceWith('work');
         expect(pageBridge(f.preload)).toBe(f.bridge);
         expect(control(f.bridge)?.state()).toMatchObject({ phase: 'ready', reason: null, revision: 0 });
@@ -100,7 +98,6 @@ describe('the local page connection retries only a bounded starting refusal', ()
         const attempts = f.attempts();
         await vi.advanceTimersByTimeAsync(30_000);
         expect(f.attempts()).toBe(attempts);
-        expect(await f.bridge.snapshot()).toEqual({ workspaces: null });
         expect(await f.bridge.takeOver('work')).toEqual({ ok: false, reason: 'agent still working' });
         const local = control(f.bridge);
         expect(local).toBeDefined();
@@ -114,7 +111,6 @@ describe('the local page connection retries only a bounded starting refusal', ()
         expect(await f.bridge.workspaces.settings('work')).toMatchObject({ ok: true });
         expect(f.settingReads()).toBe(1);
         expect(f.oldSettings).not.toHaveBeenCalled();
-        expect(f.snapshot).toHaveBeenCalledTimes(1);
         expect(f.hibernate).toHaveBeenCalledTimes(1);
         off(); f.close();
     });

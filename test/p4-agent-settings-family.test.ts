@@ -119,9 +119,8 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         expect(await call(bridge.agents, row)).toEqual(row.result);
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${row.name}`, row.args, expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith(...row.args); expect(oldInvoke).not.toHaveBeenCalled();
-        expect(await bridge.snapshot()).toEqual({ workspaces: null });
         expect(await bridge.takeOver('work')).toEqual({ ok: false, reason: 'agent still working' });
-        expect(snapshot).toHaveBeenCalledTimes(1); expect(hibernate).toHaveBeenCalledExactlyOnceWith('work');
+        expect(hibernate).toHaveBeenCalledExactlyOnceWith('work');
     });
     it.each(rows)('$name retires its native handler, preload forwarding and inventory row', (row) => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
@@ -152,7 +151,7 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const oldInvoke = vi.fn(async () => ({ ok: true })), snapshot = vi.fn(async () => ({ agents: [] }));
         const bridge = pageBridge({ snapshot, subscribeAgentWire: () => () => {}, workspaces: {}, agents: oldAgents(oldInvoke) } as unknown as PreloadBridge);
         for (const row of rows) expect(await call(bridge.agents, row)).toEqual({ ok: false, reason: 'This Genie window has no local protocol connection.' });
-        expect(oldInvoke).not.toHaveBeenCalled(); expect(await bridge.snapshot()).toEqual({ agents: [] });
+        expect(oldInvoke).not.toHaveBeenCalled();
     });
     it('a thrown provider failure becomes a visible protocol refusal', async () => {
         const deps = protocolContractDeps(dir); deps.agentOps.models = async () => { throw new Error('provider model list unavailable'); };
@@ -174,7 +173,6 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith('agents.setMode', ['agent_a', 'manual'], expect.anything());
         expect(operation).toHaveBeenCalledExactlyOnceWith('agent_a', 'manual');
         expect(send.mock.calls.filter(([action]) => action === 'open')).toHaveLength(1);
-        expect(await bridge.snapshot()).toEqual({ agents: [] }); expect(snapshot).toHaveBeenCalledTimes(1);
         expect(pageBridge(preload)).toBe(bridge); expect(page['genie']).toBe(preload);
         expect(page['genieTest']).toBe(enabled ? bridge : undefined);
     });

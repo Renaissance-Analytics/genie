@@ -17,7 +17,7 @@ describe('the native harness uses the actual page bridge only when main enables 
     it('only main GENIE_PAGE_PROBE=1 supplies the preload argument, on the main window', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         const create = main.slice(main.indexOf('function createWindow('), main.indexOf('// Links open in the browser', main.indexOf('function createWindow(')));
-        expect(create.includes("additionalArguments: process.env.GENIE_PAGE_PROBE === '1' ? ['--genie-page-probe'] : []")).toBe(true);
+        expect(create.includes("additionalArguments: [...(process.env.GENIE_PAGE_PROBE === '1' ? ['--genie-page-probe'] : [])")).toBe(true);
         expect(main.split("['--genie-page-probe']")).toHaveLength(2);
     });
     it('no source code reads the retired GENIE_E2E flag (comments may explain its history)', () => {

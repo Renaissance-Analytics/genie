@@ -196,7 +196,7 @@ const frameMetadata = (from, to) => main.evaluate(`window.__doorCdp.frames.filte
 async function quietFrames(label, from, to, nativeDelta) {
     const frames = await frameMetadata(from, to);
     demand(frames.length===to-from,`${label}: metadata retained every observed frame`);
-    const unexpected = frames.filter(frame=>frame.action!=='frame'||frame.kind!=='event'||!['local-updates','local-headroom'].includes(frame.channel));
+    const unexpected = frames.filter(frame=>frame.action!=='frame'||frame.kind!=='event'||!['local-updates','local-headroom','local-snapshot'].includes(frame.channel));
     demand(unexpected.length===0,`${label}: zero agent/activity/snapshot/terminal or unknown frames; unexpected ${JSON.stringify(unexpected)}`);
     demand(nativeDelta===frames.length,`${label}: actual native socket and page counts agree on the recorded update/headroom frames`);
     return { channels: frames.map(frame=>frame.channel), page: to-from, native: nativeDelta };

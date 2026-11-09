@@ -165,6 +165,8 @@ describe('what crosses into the page per event of a watched agent', () => {
         await import('../src/main/preload.js');
         const { pageBridge } = await import('../src/renderer/bridge.js');
         const preload = ipc.exposed.get('genie') as unknown as import('../src/renderer/bridge.js').PreloadBridge;
+        // The IPC path, kept as the measurement baseline until family 9a's VM rows pass (Tynn #564).
+        vi.stubGlobal('window', { genieAgentReadsIpc: true });
         const bridge = pageBridge(preload);
         // One per window: the same page bridge every time, so views share a receiver.
         expect(pageBridge(preload)).toBe(bridge);
