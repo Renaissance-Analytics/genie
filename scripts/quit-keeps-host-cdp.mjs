@@ -571,7 +571,7 @@ try {
 
     // A TERMINAL, with "Keep terminals through a quit" ON (genie#1508: from reading, that setting decides nothing with a host).
     step('9t', 'the setting on, and a terminal open');
-    await a.cdp.evaluate(`window.genie.features.act({ kind: 'settings.set', key: 'detached_terminals', value: true }).then(() => true)`, 15_000);
+    await a.cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'settings.set', key: 'detached_terminals', value: true }).then(() => true)`, 15_000);
     const terminal = await a.cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(workspaceId)}, {}).then((t) => ({ id: t.id, pid: t.pid }))`, 30_000);
     check(alive(terminal?.pid), '9t. CONTROL: a terminal is open, its pid alive', JSON.stringify(terminal));
 

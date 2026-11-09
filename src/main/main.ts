@@ -98,7 +98,7 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
-import { featureOrigin, featureOriginOf, HostPicks } from './host-picks.js';
+import { featureOriginOf, HostPicks, isWindowCaller } from './host-picks.js';
 import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
@@ -3024,7 +3024,8 @@ async function boot(): Promise<void> {
             },
             features: {
                 snapshot: () => featureSnapshot(services!, featureState, processPorts()),
-                act: (action, context) => handleFeatureAction(services!, action, featureState, featurePorts, featureOriginOf(context, hostPicks)),
+                act: (action, context) => runFeatureAction(action, context),
+                picked: (paths) => hostPicks.record(paths),
                 // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
                 soundData: (key) => customSoundData(services!.settings, key),
                 onChange: (cb) => { featureListeners.add(cb); return () => { featureListeners.delete(cb); }; },
@@ -4012,17 +4013,12 @@ async function boot(): Promise<void> {
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
     /*
-     * WHO MAY NAME A HOST PATH (genie#1354, host-picks.ts): this window's own IPC, from a window that is NOT a remote window
-     * (one driving another host), is the only local origin; the remote API's `features.act` passes none and is remote.
-     * The picks are the host picker's, reported by such a window — an attachment path it never picked is refused.
+     * AN ACTION, FROM WHOEVER THE HOST ADMITTED (genie#1354, host-picks.ts; Tynn #560). Only this machine's own window names
+     * a host path. A window's action also moves the window's own state and its browser pane; another device's never did.
      */
-    ipcMain.handle(FEATURE_CHANNELS.picked, (event, raw: unknown) => {
-        if (isRemoteWindow(event.sender)) return;
-        if (Array.isArray(raw)) hostPicks.record(raw);
-    });
-    ipcMain.handle(FEATURE_CHANNELS.act, async (event, raw: unknown) => {
-        const action = raw as FeatureAction;
-        const data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOrigin({ remoteWindow: isRemoteWindow(event.sender), picks: hostPicks }));
+    async function runFeatureAction(action: FeatureAction, context: CallContext | undefined): Promise<FeatureData> {
+        const data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOriginOf(context, hostPicks));
+        if (!isWindowCaller(context)) return data;
         if (action.kind.startsWith('integrations.tynn')) featureState = { ...featureState, tynnSignInUrl: data.integrations?.tynn.signInUrl ?? null, tynnMessage: data.integrations?.tynn.message ?? null };
         if (action.kind.startsWith('toolchain.')) featureState = { ...featureState, ...toolchainStateFrom(data.toolchain), toolchainBusy: null };
         featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd, lastSync: data.integrations?.lastSync ?? featureState.lastSync ?? null };
@@ -4038,7 +4034,7 @@ async function boot(): Promise<void> {
         // An engine's log, once asked for, stays open across pushed snapshots until the person hides it (H6).
         featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null, serviceLogs: data.services?.logs ?? null, serviceUpdating: data.services?.updating ?? null };
         return data;
-    });
+    }
 
     // PUSH, both ways. The registry says when the estate changed; the host says when one
     // agent did. Nothing here is on a timer.

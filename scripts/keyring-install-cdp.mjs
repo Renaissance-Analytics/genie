@@ -139,7 +139,7 @@ try {
     const windowPid = window.pid;
 
     say('pressing the button');
-    await cdp.evaluate(`window.genie.features.act({ kind: 'keyring.fix' })`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'keyring.fix' })`);
     const installed = await until('the package to arrive', 180_000, () => existsSync(DAEMON));
     check(Boolean(installed), '5-the-button-installed-it', output('pacman', '-Q', 'gnome-keyring') || 'not installed');
     const answered = await until('the keychain to answer', 60_000, keychainAnswers);

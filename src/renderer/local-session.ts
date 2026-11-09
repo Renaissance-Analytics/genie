@@ -38,7 +38,7 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
@@ -144,6 +144,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             snapshot: () => read((b) => b.features.snapshot()),
             subscribe: (listener) => subscribe((b) => b.features.subscribe(listener)),
             soundData: (key) => read((b) => b.features.soundData(key)),
+            act: (action) => read((b) => b.features.act(action)),
+            picked: (paths) => read(async (b) => { await b.features.picked?.(paths); }),
         },
         // P4 family 10 (Tynn #559): the host's folders, for every picker — a failure rejects, as the IPC call did.
         host: {
