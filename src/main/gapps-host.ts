@@ -1,3 +1,4 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { validatePackage, type Catalog, type ElementDefinition } from '../core/catalog.js';
@@ -257,7 +258,7 @@ export class GAppBook {
         await mkdir(dirname(file), { recursive: true });
         const tmp = `${file}.${process.pid}.tmp`;
         await writeFile(tmp, JSON.stringify(book, null, 2), 'utf8');
-        await rename(tmp, file);
+        await renameOver(tmp, file);
         this.#book = book;
         for (const listener of [...this.#listeners]) listener();
     }
