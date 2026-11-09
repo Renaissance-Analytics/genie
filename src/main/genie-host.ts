@@ -1178,6 +1178,7 @@ async function main(): Promise<void> {
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
         windowConnected: () => engine.newestLocalWindow() !== null,
+        settings,
         terminals: terminalHost,
         takeOver: (id) => takeOverHost.probe(id),
         headroom: headroomFeed,

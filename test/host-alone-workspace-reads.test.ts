@@ -137,6 +137,6 @@ describe('the wiring', () => {
     });
 
     it('genie-host gives it its own settings store', () => {
-        expect(src('src/main/genie-host.ts')).toMatch(/phoneApi = hostAloneApi\(\{[\s\S]*?\n        settings,\n/);
+        expect(src('src/main/genie-host.ts')).toMatch(/windowConnected: \(\) => engine\.newestLocalWindow\(\) !== null,\r?\n        settings,\r?\n/);
     });
 });
