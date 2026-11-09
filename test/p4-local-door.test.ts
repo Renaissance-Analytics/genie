@@ -235,7 +235,7 @@ describe('door connection ownership and cleanup', () => {
         const remote = await remoteDriver();
         const holder = baton.holder();
         const opened = await connected(contents);
-        if (how === 'reload') contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        if (how === 'reload') { contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }); contents.emit('did-navigate'); }
         if (how === 'destroy') contents.destroy();
         if (how === 'renderer gone') contents.emit('render-process-gone');
         if (how === 'client close') opened.client.close();
@@ -267,6 +267,39 @@ describe('door connection ownership and cleanup', () => {
         expect(first.client.state().connected).toBe(false);
         expect(second.client.state().connected).toBe(true);
         expect(activeConnections.size).toBe(1);
+    });
+
+    it('a navigation the window refuses never happened: the connection stays (Tynn #590)', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        const first = await connected(contents);
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        await settled();
+        expect(first.client.state().connected).toBe(true);
+        expect(activeConnections.size).toBe(1);
+    });
+
+    it('the connection goes when the navigation lands (CONTROL), and one opened since it started is left alone', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        const first = await connected(contents);
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        contents.emit('did-navigate');
+        await settled();
+        expect(first.client.state().connected).toBe(false);
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        const second = await connected(contents);
+        contents.emit('did-navigate');
+        await settled();
+        expect(second.client.state().connected).toBe(true);
+    });
+
+    it('every close says why, so the next one can be read in the log', async () => {
+        const reasons: string[] = [];
+        const logged = localProtocolDoor(new EventEmitter(), { onClosed: (reason) => reasons.push(reason) } as never);
+        expect(logged).toBeDefined();
+        const source = readFileSync('src/main/main.ts', 'utf8');
+        expect(source).toMatch(/localProtocolDoor\(ipcMain, \{ onClosed: \(reason\) => rendererErrorLog\?\.\(/);
     });
 
     it('closing one window keeps the other window and its subscriptions alive', async () => {
