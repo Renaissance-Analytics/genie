@@ -21,7 +21,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright-core';
-import { answerPairOnDesktop, genieWindow, waitInGenie } from './genie-cdp.mjs';
+import { answerPairOnDesktop, genieWindow, waitInGenie } from './genie-cdp.mjs';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 const OUT = join(process.cwd(), 'mobile-evidence');
 const IP = process.env.TAILNET_IP ?? '100.100.7.7';
@@ -36,7 +38,7 @@ const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const act = (g, action) => g.call((a) => window.genie.features.act(a).then((d) => d.remote), action);
-const snap = (g) => g.evaluate('window.genie.features.snapshot().then((d) => d.remote)');
+const snap = (g) => g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote)');
 
 /**
  * Genie's window, as the owner sees it: the SCREEN, from the compositor (grim), tooltips and all. CDP's

@@ -46,13 +46,22 @@ export class LocalFilesContent {
     }
     /** Encode the complete native DTO as JSON so UTF-8 blobs preserve lone UTF-16 surrogates too. */
     terminalResult(value: unknown, label = 'a terminal read'): unknown {
+        const held = this.#heldJson(value, 'terminal-json', label);
+        return held === null ? value : { terminalContent: held };
+    }
+    /** A whole result with no bound of its own (P4 family 11, the feature snapshot): inline when small, else one blob. */
+    jsonResult(value: unknown, label: string): unknown {
+        const held = this.#heldJson(value, 'features-json', label);
+        return held === null ? value : { jsonContent: held };
+    }
+    #heldJson(value: unknown, kind: 'terminal-json' | 'features-json', label: string): { ref: string; blob: string } | null {
         const json = JSON.stringify(value);
-        if (json === undefined || Buffer.byteLength(json) <= FILES_INLINE_BYTES) return value;
+        if (json === undefined || Buffer.byteLength(json) <= FILES_INLINE_BYTES) return null;
         const ref = this.begin(label);
         try {
             const bytes = Buffer.from(json), scope = this.#scope(ref);
-            const blob = this.#resource(scope, { scope, type: 'blob', kind: 'terminal-json', bytes, sha256: createHash('sha256').update(bytes).digest('hex') });
-            return { terminalContent: { ref, blob } };
+            const blob = this.#resource(scope, { scope, type: 'blob', kind, bytes, sha256: createHash('sha256').update(bytes).digest('hex') });
+            return { ref, blob };
         } catch (error) { this.release(ref); throw error; }
     }
     result(ref: string, value: unknown, kind: FilesPageKind, bytes = false): unknown {

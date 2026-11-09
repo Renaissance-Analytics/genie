@@ -15,7 +15,9 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from 'node:path';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 const PORT = Number(process.env.TRUST_CDP_PORT ?? 9344);
 const failures = [];
@@ -243,7 +245,7 @@ try {
     const refused = await waitFor(cdp, `Boolean(${stepFor(acmeId)}?.querySelector('[role="alert"]'))`, 30_000);
     if (!refused) {
         // What the page and main say, on the way to a failure: the first thing wanted when this row goes red.
-        const seen = await cdp.evaluate(`window.genie.features.snapshot().then((data) => JSON.stringify({ step: Boolean(${stepFor(acmeId)}), busy: Boolean(document.querySelector('[data-trust-busy]')), route: document.querySelector('[data-route]')?.textContent ?? null, steps: (data.trust ?? []).map((row) => row.workspaceId) }))`);
+        const seen = await cdp.evaluate(`(window.genieTest ?? window.genie).features.snapshot().then((data) => JSON.stringify({ step: Boolean(${stepFor(acmeId)}), busy: Boolean(document.querySelector('[data-trust-busy]')), route: document.querySelector('[data-route]')?.textContent ?? null, steps: (data.trust ?? []).map((row) => row.workspaceId) }))`);
         console.log(`  at the failure: ${seen}; the record there now: ${existsSync(record) ? (readdirSync(record, { withFileTypes: false }).join(',') || 'an empty folder') : 'nothing'}`);
     }
     check(refused, '6. a yes that cannot be saved says why');
@@ -280,7 +282,7 @@ try {
     const stillAsks = await waitFor(cdp, `Boolean(${stepFor(otherId)})`);
     if (!stillAsks) {
         // What the page and main say, on the way to a failure: the first thing wanted when this row goes red.
-        const seen = await cdp.evaluate(`window.genie.features.snapshot().then((data) => JSON.stringify({ hash: window.location.hash, trust: (data?.trust ?? []).map((s) => s.workspaceId ?? s.id ?? '?'), surface: (document.querySelector('[data-surface]')?.getAttribute('data-surface') ?? 'none'), text: (document.body?.innerText ?? '').slice(0, 200) }))`);
+        const seen = await cdp.evaluate(`(window.genieTest ?? window.genie).features.snapshot().then((data) => JSON.stringify({ hash: window.location.hash, trust: (data?.trust ?? []).map((s) => s.workspaceId ?? s.id ?? '?'), surface: (document.querySelector('[data-surface]')?.getAttribute('data-surface') ?? 'none'), text: (document.body?.innerText ?? '').slice(0, 200) }))`);
         console.log(`  at the failure: ${String(seen).slice(0, 600)}`);
         // genie-host's own words: it keeps the verdicts, and a relaunch may have started a new one.
         const hostLog = join(home, '.genie', 'logs', 'genie-host.log');

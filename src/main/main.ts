@@ -3024,6 +3024,8 @@ async function boot(): Promise<void> {
             features: {
                 snapshot: () => featureSnapshot(services!, featureState, processPorts()),
                 act: (action, context) => handleFeatureAction(services!, action, featureState, featurePorts, featureOriginOf(context, hostPicks)),
+                // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
+                soundData: (key) => customSoundData(services!.settings, key),
                 onChange: (cb) => { featureListeners.add(cb); return () => { featureListeners.delete(cb); }; },
             },
             updates: updates
@@ -3058,8 +3060,7 @@ async function boot(): Promise<void> {
     const featurePush = new LatestPush<FeatureData>({
         build: () => featureSnapshot(composed, featureState, { ...processPorts(), onEngineStatusesLate: () => pushFeatures() }),
         deliver: (data) => {
-            // Every window: a flow editor window draws the flow's runs and armed state from the same snapshot (genie#1204).
-            broadcast(FEATURE_CHANNELS.changed, data);
+            // Every window, a flow editor's too (genie#1204): each hears the local door's revision and re-reads (P4 family 11).
             for (const l of featureListeners) l(data);
         },
     });
@@ -3997,9 +3998,6 @@ async function boot(): Promise<void> {
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
-    ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState, processPorts()));
-    // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
-    ipcMain.handle(FEATURE_CHANNELS.soundData, (_event, key: unknown) => (typeof key === 'string' ? customSoundData(composed.settings, key) : null));
     /*
      * WHO MAY NAME A HOST PATH (genie#1354, host-picks.ts): this window's own IPC, from a window that is NOT a remote window
      * (one driving another host), is the only local origin; the remote API's `features.act` passes none and is remote.

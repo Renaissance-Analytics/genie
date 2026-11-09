@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
 import { inMemoryPair, parseMessage, type ClientTransport, type ServerConnection, type WireMessage } from '../src/core/remote-protocol.js';
 import { hostRemoteApi, RelayBridgeHost, RemoteAccessHost, RemoteAccessService } from '../src/main/remote-access-host.js';
@@ -39,6 +39,7 @@ let token = '';
 let server: SessionEngineServer;
 const tailnet: Array<(c: ServerConnection) => void> = [];
 const links: Array<() => void> = [];
+let access: RemoteAccessHost;
 
 beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'genie2-remote-access-link-'));
@@ -47,7 +48,7 @@ beforeEach(async () => {
     await before.flushed();
     tailnet.length = 0;
     const bridge = new RelayBridgeHost((owner, event) => server.remoteAccessEvent(owner, { kind: 'bridge', event }));
-    const access = await RemoteAccessHost.open({
+    access = await RemoteAccessHost.open({
         home, hostName: 'alphar', now,
         transport: { onConnection: (cb) => { tailnet.push(cb); const off = bridge.onConnection(cb); return off; } },
         api: hostRemoteApi({
@@ -64,7 +65,14 @@ beforeEach(async () => {
     });
     server = new SessionEngineServer({ token: TOKEN, build: 't', remoteAccess: service });
 });
-afterEach(async () => { for (const close of links.splice(0)) close(); await rm(home, { recursive: true, force: true }); });
+/** Everything this file's host and windows leave behind, then its folder. */
+async function leave(): Promise<void> {
+    for (const close of links.splice(0)) close();
+    // Its private writes first: on Windows each ends by restricting the file's ACL, which fails on a file already gone.
+    await access.close();
+    await rm(home, { recursive: true, force: true });
+}
+afterEach(leave);
 
 async function windowOn(local: boolean, onRemoteInvoke?: (method: string, args: unknown[], context: unknown) => Promise<unknown>) {
     const [h, raw] = memoryPair();
@@ -79,6 +87,17 @@ async function windowOn(local: boolean, onRemoteInvoke?: (method: string, args: 
 const phone = () => { const pair = inMemoryPair(); for (const cb of tailnet) cb(pair.server); return wire(pair.client); };
 
 describe('remote access over the engine link', () => {
+    // A token hello saves the device's last-seen privately, and on Windows that write ends by restricting the file's ACL:
+    // a folder removed under it makes that step fail on a file that is gone (test/helpers/acl-guard.ts counts it).
+    it('leaving waits for the host\'s private writes before its folder goes', async () => {
+        const p = phone();
+        await p.hello({ kind: 'token', token });
+        const flushed = vi.spyOn(DeviceStore.prototype, 'flushed');
+        await leave();
+        expect(flushed).toHaveBeenCalled();
+        flushed.mockRestore();
+    });
+
     it('is driven from a LOCAL window only (control: a local window reads the status)', async () => {
         const remote = await windowOn(false);
         await expect(remote.client.call('engine.remoteAccess', ['status', []])).resolves.toEqual({ ok: false, reason: 'Remote access is driven from a local window only.' });
