@@ -159,6 +159,8 @@ export const ENGINE_METHODS = [
     'engine.remoteAccess',
     // The Tynn relay host (Tynn #410, P5d.3): the registration, the role and the link, as a window reads them.
     'engine.relayHost',
+    // Take over (Tynn #553, P5d.5c): genie-host owns who has a TUI open; a window starts, ends and reads them here.
+    'engine.takeOver',
     // A workspace's agent config: the host writes it, under the lock its agent preparation holds.
     'engine.configSync',
     // The keyring card, as the host found it: `[method, args]`.

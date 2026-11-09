@@ -44,6 +44,8 @@ import { SafeMode } from './safe-mode-host.js';
 import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
+import { TakeOverHost } from './take-over-host.js';
+import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
@@ -467,6 +469,19 @@ async function main(): Promise<void> {
     const terminalsClient = new SpawnHostClient({ entry: '', link: { send: (frame) => relay?.send('terminals', frame) }, log: lifecycleLog });
     const terminalHost = new TerminalHost(terminalsClient.ptyPort(), { terminals: (workspaceId) => limitOf(settings.snapshotFor(workspaceId), 'terminals') });
     const terminalsService = new TerminalsService(terminalHost);
+    // TAKE OVER'S ONE OWNER (Tynn #553, P5d.5c): who has a TUI open. This host opens no window; whoever clicked opens its own.
+    const takeOverHost = new TakeOverHost({
+        terminals: terminalHost,
+        openWindow: () => {},
+        mcp: () => { const e = mcp?.endpoint() ?? null; return e ? { mcpUrl: e.url, token: e.token } : null; },
+    });
+    const takeOverService = new TakeOverService({
+        host: takeOverHost,
+        find: (id) => hostRegistry.find(id),
+        workspacePath: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? null,
+        tuiFor: (record) => providerBinary(record.provider) ?? record.provider,
+        onChange: (view) => engineRef?.takeOverEvent(view),
+    });
     /** This host's own spawn-host children (no window reaches them): their frames, and their "ready". */
     const ownChildren: Record<'supervised' | 'terminals', SpawnHostClient> = { supervised: supervisedClient, terminals: terminalsClient };
     /*
@@ -872,7 +887,8 @@ async function main(): Promise<void> {
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
-            own: { 'updates.state': async () => updatesService.dump() },
+            own: { 'updates.state': async () => updatesService.dump(), takeOver: async (args) => takeOverService.start(args[0]) },
+            takeOverEnded: (terminalId) => takeOverService.ended(terminalId),
             window: {
                 connected: () => (engineRef?.newestLocalWindow() ?? null) !== null,
                 invoke: (method, args, context) => (engineRef ? engineRef.remoteInvoke(method, args, context) : Promise.reject(new Error('no Genie window is connected'))),
@@ -959,6 +975,7 @@ async function main(): Promise<void> {
         }),
         workstation: workstationService,
         relayHost: relayHostService,
+        takeOver: takeOverService,
         // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
         keyring: ((service: KeyringService) => { keyringNotices.push((text) => service.setNotice(text)); return service; })(new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
             onReady: () => {
@@ -1110,6 +1127,7 @@ async function main(): Promise<void> {
     phoneRegistry.setHandoffProbe((id) => own.attention.lastHandoff(id));
     phoneRegistry.setSafeMode(() => safeMode.view());
     phoneRegistry.setHangNotice(() => crashState.view().notice);
+    phoneRegistry.setObservedProbe((id) => takeOverHost.probe(id));
     const phoneAgents = () => Object.fromEntries(hostRegistry.listAgents().map((a) => [a.id as string, { name: a.name, workspaceId: a.workspaceId }]));
     phoneRegistry.setDeckSource(() => assembleDeckItems({
         workspaces: hostRegistry.listWorkspaces(),
@@ -1135,6 +1153,7 @@ async function main(): Promise<void> {
     stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
     host.subscribe(() => phoneTouch());
     approvals.onChange(phoneTouch);
+    takeOverHost.onChange(phoneTouch);
     const phoneFiles = new FilesHost({
         gitStatus: gitFileStatus,
         gitShowHead,
@@ -1157,6 +1176,8 @@ async function main(): Promise<void> {
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
         windowConnected: () => engine.newestLocalWindow() !== null,
+        terminals: terminalHost,
+        takeOver: (id) => takeOverHost.probe(id),
         headroom: headroomFeed,
         models: new ProviderModelCache(realListModels),
         providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
@@ -1359,6 +1380,7 @@ async function main(): Promise<void> {
             },
         } : {}),
         flowCallers: { callerFor: (key) => flowCallers.callerFor(key) ?? gappCallers.callerFor(key) },
+        takeOverCaller: (id) => takeOverHost.callerFor(id),
         // The plugins' tools, run here (ADF A3): an official one in process, anyone else's in its sandboxed child. The Genie
         // API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
         plugins: hostPluginTools(pluginsService, {

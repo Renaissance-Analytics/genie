@@ -13,6 +13,8 @@ import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { Store } from '../src/main/store.js';
 import { TakeOverHost } from '../src/main/take-over-host.js';
+import { TakeOverReplica } from '../src/main/take-over-replica.js';
+import { TakeOverService } from '../src/main/take-over-service.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 
@@ -45,12 +47,7 @@ interface Mods {
     TakeOverReplica: new (call: (method: string, args: readonly unknown[]) => Promise<unknown>) => Replica;
 }
 
-/** Reached loosely so these are red by assertion, not by a compile error, until the modules exist. */
-const mods = async (): Promise<Mods> => {
-    const name = (file: string) => `../src/main/${file}.js`;
-    const [service, replica] = await Promise.all([import(/* @vite-ignore */ name('take-over-service')), import(/* @vite-ignore */ name('take-over-replica'))]);
-    return { ...service, ...replica } as Mods;
-};
+const mods = async (): Promise<Mods> => ({ TakeOverService, TakeOverReplica } as unknown as Mods);
 
 const atlas = { id: 'agent_atlas', name: 'atlas', provider: 'claude', workspaceId: 'tynn' } as unknown as AgentRecord;
 

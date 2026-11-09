@@ -58,6 +58,8 @@ export interface HostMcpPorts {
     readonly mail?: import('./mcp-tools-mail.js').MailPort;
     /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
     readonly flowCallers?: { callerFor(key: string): Caller | null };
+    /** A Take Over TUI's caller: known here, so it works with no window to tell the host (Tynn #553). */
+    readonly takeOverCaller?: (id: string) => Caller | null;
     /**
      * The sites and service engines `sites` and `services` act on (Tynn #444): the host's own hosting (P5a) and its
      * supervisor. Absent = the host's hosting did not start, and the tools say so. `sites open` / `services exec` are the window's.
@@ -129,7 +131,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const vouched = injected.get(id);
         if (vouched) return vouched;
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, ports.osaDir);
-        return session ?? ports.flowCallers?.callerFor(id) ?? view?.callers[id] ?? null;
+        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? view?.callers[id] ?? null;
     };
     const settings = ports.settings;
 
