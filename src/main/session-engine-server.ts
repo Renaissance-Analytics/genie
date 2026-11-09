@@ -44,6 +44,8 @@ import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './i
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView } from '../core/crash-record.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
+import type { GAppsApi } from '../core/gapps.js';
+import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
 
 /**
@@ -177,6 +179,8 @@ export interface EngineServerOptions {
     /** The host's plugins (ADF A3: plugins-host.ts). Absent = `engine.plugins` is refused and no window is told of any. */
     readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
     readonly marketplace?: MarketplaceApi | undefined;
+    /** The GApp book's actions (GApps v2 V7). Absent = the book could not open, and the store says so. */
+    readonly gapps?: GAppsApi | undefined;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -581,6 +585,10 @@ export class SessionEngineServer {
         // The updater helper's link calls its own method and nothing else (P5b).
         if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
         if (method === 'engine.marketplace') return this.#marketplace(conn, args);
+        if (method === 'engine.gapps') {
+            if (!conn.local || !conn.window) throw new Error('GApp actions require a local window.');
+            return dispatchGapps(() => this.#options.gapps ?? null, args[0], Array.isArray(args[1]) ? args[1] : []);
+        }
         // The crash state is the host's own, ready before any agent engine is: answered here.
         if (method === 'engine.crash') {
             if (!this.#options.crash || !conn.local) throw new Error('This window is not told about crashes here.');

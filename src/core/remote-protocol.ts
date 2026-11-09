@@ -7,6 +7,7 @@ import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
 import { LOCAL_DRAFT_METHODS, type LocalDraftMethod } from './local-drafts.js';
 import { LOCAL_ARTBOARD_METHODS, type LocalArtboardMethod } from './local-artboard.js';
 import { MARKETPLACE_METHODS, type MarketplaceMethod } from './marketplace.js';
+import { GAPP_METHODS, type GAppMethod } from './gapps.js';
 
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie.
@@ -151,6 +152,7 @@ export const REMOTE_METHODS = [
     ...LOCAL_ARTBOARD_METHODS,
     ...LOCAL_TERMINAL_METHODS,
     ...MARKETPLACE_METHODS,
+    ...GAPP_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -318,6 +320,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
     ...Object.fromEntries(LOCAL_TERMINAL_METHODS.map(method => [method, 'local'])) as Record<LocalTerminalMethod, 'local'>,
     ...Object.fromEntries(MARKETPLACE_METHODS.map(method => [method, 'local'])) as Record<MarketplaceMethod, 'local'>,
+    ...Object.fromEntries(GAPP_METHODS.map(method => [method, 'local'])) as Record<GAppMethod, 'local'>,
     addWorkspace: 'host-only',
     // Tynn #529 part A: from another machine, the TUI starts here and its window opens THERE — a write, on the baton.
     takeOver: 'write',

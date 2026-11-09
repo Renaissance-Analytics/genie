@@ -58,6 +58,7 @@ import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { PluginsDump } from './plugins-host.js';
 import { PluginsReplica } from './plugins-replica.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
+import type { GAppsApi } from '../core/gapps.js';
 import { CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../core/catalog-sync.js';
 import type { CatalogKind, ElementDefinition } from '../core/catalog.js';
 import type { BrowserEvent } from './browser-service.js';
@@ -188,6 +189,7 @@ export class SessionEngineClient {
     #processBook: ProcessBookReplica | null = null;
     #plugins: PluginsReplica | null = null;
     #marketplace: MarketplaceApi | null = null;
+    #gapps: GAppsApi | null = null;
     #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
@@ -851,6 +853,23 @@ export class SessionEngineClient {
             discard: async token => { await request('discard', [token]); },
         };
         return this.#marketplace;
+    }
+
+    /** The local window's GApp store actions (GApps v2 V7): the host's book. */
+    gapps(): GAppsApi {
+        const request = async <T>(operation: keyof GAppsApi, args: unknown[]): Promise<T> => {
+            const answer = await this.call('engine.gapps', [operation, args]);
+            if (!answer.ok) throw new Error(answer.reason);
+            return answer.value as T;
+        };
+        this.#gapps ??= {
+            list: () => request('list', []),
+            review: (folder) => request('review', [folder]),
+            install: (folder, options) => request('install', [folder, options]),
+            setOn: async (id, on) => { await request('setOn', [id, on]); },
+            uninstall: async (id) => { await request('uninstall', [id]); },
+        };
+        return this.#gapps;
     }
 
     /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */

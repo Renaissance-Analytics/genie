@@ -34,6 +34,7 @@ import { isLocalArtboardMethod } from '../core/local-artboard.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
 import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
+import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -74,6 +75,7 @@ export interface LocalOwnerDeps {
 
 export interface HostApiDeps {
     marketplace?: () => MarketplaceApi | null;
+    gapps?: () => GAppsApi | null;
     localTerminals?: NativeTerminalPort;
     artboard?: LocalArtboardPort;
     chatDrafts?: LocalDraftsStore;
@@ -286,6 +288,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
 
     const invoke = async (method: RemoteMethod, args: unknown[], context: CallContext = RESTRICTED_CALL_CONTEXT): Promise<unknown> => {
         if (isMarketplaceMethod(method)) throw new Error('Marketplace actions require their authenticated local window connection.');
+        if (isGappMethod(method)) throw new Error('GApp actions require their authenticated local window connection.');
         if (isLocalTerminalMethod(method)) {
             if (!deps.localTerminals) throw new Error('the local terminal service is not available');
             const name = method.slice('terminals.local'.length).toLowerCase();
@@ -698,6 +701,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     return {
         invoke,
         ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
+        ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
         ...(deps.tynnWatch ? { tynnWatch: deps.tynnWatch } : {}),
         ...(deps.localTerminals ? { localTerminals: deps.localTerminals } : {}),

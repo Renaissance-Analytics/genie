@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace' | 'gapps'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -133,6 +133,13 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     });
     return {
         terminals,
+        gapps: {
+            list: () => read(b => b.gapps!.list()),
+            review: folder => read(b => b.gapps!.review(folder)),
+            install: (folder, options) => read(b => b.gapps!.install(folder, options)),
+            setOn: (id, on) => read(b => b.gapps!.setOn(id, on)),
+            uninstall: id => read(b => b.gapps!.uninstall(id)),
+        },
         marketplace: {
             search: (query, cursor) => read(b => b.marketplace!.search(query, cursor)),
             prepare: (id, version) => read(b => b.marketplace!.prepare(id, version)),
