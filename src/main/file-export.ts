@@ -1,6 +1,7 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { lstat, rename, rm, stat } from 'node:fs/promises';
+import { lstat, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { zipFolder } from './folder-zip.js';
@@ -91,7 +92,7 @@ export function fileExporter(ports: ExportPorts): FileExporter {
                 // `wx`: the temp name is ours alone — never over something that happens to be there.
                 if (folder) await zipFolder(source, name, part, [part, dest]);
                 else await pipeline(createReadStream(source), createWriteStream(part, { flags: 'wx' }));
-                await rename(part, dest);
+                await renameOver(part, dest);
                 return { ok: true, path: dest };
             } catch (error) {
                 await rm(part, { force: true }).catch(() => {});

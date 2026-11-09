@@ -1,3 +1,4 @@
+import { RENAME_RETRY_DELAYS_MS } from '../src/core/atomic-rename.js';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,10 +62,10 @@ describe('a store whose fire-and-forget flush fails', () => {
         try {
             const paired = store.pair('phone');
             expect(paired.device.label).toBe('phone');
-            // Windows refuses the rename with EPERM, which writeJsonAtomic retries for ~300 ms before giving up;
-            // Linux answers EISDIR at once. The test's deadline must exceed the code's retry budget (the Windows
-            // release runner failed a 150 ms wait on 2026-10-12): poll for the report, up to 3 s.
-            const until = Date.now() + 3_000;
+            // Windows refuses the rename with EPERM, which the atomic write retries for RENAME_RETRY_DELAYS_MS before giving
+            // up; Linux answers EISDIR at once. The test's deadline must exceed the code's retry budget (the Windows
+            // release runner failed a 150 ms wait on 2026-10-12): poll for the report, for twice that budget.
+            const until = Date.now() + 2 * RENAME_RETRY_DELAYS_MS.reduce((a, b) => a + b, 0);
             while (error.mock.calls.length === 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
             expect(unhandled).toBe(0);
             expect(error).toHaveBeenCalled();

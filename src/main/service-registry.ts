@@ -1,5 +1,6 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { NAMESPACE_SLICED_ENGINES, provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
 import { deleteDataVerdict } from '../core/service-tenancy.js';
@@ -99,7 +100,7 @@ export const diskConfigFiles: ConfigFiles = {
         await mkdir(dirname(path), { recursive: true });
         const tmp = `${path}.${process.pid}.tmp`;
         await writeFile(tmp, text, { encoding: 'utf8', mode: 0o644 });
-        await rename(tmp, path);
+        await renameOver(tmp, path);
     },
     remove: (path) => rm(path, { force: true }),
 };

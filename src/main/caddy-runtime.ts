@@ -1,6 +1,7 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { chmod, copyFile as nodeCopyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile as nodeCopyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, posix, win32 } from 'node:path';
 
 /**
@@ -115,7 +116,7 @@ export async function userCaddyCopy(bundled: string, baseDir: string, deps: { co
             }
             if (platform !== 'win32') await chmod(tmp, 0o755);
             await rm(dest, { force: true });
-            await rename(tmp, dest);
+            await renameOver(tmp, dest);
             await writeFile(marker, sha, 'utf8');
             copied = true;
         }
