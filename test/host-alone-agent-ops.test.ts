@@ -83,6 +83,8 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         },
         models: { get: async (provider: string, options?: { refresh?: boolean }) => { calls.push(`models ${provider} ${options?.refresh === true}`); return { models: [{ id: 'opus' }] }; } },
         providerInstalled: (provider: string) => provider === 'codex',
+        windowConnected: () => false,
+        headroom: { view: () => ({}), subscribe: () => () => {} },
         ...over,
     } as unknown as HostAlonePorts;
 }

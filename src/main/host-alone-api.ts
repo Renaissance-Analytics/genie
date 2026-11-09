@@ -2,6 +2,7 @@ import type { AgentId } from '../core/identity.js';
 import type { RemoteMethod } from '../core/remote-protocol.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import { agentDetailFor } from './agent-detail.js';
+import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
 import { agentOpsApi, agentOpsPorts, type AgentOpsWiring } from './agent-ops-api.js';
 import { restartAgent, SettingApplier } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
@@ -41,8 +42,11 @@ export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMeth
     'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput',
 ]);
 
+/** The Dashboard's lanes and rate limits (Tynn #553, P5d.5b). */
+export const HOST_FEED_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['activity', 'headroom']);
+
 /** Every method genie-host answers itself while no window is connected. */
-export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS]);
+export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS]);
 
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
@@ -67,6 +71,10 @@ export interface HostAlonePorts {
     /** An approval's note, delivered to the agent as your message. */
     readonly deliverToAgent: (agentId: string, text: string) => boolean | Promise<boolean>;
     readonly files: NonNullable<HostApiDeps['files']>;
+    /** A window is connected: it answers, so genie-host builds no activity feed nobody it serves will read. */
+    readonly windowConnected: () => boolean;
+    /** Each provider's latest rate-limit reading, kept by genie-host whether or not a window is open. */
+    readonly headroom: NonNullable<HostApiDeps['headroom']>;
     readonly updates?: HostApiDeps['updates'];
     readonly schedule?: HostApiDeps['schedule'];
 }
@@ -96,6 +104,14 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
     // A model change waiting for its agent to be free applies the moment it is, with or without a window.
     const settingApplier = new SettingApplier(agentOps, (id) => agentShells(ports.engine()?.rowsFor(id) ?? []).count);
     ports.engine()?.subscribe((id) => settingApplier.changed(id as AgentId));
+    const activityFeeds = new ActivityFeeds({
+        host: {
+            subscribe: (listener) => ports.engine()?.subscribe((id) => { if (!ports.windowConnected()) listener(id); }) ?? (() => {}),
+            ledgerFor: (id) => ports.engine()?.ledgerFor(id) ?? [],
+            probe: (id) => ports.engine()?.probe(id) ?? null,
+        },
+        ...(ports.schedule ? { schedule: (fn: () => void, ms: number) => { ports.schedule!(ms, fn); } } : {}),
+    });
     const startOnDemand = (record: Parameters<HostApiDeps['cwdFor']>[0]) => startForWork({
         probe: (id) => ports.engine()?.probe(id) ?? null,
         start: (r, cwd) => engine().start(r, cwd),
@@ -146,6 +162,8 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             },
             onChange: () => () => {},
         }),
+        activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry.listAgents(), workspaceId), subscribe: (listener) => activityFeeds.subscribe(listener) },
+        headroom: ports.headroom,
         updates: ports.updates ?? null,
     };
     return buildHostApi(deps);
