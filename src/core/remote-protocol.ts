@@ -274,9 +274,10 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.adopt': 'local',
     'tynnNetwork.workstations': 'local',
     'tynnNetwork.setRole': 'local',
-    'tynnNetwork.shares.list': 'local',
-    'tynnNetwork.shares.mint': 'local',
-    'tynnNetwork.shares.revoke': 'local',
+    // Tynn #587: the host being shared makes its own links. Its owner only (OWNER_ONLY, remote-host.ts); making or revoking takes the baton.
+    'tynnNetwork.shares.list': 'read',
+    'tynnNetwork.shares.mint': 'write',
+    'tynnNetwork.shares.revoke': 'write',
     // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
     'inbox.sendFile': 'write',
     // The phone's files (genie#1346): reading a workspace's files is a read; an upload writes into it.

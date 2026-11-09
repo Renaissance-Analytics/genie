@@ -35,6 +35,8 @@ export interface WorkspaceTabsProps {
      * view or the agent — so the agent you are on is shown in its workspace's colour. Absent/`null` = drawn as before.
      */
     readonly color?: string | null | undefined;
+    /** Share this workspace through Tynn (Tynn #587): in the strip, so it is there whatever is selected. Absent for a guest. */
+    readonly onShare?: (() => void) | undefined;
 }
 
 const STATE_DOT: Record<string, string> = {
@@ -43,7 +45,7 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, onView, onAdd, onOpenAgent, planToggle, color = null }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, onView, onAdd, onOpenAgent, planToggle, color = null, onShare }: WorkspaceTabsProps) {
     // Literal classes, dark: included: react-fancy's underline tab carries its own dark: colours, and only a class with the
     // same variant replaces one.
     const underline = color ? 'border-[var(--ws)] dark:border-[var(--ws)]' : 'border-[var(--fg-1)] dark:border-[var(--fg-1)]';
@@ -90,6 +92,19 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
             })}
             </Tabs.List>
             </Tabs>
+            {onShare ? (
+                <Button variant="ghost" size="xs" labelClassName="contents"
+                    type="button"
+                    data-action="share-workspace"
+                    aria-label="Share this workspace"
+                    title="A link someone opens to reach this workspace over Tynn: control or read-only, for as long as you choose"
+                    onClick={onShare}
+                    className="ml-auto flex shrink-0 items-center gap-1.5 px-2 text-[12px] text-[var(--fg-3)] hover:text-[var(--fg-1)]"
+                >
+                    <Icon name="share-2" size="xs" />
+                    Share
+                </Button>
+            ) : null}
             {planToggle ? (
                 <Button variant="ghost" size="xs" labelClassName="contents"
                     type="button"
@@ -98,7 +113,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                     aria-label={planToggle.open ? 'Hide the active plan' : 'Show the active plan'}
                     title={planToggle.open ? 'Hide the active plan' : 'Show the active plan'}
                     onClick={planToggle.onToggle}
-                    className={`ml-auto flex shrink-0 items-center gap-1.5 px-2 text-[12px] ${planToggle.open ? 'text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}
+                    className={`${onShare ? '' : 'ml-auto '}flex shrink-0 items-center gap-1.5 px-2 text-[12px] ${planToggle.open ? 'text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}
                 >
                     <Icon name={planToggle.open ? 'panel-right-close' : 'panel-right-open'} size="xs" />
                     Plan
