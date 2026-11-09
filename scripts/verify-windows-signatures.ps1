@@ -8,7 +8,7 @@ $evidenceDir = Join-Path $releaseRoot 'signature-evidence'
 $uninstaller = Join-Path $evidenceDir 'nsis-uninstaller.exe'
 
 # Positive inventory: an empty or incomplete tree cannot pass a recursive signature scan.
-foreach ($relative in @('Genie.exe', 'resources/bin/genie-launch.exe')) {
+foreach ($relative in @('Genie.exe', 'resources/bin/genie-launch.exe', 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-x64/prism-acp-supervisor.exe', 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-arm64/prism-acp-supervisor.exe')) {
     $required = Join-Path $appDir $relative
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing required Windows binary: $required" }
 }

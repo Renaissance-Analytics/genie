@@ -56,6 +56,7 @@ import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, 
 import { TrustVerdicts } from './trust-verdict.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
+import { supervisorFailureWords } from '../core/supervisor-failure.js';
 import { isAcpProvider } from '../core/engine.js';
 import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
@@ -1675,15 +1676,16 @@ async function boot(): Promise<void> {
         // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
         // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
         // never what a running process was started from.
-        const supervisor = await prepareGenieSupervisor(runtimeDir(genieRoot())).catch((error: unknown) => {
-            const why = error instanceof Error ? error.message : String(error);
+        const supervisor = await prepareGenieSupervisor().catch((error: unknown) => {
+            const words = supervisorFailureWords(error);
+            const why = words ?? (error instanceof Error ? error.message : String(error));
             lifecycleLog(`containment unready reason=${why}`);
             console.error(`[genie] agents cannot start contained: ${why}`);
-            mainErrors.record('containment-unready', error);
+            mainErrors.record('containment-unready', words === null ? error : new Error(words));
             return null;
         });
         if (supervisor !== null) {
-            void removeStaleSupervisorBuilds(runtimeDir(genieRoot()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
+            void removeStaleSupervisorBuilds(runtimeDir(genieRoot()), { runningImages: supervisorImagesRunning }).then(
                 (sweep) => {
                     for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
                     for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
