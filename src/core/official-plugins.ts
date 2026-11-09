@@ -21,7 +21,7 @@
 export interface OfficialPlugin {
     /** One line for Settings → Plugins. */
     readonly description: string;
-    /** The `genie-plugin.json` this plugin would have, as an object. */
+    /** The `genie-package.json` this plugin would have, as an object. */
     readonly manifest: Readonly<Record<string, unknown>>;
 }
 

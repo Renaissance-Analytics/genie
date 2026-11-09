@@ -11,7 +11,8 @@ import { siteNameProblem } from '../src/core/gen-name.js';
 import { GenRouterServer } from '../src/main/gen-router-server.js';
 import { GAppServer } from '../src/main/gapp-server.js';
 import { openGAppWindow } from '../src/main/gapp-window.js';
-import { GAPP_MANIFEST_FILE, GAppBook } from '../src/main/gapps-host.js';
+import { PACKAGE_MANIFEST_FILE } from '../src/core/plugin-integrity.js';
+import { GAppBook } from '../src/main/gapps-host.js';
 import { genieCatalog } from '../src/main/genie-catalog.js';
 import { signPackage } from './plugin-sign-helper.js';
 
@@ -35,7 +36,7 @@ let port: number;
 async function install(id: string): Promise<void> {
     const dir = join(root, 'src', id);
     await mkdir(join(dir, 'app'), { recursive: true });
-    await writeFile(join(dir, GAPP_MANIFEST_FILE), JSON.stringify({
+    await writeFile(join(dir, PACKAGE_MANIFEST_FILE), JSON.stringify({
         id, name: id.split('.').pop(), version: '1.0.0', publisher: { name: 'Example Co', keyId: KEY_ID },
         contributions: [{
             id: `${id}.app`, kind: 'app', docs: { name: 'App', description: 'An app.' },
