@@ -3,8 +3,7 @@ import { LOCAL_FRAME_CHANNELS } from './local-frame.js';
 
 /** P4's remaining IPC registrations. Protocol rows disappear with their handler in that family's PR. */
 /**
- * `browser-process`: answered by the Genie browser process (genie-browser-electron.ts); the window keeps its fallback copy until
- * P6 removes it. `window-port`: stays in the window, which is also where the site panels are, as webviews by design (one login
+ * `browser-process`: answered by the Genie browser process (genie-browser-electron.ts); the window has no copy (Tynn #585). `window-port`: stays in the window, which is also where the site panels are, as webviews by design (one login
  * per site).
  */
 export type IpcDestination = `protocol:${string}` | 'protocol-door' | 'window-port' | 'browser-process' | `later:${string}`;

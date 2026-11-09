@@ -218,7 +218,7 @@ describe('the generated types', () => {
         const text = renderAppSdkTypes(defs);
         expect(text).toMatch(/^ {4}knowledge: \{/m);
         expect(text).toContain("'ai.genie.spreadsheet.createWorkbook': {");
-        for (const never of ['ForceTheQuestion', 'imDone', 'createAgent', 'lists']) expect(text, never).not.toMatch(new RegExp(`^ {4}${never}:`, 'm'));
+        for (const never of ['ForceTheQuestion', 'imDone', 'createAgent', 'lists', 'plan', 'flows', 'mail', 'thumbsUp']) expect(text, never).not.toMatch(new RegExp(`^ {4}${never}:`, 'm'));
     });
 
     it('never offers a terminal id; a required argument is required, an enum is its values', () => {

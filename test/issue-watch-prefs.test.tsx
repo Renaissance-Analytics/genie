@@ -96,17 +96,17 @@ describe('the Settings tab shows it', () => {
 
     it('how it hears, and a box per kind, the ones it hears ticked — COUNTED; says when it is the default', () => {
         const html = render(opsFor({ delivery: 'push', kinds: DEFAULT_KINDS, chosen: false }));
-        expect(html).toMatch(/<select[^>]*data-issue-watch-delivery="push"/);
-        const boxes = html.match(/<input[^>]*data-issue-watch-kind="[a-z.]+"[^>]*>/g) ?? [];
+        expect(html).toMatch(/data-issue-watch-delivery="push"/);
+        const boxes = [...html.matchAll(/data-issue-watch-kind="([a-z.]+)"[^>]*>.*?<input[^>]*>/g)];
         expect(boxes).toHaveLength(IW_EVENT_KINDS.length);
-        expect(boxes.filter((b) => / checked=""/.test(b)).map((b) => b.match(/data-issue-watch-kind="([a-z.]+)"/)![1])).toEqual(DEFAULT_KINDS);
+        expect(boxes.filter((b) => / checked=""/.test(b[0])).map((b) => b[1])).toEqual(DEFAULT_KINDS);
         expect(html).toContain('data-issue-watch-default');
     });
 
     it('off: the kinds are shown but disabled; a chosen setting is not called the default (CONTROL)', () => {
         const html = render(opsFor({ delivery: 'off', kinds: [], chosen: true }));
         expect(html).toMatch(/data-issue-watch-delivery="off"/);
-        expect((html.match(/<input[^>]*data-issue-watch-kind="[a-z.]+"[^>]*disabled=""/g) ?? []).length).toBe(IW_EVENT_KINDS.length);
+        expect([...html.matchAll(/data-issue-watch-kind="[a-z.]+"[^>]*>.*?<input[^>]*>/g)].filter((b) => / disabled=""/.test(b[0]))).toHaveLength(IW_EVENT_KINDS.length);
         expect(html).not.toContain('data-issue-watch-default');
     });
 

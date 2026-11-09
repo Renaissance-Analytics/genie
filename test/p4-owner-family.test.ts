@@ -135,11 +135,10 @@ describe('family5 owner methods and real recorded bridge calls', () => {
         const b = pageBridge({ appInbox: { state: old, createKey: old, revokeKey: old, source: old }, deviceLink: { hosts: old, forget: old, adopt: old }, tynnNetwork: { workstations: old, setRole: old, shares: { list: old, mint: old, revoke: old } }, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge);
         await expect(row.call(b as Owner)).rejects.toThrow('no local protocol connection'); expect(old).not.toHaveBeenCalled();
     });
-    it('a stable owner facade survives manual recovery over the page connection', async () => {
+    it('a stable owner facade survives a dropped page connection: the call waits for the link', async () => {
         const f = setup(), port = f.port(); vi.stubGlobal('window', { genieLocalProtocol: port });
         const b = pageBridge({ deviceLink: { open: vi.fn() }, tynnNetwork: { open: vi.fn() }, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge), inbox = b.appInbox;
         expect(await b.appInbox!.state('work')).toEqual({ ok: true, state }); port.send('close', '', ''); await tick();
-        await expect(b.appInbox!.state('work')).rejects.toThrow('connection'); b.localProtocol!.retry();
         expect(await b.appInbox!.state('work')).toEqual({ ok: true, state }); expect(b.appInbox).toBe(inbox); expect(f.calls).toEqual([{ method: 'appInbox.state', args: ['work'] }, { method: 'appInbox.state', args: ['work'] }]);
     });
 });

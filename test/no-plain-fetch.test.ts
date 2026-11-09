@@ -69,8 +69,9 @@ describe('wired through the window\'s network', () => {
     it('the toolchain version index', () => {
         expect(main).toMatch(/latestIndex\(\{[^\n]*fetchJson: async \(url\) => \(await net\.fetch\(url\)\)\.json\(\)/);
     });
-    it('the release notes, with their timeout', () => {
-        expect(main).toMatch(/await net\.fetch\('https:\/\/api\.github\.com\/repos\/Renaissance-Analytics\/genie\/releases\?per_page=100'/);
+    it('the release notes are genie-host’s: the window no longer asks for them (Tynn #585)', () => {
+        expect(main).not.toMatch(/api\.github\.com\/repos\/Renaissance-Analytics\/genie\/releases/);
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/await send\('https:\/\/api\.github\.com\/repos\/Renaissance-Analytics\/genie\/releases\?per_page=100'/);
     });
     it('the Tailscale installer', () => {
         expect(main).toMatch(/installTailscale\(\{ download: \(url\) => net\.fetch\(url\) \}\)/);

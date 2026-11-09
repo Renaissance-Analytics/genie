@@ -270,7 +270,8 @@ describe('the window wires its scratch from its root, and stops the sweep on qui
     it('the login and Import from Git take the scratch area’s folder; the sweep is scheduled and stopped in before-quit', () => {
         expect(main).toMatch(/scratchArea\(genieRoot\(\)\)/);
         expect(main).toMatch(/new LoginHost\(\{[\s\S]{0,400}scratch: \(\) => /);
-        expect(main).toMatch(/nodeEnvelopePorts\(\{ stagingBase: /);
+        expect(main).toMatch(/stagingDirectory: \(\) => scratch\.directory\(\)/);
+        expect(readFileSync('src/main/workspace-lifecycle-api.ts', 'utf8')).toMatch(/nodeEnvelopePorts\(\{ stagingBase: w\.stagingDirectory \}\)/);
         expect(main).toMatch(/scheduleScratchSweep\(genieRoot\(\)/);
         const beforeQuit = main.slice(main.indexOf("app.on('before-quit'"));
         expect(beforeQuit.slice(0, 3000)).toMatch(/scratchSweepStop\?\.\(\)/);

@@ -2,7 +2,7 @@ import { browserPlatformHints, Button, detectPlatform, Icon, modifierKeyLabel, P
 import { useEffect, useState } from 'react';
 import { FEATURE_ICONS } from '../../core/rail-view.js';
 import type { GAppListing } from '../../core/gapps.js';
-import { GAppStoreFlyout } from './GAppStore.js';
+import { GAppStoreFlyout, type GAppStoreActions } from './GAppStore.js';
 import type { UpdateChip } from '../../core/update-chip.js';
 import { GenieLogo } from './GenieLogo.js';
 import { ConnectMenu } from './ConnectMenu.js';
@@ -88,7 +88,7 @@ export interface TitleBarProps {
      * genie://gapps, which no surface serves. `apps: null` = still loading. Absent = this window has no store, and the
      * icon routes as before.
      */
-    gapps?: { apps: readonly GAppListing[] | null } | undefined;
+    gapps?: { apps: readonly GAppListing[] | null; actions?: GAppStoreActions | undefined } | undefined;
     /** Share this workstation through Tynn (Tynn #587), the host's when driving one. Absent for a guest. */
     share?: { readonly onShare: () => void } | undefined;
     connect?: {
@@ -351,7 +351,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     {workstation.name}
                 </div>
             ) : null}
-            {gapps ? <GAppStoreFlyout open={storeOpen} onClose={() => setStoreOpen(false)} apps={gapps.apps} /> : null}
+            {gapps ? <GAppStoreFlyout open={storeOpen} onClose={() => setStoreOpen(false)} apps={gapps.apps} actions={gapps.actions} /> : null}
         </div>
     );
 }

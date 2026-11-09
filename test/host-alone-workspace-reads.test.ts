@@ -119,10 +119,9 @@ describe('the gate', () => {
         expect(store.workspaceValues('tynn')).toEqual({});
     });
 
-    it('changing the repositories is not part of this: still "open a window" (CONTROL)', async () => {
+    it('the Tynn tab is not part of this: still "open a window" (CONTROL)', async () => {
         const api = gate(hostAloneApi(ports()));
-        await expect(api.invoke('workspaces.addRepo', ['tynn', { name: 'x', path: 'x' }])).rejects.toThrow('open Genie on alphar');
-        await expect(api.invoke('workspaces.hibernate', ['tynn'])).rejects.toThrow('open Genie on alphar');
+        await expect(api.invoke('workspaces.tynnIssues', ['tynn', {}])).rejects.toThrow('open Genie on alphar');
     });
 });
 
@@ -132,7 +131,7 @@ describe('the wiring', () => {
     it('the window and genie-host answer through the same code', () => {
         for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts']) {
             expect(src(file), file).toContain('workspaceSettingsOps(');
-            expect(src(file), file).toContain('repoOpsPorts(');
+            expect(src(file), file).toContain('workspaceLifecyclePorts(');
         }
     });
 

@@ -10,6 +10,7 @@ export class DeviceLinkReplica {
     readonly #steps = new Set<(workstationId: string, step: 'relay') => void>();
     /** Each relay channel's browser door, as genie-host last said it (Tynn #552). */
     readonly #vias = new Map<string, { port: number; ca: string | null }>();
+    readonly #viaListeners = new Set<(channel: string, port: number, ca: string | null) => void>();
 
     constructor(call: (method: string, args: readonly unknown[]) => Promise<unknown>) { this.#call = call; }
 
@@ -47,6 +48,9 @@ export class DeviceLinkReplica {
         }
     }
 
+    /** A channel's browser door moved, or learned that host's CA. */
+    onVia(listener: (channel: string, port: number, ca: string | null) => void): () => void { this.#viaListeners.add(listener); return () => { this.#viaListeners.delete(listener); }; }
+
     onStep(listener: (workstationId: string, step: 'relay') => void): () => void { this.#steps.add(listener); return () => { this.#steps.delete(listener); }; }
 
     send(channel: string, text: string): void { void this.#call('send', [channel, text]).catch(() => {}); }
@@ -75,7 +79,11 @@ export class DeviceLinkReplica {
 
     deliver(event: DeviceLinkEvent): void {
         if (event.type === 'step') { for (const listener of [...this.#steps]) listener(event.workstationId, event.step); return; }
-        if (event.type === 'via') { this.#vias.set(event.channel, { port: event.port, ca: event.ca }); return; }
+        if (event.type === 'via') {
+            this.#vias.set(event.channel, { port: event.port, ca: event.ca });
+            for (const listener of [...this.#viaListeners]) listener(event.channel, event.port, event.ca);
+            return;
+        }
         if (event.type === 'frame') {
             for (const listener of [...this.#frames]) listener(event.channel, event.text);
             return;

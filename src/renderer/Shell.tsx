@@ -66,10 +66,8 @@ import { HangNoticeBar } from './components/HangNoticeBar.js';
 import { RendererNoticeBar } from './components/RendererNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
-import type { GAppListing } from '../core/gapps.js';
+import type { GAppListing, GAppsApi } from '../core/gapps.js';
 
-/** No GApps until the install book (GApps D2) supplies them: one list, so the store's view never changes for nothing. */
-const NO_GAPPS: readonly GAppListing[] = [];
 
 /**
  * The updater's state, pushed by the main process. Starts as `null` — "no updater has said
@@ -144,6 +142,9 @@ export interface ShellProps {
     /** What the feature surfaces render from; `null` sections draw skeletons. Defaults to nothing asked yet. */
     features?: FeatureData | undefined;
     marketplace?: MarketplaceApi | undefined;
+    /** The host's GApp book, for a local window's store (GApps v2 V7). */
+    gapps?: GAppsApi | undefined;
+    pickGappFolder?: (() => Promise<string | null>) | undefined;
     /** A feature surface asking the main process for something. */
     onFeature?: ((action: FeatureAction) => void | Promise<ActOutcome>) | undefined;
     /**
@@ -338,6 +339,8 @@ export function Shell({
     servable,
     features = EMPTY_FEATURES,
     marketplace,
+    gapps,
+    pickGappFolder,
     onFeature = () => {},
     featureAsk,
     pickFiles,
@@ -523,6 +526,18 @@ export function Shell({
     const colorMap = useShared(useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]));
     // The workspace on screen — its own page, or the page of one of its agents — named with its colour in the title bar.
     const onScreen = workspaceFor(routeWorkspace(route, snapshot.agents) ?? '');
+    const [gappList, setGappList] = useState<readonly GAppListing[] | null>(null);
+    const refreshGapps = useCallback(async (): Promise<void> => {
+        if (!gapps) return;
+        // A list the host could not give leaves what was shown, or shows none rather than loading for ever.
+        try { setGappList(await gapps.list()); } catch { setGappList((shown) => shown ?? []); }
+    }, [gapps]);
+    const onScreenId = onScreen?.id ?? null;
+    const onScreenName = onScreen ? (onScreen.name ?? folderName(onScreen.path)) : null;
+    const gappStore = useMemo(() => (gapps && pickGappFolder ? {
+        apps: gappList,
+        actions: { api: gapps, pickFolder: pickGappFolder, refresh: refreshGapps, workspace: onScreenId !== null && onScreenName !== null ? { id: onScreenId, name: onScreenName } : null },
+    } : { apps: [] as readonly GAppListing[] }), [gapps, pickGappFolder, gappList, refreshGapps, onScreenId, onScreenName]);
 
     return (
         <WorkspaceColorsContext.Provider value={colorMap}>
@@ -545,9 +560,8 @@ export function Shell({
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
                 connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh }}
-                // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it. No app is listed until the install book (D2)
-                // supplies them, so the store says it has none yet rather than routing to a surface nobody serves.
-                gapps={{ apps: NO_GAPPS }}
+                // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it, over the host's book (V7) in a local window.
+                gapps={gappStore}
             />
             {remote?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />

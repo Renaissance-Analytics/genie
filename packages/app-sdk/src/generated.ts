@@ -13,9 +13,6 @@ export interface AppElementPayload {
 
 /** Genie's own elements an app can be granted, and each one's arguments. */
 export interface GenieElements {
-    thumbsUp: {
-        reason?: string;
-    };
     checkIssues: {
         refresh?: boolean;
     };
@@ -38,29 +35,6 @@ export interface GenieElements {
     openFileForUser: {
         path: string;
         line?: number;
-    };
-    plan: {
-        steps?: ({
-            content: string;
-            status: 'pending' | 'in_progress' | 'completed';
-        })[];
-    };
-    flows: {
-        action: 'list' | 'get' | 'create' | 'update' | 'arm' | 'disarm' | 'runNow' | 'remove';
-        id?: string;
-        name?: string;
-        document?: Record<string, unknown>;
-    };
-    mail: {
-        action: 'create' | 'list' | 'messages' | 'read' | 'delete' | 'rotate' | 'wait';
-        name?: string;
-        inbox?: string;
-        id?: string;
-        unread?: boolean;
-        search?: string;
-        limit?: number;
-        match?: string;
-        timeoutSeconds?: number;
     };
     'ai.genie.spreadsheet.createWorkbook': {
         title?: string;

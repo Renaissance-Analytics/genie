@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { validatePackage, type Catalog, type ElementDefinition } from '../core/catalog.js';
 import { grantFor, installReview, updateReview, type GAppGrant, type GAppRequest, type GrantScope, type ReviewItem } from '../core/gapp-grants.js';
+import type { GAppReview } from '../core/gapps.js';
 import { UNVERIFIED_LABEL } from '../core/plugins.js';
 import type { PackageDeclaration } from './genie-catalog.js';
 import { PACKAGE_MANIFEST_FILE } from '../core/plugin-integrity.js';
@@ -34,21 +35,6 @@ export interface GAppEntry {
     /** Running only because publisher checks are off (B5). */
     readonly unverified: boolean;
     readonly grant: GAppGrant;
-}
-
-export interface GAppReview {
-    readonly packageId: string;
-    readonly name: string;
-    readonly version: string;
-    readonly digest: string;
-    /** The signing key's id, or `unverified`. */
-    readonly publisher: string;
-    /** An update to an installed app (its grant is the baseline). */
-    readonly update: boolean;
-    /** Whether the person must consent: always for a new app; for an update, only when it asks for something new. */
-    readonly consent: boolean;
-    /** What the person reads: each element by Genie's catalog name, each host, a new publisher. */
-    readonly items: readonly ReviewItem[];
 }
 
 export interface GAppBookPorts {

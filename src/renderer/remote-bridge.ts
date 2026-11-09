@@ -567,6 +567,13 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     }) : undefined;
     let agentWire: RemoteClient['agentWire'];
     if (local) {
+        bridge.gapps = {
+            list: () => read('gapps.list'),
+            review: (folder) => read('gapps.review', folder),
+            install: (folder, options) => read('gapps.install', folder, options),
+            setOn: async (id, on) => { await read('gapps.setOn', id, on); },
+            uninstall: async (id) => { await read('gapps.uninstall', id); },
+        };
         bridge.marketplace = {
             search: (query, cursor) => cursor === undefined ? read('marketplace.search', query) : read('marketplace.search', query, cursor),
             prepare: (id, version) => read('marketplace.prepare', id, version),
