@@ -37,10 +37,34 @@ describe('a failed start offers the picker', () => {
         expect(html).toContain(ACTION);
     });
 
-    it('CONTROL: on the agent, no refusal or another refusal draws nothing', async () => {
+    // Every refused Start is said on desktop, not only this one (the owner's rule: never a dead click).
+    it('on the agent, any other refusal is said too, with no picker', async () => {
+        const { ProviderStartRefusal } = await choice();
+        const html = renderToStaticMarkup(createElement(ProviderStartRefusal, { reason: '"atlas" is still stopping; it starts once its previous run has ended.', onChoose }));
+        expect(html).toContain('data-start-refusal');
+        expect(html).toContain('is still stopping');
+        expect(html).not.toContain(ACTION);
+    });
+
+    it('a window that cannot choose still says the refusal, with no picker', async () => {
+        const { ProviderStartRefusal } = await choice();
+        const html = renderToStaticMarkup(createElement(ProviderStartRefusal, { reason: REFUSED }));
+        expect(html).toContain('C:\\tools\\bin\\claude.cmd');
+        expect(html).not.toContain(ACTION);
+    });
+
+    it('CONTROL: no refusal draws nothing', async () => {
         const { ProviderStartRefusal } = await choice();
         expect(renderToStaticMarkup(createElement(ProviderStartRefusal, { reason: null, onChoose }))).toBe('');
-        expect(renderToStaticMarkup(createElement(ProviderStartRefusal, { reason: 'still stopping', onChoose }))).toBe('');
+    });
+
+    it('is never a dead click: a refused Start or Restart from any surface says its reason on desktop', () => {
+        const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
+        const view = read('../src/renderer/components/AgentView.tsx'), app = read('../src/renderer/App.tsx');
+        // Drawn whether or not this window can choose a program.
+        expect(view).not.toMatch(/ops\?\.onChooseProviderProgram \? <ProviderStartRefusal/);
+        expect(view).toContain('<ProviderStartRefusal reason={startRefusal}');
+        for (const handler of ['onStartAgent', 'onRestartAgent']) expect(app).toMatch(new RegExp(`${handler}=\\{\\(agentId\\) => \\{[^\\n]*setDockNotice\\(\\{ kind: 'refused'`));
     });
 
     it('reads the provider from the words, and only from that problem', async () => {
