@@ -1038,7 +1038,7 @@ function AgentViewBody({
                              * THE ERROR CARD (the board): the turn did not finish. The last tool call has no result,
                              * and nothing after the break was received. Inline, at the end — where the reader is.
                              */}
-                            {ops?.onChooseProviderProgram ? <ProviderStartRefusal reason={startRefusal} onChoose={(provider) => ops.onChooseProviderProgram!(provider).then((r) => { if (r.ok) onStart?.(agent.id); return r; })} /> : null}
+                            <ProviderStartRefusal reason={startRefusal} {...(ops?.onChooseProviderProgram ? { onChoose: (provider: string) => ops.onChooseProviderProgram!(provider).then((r) => { if (r.ok) onStart?.(agent.id); return r; }) } : {})} />
                             {session?.failure ? (
                                 <div data-stream-error="" className="mx-5 my-2 shrink-0 rounded-[10px] border border-[var(--danger)] bg-[var(--bg-1)] px-3 py-2 text-[12px]">
                                     <div className="flex items-center gap-2 font-mono text-[12px] text-[var(--danger)]">
