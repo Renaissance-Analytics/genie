@@ -101,7 +101,8 @@ async function verifyProof(): Promise<void> {
         const refused = await command([unknownDir, '--key-file', unknownKeyFile, '--token-file', tokenFile, '--origin', origin]);
         if ([privatePem, unknownPem, token].some(secret => refused.text.includes(secret))) throw new Error('Refused CLI leaked a fixture credential; output suppressed');
         assert.equal(refused.code, 1, 'Actual CLI must refuse an unregistered signing key');
-        assert.equal(/HTTP404/.test(refused.text) && /not registered/i.test(refused.text), true, 'Actual CLI must give the recognized Tynn unregistered-key reason; output suppressed');
+        assert.equal(/HTTP404/.test(refused.text), true, 'Actual CLI unregistered-key refusal must carry HTTP404; output suppressed');
+        assert.equal(/not registered/i.test(refused.text), true, 'Actual CLI must give the recognized Tynn unregistered-key reason; output suppressed');
         console.log('C5 actual unregistered-key publication refused with HTTP404 and the Tynn reason; no secret output.');
     } finally { await session?.close(); await host?.close(); registry.close(); }
 }

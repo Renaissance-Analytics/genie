@@ -61,6 +61,20 @@ async function zipSnapshot(files: readonly PackageFile[], signature: Buffer): Pr
     zip.addBuffer(signature, PACKAGE_SIGNATURE_FILE, settings); zip.end(); return done;
 }
 
+/** Interpret only recognized fixed refusals; never copy server-controlled text into a log. */
+async function registryReason(response: Pick<HostHttpsResponse, 'status' | 'text'>): Promise<string | null> {
+    try {
+        const text = await response.text(); if (Buffer.byteLength(text) > RESPONSE_BYTES) return null;
+        const body: unknown = JSON.parse(text); if (!record(body)) return null;
+        const errors: Record<string, unknown> = record(body.errors) ? body.errors : {};
+        const messages: unknown[] = [body.message, ...(Array.isArray(errors.archive) ? errors.archive : [])];
+        if (response.status === 404 && messages.includes('No query results for model [App\\Models\\MarketplacePublisherKey].')) return 'The publisher signing key is not registered with Tynn.';
+        const signatureReason = 'The package signature does not match the registered publisher key and file digest.';
+        if (response.status === 422 && messages.includes(signatureReason)) return signatureReason;
+    } catch { /* Invalid, oversized or incomplete refusal bodies receive generic guidance only. */ }
+    return null;
+}
+
 /** A bounded immutable B4 snapshot; signing never writes a source file or uploads a private key. */
 export async function publishPlugin(options: PublishPluginOptions): Promise<PublishedPlugin> {
     try { return await publish(options); }
@@ -112,7 +126,10 @@ async function publish(options: PublishPluginOptions): Promise<PublishedPlugin> 
             response = await upload(`${origin}/api/v1/marketplace/publish`, { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(body.length) }, body, credentials: 'omit', redirect: 'error', signal: controller.signal });
         } catch { return refuse('Package upload failed or timed out. Check HTTPS trust, connectivity and the registry address; redirects are refused.'); }
         if (!Number.isInteger(response.status) || response.status < 100 || response.status > 599) refuse('Invalid registry confirmation response.');
-        if (!response.ok || (response.status !== 200 && response.status !== 201)) refuse(`Registry refused publication (HTTP${response.status}). Check the publisher token, verified publisher, registered active signing key, archive and immutable version.`);
+        if (!response.ok || (response.status !== 200 && response.status !== 201)) {
+            const reason = await registryReason(response);
+            refuse(`Registry refused publication (HTTP${response.status}).${reason ? ' ' + reason : ''} Check the publisher token, verified publisher, registered active signing key, archive and immutable version.`);
+        }
         let text: string;
         try { text = await response.text(); } catch { return refuse('Registry confirmation could not be read or exceeds the response limit.'); }
         if (Buffer.byteLength(text) > RESPONSE_BYTES) refuse('Registry confirmation exceeds the response size limit.');

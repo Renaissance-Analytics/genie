@@ -127,7 +127,7 @@ describe('C5 signed publisher upload', () => {
         [422, { errors: { archive: ['The package signature does not match the registered publisher key and file digest.'] } }, /signature does not match/i],
     ] as const)('reports the recognized Tynn refusal reason for HTTP%s without printing arbitrary data', async (status, body, reason) => {
         const { publishPlugin } = await load(); await publishPlugin(options());
-        upload.mockResolvedValue({ ok: false, status, text: async () => JSON.stringify(body) });
+        upload.mockResolvedValue({ ok: false, status, text: async () => JSON.stringify({ ...body, untrusted: privatePem + token }) });
         const failure = await publishPlugin(options()).catch(error => error as Error);
         expect(failure).toBeInstanceOf(Error); expect((failure as Error).message).toMatch(reason);
         expect((failure as Error).message).not.toContain(token); expect((failure as Error).message).not.toContain(privatePem);

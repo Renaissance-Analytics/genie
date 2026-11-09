@@ -87,8 +87,9 @@ explicit TLS verification are preserved; cookies and redirects are refused.
 The upload deadline is two minutes; confirmations are limited to 64 KiB and must
 match the package id, version, digest and key. New versions and identical retries
 succeed; a changed immutable version, unregistered/revoked key or unusable token
-fails with its HTTP status and guidance. Raw response bodies and crypto/file
-exceptions are never printed. A failed confirmation can be retried with the same
+fails with its HTTP status and guidance. Recognized Tynn key/signature refusals
+receive fixed safe wording. Raw response bodies and crypto/file exceptions are
+never printed. A failed confirmation can be retried with the same
 unchanged package; Tynn keeps an identical retry idempotent.
 
 For a development registry, explicitly set `--origin https://tynn-c5.gen`.
