@@ -88,6 +88,21 @@ async function verifyProof(): Promise<void> {
         assert.deepEqual(await readFile(join(pluginsDir, fixture.id, 'bytes.bin')), Buffer.from([0, 255, 254, 128, 10]));
         assert.ok((await readdir(source)).every(name => name !== 'genie-plugin.sig'));
         console.log('C5 real MarketplaceSession search/review/consent/install succeeded with registry trust and exact binary bytes; no plugin code executed.');
+        const unknown = generateKeyPairSync('ed25519'), unknownPem = unknown.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+        const unknownId = publisherKeyId(unknown.publicKey.export({ type: 'spki', format: 'pem' }).toString());
+        const unknownKeyFile = join(secrets, 'unregistered.pem'), unknownDir = join(root, 'unregistered');
+        await writeFile(unknownKeyFile, unknownPem, { mode: 0o600 }); await mkdir(unknownDir);
+        const snapshot = await readPackageFiles(source); if (!snapshot.ok) throw new Error('Known proof source disappeared');
+        for (const file of snapshot.files) {
+            const bytes = file.path === PACKAGE_MANIFEST_FILE
+                ? Buffer.from(JSON.stringify({ ...JSON.parse(file.bytes.toString()), id: `${fixture.id}.unregistered`, publisher: { name: 'C5 proof publisher', keyId: unknownId } })) : file.bytes;
+            await mkdir(dirname(join(unknownDir, file.path)), { recursive: true }); await writeFile(join(unknownDir, file.path), bytes);
+        }
+        const refused = await command([unknownDir, '--key-file', unknownKeyFile, '--token-file', tokenFile, '--origin', origin]);
+        if ([privatePem, unknownPem, token].some(secret => refused.text.includes(secret))) throw new Error('Refused CLI leaked a fixture credential; output suppressed');
+        assert.equal(refused.code, 1, 'Actual CLI must refuse an unregistered signing key');
+        assert.equal(/HTTP404/.test(refused.text) && /not registered/i.test(refused.text), true, 'Actual CLI must give the recognized Tynn unregistered-key reason; output suppressed');
+        console.log('C5 actual unregistered-key publication refused with HTTP404 and the Tynn reason; no secret output.');
     } finally { await session?.close(); await host?.close(); registry.close(); }
 }
 if (stage === 'prepare') await prepare(); else if (stage === 'verify') await verifyProof(); else throw new Error('Expected prepare or verify');

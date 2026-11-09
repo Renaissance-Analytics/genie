@@ -66,6 +66,10 @@ file takes precedence. The CLI does not read account sessions, project keys
 or Genie pairing credentials. Encrypted private keys requiring an interactive
 passphrase are not supported.
 
+The root manifest is `genie-package.json`, following Genie's forward-only
+package contract. An old-name-only folder is refused. The detached signature
+keeps its `genie-plugin.sig` filename.
+
 Keep credential files outside the package directory. The publisher refuses
 credential files within it and snapshots containing the supplied key/token or
 PEM private-key material. Never pass secret contents in command-line arguments

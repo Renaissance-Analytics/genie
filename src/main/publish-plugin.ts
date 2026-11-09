@@ -2,9 +2,9 @@ import { createPrivateKey, createPublicKey, randomBytes, sign, type KeyObject } 
 import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
 import type { Readable } from 'node:stream';
-import { ZipFile } from 'yazl';
+import yazl from 'yazl';
 import { compareMarketplaceVersions } from '../core/marketplace.js';
-import { PACKAGE_SIGNATURE_FILE, packageDigest, packageLimitProblem, packageSigningBytes, publisherKeyId, type PackageFile } from '../core/plugin-integrity.js';
+import { PACKAGE_MANIFEST_FILE, PACKAGE_SIGNATURE_FILE, packageDigest, packageLimitProblem, packageSigningBytes, publisherKeyId, type PackageFile } from '../core/plugin-integrity.js';
 import { parseManifest } from '../core/plugins.js';
 import { hostHttpsFetch, type HostHttpsResponse } from './host-https-fetch.js';
 import { readPackageFiles } from './plugin-package.js';
@@ -46,7 +46,7 @@ async function secretFile(path: string, root: string, limit: number): Promise<Bu
     } finally { await file.close(); }
 }
 async function zipSnapshot(files: readonly PackageFile[], signature: Buffer): Promise<Buffer> {
-    const zip = new ZipFile(), chunks: Buffer[] = []; let size = 0;
+    const zip = new yazl.ZipFile(), chunks: Buffer[] = []; let size = 0;
     const done = new Promise<Buffer>((resolve, reject) => {
         zip.on('error', reject); zip.outputStream.on('error', reject);
         zip.outputStream.on('data', (bytes: Buffer) => {
@@ -91,7 +91,7 @@ async function publish(options: PublishPluginOptions): Promise<PublishedPlugin> 
     for (const file of files) {
         if (file.bytes.includes(keyBytes) || file.bytes.includes(privateDer) || file.bytes.includes('PRIVATE KEY-----') || file.bytes.includes(token)) refuse('Package contains private key or credential material; remove the secret before publishing.');
     }
-    const manifestFile = files.find(file => file.path === 'genie-plugin.json'); if (!manifestFile) refuse('Package root needs genie-plugin.json.');
+    const manifestFile = files.find(file => file.path === PACKAGE_MANIFEST_FILE); if (!manifestFile) refuse(`Package root needs ${PACKAGE_MANIFEST_FILE}.`);
     let raw: unknown;
     try { raw = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestFile.bytes)); } catch { return refuse('The package manifest must be valid UTF-8 JSON.'); }
     const parsed = parseManifest(raw); if (!parsed.ok) refuse('The package manifest is invalid; check it against the Genie manifest contract.');

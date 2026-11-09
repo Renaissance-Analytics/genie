@@ -122,6 +122,16 @@ describe('C5 signed publisher upload', () => {
         const { publishPlugin } = await load(); upload.mockResolvedValue({ ok: false, status, text: async () => privatePem + token });
         const error = await publishPlugin(options()).catch(failure => failure as Error); expect(error).toBeInstanceOf(Error); expect((error as Error).message).toMatch(new RegExp(`HTTP${status}`)); expect((error as Error).message).not.toContain(token); expect((error as Error).message).not.toContain(privatePem);
     });
+    it.each([
+        [404, { message: 'No query results for model [App\\Models\\MarketplacePublisherKey].' }, /not registered/i],
+        [422, { errors: { archive: ['The package signature does not match the registered publisher key and file digest.'] } }, /signature does not match/i],
+    ] as const)('reports the recognized Tynn refusal reason for HTTP%s without printing arbitrary data', async (status, body, reason) => {
+        const { publishPlugin } = await load(); await publishPlugin(options());
+        upload.mockResolvedValue({ ok: false, status, text: async () => JSON.stringify(body) });
+        const failure = await publishPlugin(options()).catch(error => error as Error);
+        expect(failure).toBeInstanceOf(Error); expect((failure as Error).message).toMatch(reason);
+        expect((failure as Error).message).not.toContain(token); expect((failure as Error).message).not.toContain(privatePem);
+    });
     it.each(['wrong digest', 'wrong id', 'invalid JSON', 'oversized response'])('refuses %s in an apparent success', async state => {
         const { publishPlugin } = await load(), good = JSON.parse(await (await accepted()).text()) as { id: string; version: { digest: string } };
         if (state === 'wrong digest') good.version.digest = '0'.repeat(64); if (state === 'wrong id') good.id = 'org.example.other';
