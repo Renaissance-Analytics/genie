@@ -8,6 +8,8 @@ import { restartAgent, SettingApplier } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
 import type { Finished } from './attention-store.js';
 import { answerDeck, type DeckAnswerPorts } from './deck-answer.js';
+import { commitsSinceIn, listReposOf } from './repo-ops-host.js';
+import { repoOpsPorts, workspaceSettingsOps } from './workspace-reads-api.js';
 import { buildHostApi, type HostApiDeps } from './host-api.js';
 import type { InboxMessage } from './inbox-store.js';
 import type { Registry } from './registry.js';
@@ -45,8 +47,14 @@ export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMeth
 /** The Dashboard's lanes and rate limits (Tynn #553, P5d.5b). */
 export const HOST_FEED_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['activity', 'headroom']);
 
+/** A Pilot's Take Over window's own terminal (Tynn #553, P5d.5c). Opening and listing terminals stay the window's. */
+export const HOST_TERMINAL_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['terminals.attach', 'terminals.write', 'terminals.resize', 'terminals.close']);
+
+/** A workspace's settings and repositories, read (Tynn #553, P5d.5d). Changing the repositories stays the window's. */
+export const HOST_WORKSPACE_READ_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.listRepos', 'workspaces.commitsSince']);
+
 /** Every method genie-host answers itself while no window is connected. */
-export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS]);
+export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_WORKSPACE_READ_METHODS]);
 
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
@@ -75,6 +83,12 @@ export interface HostAlonePorts {
     readonly windowConnected: () => boolean;
     /** Each provider's latest rate-limit reading, kept by genie-host whether or not a window is open. */
     readonly headroom: NonNullable<HostApiDeps['headroom']>;
+    /** The host's terminals, as a Take Over window on a Pilot reads and types into its own. */
+    readonly terminals: Pick<HostApiDeps['terminals'], 'attach' | 'write' | 'resize' | 'close' | 'list' | 'onData' | 'onExit'>;
+    /** What is known of this agent's Take Over TUI: its Observed row. */
+    readonly takeOver: NonNullable<Parameters<typeof agentDetailFor>[0]['takeOver']>;
+    /** genie-host's own settings store. */
+    readonly settings: Parameters<typeof workspaceSettingsOps>[0] extends () => infer S ? S : never;
     readonly updates?: HostApiDeps['updates'];
     readonly schedule?: HostApiDeps['schedule'];
 }
@@ -112,6 +126,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         },
         ...(ports.schedule ? { schedule: (fn: () => void, ms: number) => { ports.schedule!(ms, fn); } } : {}),
     });
+    const repoOps = repoOpsPorts((id) => registry.workspace(id));
     const startOnDemand = (record: Parameters<HostApiDeps['cwdFor']>[0]) => startForWork({
         probe: (id) => ports.engine()?.probe(id) ?? null,
         start: (r, cwd) => engine().start(r, cwd),
@@ -124,7 +139,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         subscribeSnapshot: (listener) => registry.subscribe(listener),
         subscribeAgentRecords: (listener) => registry.subscribeAgentRecords(listener),
         find: (id) => registry.find(id as AgentId),
-        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, mail: (agentId, limit) => ports.inbox.involving(agentId, limit) }, id as AgentId),
+        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit) }, id as AgentId),
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
         startForYourMessage: (record) => startForYourMessage({
@@ -146,12 +161,17 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         },
         registerAgent: async () => { throw new Error(needsWindow('a new agent')); },
         attention: { finished: () => ports.attention.finished(), markSeen: (id) => ports.attention.markSeen(id) },
-        terminals: windowOnly<HostApiDeps['terminals']>('terminals', { onData: () => () => {}, onExit: () => () => {} }),
+        terminals: windowOnly<HostApiDeps['terminals']>('terminals', ports.terminals),
         uploads: windowOnly<HostApiDeps['uploads']>('inbox.sendFile'),
         files: ports.files,
         serviceEnvFor: () => ({}),
         // Its settings-changed subscription is wired with the events: a no-op here, nothing else of it answers.
-        workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', { onSettingsChanged: () => () => {} }),
+        workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
+            onSettingsChanged: () => () => {},
+            ...workspaceSettingsOps(() => ports.settings),
+            listRepos: (id) => listReposOf(repoOps, id),
+            commitsSince: (id, since) => commitsSinceIn(repoOps, id, since),
+        }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
         features: windowOnly<HostApiDeps['features']>('features', {
             // The Deck's answer only (the phone's Deck, deck-answer.ts); the phone reads nothing back from it.

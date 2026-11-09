@@ -102,7 +102,7 @@ it('late fixture cleanup removes only the directory whose device writes it await
 });
 
 describe('family5 owner methods and real recorded bridge calls', () => {
-    it.each(methods)('%s starts local', method => { expect(REMOTE_METHODS).toContain(method); expect(capabilityOf(method as RemoteMethod)).toBe('local'); });
+    it.each(methods.filter((m) => !m.startsWith('tynnNetwork.shares.')))('%s starts local', method => { expect(REMOTE_METHODS).toContain(method); expect(capabilityOf(method as RemoteMethod)).toBe('local'); });
     it.each(rows)('$method sends its actual arguments and preserves the native result', async row => {
         const f = setup(), c = await f.client();
         const owner = (c as unknown as { localOwner: Owner }).localOwner;
@@ -115,7 +115,8 @@ describe('family5 owner methods and real recorded bridge calls', () => {
     it.each(['tailnet owner', 'relay owner', 'workspace guest', 'host guest', 'readonly relay', 'phone owner', 'phone relay guest'])('%s is refused before invocation and receives no local key/share payload', async kind => {
         const f = setup(), relay = kind.includes('relay') || kind.includes('guest'), guest = kind.includes('guest');
         const p = await f.raw(relay ? { label: kind, isOwner: !guest, workspaceId: kind === 'workspace guest' ? 'work' : null, readonly: kind.includes('readonly') } : undefined, kind.startsWith('phone'));
-        for (const row of rows) expect(await p.call(row.method, row.args)).toMatchObject({ kind: 'result', ok: false, reason: expect.stringContaining("own Genie window") });
+        // Share links are the host owner's over any connection, with the baton (share-door.test.tsx); the rest stay local.
+        for (const row of rows.filter((r) => !r.method.startsWith('tynnNetwork.shares.'))) expect(await p.call(row.method, row.args)).toMatchObject({ kind: 'result', ok: false, reason: expect.stringContaining("own Genie window") });
         expect(f.invoke).not.toHaveBeenCalled(); expect(f.ports.createKey).not.toHaveBeenCalled(); expect(f.ports.adopt).not.toHaveBeenCalled(); expect(f.ports.mint).not.toHaveBeenCalled();
         expect(JSON.stringify(p.frames)).not.toContain('synthetic-key-never-a-real-secret'); expect(JSON.stringify(p.frames)).not.toContain('/connect/synthetic');
     });

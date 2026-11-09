@@ -75,6 +75,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-bringback', 'window-port'],
     ['genie:files-windows', 'window-port'],
     ['genie:add-workspace', 'window-port'],
+    ['genie:provider-choose-program', 'window-port'],
     ['genie:features-browser-bounds', 'window-port'],
 
     ['question:current', 'later:question window'],

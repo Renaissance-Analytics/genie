@@ -6,6 +6,8 @@ import { DeviceLinkReplica } from './device-link-replica.js';
 import { hostname } from 'node:os';
 import { RemoteAccessReplica } from './remote-access-replica.js';
 import { RelayHostReplica } from './relay-host-replica.js';
+import { TakeOverReplica } from './take-over-replica.js';
+import type { TakeOverView } from './take-over-service.js';
 import type { RelayHostView } from './relay-host-service.js';
 import type { RemoteAccessEvent } from './remote-access-host.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -196,6 +198,7 @@ export class SessionEngineClient {
     #deviceLink: DeviceLinkReplica | null = null;
     #remoteAccess: RemoteAccessReplica | null = null;
     #relayHost: RelayHostReplica | null = null;
+    #takeOvers: TakeOverReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -439,6 +442,9 @@ export class SessionEngineClient {
                 return;
             case 'tynn.event':
                 this.tynn().rebase(payload as TynnAccountDump);
+                return;
+            case 'takeOver.event':
+                this.takeOvers().deliver(payload as TakeOverView);
                 return;
             case 'relayHost.event':
                 this.relayHost().deliver(payload as RelayHostView);
@@ -721,6 +727,16 @@ export class SessionEngineClient {
     }
 
     /** This machine on the Tynn relay, as a host (Tynn #410): genie-host registers it and runs the link. */
+    /** Who has a TUI open, as genie-host says (Tynn #553). */
+    takeOvers(): TakeOverReplica {
+        this.#takeOvers ??= new TakeOverReplica(async (method, args) => {
+            const reply = await this.call('engine.takeOver', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#takeOvers;
+    }
+
     relayHost(): RelayHostReplica {
         this.#relayHost ??= new RelayHostReplica(async (method, args) => {
             const reply = await this.call('engine.relayHost', [method, [...args]]);

@@ -41,6 +41,7 @@ import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
+import { TakeOverReplica } from './take-over-replica.js';
 import { crashReportHost } from './crash-report-host.js';
 import { FilesWindows } from './files-windows.js';
 import { availableParallelism, homedir, hostname } from 'node:os';
@@ -60,6 +61,9 @@ import { TrustVerdicts } from './trust-verdict.js';
 import { restartAgent, SettingApplier } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import type { WatchedReposView } from '../core/issue-watch.js';
+import { supervisorFailureWords } from '../core/supervisor-failure.js';
+import { isAcpProvider } from '../core/engine.js';
+import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
@@ -105,7 +109,7 @@ import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
 import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit, type EnvelopePorts } from './envelope-wizard-host.js';
 import { parseEnvelopePlan } from '../core/envelope-plan.js';
-import { chmod, mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
@@ -215,7 +219,8 @@ import { repoStatus } from './repo-git.js';
 import { fileExporter } from './file-export.js';
 import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
-import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
+import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf } from './repo-ops-host.js';
+import { repoOpsPorts, workspaceSettingsOps } from './workspace-reads-api.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
@@ -735,7 +740,8 @@ let filesHost: FilesHost | null = null;
  */
 let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): boolean | Promise<boolean>; unwatch(viewId: string): void; close(): void } | null = null;
 const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
-let takeOvers: TakeOverHost | null = null;
+/** genie-host's, read through its replica; this window's own only on the emergency path (no genie-host, until P6). */
+let takeOvers: TakeOverHost | TakeOverReplica | null = null;
 /** This workstation's Tynn identity, once known: a crash report is sent with its host proof (Tynn #386 part 4). */
 let crashReportMachine: WorkstationPort | null = null;
 /** The workspace header's throwaway terminals (Tynn story #378): each in its own window, closed with it. */
@@ -848,8 +854,14 @@ function takeOverWindow(route: string, request: ActivationRequest, remote: { sea
  * TAKE OVER (§1): the agent's TUI in a workspace terminal. `window: true` is this machine's click, with a window here;
  * `window: false` is another machine's (Tynn #529 part A), whose own Take Over window attaches over the link.
  */
-function takeOverHere(raw: unknown, options: { window: boolean }): { ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string } {
+async function takeOverHere(raw: unknown, options: { window: boolean }): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }> {
     if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
+    // genie-host decides and starts it (Tynn #553); only the window, if one is wanted here, is this process's to open.
+    if (takeOvers instanceof TakeOverReplica) {
+        const started = await takeOvers.start(raw);
+        if (started.ok && options.window) openTakeOverWindow(`genie://takeover/${started.terminalId}`, 'user-gesture');
+        return started;
+    }
     const record = registry?.find(raw as AgentId) ?? null;
     if (!record) return { ok: false, reason: `No agent is registered as ${raw}.` };
     const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId) ?? null;
@@ -1460,6 +1472,7 @@ async function boot(): Promise<void> {
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
     const lifecycleLog = openLifecycleLog(runtimeDir(genieRoot()));
+    setProviderChoiceFile(join(runtimeDir(genieRoot()), 'provider-programs.json'));
     rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
@@ -1660,15 +1673,16 @@ async function boot(): Promise<void> {
         // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
         // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
         // never what a running process was started from.
-        const supervisor = await prepareGenieSupervisor(runtimeDir(genieRoot())).catch((error: unknown) => {
-            const why = error instanceof Error ? error.message : String(error);
+        const supervisor = await prepareGenieSupervisor().catch((error: unknown) => {
+            const words = supervisorFailureWords(error);
+            const why = words ?? (error instanceof Error ? error.message : String(error));
             lifecycleLog(`containment unready reason=${why}`);
             console.error(`[genie] agents cannot start contained: ${why}`);
-            mainErrors.record('containment-unready', error);
+            mainErrors.record('containment-unready', words === null ? error : new Error(words));
             return null;
         });
         if (supervisor !== null) {
-            void removeStaleSupervisorBuilds(runtimeDir(genieRoot()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
+            void removeStaleSupervisorBuilds(runtimeDir(genieRoot()), { runningImages: supervisorImagesRunning }).then(
                 (sweep) => {
                     for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
                     for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
@@ -1838,7 +1852,7 @@ async function boot(): Promise<void> {
      */
     const terminalsForTakeOver = terminals;
     scratchTerminals = new ScratchTerminals({ terminals: terminalsForTakeOver, openWindow: (route) => openTakeOverWindow(route, 'user-gesture') });
-    takeOvers = new TakeOverHost({
+    takeOvers = agentEngineLink ? agentEngineLink.client.takeOvers() : new TakeOverHost({
         terminals: terminalsForTakeOver,
         // Take Over is a button the person pressed (genie:take-over); nothing else starts one (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
@@ -1846,7 +1860,12 @@ async function boot(): Promise<void> {
         mcp: () => { const e = mcpEndpointNow(); return e ? { mcpUrl: e.url, token: e.token } : null; },
     });
     const takeOversNow = takeOvers;
-    theRegistry.setObservedProbe((id) => takeOversNow.probe(id));
+    theRegistry.setObservedProbe((id) => takeOversNow.probe(id as AgentId));
+    if (takeOversNow instanceof TakeOverReplica) {
+        // A window opened after a Pilot's Take over sees it; the Observed row follows each TUI starting and ending.
+        takeOversNow.onChange(() => { theRegistry.touch(); });
+        void takeOversNow.refresh().catch((error: unknown) => console.error(`[take over] ${error instanceof Error ? error.message : String(error)}`));
+    }
 
     /*
      * UPDATES (§7), GENIE-HOST'S (the host split, P5b; updates-host.ts). The host holds the state, checks on its schedule —
@@ -2478,16 +2497,7 @@ async function boot(): Promise<void> {
     // Import from Git's browser (item 8): what the sign-in reaches; signed out says so.
     const githubRepos = (): Promise<RepoListing> => (githubAccount ? githubAccount.repoListing() : Promise.resolve({ status: 'signed-out' }));
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
-    const repoOps: RepoOpsPorts = {
-        fs: {
-            ...workspaceOps.fs,
-            // The repo chips read `.git/HEAD` and stat `.git/index.lock`; "Remove stale lock" unlinks it (only when stale).
-            readText: async (p) => { try { return await readFileText(p, 'utf8'); } catch { return null; } },
-            mtime: async (p) => { try { return (await statPath(p)).mtimeMs; } catch { return null; } },
-            unlink: async (p) => { const { unlink } = await import('node:fs/promises'); await unlink(p); },
-        },
-        registry: { workspace: (id) => registry?.workspace(id) ?? null },
-    };
+    const repoOps = repoOpsPorts((id) => registry?.workspace(id) ?? null);
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
     // The parent is picked in the window over the host's disk (Tynn #835).
     const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
@@ -2506,6 +2516,17 @@ async function boot(): Promise<void> {
             return sacredNameOf(await tynnAccount.projects(), projectId);
         },
     };
+
+    // The person's own answer to a provider hidden behind a batch wrapper (Tynn #577): an .exe, kept per provider.
+    ipcMain.handle('genie:provider-choose-program', async (_event, raw: unknown) => {
+        if (!window || typeof raw !== 'string' || !isAcpProvider(raw)) return { ok: false, reason: 'No provider named.' };
+        const picked = await dialog.showOpenDialog(window, { title: `Choose ${raw}'s program`, properties: ['openFile'], filters: [{ name: 'Programs', extensions: ['exe', 'com'] }] });
+        const path = picked.filePaths[0];
+        if (picked.canceled || !path) return { ok: false };
+        const file = providerChoiceFile();
+        if (file === null) return { ok: false, reason: 'Genie has nowhere to keep the choice yet.' };
+        return writeProviderChoice(file, raw, path);
+    });
 
     ipcMain.handle('genie:add-workspace', async () => {
         if (!window || !registry) return { ok: false };
@@ -2933,9 +2954,7 @@ async function boot(): Promise<void> {
                 removeRepo: (id, slug) => removeRepoFrom(repoOps, id, slug),
                 removeRepoLock: (id, slug) => removeRepoLockOf(repoOps, id, slug),
                 commitsSince: (id, since) => commitsSinceIn(repoOps, id, since),
-                settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
-                setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
-                resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
+                ...workspaceSettingsOps(() => services!.settings),
                 onSettingsChanged: (listener) => services!.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
                 setGoverns: (id, children) => registry!.setGoverns(id, children),
                 setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),

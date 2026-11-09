@@ -227,7 +227,7 @@ const EXCEPTIONS: Record<string, { lines: string[]; why: string }> = {
         why: 'the folder picker starts at the person’s home: a place to look from, not a write of Genie’s data',
     },
     'src/main/session-host.ts': {
-        lines: ["import { homedir } from 'node:os';", 'return { ...providerLaunchOptions(providerBinary(provider, env), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };'],
+        lines: ["import { homedir } from 'node:os';", 'return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };'],
         why: 'a provider’s model list is asked from its own home, outside any project',
     },
 };

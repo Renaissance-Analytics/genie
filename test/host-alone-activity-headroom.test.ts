@@ -68,6 +68,8 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         deliverToAgent: async () => true,
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
         windowConnected: () => false,
+        terminals: { attach: () => null, write: () => true, resize: () => true, close: () => true, list: () => [], onData: () => () => {}, onExit: () => () => {} },
+        takeOver: () => null,
         headroom: { view: () => ({}), subscribe: () => () => {} },
         ...over,
     } as unknown as HostAlonePorts;
