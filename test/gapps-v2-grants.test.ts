@@ -129,7 +129,7 @@ describe('Genie\'s own tools that act as the person are never granted', () => {
     it('each is grantable: false in Genie\'s catalog; an app listing one is refused by name', () => {
         const genie = genieCatalog();
         // `lists` too (the coordinator's ruling, 2026-11-08): its items put work in front of the person; start conservative.
-        expect([...PERSON_ONLY_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'createAgent', 'imDone', 'lists', 'manageTerminals', 'pages', 'processes', 'services', 'sites', 'workspaceTabs'].sort());
+        expect([...PERSON_ONLY_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'createAgent', 'flows', 'imDone', 'lists', 'mail', 'manageTerminals', 'pages', 'plan', 'processes', 'services', 'sites', 'thumbsUp', 'workspaceTabs'].sort());
         for (const id of PERSON_ONLY_TOOLS) {
             expect(genie.get(id)?.payload.grantable, id).toBe(false);
             const r = installReview(request({ uses: [id] }), (x) => genie.get(x));
@@ -139,7 +139,7 @@ describe('Genie\'s own tools that act as the person are never granted', () => {
 
     it('CONTROL: Genie\'s other tools are grantable, and an app may list them', () => {
         const genie = genieCatalog();
-        for (const id of ['knowledge', 'mail', 'flows']) {
+        for (const id of ['knowledge', 'checkIssues', 'openFileForUser']) {
             expect(genie.get(id), id).not.toBeNull();
             expect(genie.get(id)?.payload.grantable, id).not.toBe(false);
             expect(installReview(request({ uses: [id], network: [] }), (x) => genie.get(x)).ok, id).toBe(true);

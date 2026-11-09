@@ -210,13 +210,13 @@ describe('an update asks again only for what is new', () => {
     it('a new element: consent again, for it alone; without consent nothing changes', async () => {
         const book = await open();
         await installReviewed(book, await appFolder('v1'));
-        const dir2 = await appFolder('v1.2', { version: '1.2.0', uses: ['knowledge', 'mail'] });
+        const dir2 = await appFolder('v1.2', { version: '1.2.0', uses: ['knowledge', 'checkIssues'] });
         const review = await book.reviewInstall(dir2);
-        expect(review).toMatchObject({ ok: true, review: { update: true, consent: true, items: [expect.objectContaining({ kind: 'element', id: 'mail' })] } });
+        expect(review).toMatchObject({ ok: true, review: { update: true, consent: true, items: [expect.objectContaining({ kind: 'element', id: 'checkIssues' })] } });
         expect(await book.install(dir2, { scope: ['ws-a'] })).toMatchObject({ ok: false, reason: expect.stringMatching(/consent/) });
         expect(book.list()[0]).toMatchObject({ version: '1.0.0' });
         if (!review.ok) return;
         expect(await book.install(dir2, { scope: ['ws-a'], consent: { digest: review.review.digest, items: review.review.items } })).toMatchObject({ ok: true });
-        expect(book.list()[0]).toMatchObject({ version: '1.2.0', grant: expect.objectContaining({ uses: ['knowledge', 'mail'] }) });
+        expect(book.list()[0]).toMatchObject({ version: '1.2.0', grant: expect.objectContaining({ uses: ['knowledge', 'checkIssues'] }) });
     });
 });
