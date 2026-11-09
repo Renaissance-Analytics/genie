@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hostDownAnswer, hostDownPlan } from '../src/core/host-down.js';
-import { composeServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**

@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { AgentRecord } from '../src/core/identity.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import type { AgentSessionsPort } from '../src/main/flow-runner.js';
 import type { PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
 

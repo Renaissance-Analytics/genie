@@ -63,7 +63,7 @@ import { trustSteps, type TrustApi } from './hosting-trust.js';
 import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
 import type { PtyPort } from './terminal-host.js';
-import { composeHosting, type HostingOptions } from './hosting-compose.js';
+import type { HostingComposeInput, HostingOptions, HostingStack } from './hosting-compose.js';
 import { composeStageDiagnostics, type ComposeStageSample } from './compose-stage-diagnostics.js';
 import type { EnginesApi, EnvelopeSitesApi, HostingApi, SitesApi } from './hosting-host.js';
 import type { SiteManager } from './site-manager.js';
@@ -130,10 +130,12 @@ export interface ComposeInput extends HostingOptions {
     /** genie-host's process supervisor, through this window's replica (P3.3b). Absent = this window runs its own. */
     readonly supervisor?: SupervisorApi;
     /**
-     * genie-host's front door, service engines and site routes, through this window's replica (the host split, P5a): this
-     * window then builds none of its own. Absent = it builds its own (hosting-compose.ts) — the emergency path, until P6.
+     * genie-host's front door, service engines and site routes, through this window's replica (the host split, P5a): the
+     * window builds none of its own (Tynn #584).
      */
     readonly hosting?: HostingApi;
+    /** Tests that compose alone hand in a real hosting stack (test/helpers/compose-alone.ts). Nothing in the app does. */
+    readonly buildOwnHosting?: (input: HostingComposeInput) => Promise<HostingStack>;
     /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
     readonly plugins?: PluginsApi;
     /** genie-host's catalog, through this window's replica (ADF A4/A5). Absent = this window builds its own from its plugins. */
@@ -347,17 +349,13 @@ const FLOW_SETTLE_ON_QUIT_MS = 5_000;
 /** What a window that composed against genie-host's stores holds (the host split, P3.1). */
 export type WindowServices = ComposedServices<WindowAgentStores>;
 
-/** Compose with the stores agents write to opened HERE: the emergency path (no host), and every test that composes alone. */
-export async function composeServices(input: Omit<ComposeInput, 'agentStores'>): Promise<ComposedServices<OwnAgentStores>> {
-    return (await composeWith(input)) as ComposedServices<OwnAgentStores>;
-}
-
 /** Compose with genie-host's stores, through this window's replicas (the host split, P3.1). */
 export async function composeWindowServices(input: ComposeInput & { readonly agentStores: WindowAgentStores }): Promise<WindowServices> {
     return composeWith(input);
 }
 
-async function composeWith(input: ComposeInput): Promise<WindowServices> {
+/** The composition itself. `composeWindowServices` is the app's way in; a test that composes alone goes through test/helpers/compose-alone.ts. */
+export async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
     const workTracking = (): WorkTracking => (input.tynn?.()?.status().signedIn === true ? 'tynn' : 'files');
     const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
@@ -470,15 +468,15 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         ...(input.build ? { build: input.build } : {}),
     });
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
-    // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA. Its own
-    // (hosting-compose.ts) only on the emergency path, built exactly as it always was.
+    // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA.
     stage?.begin('hosting');
-    const ownHosting = input.hosting ? null : await composeHosting({ ...input, supervisor, settings, appEnv: appEnvOf });
+    if (!input.hosting && !input.buildOwnHosting) throw new Error("compose was given no hosting: it is genie-host's");
+    const ownHosting = input.hosting ? null : await input.buildOwnHosting!({ ...input, supervisor, settings, appEnv: appEnvOf });
     stage?.end();
     const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With genie-host's, this window's own git reads follow the host's
-    // verdicts through the replica, which fails closed; the emergency path's own hosting set this process's policy itself.
+    // verdicts through the replica, which fails closed.
     if (!ownHosting) {
         setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.isTrustedPath(path)));
         hosting.trust.onVerdict((id) => input.onTrustVerdict?.(id));

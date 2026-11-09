@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_SOUND_BYTES, soundFileMime } from '../src/core/custom-sound.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { customSoundData, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 

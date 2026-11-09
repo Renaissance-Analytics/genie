@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { describe, expect, it } from 'vitest';
 import { ServiceDriver, type DockerRunner } from '../src/main/service-driver.js';
-import { composeServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
 import { handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import { hostingTools } from '../src/main/mcp-tools-hosting.js';
 import { HostingSurface } from '../src/renderer/components/FeatureSurfaces.js';
