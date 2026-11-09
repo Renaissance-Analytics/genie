@@ -109,6 +109,8 @@ export const REMOTE_METHODS = [
     'terminals.attach',
     'terminals.list',
     'features.snapshot',
+    // P4 family 11 (Tynn #560): a custom alert sound's data, read by this machine's own window.
+    'features.soundData',
     'features.act',
     'features.setBrowserBounds',
     'updates.state',
@@ -170,7 +172,7 @@ export const COMPANION_EVENT = 'remote-companion';
 export interface CompanionEvent { readonly revoked: string }
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
@@ -180,6 +182,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'terminals.list': 'read',
     'terminals.attach': 'read',
     'features.snapshot': 'read',
+    'features.soundData': 'local',
     'updates.state': 'read',
     openAgent: 'write',
     stopAgent: 'write',
@@ -346,6 +349,43 @@ export interface PreAuth {
     readonly workspaceId: string | null;
     /** Reads only: every change is refused. */
     readonly readonly: boolean;
+    /** Only with `kind: 'local'`: which window the door admitted. Absent = not known to be this machine's own (Tynn #578). */
+    readonly window?: 'main' | 'remote';
+}
+
+/**
+ * WHO A HOST CALL CAME FROM (host split P4, Tynn #578). Built by RemoteHost from what it admitted, never from anything
+ * the caller says, and the only thing an origin-dependent rule may read.
+ */
+export interface CallContext {
+    readonly connectionId: string;
+    /** `local-window` is this machine's own window; a window driving another machine is `remote-window`, though it holds the door. */
+    readonly origin: 'local-window' | 'remote-window' | 'device' | 'relay';
+    readonly profile: 'mobile' | 'desktop';
+    readonly isOwner: boolean;
+    /** The one workspace this caller may reach; `null` = the whole host. */
+    readonly workspaceId: string | null;
+    readonly readonly: boolean;
+    readonly label: string;
+}
+
+/** A call nobody vouched for: no owner, reads only, and a workspace id no workspace has (`null` would be the whole host). */
+export const RESTRICTED_CALL_CONTEXT: CallContext = Object.freeze({ connectionId: '', origin: 'relay', profile: 'mobile', isOwner: false, workspaceId: '', readonly: true, label: 'an unidentified caller' });
+
+/**
+ * A context that crossed from genie-host to a window. Only a remote caller is ever forwarded, so one claiming this
+ * machine's window, or that is not exactly a context, is treated as nobody's.
+ */
+export function forwardedCallContext(value: unknown): CallContext {
+    if (value === null || typeof value !== 'object') return RESTRICTED_CALL_CONTEXT;
+    const v = value as Record<string, unknown>;
+    const keys = ['connectionId', 'origin', 'profile', 'isOwner', 'workspaceId', 'readonly', 'label'];
+    if (Object.keys(v).length !== keys.length || !keys.every((k) => k in v)) return RESTRICTED_CALL_CONTEXT;
+    if (v.origin !== 'remote-window' && v.origin !== 'device' && v.origin !== 'relay') return RESTRICTED_CALL_CONTEXT;
+    if (v.profile !== 'mobile' && v.profile !== 'desktop') return RESTRICTED_CALL_CONTEXT;
+    if (typeof v.connectionId !== 'string' || typeof v.label !== 'string' || typeof v.isOwner !== 'boolean' || typeof v.readonly !== 'boolean') return RESTRICTED_CALL_CONTEXT;
+    if (v.workspaceId !== null && typeof v.workspaceId !== 'string') return RESTRICTED_CALL_CONTEXT;
+    return { connectionId: v.connectionId, origin: v.origin, profile: v.profile, isOwner: v.isOwner, workspaceId: v.workspaceId as string | null, readonly: v.readonly, label: v.label };
 }
 
 /**

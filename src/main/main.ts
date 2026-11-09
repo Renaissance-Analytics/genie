@@ -16,7 +16,7 @@ import { forwardRendererConsole } from '../core/render-error.js';
 import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { takeOverRouteOf } from '../core/take-over-route.js';
-import { transportHub } from '../core/remote-protocol.js';
+import { transportHub, type CallContext } from '../core/remote-protocol.js';
 import { agentDetailFor } from './agent-detail.js';
 import { openRelayMember, PopKeypair, type RelayMemberTransport } from './relay-member.js';
 import type { RelaySocket } from './relay-wire.js';
@@ -100,7 +100,7 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
-import { featureOrigin, HostPicks } from './host-picks.js';
+import { featureOrigin, featureOriginOf, HostPicks } from './host-picks.js';
 import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
@@ -368,7 +368,8 @@ const pageMemory = pageMemorySampler({
 /** The main window's page ended and was brought back (renderer-recovery.ts): the notice every snapshot carries. */
 let rendererNotice: RendererNotice | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
-const localDoor = localProtocolDoor(ipcMain);
+// Which window a connection is decides what it may do (Tynn #578): main's own record, read when the page connects.
+const localDoor = localProtocolDoor(ipcMain, { windowKind: (contents) => (isRemoteWindow(contents as Electron.WebContents) ? 'remote' : 'main') });
 /**
  * THE STALL WATCHDOG (beta.53 freezes; main/stall-watchdog.ts): main's held event loop, slow renderer requests and slow
  * outbound calls, the windows' own long tasks and frame gaps, hung renderers and gone child processes — each a line in
@@ -1526,7 +1527,7 @@ async function boot(): Promise<void> {
         // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
         // raised them; the host never prompts on its own.
         // A REMOTE METHOD GENIE-HOST DOES NOT OWN YET (Tynn #409): done here, by this window's own host API.
-        onRemoteInvoke: (method: string, args: unknown[]) => (remoteApiNow ? remoteApiNow.invoke(method as Parameters<ReturnType<typeof buildHostApi>['invoke']>[0], args) : Promise.reject(new Error('Genie’s window is still starting; try again in a moment.'))),
+        onRemoteInvoke: (method: string, args: unknown[], context: CallContext) => (remoteApiNow ? remoteApiNow.invoke(method as Parameters<ReturnType<typeof buildHostApi>['invoke']>[0], args, context) : Promise.reject(new Error('Genie’s window is still starting; try again in a moment.'))),
         elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
         // Which php-cgi a site's pin runs, for the hosting replica's synchronous check: the same toolchain as the host's.
         phpCgiFor: (pin: string | undefined) => resolvePhpCgi(pin, phpCgiBase()),
@@ -3036,7 +3037,9 @@ async function boot(): Promise<void> {
             },
             features: {
                 snapshot: () => featureSnapshot(services!, featureState, processPorts()),
-                act: (action) => handleFeatureAction(services!, action, featureState, featurePorts),
+                act: (action, context) => handleFeatureAction(services!, action, featureState, featurePorts, featureOriginOf(context, hostPicks)),
+                // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
+                soundData: (key) => customSoundData(services!.settings, key),
                 onChange: (cb) => { featureListeners.add(cb); return () => { featureListeners.delete(cb); }; },
             },
             updates: updates
@@ -3071,8 +3074,7 @@ async function boot(): Promise<void> {
     const featurePush = new LatestPush<FeatureData>({
         build: () => featureSnapshot(composed, featureState, { ...processPorts(), onEngineStatusesLate: () => pushFeatures() }),
         deliver: (data) => {
-            // Every window: a flow editor window draws the flow's runs and armed state from the same snapshot (genie#1204).
-            broadcast(FEATURE_CHANNELS.changed, data);
+            // Every window, a flow editor's too (genie#1204): each hears the local door's revision and re-reads (P4 family 11).
             for (const l of featureListeners) l(data);
         },
     });
@@ -4010,9 +4012,6 @@ async function boot(): Promise<void> {
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
-    ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState, processPorts()));
-    // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
-    ipcMain.handle(FEATURE_CHANNELS.soundData, (_event, key: unknown) => (typeof key === 'string' ? customSoundData(composed.settings, key) : null));
     /*
      * WHO MAY NAME A HOST PATH (genie#1354, host-picks.ts): this window's own IPC, from a window that is NOT a remote window
      * (one driving another host), is the only local origin; the remote API's `features.act` passes none and is remote.

@@ -109,7 +109,7 @@ describe('family5 owner methods and real recorded bridge calls', () => {
         expect(owner, 'local-only facade on the same client').toBeDefined();
         expect(await row.call(owner)).toEqual(row.value);
         expect(f.calls).toEqual([{ method: row.method, args: row.args }]);
-        expect(f.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args);
+        expect(f.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args, expect.anything());
         expect(f.ports[row.port as keyof typeof f.ports]).toHaveBeenCalledWith(...row.portArgs);
     });
     it.each(['tailnet owner', 'relay owner', 'workspace guest', 'host guest', 'readonly relay', 'phone owner', 'phone relay guest'])('%s is refused before invocation and receives no local key/share payload', async kind => {

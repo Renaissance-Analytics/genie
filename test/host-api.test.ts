@@ -265,12 +265,14 @@ describe('events', () => {
             ['terminal-data', { id: 'term_1', data: 'hi' }],
             ['terminal-exit', { id: 'term_1', exitCode: 0 }],
             ['features', { knowledge: {} }],
+            // This machine's own windows hear that it changed, and re-read (P4 family 11).
+            ['local-features', { revision: 1 }],
             ['updates', { phase: 'none' }],
             ['local-updates', { phase: 'none' }],
         ]);
         off();
         for (const l of f.listeners.snapshot) l({ agents: [] } as never);
-        expect(got).toHaveLength(7);
+        expect(got).toHaveLength(8);
         expect(f.listeners.snapshot.size).toBe(0);
     });
 
