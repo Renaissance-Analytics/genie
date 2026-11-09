@@ -43,6 +43,8 @@ import { localArtboardArguments } from './local-artboard-api.js';
 import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
 import { isTynnWatchKind, type TynnWatchEvent, type TynnWatchKind, type TynnWatchPort } from '../core/local-tynn-watch.js';
 import type { FilesHubEvent } from './files-watch-hub.js';
+import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
+import { MarketplaceSession } from './marketplace-session.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -57,6 +59,7 @@ import type { FilesHubEvent } from './files-watch-hub.js';
  */
 
 export interface HostApi {
+    readonly marketplace?: () => MarketplaceApi | null;
     readonly filesWatch?: FilesWatchPort;
     /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
     readonly tynnWatch?: TynnWatchPort;
@@ -195,6 +198,7 @@ export class RemoteHost {
     /** Re-pair: the device the PIN on screen was issued to replace, if any. */
     #pinReplaces: string | null = null;
     readonly #connections = new Map<string, Connection>();
+    readonly #marketplaces = new WeakMap<Connection, MarketplaceSession>();
     #localTerminals: LocalTerminalServer | null = null;
     readonly #transport: ServerTransport;
     readonly #now: () => number;
@@ -253,6 +257,8 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        const marketplace = this.#marketplaces.get(connection);
+        if (marketplace) { this.#marketplaces.delete(connection); void marketplace.close().catch(() => console.warn('[genie] Marketplace review cleanup failed')); }
         this.#localTerminals?.dropOwner(connection.id);
         connection.filesViews?.dispose();
         connection.content?.dispose();
@@ -762,6 +768,13 @@ export class RemoteHost {
             if (scoped) return refuse(scoped);
         }
 
+        if (isMarketplaceMethod(method)) {
+            if (!connection.local || !this.#connections.has(connection.id)) return refuse('The Marketplace local window connection is closed.');
+            let session = this.#marketplaces.get(connection);
+            if (!session) { session = new MarketplaceSession(() => this.#api.marketplace?.() ?? null); this.#marketplaces.set(connection, session); }
+            try { return ok(await session.call(method.slice('marketplace.'.length), args)); }
+            catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
         // Staged bytes are taken only now, after every gate passed (genie#1346): never a path, never bytes inline.
         if (isLocalTerminalMethod(method)) {
             if (!connection.local || !this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');

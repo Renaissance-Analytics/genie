@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { renameOverSync } from '../core/atomic-rename.js';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 /**
  * THE PTYS A HOST RUNS, ON DISK — so a pty never outlives its owner (batch L4, bug B; measured on omarchy-test, VM job 76).
@@ -47,7 +48,7 @@ export function readPtyLedger(file: string): PtyLedger | null {
 export function writePtyLedger(file: string, ledger: PtyLedger): void {
     const tmp = `${file}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify(ledger), { mode: 0o600 });
-    renameSync(tmp, file);
+    renameOverSync(tmp, file);
 }
 
 export interface ReapPorts {

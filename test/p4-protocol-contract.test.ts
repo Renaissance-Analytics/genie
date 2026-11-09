@@ -12,6 +12,7 @@ import { protocolContractDeps } from './support/protocol-contract-deps.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 import { LocalStagingArea } from '../src/main/local-staging-area.js';
 import type { LocalUploads } from '../src/main/local-uploads.js';
+import { MARKETPLACE_METHODS } from '../src/core/marketplace.js';
 
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
@@ -20,6 +21,13 @@ const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
     'features.setBrowserBounds': "features.setBrowserBounds places a view on the host's own window; nothing to do remotely",
 };
 const hostOnlyMethods = REMOTE_METHODS.filter((method) => capabilityOf(method) === 'host-only');
+/** Connection-owned reviews cannot go through bare HostApi.invoke. This fixture has no Marketplace service. */
+const MARKETPLACE_CONNECTION_REFUSALS: Partial<Record<RemoteMethod, string>> = {
+    'marketplace.search': 'Marketplace is not available on this host.',
+    'marketplace.prepare': 'Marketplace is not available on this host.',
+    'marketplace.install': 'This Marketplace review does not belong to this window.',
+    'marketplace.discard': 'This Marketplace review does not belong to this window.',
+};
 /** Explicit rows: adding a protocol method without its contract must fail, rather than silently testing nothing. */
 const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     // Positive native and connection-control contracts live in the 8B suites. This fixture checks missing-service refusals.
@@ -81,6 +89,8 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'chatDrafts.putFile': [Uint8Array.of(111, 107)], 'chatDrafts.readFile': ['00000000-0000-4000-8000-000000000001'],
     'chatDrafts.release': [['00000000-0000-4000-8000-000000000001']],
     'artboard.read': ['work'], 'artboard.review': ['work', 'p1', 'approved', 'review comment'],
+    'marketplace.search': [''], 'marketplace.prepare': ['org.example.plugin', '1.0.0'],
+    'marketplace.install': ['unknown-review', true], 'marketplace.discard': ['unknown-review'],
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };
@@ -174,6 +184,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
     it('has an explicit row for exactly every method in the protocol table', () => {
         expect(Object.keys(ROWS).sort()).toEqual([...REMOTE_METHODS].sort());
         expect(Object.keys(HOST_ONLY_BACKSTOPS).sort()).toEqual([...hostOnlyMethods].sort());
+        expect(Object.keys(MARKETPLACE_CONNECTION_REFUSALS).sort()).toEqual([...MARKETPLACE_METHODS].sort());
     });
 
     it.each(REMOTE_METHODS)('%s keeps the direct value, null, or refusal across the wire', async (method) => {
@@ -181,6 +192,13 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
         expect(row, `missing contract row for ${method}`).toBeDefined();
         const args = row!.map((arg) => arg === ROOT ? dir : arg);
         const wireArgs = [...args];
+        const connectionRefusal = MARKETPLACE_CONNECTION_REFUSALS[method];
+        if (connectionRefusal) {
+            expect(await directResult(() => api.invoke(method, args))).toEqual({ ok: false, reason: 'Marketplace actions require their authenticated local window connection.' });
+            expect(await rpc(method, wireArgs)).toEqual({ ok: false, reason: connectionRefusal });
+            expect(wireInvocations).not.toContain(method);
+            return;
+        }
         if (capabilityOf(method) === 'host-only') {
             const result = await rpc(method, wireArgs);
             expect(result.ok).toBe(false);

@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -133,6 +133,12 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     });
     return {
         terminals,
+        marketplace: {
+            search: (query, cursor) => read(b => b.marketplace!.search(query, cursor)),
+            prepare: (id, version) => read(b => b.marketplace!.prepare(id, version)),
+            install: (token, consent) => read(b => b.marketplace!.install(token, consent)),
+            discard: token => read(b => b.marketplace!.discard(token)),
+        },
         // P4 family 11 (Tynn #560): the feature snapshot, its push and a sound's data.
         features: {
             snapshot: () => read((b) => b.features.snapshot()),
