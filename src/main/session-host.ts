@@ -113,6 +113,7 @@ import {
     type StopVerdict,
     type TurnOutcomeLike,
 } from '../core/session.js';
+import type { NativeStopVerdict } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
@@ -264,6 +265,7 @@ export function driverEvents(events: DriverEvents): {
     onProtocolError: (problem: string, detail?: { readonly recoverable: boolean }) => void;
     onStderr: (line: string) => void;
     onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+    onStopVerdict: (verdict: NativeStopVerdict) => void;
     onSteerUpdate: (update: SteerRecordLike) => void;
 } {
     return {
@@ -280,6 +282,7 @@ export function driverEvents(events: DriverEvents): {
         onProtocolError: (problem, detail) => events.onProtocolError?.(problem, detail),
         onStderr: (line) => events.onStderr?.(line),
         onExit: (code, signal) => events.onExit?.(code, signal),
+        onStopVerdict: (verdict) => events.onStopVerdict?.(verdict),
         // prism-acp 0.38.0: a Codex steer's record (Tynn #440) — how mail steered mid-turn becomes Delivered.
         onSteerUpdate: (update) => events.onSteerUpdate?.(update),
     };
