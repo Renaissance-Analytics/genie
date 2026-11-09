@@ -157,6 +157,8 @@ export const ENGINE_METHODS = [
     'engine.deviceLink',
     // Remote access's host side (Tynn #409, P5d.1): its status, the PIN, devices, lock, pair answers, and the relay bridge.
     'engine.remoteAccess',
+    // The Tynn relay host (Tynn #410, P5d.3): the registration, the role and the link, as a window reads them.
+    'engine.relayHost',
     // A workspace's agent config: the host writes it, under the lock its agent preparation holds.
     'engine.configSync',
     // The keyring card, as the host found it: `[method, args]`.
