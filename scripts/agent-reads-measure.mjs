@@ -20,7 +20,7 @@ import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { WIN, attach, check, cleanQuit, failures, finish, hostPid, launch, makeHome, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
+import { WIN, attach, check, cleanQuit, failures, finish, hostPid, launch, makeHome, readOr, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
 
 refuseOffTestMachines('agent-reads-measure');
 
@@ -69,6 +69,11 @@ const windowCpu = (inspector) => inspector.evaluate(`(() => {
 const cleanups = [];
 const done = finish('AGENT READS MEASURE', h, cleanups);
 let session = null;
+/** Written whatever happens: a row that fails still leaves everything measured up to it, and every first read. */
+const result = { mode: MODE, platform: process.platform, finished: false };
+const writeResult = () => writeFileSync(OUT, `${JSON.stringify(result, null, 2)}\n`);
+/** How the agents started and ended, from the host's own lifecycle log: what a start that never came needs read. */
+const agentLifecycle = () => readOr(h.lifecycle).split(/\r?\n/).filter((l) => /kind=agent|agent .*(start|refus|fail)|host stall|stall main/.test(l)).slice(-80);
 
 /** Add an agent, start it, give it its turn; `rows` long before it streams at `rate`. */
 async function agentThat(cdp, workspaceId, name, rows, rate) {
@@ -113,16 +118,19 @@ async function main() {
     let workspaceId = null, last = null;
     while (Date.now() - started < 30_000 && typeof workspaceId !== 'string') {
         try {
-            last = await cdp.evaluate(`window.genieTest.snapshot().then((s) => ({ workspaces: s?.workspaces === null ? null : s?.workspaces === undefined ? 'undefined' : s.workspaces.map((w) => w.id), agents: s?.agents?.length ?? null, keys: Object.keys(s ?? {}).length, isNull: s === null, kind: typeof s }))`, 15_000);
+            last = await cdp.evaluate(`Promise.all([window.genieTest.snapshot(), window.genie.snapshot ? window.genie.snapshot().catch((e) => ({ threw: String(e) })) : null]).then(([s, ipc]) => ({ workspaces: s?.workspaces === null ? null : s?.workspaces === undefined ? 'undefined' : s.workspaces.map((w) => w.id), agents: s?.agents?.length ?? null, keys: Object.keys(s ?? {}).length, isNull: s === null, kind: typeof s, windowKeys: Object.keys(s ?? {}), ipcWorkspaces: ipc?.workspaces === null ? null : Array.isArray(ipc?.workspaces) ? ipc.workspaces.map((w) => w.id) : ipc, shown: document.querySelector('[data-surface]')?.getAttribute('data-surface') ?? null, text: (document.body.innerText ?? '').slice(0, 160) }))`, 15_000);
+            last.onDisk = readOr(join(h.genie, 'runtime', 'workspaces.json')).slice(0, 200);
         } catch (error) { last = { threw: error instanceof Error ? error.message : String(error) }; }
         firstReads.push({ afterMs: Date.now() - started, read: last });
         workspaceId = Array.isArray(last?.workspaces) ? last.workspaces[0] ?? null : null;
         if (typeof workspaceId !== 'string') await sleep(100);
     }
     console.log(`  first snapshot reads (${firstReads.length}): ${JSON.stringify(firstReads.slice(0, 40))}`);
+    result.firstReads = firstReads;
     if (typeof workspaceId !== 'string') throw new Error(`no workspace in this home after 30 s; the last read answered ${JSON.stringify(last)}`);
     check(firstReads.length === 1, 'the first snapshot read already had the workspace', `${firstReads.length} read(s), ${firstReads.at(-1).afterMs} ms`);
-    const result = { mode: MODE, platform: process.platform, firstReads };
+    result.firstReads = firstReads;
+    if (process.env.AGENT_READS_PROBE_ONLY === '1') { writeResult(); return; }
 
     step('B', 'proving the gauge on a deliberate 120 ms block');
     const blockedGapMs = await cdp.evaluate(`new Promise((resolve) => { window.__gauge.reset(); setTimeout(() => { const end = performance.now() + 120; while (performance.now() < end); setTimeout(() => resolve(window.__gauge.max()), 30); }, 50); })`, 10_000);
@@ -180,9 +188,17 @@ async function main() {
     check(m6.pushesPerSec > 0, 'M6 saw snapshot pushes at all', String(m6.pushesPerSec));
     for (const id of busy) await cdp.evaluate(`window.genieTest.stopAgent(${JSON.stringify(id)}); true`, 10_000);
 
-    writeFileSync(OUT, `${JSON.stringify(result, null, 2)}\n`);
+    result.finished = true;
+    writeResult();
     console.log(`\nwrote ${OUT}\n${JSON.stringify({ ...result, m4_5000: { ...result.m4_5000, runs: undefined }, m4_20000: { ...result.m4_20000, runs: undefined } }, null, 2)}`);
     await cleanQuit(inspector).catch(() => {});
 }
 
-main().then(() => done(failures.length === 0 ? 0 : 1), (error) => { check(false, 'the run finished', error instanceof Error ? error.message : String(error)); return done(1); });
+const ending = (code) => {
+    result.failures = [...failures];
+    result.agentLifecycle = agentLifecycle();
+    writeResult();
+    console.log(`  wrote ${OUT}; agent lifecycle (${result.agentLifecycle.length} lines):\n    ${result.agentLifecycle.map((l) => l.slice(0, 220)).join('\n    ')}`);
+    return done(code);
+};
+main().then(() => ending(failures.length === 0 ? 0 : 1), (error) => { check(false, 'the run finished', error instanceof Error ? error.message : String(error)); return ending(1); });
