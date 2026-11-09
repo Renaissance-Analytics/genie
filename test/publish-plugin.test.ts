@@ -61,9 +61,7 @@ describe('C5 signed publisher upload', () => {
         });
         servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
         const origin = `https://localhost:${(server.address() as AddressInfo).port}`;
-        // The underlying HTTPS request already accepts binary bytes; its widened
-        // production type is checked by the CLI implementation, not bypassed there.
-        const transport: Upload = (url, init) => hostHttpsFetch({ machineRoots: () => [ca.certPem], env: {}, maxResponseBytes: 65536 })(url, init as unknown as Parameters<ReturnType<typeof hostHttpsFetch>>[1]);
+        const transport: Upload = (url, init) => hostHttpsFetch({ machineRoots: () => [ca.certPem], env: {}, maxResponseBytes: 65536 })(url, init);
         const result = await publishPlugin({ ...options(), origin, fetch: transport });
         expect(result).toMatchObject({ id: identity.id, version: identity.version, keyId, created: true });
         expect(request?.path).toBe('/api/v1/marketplace/publish'); expect(request?.authorization).toBe(`Bearer ${token}`); expect(request?.cookie).toBeUndefined();

@@ -24,7 +24,8 @@
     "verify:zip64": "vitest run -c vitest.zip64.config.mts",
     "verify:mailpit": "vitest run -c vitest.mailpit.config.mts",
     "verify:app-inbox": "tsx test/live/app-inbox.live.ts",
-    "docs:sdk": "tsx scripts/gen-sdk-docs.ts"
+    "docs:sdk": "tsx scripts/gen-sdk-docs.ts",
+    "publish:plugin": "tsx scripts/publish-plugin.ts"
   },
   "dependencies": {
     "@napi-rs/keyring": "2.1.2",

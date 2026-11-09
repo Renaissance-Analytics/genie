@@ -58,8 +58,7 @@ async function verifyProof(): Promise<void> {
     const http = hostHttpsFetch({ maxResponseBytes: 1024 * 1024, streamResponse: true });
     const boundary = `genie-c5-control-${randomBytes(16).toString('hex')}`, zip = await signedControl(privatePem);
     const body = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="archive"; filename="plugin.zip"\r\nContent-Type: application/zip\r\n\r\n`), zip, Buffer.from(`\r\n--${boundary}--\r\n`)]);
-    // Test-only binary cast: existing Node HTTPS already writes byte bodies; CLI typing is widened separately.
-    const control = await http(`${origin}/api/v1/marketplace/publish`, { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(body.length) }, body: body as unknown as string, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(20000) });
+    const control = await http(`${origin}/api/v1/marketplace/publish`, { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(body.length) }, body, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(20000) });
     const controlText = await control.text(); let controlData: { id?: string; version?: { version?: string } } | null = null;
     try { controlData = JSON.parse(controlText) as { id?: string; version?: { version?: string } } | null; } catch { /* Diagnostic is boolean/length only; never echo a response or credential. */ }
     console.log(`C5 control diagnostic: status=${control.status}, json=${control.headers.get('content-type')?.includes('application/json') === true}, bytes=${Buffer.byteLength(controlText)}, idMatch=${controlData?.id === fixture.id}, versionMatch=${controlData?.version?.version === '0.0.0'}.`);
