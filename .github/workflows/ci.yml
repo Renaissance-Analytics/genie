@@ -585,9 +585,9 @@ jobs:
       - name: the trust step in the real app
         run: timeout 300 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/trust-step-cdp.mjs
 
-      # TEMPORARY (Tynn #564): what the door's snapshot answers on a seeded home. Comes out with the fix.
-      - name: probe the door's first snapshot
-        run: AGENT_READS_PROBE_ONLY=1 timeout 120 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/agent-reads-measure.mjs --mode=door --out=/tmp/door-probe.json || true
+      # A SEEDED HOME OVER THE DOOR (Tynn #564): the first snapshot read already has its workspace.
+      - name: the door's first snapshot on a seeded home
+        run: AGENT_READS_PROBE_ONLY=1 timeout 120 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/agent-reads-measure.mjs --mode=door --out=/tmp/door-probe.json
 
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397): main creates no processes on its own thread; the child it
       # forks at boot does. A child that could not start falls back to in-process silently for the person, so it is

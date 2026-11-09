@@ -20,7 +20,7 @@ import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { WIN, attach, check, cleanQuit, failures, finish, hostPid, launch, makeHome, readOr, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
+import { WIN, alive, attach, check, cleanQuit, failures, finish, gone, hostPid, killHard, launch, makeHome, readOr, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
 
 refuseOffTestMachines('agent-reads-measure');
 
@@ -29,8 +29,9 @@ const MODE = arg('mode', 'door');
 const OUT = arg('out', `agent-reads-${MODE}.json`);
 if (!['ipc', 'door', 'door-revision'].includes(MODE)) { console.error(`unknown --mode=${MODE}`); process.exit(2); }
 
-const PORT = Number(process.env.AGENT_READS_CDP_PORT ?? 9366);
-const INSPECT = Number(process.env.AGENT_READS_INSPECT ?? 9367);
+// Its own ports per run: a window left by an earlier run on the same port answers for this one, with its home already deleted.
+const PORT = Number(process.env.AGENT_READS_CDP_PORT ?? 9400 + (process.pid % 200) * 2);
+const INSPECT = Number(process.env.AGENT_READS_INSPECT ?? PORT + 1);
 const MARKER = join(tmpdir(), 'genie-stub-codex-measure');
 /** What the stub's next turn does (scripts/stub-codex.mjs, MEASURE mode). */
 const script = (rows, rate) => writeFileSync(MARKER, JSON.stringify({ owner: process.pid, rows, rate }));
@@ -107,10 +108,18 @@ const openOnce = (cdp, id, rows) => cdp.evaluate(`new Promise((resolve, reject) 
 
 async function main() {
     step('A', `launching, mode ${MODE}`);
+    const taken = await fetch(`http://127.0.0.1:${PORT}/json/version`).then(() => true, () => false);
+    if (taken) throw new Error(`something already answers on the debugging port ${PORT}: it would be measured instead of this run`);
     const app = launch(h, { port: PORT, inspect: INSPECT, label: MODE });
-    cleanups.push(() => { try { process.kill(app.child.pid); } catch { /* gone */ } });
+    // Nothing of this run outlives it: the next mode's numbers must be its own.
+    cleanups.push(async () => {
+        for (const pid of [hostPid(h), app.child.pid]) if (typeof pid === 'number' && alive(pid)) { killHard(pid); await gone(pid, 10_000); }
+    });
     session = await attach({ port: PORT, inspect: INSPECT, label: MODE });
     const { cdp, inspector } = session;
+    result.windowPid = session.windowPid;
+    result.launchedPid = app.child.pid;
+    check(session.windowPid === app.child.pid, 'the window being measured is the one this run launched', `window ${session.windowPid}, launched ${app.child.pid}`);
     await cdp.evaluate(GAUGE, 5_000);
     // What the first reads really answered, kept in the result: a snapshot that is empty at first is a finding, not a wait.
     const firstReads = [];
