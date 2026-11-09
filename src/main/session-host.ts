@@ -82,7 +82,12 @@ export interface SessionLifecycle {
     straggler(agentId: AgentId, run: number): void;
     /** The machine could not be read after this run's spawn: its pids are recorded with no start time. */
     readingFailed?(agentId: AgentId, run: number, pids: readonly number[]): void;
+    /** How far a start has come (Tynn #558). */
+    phase?(agentId: AgentId, run: number, phase: AgentStartPhase): void;
 }
+
+/** A start's progress: its connections, the provider's handshake, then up, failed, or still not up when reported. */
+export type AgentStartPhase = 'preparing' | 'handshake' | 'ready' | 'failed' | 'slow';
 
 /** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
 export const HISTORY_LIMIT = 3000;
