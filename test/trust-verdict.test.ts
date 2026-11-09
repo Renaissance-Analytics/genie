@@ -577,12 +577,13 @@ describe('the verdict is announced when it moves', () => {
 describe('the app is wired to it (reads the source: no window is opened here)', () => {
     const source = (name: string) => readFileSync(new URL(`../src/main/${name}`, import.meta.url), 'utf8');
 
-    it('main hands the session host the live read, and turns every change of the host or the verdict into a check', () => {
-        const main = source('main.ts');
-        expect(main).toMatch(/untrustedNow:/);
-        expect(main).toMatch(/new TrustVerdicts\(/);
-        expect(main).toMatch(/\.subscribe\(\(id\) => trustVerdicts/);
-        expect(main).toMatch(/onTrustVerdict:/);
+    it('genie-host hands its session host the live read, and turns every change of the host or the verdict into a check', () => {
+        const host = source('genie-host.ts');
+        expect(host).toMatch(/untrustedNow:/);
+        expect(host).toMatch(/new TrustVerdicts\(/);
+        expect(host).toMatch(/\.subscribe\(\(id\) => hostVerdicts/);
+        expect(host).toMatch(/onTrustVerdict:/);
+        expect(source('main.ts')).not.toMatch(/new TrustVerdicts\(/);
     });
 
     it('compose gives the same verdict to the sync read, and announces through what main passed', () => {

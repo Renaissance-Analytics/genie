@@ -95,9 +95,9 @@ describe('wired', () => {
         expect(host).toMatch(/startBeat\(\{ started: \(\) => host\.startedIds\(\), onChange: \(l\) => host\.subscribe\(\(\) => l\(\)\), beat: \(ids\) => \{ safeMode\.beat\(ids\); \} \}\)/);
         expect(host).not.toMatch(/setInterval\(\(\) => \{ safeMode\.beat\(/);
     });
-    it('the no-host window beats its own sessions through startBeat', () => {
+    it('the window beats nothing of its own: the host does (Tynn #415)', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main).toMatch(/startBeat\(\{ started: \(\) => \(registry\?\.listAgents\(\) \?\? \[\]\)\.filter\(\(a\) => host\?\.probe\(a\.id\)\?\.running === true\)\.map\(\(a\) => a\.id\), onChange: \(l\) => \(host instanceof SessionHost \? host\.subscribe\(\(\) => l\(\)\) : \(\) => \{\}\), beat: \(ids\) => \{ windowSafe\?\.beat\(ids\); \} \}\)/);
+        expect(main).not.toMatch(/startBeat\(/);
         expect(main).not.toMatch(/setInterval\(\(\) => \{ windowSafe\?\.beat\(/);
     });
 });
