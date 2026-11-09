@@ -304,7 +304,7 @@ describe('door connection ownership and cleanup', () => {
         contents.emit('did-navigate');
         await settled();
         expect(closeReasons).toEqual(['the local window reloaded or navigated']);
-        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/localProtocolDoor\(ipcMain, \{ onClosed: \(reason\) => rendererErrorLog\?\.\(/);
+        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/localProtocolDoor\(ipcMain, \{[^\n]*onClosed: \(reason\) => rendererErrorLog\?\.\(/);
     });
 
     it('closing one window keeps the other window and its subscriptions alive', async () => {
