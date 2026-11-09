@@ -264,10 +264,9 @@ describe('all fifteen agent settings calls use the one protocol', () => {
     // The retired mutations all touched the registry on completion, including refusal/throw.
     // Check the composition root retains that hook on the existing protocol adapters.
     it.each(['restart', 'delete', 'switchDriver', 'setBudget', 'setMode', 'setAccessScope', 'setAutoApprove', 'setManageTabs', 'setDrivePages', 'setIssueWatch', 'setPermissions', 'setModel'])('%s retains the native completion refresh in the shared adapter', (method) => {
-        const main = readFileSync('src/main/main.ts', 'utf8');
-        const adapters = main.slice(main.indexOf('            agentOps: {'), main.indexOf('            features: {', main.indexOf('            agentOps: {')));
-        const line = adapters.split('\n').find((line) => line.trimStart().startsWith(`${method}:`));
+        expect(readFileSync('src/main/main.ts', 'utf8')).toContain('agentOps: agentOpsApi(agentOps, () => registry?.touch(), () => host)');
+        const line = readFileSync('src/main/agent-ops-api.ts', 'utf8').split('\n').find((line) => line.trimStart().startsWith(`${method}:`));
         expect(line !== undefined).toBe(true);
-        expect(line?.includes('.finally(() => registry?.touch())')).toBe(true);
+        expect(line?.includes('.finally(touch)')).toBe(true);
     });
 });

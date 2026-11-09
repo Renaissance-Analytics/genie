@@ -77,8 +77,8 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         deliverToAgent: async () => true,
         files: {
             children: async () => null,
-            open: async (_w, path) => ({ ok: false as const, path, error: 'n/a' }),
-            readBytes: async (_w, path) => ({ ok: false as const, path, error: 'n/a' }),
+            open: async (_w: string, path: string) => ({ ok: false as const, path, error: 'n/a' }),
+            readBytes: async (_w: string, path: string) => ({ ok: false as const, path, error: 'n/a' }),
             upload: async () => ({ ok: false as const, reason: 'n/a' }),
         },
         models: { get: async (provider: string, options?: { refresh?: boolean }) => { calls.push(`models ${provider} ${options?.refresh === true}`); return { models: [{ id: 'opus' }] }; } },
@@ -148,10 +148,12 @@ describe('every agents.* call is answered with no window', () => {
 describe('they do what the window\'s do', () => {
     it('a setting is written to the registry\'s files', async () => {
         const api = gate(hostAloneApi(ports(engine())));
-        expect(await api.invoke('agents.setMode', [atlas.id, 'manual'])).toMatchObject({ ok: true, record: { mode: 'manual' } });
+        // A new agent is manual: the write has to change something for this to prove anything.
+        expect(registry.find(atlas.id)?.mode).toBe('manual');
+        expect(await api.invoke('agents.setMode', [atlas.id, 'automated'])).toMatchObject({ ok: true, record: { mode: 'automated' } });
         const fresh = new Registry(new Store(dir));
         await fresh.load({ name: 'alphar', healthy: true });
-        expect(fresh.find(atlas.id)?.mode).toBe('manual');
+        expect(fresh.find(atlas.id)?.mode).toBe('automated');
     });
 
     it('a setting that was changed tells the Pilot: the snapshot follows at once', async () => {
@@ -233,9 +235,9 @@ describe('the gate', () => {
         const alone = hostAloneApi(ports(engine()));
         const invoke = vi.spyOn(alone, 'invoke');
         const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        expect(await api.invoke('agents.setMode', [atlas.id, 'manual'])).toBe('window answered agents.setMode');
+        expect(await api.invoke('agents.setMode', [atlas.id, 'automated'])).toBe('window answered agents.setMode');
         expect(invoke).not.toHaveBeenCalled();
-        expect(registry.find(atlas.id)?.mode).not.toBe('manual');
+        expect(registry.find(atlas.id)?.mode).toBe('manual');
     });
 
     it('the caller\'s context travels with the call', async () => {
