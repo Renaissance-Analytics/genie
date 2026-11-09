@@ -420,6 +420,8 @@ export interface AgentSessionOptions {
      * (hosting plan 1.2). What the host writes into its spawn ledger, so a crash cannot orphan them unrecorded.
      */
     onSpawned?: (processes: readonly ProcessInfo[]) => void;
+    /** The driver's declared `ready` settled: `true` up, `false` failed (Tynn #558). Never called for a driver with no `ready`. */
+    onStartSettled?: (ok: boolean) => void;
     /** The machine could not be read after a spawn, twice: these pids are recorded with no start time. */
     onReadingFailed?: (pids: readonly number[]) => void;
     /** Output arrived from this run after it was stopped (hosting plan 1.4). Said once per run. */
@@ -1699,7 +1701,7 @@ export class AgentSession {
             // A prompt queued while it started opens its turn in the flush. That needs no announcement of its own: the
             // rows it writes (its turn marker, its `prompt_delivery`) are each pushed, the last already reading `working`
             // — a second push for the same moment only costs the window (genie#1418, batch B).
-            ready.then(() => { done(); this.#flushAfterTurn(); }, done);
+            ready.then(() => { done(); this.#options.onStartSettled?.(true); this.#flushAfterTurn(); }, () => { done(); this.#options.onStartSettled?.(false); });
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
         // turns it already had.

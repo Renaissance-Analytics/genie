@@ -1075,6 +1075,7 @@ async function main(): Promise<void> {
                 spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
                 lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
             },
+            phase: (agentId, run, phase) => { lifecycleLog(`agent start owner=${agentId} run=${run} phase=${phase}`); },
             ended: (agentId, run, verdict) => {
                 if (verdict.verified) {
                     spawnLedger.forget('agent', agentId, run);
