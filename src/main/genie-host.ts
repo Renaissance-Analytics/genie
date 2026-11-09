@@ -62,6 +62,7 @@ import { FlowStore } from './flow-store.js';
 import { FlowsReplica, FlowsService } from './flows-host.js';
 import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
+import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
@@ -480,6 +481,7 @@ async function main(): Promise<void> {
      */
     const flowsService = new FlowsService();
     const flowCallers = new FlowCallers((id) => hostRegistry.workspace(id)?.path ?? null);
+    const gappCallers = new GAppCallers((id) => hostRegistry.workspace(id)?.path ?? null);
     // The flows as the host's own `flows` tool reads and drives them: the service's list, its actions in place.
     const hostFlows = new FlowsReplica((method, args) => flowsService.call(method, args));
     flowsService.onEvent((event) => hostFlows.apply(event));
@@ -773,7 +775,13 @@ async function main(): Promise<void> {
         gappBook.onChange(() => catalogService.rebuild());
         catalogService.rebuild();
         // GApps v2 V4: installed apps at their own origins, behind the front door.
-        gappServer = new GAppServer({ book: gappBook });
+        const gappBridge = new GAppBridge({
+            book: gappBook,
+            catalog: (id) => catalogService.snapshot().definitions.find((d) => d.id === id) ?? null,
+            run: createGAppToolRunner({ registrations: () => mcp?.registrations() ?? [], callers: gappCallers }),
+            onCatalogChange: (listener) => catalogService.onEvent((change) => listener(change.revision)),
+        });
+        gappServer = new GAppServer({ book: gappBook, bridge: gappBridge });
         await gappServer.listen(0);
         gappBook.onChange(() => { for (const listener of gappRouteListeners) listener(); });
         for (const listener of gappRouteListeners) listener();
@@ -1344,7 +1352,7 @@ async function main(): Promise<void> {
                 updateEngine: (id: string, options: { consent: boolean; approvedDependents?: readonly string[] }) => hostingStack.updateEngine(id, options),
             },
         } : {}),
-        flowCallers,
+        flowCallers: { callerFor: (key) => flowCallers.callerFor(key) ?? gappCallers.callerFor(key) },
         // The plugins' tools, run here (ADF A3): an official one in process, anyone else's in its sandboxed child. The Genie
         // API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
         plugins: hostPluginTools(pluginsService, {

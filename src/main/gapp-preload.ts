@@ -10,10 +10,14 @@ import { contextBridge } from 'electron';
  */
 const CALLS: readonly string[] = ['app.me', 'app.call', 'app.storage.get', 'app.storage.set', 'app.storage.delete', 'app.storage.list'];
 const EVENTS: readonly string[] = ['app.grantChanged', 'app.catalogChanged'];
+/** The host's APP_CHANNEL_MAX_BYTES (core/gapp-origin.ts). Past it the host would close the channel; here it is refused in words. */
+const MAX_BYTES = 67108864;
 
 const argument = (name: string): string => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? '';
 
 interface Pending { resolve(value: unknown): void; reject(error: Error): void }
+/** An Error crossing to the page keeps only its message, so what kind of refusal it was is said there. */
+const refusal = (error: string, notGranted?: string): Error => new Error(notGranted === undefined ? error : `NotGrantedError(${notGranted}): ${error}`);
 
 const socket = new WebSocket(argument('genie-app-channel'));
 const token = argument('genie-app-token');
@@ -34,7 +38,7 @@ function fail(reason: string): void {
 socket.addEventListener('open', () => { socket.send(JSON.stringify({ hello: token })); });
 socket.addEventListener('close', () => { fail('the app channel to Genie closed'); });
 socket.addEventListener('message', (event: MessageEvent) => {
-    let message: { ok?: boolean; reason?: string; id?: number; result?: unknown; error?: string; event?: string; data?: unknown };
+    let message: { ok?: boolean; reason?: string; id?: number; result?: unknown; error?: string; notGranted?: string; event?: string; data?: unknown };
     try { message = JSON.parse(String(event.data)) as typeof message; } catch { return; }
     if (typeof message.event === 'string') {
         for (const listener of listeners.get(message.event) ?? []) listener(message.data);
@@ -43,7 +47,7 @@ socket.addEventListener('message', (event: MessageEvent) => {
     if (typeof message.id === 'number') {
         const waiter = pending.get(message.id);
         pending.delete(message.id);
-        if (message.error !== undefined) waiter?.reject(new Error(message.error));
+        if (message.error !== undefined) waiter?.reject(refusal(message.error, message.notGranted));
         else waiter?.resolve(message.result);
         return;
     }
@@ -63,6 +67,7 @@ contextBridge.exposeInMainWorld('genieApp', {
             const id = nextId++;
             pending.set(id, { resolve, reject });
             const line = JSON.stringify({ id, method, params });
+            if (new TextEncoder().encode(line).length > MAX_BYTES) { pending.delete(id); reject(new Error(`this call is too large for the app channel: ${MAX_BYTES / (1024 * 1024)} MB at most`)); return; }
             if (ready) socket.send(line);
             else queued.push(line);
         });
