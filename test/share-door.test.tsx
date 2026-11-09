@@ -68,7 +68,7 @@ describe('the host being shared decides', () => {
         const call = await device();
         expect(await call('baton.take', [{}])).toMatchObject({ ok: true });
         expect(await call('tynnNetwork.shares.mint', MINT)).toMatchObject({ ok: true });
-        expect(invoke).toHaveBeenCalledExactlyOnceWith('tynnNetwork.shares.mint', MINT);
+        expect(invoke).toHaveBeenCalledExactlyOnceWith('tynnNetwork.shares.mint', MINT, expect.anything());
     });
 
     it('without the baton it is told to take it, and nothing is made', async () => {
@@ -107,7 +107,7 @@ describe('the host being shared decides', () => {
         expect(await client.ready).toEqual({ ok: true });
         const shares = (client as unknown as { shares: { list(id: string | null): Promise<unknown>; mint(i: object): Promise<unknown>; revoke(id: string): Promise<unknown> } }).shares;
         expect(await shares.list(null)).toEqual({ ok: true, links: [] });
-        expect(invoke).toHaveBeenCalledExactlyOnceWith('tynnNetwork.shares.list', [null]);
+        expect(invoke).toHaveBeenCalledExactlyOnceWith('tynnNetwork.shares.list', [null], expect.anything());
         expect(await shares.mint({ workspaceId: null, capability: 'control', expiresInDays: 7 })).toMatchObject({ ok: false, reason: expect.stringContaining('baton') });
         client.close();
     });
