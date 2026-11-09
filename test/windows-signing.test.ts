@@ -2,7 +2,7 @@ import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
@@ -10,6 +10,58 @@ const read = (file: string) => existsSync(file) ? readFileSync(file, 'utf8').rep
 const yaml = (file: string) => require('js-yaml').load(read(file)) ?? {};
 const azureFixture = () => ({ publisherName: 'Renaissance Analytics', endpoint: 'https://eus.codesigning.azure.net',
     certificateProfileName: 'genie-public', codeSigningAccountName: 'renaissance-analytics' });
+
+type UploadRun = Pick<SpawnSyncReturns<string>, 'status' | 'signal' | 'stdout' | 'stderr'>;
+
+/** What one spawn of the upload script must have done, for a release in this state. */
+function expectUploadRun(state: string, run: UploadRun): void {
+    const status = run.status === null ? 'null' : `${run.status} (0x${(run.status >>> 0).toString(16)})`;
+    const seen = `release state ${state}: status ${status}, signal ${run.signal}, stdout ${JSON.stringify(run.stdout)}, stderr ${JSON.stringify(run.stderr)}`;
+    if (state === 'true') {
+        expect(run.status, seen).toBe(0);
+        expect(run.stdout, seen).toContain('UPLOAD_CALLED');
+    } else {
+        // The script's own refusal, not merely "not 0": a shell that crashed also exits non-zero.
+        expect(run.status, seen).toBe(1);
+        expect(run.stdout, seen).toContain('Windows upload requires an existing draft release');
+        expect(run.stdout, seen).not.toContain('UPLOAD_CALLED');
+    }
+}
+
+/**
+ * Git Bash has died under this test on the Windows runners with status 0x80000004 and nothing on stderr. Not forced in 3,150
+ * probe spawns, so no retry: a crash fails, and the failure says what happened.
+ */
+describe('the verdict on one spawn of the upload script', () => {
+    const REFUSAL = '::error::Windows upload requires an existing draft release\n';
+    const crash: UploadRun = { status: 0x80000004, signal: null, stdout: 'partial output', stderr: '' };
+    const killed: UploadRun = { status: null, signal: 'SIGKILL', stdout: 'partial output', stderr: '' };
+    const failureOf = (state: string, run: UploadRun): string => {
+        try { expectUploadRun(state, run); } catch (error) { return String((error as Error).message); }
+        return 'it did not fail';
+    };
+
+    it.each(['false', 'error'])('a crash is not a refusal: release state %s', (state) => {
+        expect(() => expectUploadRun(state, crash)).toThrow();
+        expect(() => expectUploadRun(state, killed)).toThrow();
+        expect(() => expectUploadRun(state, { status: 127, signal: null, stdout: '', stderr: 'gh: command not found' })).toThrow();
+    });
+
+    it.each(['true', 'false', 'error'])('the failure reports the status in hex, the signal and stdout: release state %s', (state) => {
+        const crashed = failureOf(state, crash);
+        expect(crashed).toContain('0x80000004');
+        expect(crashed).toContain('signal null');
+        expect(crashed).toContain('partial output');
+        const signalled = failureOf(state, killed);
+        expect(signalled).toContain('signal SIGKILL');
+        expect(signalled).toContain('partial output');
+    });
+
+    it('CONTROL: the two real outcomes still pass', () => {
+        expect(() => expectUploadRun('true', { status: 0, signal: null, stdout: 'uploading\nUPLOAD_CALLED\n', stderr: '' })).not.toThrow();
+        for (const state of ['false', 'error']) expect(() => expectUploadRun(state, { status: 1, signal: null, stdout: REFUSAL, stderr: '' })).not.toThrow();
+    });
+});
 
 describe('Windows release signing', () => {
     it('selects the public profile and the unmodified default credential chain, with SHA256 timestamps', () => {
@@ -116,13 +168,7 @@ describe('Windows release signing', () => {
         for (const state of ['true', 'false', 'error']) {
             const run = spawnSync('bash', ['-e', '-c', stub + script], { encoding: 'utf8', env: { ...process.env,
                 RELEASE_STATE: state, GITHUB_REF_NAME: 'v0.0.0', GITHUB_REPOSITORY: 'fixture/genie' } });
-            if (state === 'true') {
-                expect(run.status, run.stderr).toBe(0);
-                expect(run.stdout).toContain('UPLOAD_CALLED');
-            } else {
-                expect(run.status, `release state ${state} allowed upload: ${run.stdout}`).not.toBe(0);
-                expect(run.stdout).not.toContain('UPLOAD_CALLED');
-            }
+            expectUploadRun(state, run);
         }
     });
 

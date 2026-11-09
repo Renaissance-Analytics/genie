@@ -9,6 +9,8 @@ import { createHash, createPublicKey } from 'node:crypto';
 
 /** The format's name, in the signed bytes. */
 export const PACKAGE_FORMAT = 'genie-package/1';
+/** Every package's manifest, plugin or app, at the package root (GApps v2 decision 1). */
+export const PACKAGE_MANIFEST_FILE = 'genie-package.json';
 /** The detached signature, at the package root: the one file the digest leaves out. */
 export const PACKAGE_SIGNATURE_FILE = 'genie-plugin.sig';
 
@@ -129,7 +131,7 @@ export const PACKAGE_FORMAT_DOC: readonly string[] = [
     '',
     '## 7. The manifest',
     '',
-    '`genie-plugin.json`, at the package root, is one of the signed files. Its `id` and `version` name the package; `publisher.name` names the publisher; `publisher.keyId` holds the signing key\'s id (the registry\'s `key_id`).',
+    '`genie-package.json`, at the package root, is one of the signed files. Its `id` and `version` name the package; `publisher.name` names the publisher; `publisher.keyId` holds the signing key\'s id (the registry\'s `key_id`).',
     '',
     '## What Genie does',
     '',

@@ -21,7 +21,10 @@ import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
-import { SessionHost } from './session-host.js';
+import { providerBinary, realListModels, SessionHost } from './session-host.js';
+import { HostRegistryStore } from './agent-stores-replica.js';
+import { ProviderModelCache } from '../core/provider-models.js';
+import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -60,6 +63,7 @@ import { FlowStore } from './flow-store.js';
 import { FlowsReplica, FlowsService } from './flows-host.js';
 import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
+import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
@@ -159,6 +163,7 @@ import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
 import { setThreadStoreSlowLog } from '../core/thread-store.js';
 import { supervisorFailureWords } from '../core/supervisor-failure.js';
+import { setProviderChoiceFile } from './provider-choice.js';
 import { warmLockIdentity } from '@particle-academy/prism-harness';
 import { repoStatus } from './repo-git.js';
 
@@ -200,6 +205,7 @@ mkdirSync(runtime, { recursive: true });
 const lifecycleLog = openLifecycleLog(runtime, { async: true });
 // A thread-store step past STORE_SLOW_MS names itself here (Tynn #557): the next stall says which await it was.
 setThreadStoreSlowLog(lifecycleLog);
+setProviderChoiceFile(join(runtime, 'provider-programs.json'));
 const say = (line: string): void => {
     console.log(`[genie-host] ${new Date().toISOString()} ${line}`);
 };
@@ -479,6 +485,7 @@ async function main(): Promise<void> {
      */
     const flowsService = new FlowsService();
     const flowCallers = new FlowCallers((id) => hostRegistry.workspace(id)?.path ?? null);
+    const gappCallers = new GAppCallers((id) => hostRegistry.workspace(id)?.path ?? null);
     // The flows as the host's own `flows` tool reads and drives them: the service's list, its actions in place.
     const hostFlows = new FlowsReplica((method, args) => flowsService.call(method, args));
     flowsService.onEvent((event) => hostFlows.apply(event));
@@ -772,7 +779,13 @@ async function main(): Promise<void> {
         gappBook.onChange(() => catalogService.rebuild());
         catalogService.rebuild();
         // GApps v2 V4: installed apps at their own origins, behind the front door.
-        gappServer = new GAppServer({ book: gappBook });
+        const gappBridge = new GAppBridge({
+            book: gappBook,
+            catalog: (id) => catalogService.snapshot().definitions.find((d) => d.id === id) ?? null,
+            run: createGAppToolRunner({ registrations: () => mcp?.registrations() ?? [], callers: gappCallers }),
+            onCatalogChange: (listener) => catalogService.onEvent((change) => listener(change.revision)),
+        });
+        gappServer = new GAppServer({ book: gappBook, bridge: gappBridge });
         await gappServer.listen(0);
         gappBook.onChange(() => { for (const listener of gappRouteListeners) listener(); });
         for (const listener of gappRouteListeners) listener();
@@ -1009,6 +1022,8 @@ async function main(): Promise<void> {
     files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
+    // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
+    const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
     await lockIdentity;
     const host = new SessionHost({
         userData: home,
@@ -1025,6 +1040,7 @@ async function main(): Promise<void> {
         },
         untrustedNow: (record) => hostUntrustedNow(record),
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
+        onHeadroom: (provider, room) => { headroomFeed.offer(provider, room); engineHostOptions.onHeadroom(provider, room); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
             const hold = doctorHoldNow(home);
@@ -1089,7 +1105,8 @@ async function main(): Promise<void> {
      * over a registry on this host's own registry store, this session host, its attention, inbox and approval stores, and
      * the workspaces' files. The remote host uses it for the phone's methods only while no window is connected.
      */
-    const phoneRegistry = new Registry(registryStore);
+    // Its writes go the way a window's do (AgentStoresService), so genie-host's own model and every window follow them.
+    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));
@@ -1142,6 +1159,10 @@ async function main(): Promise<void> {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
+        windowConnected: () => engine.newestLocalWindow() !== null,
+        headroom: headroomFeed,
+        models: new ProviderModelCache(realListModels),
+        providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
         attention: own.attention,
         approvals,
         inbox: own.inbox,
@@ -1340,7 +1361,7 @@ async function main(): Promise<void> {
                 updateEngine: (id: string, options: { consent: boolean; approvedDependents?: readonly string[] }) => hostingStack.updateEngine(id, options),
             },
         } : {}),
-        flowCallers,
+        flowCallers: { callerFor: (key) => flowCallers.callerFor(key) ?? gappCallers.callerFor(key) },
         // The plugins' tools, run here (ADF A3): an official one in process, anyone else's in its sandboxed child. The Genie
         // API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
         plugins: hostPluginTools(pluginsService, {

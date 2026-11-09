@@ -21,6 +21,14 @@ import type { TimedEvent } from '../core/stream-view.js';
 
 export const COALESCE_MS = 250;
 
+/** One workspace's agents' feeds, by agent id: the lanes' first paint, wherever it is asked. Each change is pushed after. */
+export function activityOfWorkspace(feeds: Pick<ActivityFeeds, 'feedFor'> | null, agents: readonly { readonly id: string; readonly workspaceId: string }[], workspaceId: unknown): Record<string, ActivityFeed> {
+    const out: Record<string, ActivityFeed> = {};
+    if (typeof workspaceId !== 'string' || feeds === null) return out;
+    for (const agent of agents) if (agent.workspaceId === workspaceId) out[agent.id] = feeds.feedFor(agent.id);
+    return out;
+}
+
 export interface ActivityHostPort {
     subscribe(listener: (agentId: AgentId) => void): () => void;
     ledgerFor(agentId: AgentId): readonly TimedEvent[];

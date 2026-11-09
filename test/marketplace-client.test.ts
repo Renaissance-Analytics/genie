@@ -191,7 +191,7 @@ describe('C3 publisher-key REST client and host trust integration', () => {
         const folder = join(plugins, 'example');
         await mkdir(folder, { recursive: true });
         const bytes = JSON.stringify({ id: 'org.example.plugin', name: 'Example', version: '1.0.0', publisher: { name: 'Example', keyId: fingerprint }, capabilities: { genieApi: [], network: { hosts: [] } } });
-        await writeFile(join(folder, 'genie-plugin.json'), bytes);
+        await writeFile(join(folder, 'genie-package.json'), bytes);
         await signPackage(folder, pair.privateKey);
         const installed = await PluginHost.open({ dir: plugins, keys: client.publisherKeys(), publisherChecksOff: false });
         expect(installed.list()).toMatchObject([{ id: 'org.example.plugin', state: 'enabled' }]);
@@ -218,7 +218,7 @@ describe('C3 publisher-key REST client and host trust integration', () => {
         const pluginsDir = join(dir, 'plugins');
         const folder = join(pluginsDir, 'example');
         await mkdir(folder, { recursive: true });
-        await writeFile(join(folder, 'genie-plugin.json'), JSON.stringify({ id: 'org.example.plugin', name: 'Example', version: '1.0.0', publisher: { name: 'Example', keyId: fingerprint }, mcpTools: [{ name: 'hello', description: 'Hello', inputSchema: { type: 'object' }, run: 'tool.cjs', process: 'subprocess', gated: false }], capabilities: { genieApi: [], network: { hosts: [] } } }));
+        await writeFile(join(folder, 'genie-package.json'), JSON.stringify({ id: 'org.example.plugin', name: 'Example', version: '1.0.0', publisher: { name: 'Example', keyId: fingerprint }, mcpTools: [{ name: 'hello', description: 'Hello', inputSchema: { type: 'object' }, run: 'tool.cjs', process: 'subprocess', gated: false }], capabilities: { genieApi: [], network: { hosts: [] } } }));
         await writeFile(join(folder, 'tool.cjs'), 'module.exports = { hello: async () => "ok" };');
         await signPackage(folder, pair.privateKey);
         const options = { dir: pluginsDir, keys: {}, publisherChecksOff: () => publisherChecksOff, registry: client };

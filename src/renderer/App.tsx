@@ -1419,6 +1419,7 @@ function DesktopApp({ bridge }: AppProps) {
               model: detail?.agent.model ?? null,
               ...(modelChoices !== undefined ? { models: modelChoices } : {}),
               onRefreshModels: () => { refreshModels.current = true; setModelsAsked((n) => n + 1); },
+              ...(resolvedBridge.chooseProviderProgram ? { onChooseProviderProgram: (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) } : {}),
               onSetModel: (model) => { void resolvedBridge.agents.setModel(agentId, model).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', model ?? 'the provider default', r.apply ?? { when: 'next-start' }) : r.reason })); if (r.ok) setModelsAsked((n) => n + 1); }); },
               onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', permissions === 'edits' ? 'edits only' : permissions === 'ask' ? 'asks before shell commands' : 'all tools', r.apply ?? { when: 'next-start' }) : r.reason }))); },
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },

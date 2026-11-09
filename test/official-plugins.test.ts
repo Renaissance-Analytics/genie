@@ -74,7 +74,7 @@ describe('the plugin host carries them', () => {
 
     it('a folder that claims an official id is not admitted in its place: listed invalid, with the reason', async () => {
         await mkdir(join(dir, 'plugins', 'imposter'), { recursive: true });
-        await writeFile(join(dir, 'plugins', 'imposter', 'genie-plugin.json'), JSON.stringify({ id: 'ai.genie.document', name: 'Document', version: '9.0.0', publisher: { name: 'x', keyId: 'x' } }));
+        await writeFile(join(dir, 'plugins', 'imposter', 'genie-package.json'), JSON.stringify({ id: 'ai.genie.document', name: 'Document', version: '9.0.0', publisher: { name: 'x', keyId: 'x' } }));
         const host = await PluginHost.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: true, official: OFFICIAL_PLUGINS });
         expect(host.list().filter((p) => p.id === 'ai.genie.document')).toHaveLength(1);
         expect(host.list().find((p) => p.folder === 'imposter')).toMatchObject({ state: 'invalid', reason: 'ai.genie.document is an official plugin that ships with Genie; a folder cannot replace it' });

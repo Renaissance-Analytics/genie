@@ -39,7 +39,7 @@ describe('a slow features action names its slow half', () => {
         const slowSettings = new Proxy(real, { get: (t, p) => (p === 'set' ? slowSet : ((v) => (typeof v === 'function' ? v.bind(t) : v))(Reflect.get(t, p, t))) });
         const slow = { ...services, settings: slowSettings } as ComposedServices;
         const said: string[] = [];
-        await handleFeatureAction(slow, { kind: 'settings.set', key: 'detached_terminals', value: true }, undefined, { slowPart: { ms: 40, log: (part, ms) => said.push(`${part} ${ms >= 40 ? 'over' : 'under'}`) } });
+        await handleFeatureAction(slow, { kind: 'settings.set', key: 'track_cwd', value: true }, undefined, { slowPart: { ms: 40, log: (part, ms) => said.push(`${part} ${ms >= 40 ? 'over' : 'under'}`) } });
         expect(said).toContain('act:settings.set over');
     });
 
@@ -47,7 +47,7 @@ describe('a slow features action names its slow half', () => {
         dir = await mkdtemp(join(tmpdir(), 'act-timing-'));
         services = await composeServices({ userData: dir, pty: fakePty(), v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
         const said: string[] = [];
-        await handleFeatureAction(services, { kind: 'settings.set', key: 'detached_terminals', value: true }, undefined, { slowPart: { ms: 5_000, log: (part) => said.push(part) } });
+        await handleFeatureAction(services, { kind: 'settings.set', key: 'track_cwd', value: true }, undefined, { slowPart: { ms: 5_000, log: (part) => said.push(part) } });
         expect(said).toEqual([]);
     });
 

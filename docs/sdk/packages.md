@@ -47,7 +47,7 @@ An Ed25519 public key in SPKI. Its id is `sha256:` followed by the lowercase hex
 
 ## 7. The manifest
 
-`genie-plugin.json`, at the package root, is one of the signed files. Its `id` and `version` name the package; `publisher.name` names the publisher; `publisher.keyId` holds the signing key's id (the registry's `key_id`).
+`genie-package.json`, at the package root, is one of the signed files. Its `id` and `version` name the package; `publisher.name` names the publisher; `publisher.keyId` holds the signing key's id (the registry's `key_id`).
 
 ## What Genie does
 

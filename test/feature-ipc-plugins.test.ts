@@ -30,7 +30,7 @@ let host: PluginsService;
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-plugins-'));
     await mkdir(join(dir, 'plugins', 'local-dev'), { recursive: true });
-    await writeFile(join(dir, 'plugins', 'local-dev', 'genie-plugin.json'), JSON.stringify({ id: 'com.example.localdev', name: 'Local Dev', version: '0.1.0', publisher: { name: 'Me', keyId: 'me' } }));
+    await writeFile(join(dir, 'plugins', 'local-dev', 'genie-package.json'), JSON.stringify({ id: 'com.example.localdev', name: 'Local Dev', version: '0.1.0', publisher: { name: 'Me', keyId: 'me' } }));
     let publisherChecksOff = () => false;
     host = await PluginsService.open({ dir: join(dir, 'plugins'), keys: {}, publisherChecksOff: () => publisherChecksOff() });
     const replica = new PluginsReplica((method, args) => host.call(method, args));

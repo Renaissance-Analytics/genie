@@ -168,22 +168,23 @@ export const NO_SNAPSHOTS = { writeSnapshot: () => null, readSnapshot: () => nul
  */
 /**
  * The engine's settings port over GENIE'S settings (§6.5). fancy-term-host speaks 'on' / 'off' for
- * the two keys it gates on (the OSC-7 cwd hook, detached terminals); read LIVE so a change in the
+ * the keys it gates on (the OSC-7 cwd hook, read LIVE from Genie's settings; detached terminals, always off); read LIVE so a change in the
  * Settings surface reaches the engine on its next look. A key Genie has no value for is left to the
  * engine's own default. This replaces a literal that made the two settings change nothing.
  */
 export function engineSettingsFrom(values: () => Readonly<Record<string, boolean | string>>): { get(key: string): string | undefined } {
-    const ENGINE_KEYS = new Set(['track_cwd', 'detached_terminals']);
     return {
         get: (key) => {
-            if (!ENGINE_KEYS.has(key)) return undefined;
+            // genie-host owns the terminals and keeps them past a window's quit: the engine never detaches one (Tynn #416).
+            if (key === 'detached_terminals') return 'off';
+            if (key !== 'track_cwd') return undefined;
             const v = values()[key];
             return typeof v === 'boolean' ? (v ? 'on' : 'off') : typeof v === 'string' ? v : undefined;
         },
     };
 }
 
-export function realFancyTermPort(settingsValues: () => Readonly<Record<string, boolean | string>> = () => ({ track_cwd: true, detached_terminals: false })): PtyPort {
+export function realFancyTermPort(settingsValues: () => Readonly<Record<string, boolean | string>> = () => ({ track_cwd: true })): PtyPort {
     const settings = engineSettingsFrom(settingsValues);
     configureInProcessBackend({
         settings,

@@ -4,9 +4,10 @@ import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { lstat, readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { WebSocketServer, type WebSocket } from 'ws';
-import { APP_CHANNEL_PATH, appCsp, appHost } from '../core/gapp-origin.js';
+import { WebSocket, WebSocketServer } from 'ws';
+import { APP_CHANNEL_MAX_BYTES, APP_CHANNEL_PATH, appCsp, appHost } from '../core/gapp-origin.js';
 import { normalizeHost, type GenRoute } from '../core/gen-router.js';
+import type { GAppBridge } from './gapp-bridge.js';
 import type { GAppBook, GAppEntry } from './gapps-host.js';
 
 /**
@@ -19,7 +20,8 @@ import type { GAppBook, GAppEntry } from './gapps-host.js';
  *
  * THE APP CHANNEL: a WebSocket on the app's own origin. A session is minted for one window of one app, holding a token
  * only that window's sealed preload gets (main/gapp-window.ts). The first message says hello with it; a token that is not
- * for this app, or whose window closed, is refused. What each bridge call then does is V5's.
+ * for this app, or whose window closed, is refused. After that each message is a bridge call for that app and no other
+ * (main/gapp-bridge.ts), and the bridge's events reach that app's windows.
  */
 export interface GAppSession {
     readonly packageId: string;
@@ -60,12 +62,20 @@ export class GAppServer {
     readonly #server: Server;
     readonly #sockets: WebSocketServer;
     readonly #sessions = new Map<string, { packageId: string; socket: WebSocket | null }>();
+    readonly #bridge: Pick<GAppBridge, 'handle' | 'onEvent'>;
+    readonly #offBridge: () => void;
     #port = 0;
 
-    constructor(input: { book: Pick<GAppBook, 'list' | 'installedDir' | 'appElement' | 'verifyInstalled'> }) {
+    constructor(input: { book: Pick<GAppBook, 'list' | 'installedDir' | 'appElement' | 'verifyInstalled'>; bridge: Pick<GAppBridge, 'handle' | 'onEvent'> }) {
         this.#book = input.book;
+        this.#bridge = input.bridge;
+        this.#offBridge = input.bridge.onEvent((packageId, event, data) => {
+            for (const session of this.#sessions.values()) {
+                if (session.packageId === packageId && session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ event, data }));
+            }
+        });
         this.#server = createServer((req, res) => { void this.#onRequest(req, res); });
-        this.#sockets = new WebSocketServer({ noServer: true });
+        this.#sockets = new WebSocketServer({ noServer: true, maxPayload: APP_CHANNEL_MAX_BYTES });
         this.#server.on('upgrade', (req, socket, head) => this.#onUpgrade(req, socket, head));
     }
 
@@ -81,6 +91,7 @@ export class GAppServer {
     }
 
     close(): Promise<void> {
+        this.#offBridge();
         for (const session of this.#sessions.values()) session.socket?.terminate();
         this.#sessions.clear();
         this.#sockets.close();
@@ -177,6 +188,16 @@ export class GAppServer {
         if (!session) { refused('this token is not a live window of this Genie'); return; }
         if (session.packageId !== packageId) { refused('this token is not for this app'); return; }
         session.socket = ws;
+        ws.on('message', (data) => { void this.#call(ws, packageId, data.toString()); });
         ws.send(JSON.stringify({ ok: true, packageId }));
+    }
+
+    /** One bridge call on a window's channel. The app is the one its token was minted for, never one the message names. */
+    async #call(ws: WebSocket, packageId: string, text: string): Promise<void> {
+        let message: { id?: unknown; method?: unknown; params?: unknown };
+        try { message = JSON.parse(text) as typeof message; } catch { return; }
+        if (typeof message.id !== 'number' || typeof message.method !== 'string') return;
+        const answer = await this.#bridge.handle({ packageId, preview: false }, message.method, message.params);
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id: message.id, ...answer }));
     }
 }

@@ -1,6 +1,9 @@
 import type { AgentOpsPorts } from './agent-ops-host.js';
 import type { AgentEngine } from './agent-engine.js';
 
+/** The session host's calls this port makes: a window's link to it, or genie-host's own. */
+export type AgentOpsHostEngine = Pick<AgentEngine, 'start' | 'stop' | 'ended' | 'probe' | 'modelState' | 'switchModel' | 'settleParked' | 'deliverOwed'>;
+
 /**
  * THE SESSION HOST AS AGENT OPERATIONS SEE IT — the one place the real `SessionHost` is wired into `AgentOpsPorts.host`.
  *
@@ -8,7 +11,7 @@ import type { AgentEngine } from './agent-engine.js';
  * host use it too, so a method the wiring forgets is forgotten in the tests as well. `host` is late-bound: main.ts
  * creates the session host after the ports.
  */
-export function sessionHostPort(host: () => AgentEngine | null): AgentOpsPorts['host'] {
+export function sessionHostPort(host: () => AgentOpsHostEngine | null): AgentOpsPorts['host'] {
     return {
         start: (record, cwd) => host()!.start(record, cwd),
         stop: (id) => host()!.stop(id),

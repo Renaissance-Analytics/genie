@@ -5,6 +5,7 @@ import { validatePackage, type Catalog, type ElementDefinition } from '../core/c
 import { grantFor, installReview, updateReview, type GAppGrant, type GAppRequest, type GrantScope, type ReviewItem } from '../core/gapp-grants.js';
 import { UNVERIFIED_LABEL } from '../core/plugins.js';
 import type { PackageDeclaration } from './genie-catalog.js';
+import { PACKAGE_MANIFEST_FILE } from '../core/plugin-integrity.js';
 import { checkPackage, currentDigest } from './plugin-package.js';
 
 /**
@@ -22,10 +23,8 @@ import { checkPackage, currentDigest } from './plugin-package.js';
  * and keeps grant and storage; uninstall leaves nothing of the app. No workspace is ever made for an app (decision 2).
  *
  * The book's own record is `<dir>/book.json`; each app's files are `<dir>/<packageId>/<version>/`, its isolated store
- * `<dir>/<packageId>/storage/` (the bridge's, V5).
+ * `<dir>/<packageId>/storage/`, a preview's `<dir>/<packageId>/preview-storage/` (the bridge's, V5).
  */
-export const GAPP_MANIFEST_FILE = 'genie-package.json';
-
 export interface GAppEntry {
     readonly packageId: string;
     readonly name: string;
@@ -74,11 +73,11 @@ const sameItems = (a: readonly ReviewItem[], b: readonly ReviewItem[]) => {
 
 /** `genie-package.json` read as a package declaration: its contributions in the catalog's envelope, filled with the package's id, version and source. */
 function declarationOf(raw: unknown): { ok: true; declaration: PackageDeclaration; name: string; keyId: string | null } | { ok: false; reason: string } {
-    if (!isRecord(raw)) return { ok: false, reason: `${GAPP_MANIFEST_FILE} must be a JSON object` };
-    if (typeof raw.id !== 'string' || typeof raw.version !== 'string' || typeof raw.name !== 'string' || raw.name.trim() === '') return { ok: false, reason: `${GAPP_MANIFEST_FILE} must name its id, name and version` };
-    if (!isRecord(raw.publisher) || typeof raw.publisher.name !== 'string') return { ok: false, reason: `${GAPP_MANIFEST_FILE} must name its publisher: publisher.name` };
+    if (!isRecord(raw)) return { ok: false, reason: `${PACKAGE_MANIFEST_FILE} must be a JSON object` };
+    if (typeof raw.id !== 'string' || typeof raw.version !== 'string' || typeof raw.name !== 'string' || raw.name.trim() === '') return { ok: false, reason: `${PACKAGE_MANIFEST_FILE} must name its id, name and version` };
+    if (!isRecord(raw.publisher) || typeof raw.publisher.name !== 'string') return { ok: false, reason: `${PACKAGE_MANIFEST_FILE} must name its publisher: publisher.name` };
     const keyId = typeof raw.publisher.keyId === 'string' ? raw.publisher.keyId : null;
-    if (!Array.isArray(raw.contributions)) return { ok: false, reason: `${GAPP_MANIFEST_FILE} must list its contributions` };
+    if (!Array.isArray(raw.contributions)) return { ok: false, reason: `${PACKAGE_MANIFEST_FILE} must list its contributions` };
     const id = raw.id;
     const version = raw.version;
     const declaration = {
@@ -144,9 +143,22 @@ export class GAppBook {
         return `${entry.name} is refused as tampered: ${now.ok ? 'a file changed, was added or was removed after it was installed' : now.reason}; reinstall it from its publisher.`;
     }
 
-    /** An app's isolated store (V5's bridge reads and writes it). */
-    storageDir(packageId: string): string {
-        return join(this.#ports.dir, packageId, 'storage');
+    /** An app's isolated store (V5's bridge reads and writes it); a preview has its own, which can never read the installed app's. */
+    storageDir(packageId: string, preview = false): string {
+        return join(this.#ports.dir, packageId, preview ? 'preview-storage' : 'storage');
+    }
+
+    /** Take back one element or one network host from an app's grant; it counts from the next call. `false` for an unknown app. */
+    takeBack(packageId: string, what: { element: string } | { host: string }): Promise<boolean> {
+        return this.#serial(async () => {
+            const entry = this.#book.apps.find((e) => e.packageId === packageId);
+            if (!entry) return false;
+            const grant: GAppGrant = 'element' in what
+                ? { ...entry.grant, uses: entry.grant.uses.filter((id) => id !== what.element) }
+                : { ...entry.grant, network: entry.grant.network.filter((host) => host !== what.host) };
+            await this.#write({ apps: this.#book.apps.map((e) => (e.packageId === packageId ? { ...e, grant } : e)) });
+            return true;
+        });
     }
 
     onChange(listener: () => void): () => void {
@@ -226,9 +238,9 @@ export class GAppBook {
     async #prepare(dir: string): Promise<Prepared> {
         let raw: unknown;
         try {
-            raw = JSON.parse(await readFile(join(dir, GAPP_MANIFEST_FILE), 'utf8'));
+            raw = JSON.parse(await readFile(join(dir, PACKAGE_MANIFEST_FILE), 'utf8'));
         } catch {
-            return { ok: false, reason: `no readable ${GAPP_MANIFEST_FILE} in the folder: a GApp is a package with one` };
+            return { ok: false, reason: `no readable ${PACKAGE_MANIFEST_FILE} in the folder: a GApp is a package with one` };
         }
         const parsed = declarationOf(raw);
         if (!parsed.ok) return parsed;
@@ -268,7 +280,7 @@ export class GAppBook {
 
     async #loadDeclaration(entry: GAppEntry): Promise<void> {
         try {
-            const parsed = declarationOf(JSON.parse(await readFile(join(this.#ports.dir, entry.packageId, entry.version, GAPP_MANIFEST_FILE), 'utf8')));
+            const parsed = declarationOf(JSON.parse(await readFile(join(this.#ports.dir, entry.packageId, entry.version, PACKAGE_MANIFEST_FILE), 'utf8')));
             if (parsed.ok) this.#packages.set(entry.packageId, parsed.declaration);
         } catch { /* its files are gone: it is listed, and offers nothing until reinstalled */ }
     }

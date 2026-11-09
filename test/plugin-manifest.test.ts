@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bridgeAccess, parseManifest, type PluginManifest } from '../src/core/plugins.js';
 
 /**
- * PLUGINS (§6.7): a plugin is a package with a `genie-plugin.json`. The manifest is STRICT — unknown
+ * PLUGINS (§6.7): a plugin is a package with a `genie-package.json`. The manifest is STRICT — unknown
  * keys are refused, because "undeclared access does not exist": every capability a plugin may use is
  * declared here and granted at install, and the bridge refuses anything else by name. Nothing is
  * defaulted open: no `network` means no hosts; no `genieApi` means no Genie API.
@@ -46,7 +46,7 @@ describe('bridgeAccess — enforced at the bridge, by name', () => {
 
     it('allows exactly what is declared and refuses the rest, naming the plugin, the request and the fix', () => {
         expect(bridgeAccess(m, { kind: 'genieApi', name: 'openFileForUser' })).toEqual({ allowed: true });
-        expect(bridgeAccess(m, { kind: 'genieApi', name: 'manageTerminals' })).toEqual({ allowed: false, reason: 'com.example.presentation did not declare genieApi "manageTerminals" — undeclared access does not exist; declare it in genie-plugin.json capabilities.genieApi and reinstall' });
+        expect(bridgeAccess(m, { kind: 'genieApi', name: 'manageTerminals' })).toEqual({ allowed: false, reason: 'com.example.presentation did not declare genieApi "manageTerminals" — undeclared access does not exist; declare it in genie-package.json capabilities.genieApi and reinstall' });
         expect(bridgeAccess(m, { kind: 'network', host: 'api.example.com' })).toEqual({ allowed: true });
         expect(bridgeAccess(m, { kind: 'network', host: 'evil.example.net' })).toMatchObject({ allowed: false, reason: expect.stringMatching(/did not declare network host "evil\.example\.net"/) });
         expect(bridgeAccess(m, { kind: 'fs', path: '/w/tynn/deck.pptx', workspacePath: '/w/tynn' })).toEqual({ allowed: true });
