@@ -7,8 +7,6 @@ import { OFFICIAL_LABEL, PluginHost, type PluginEntry } from './plugin-host.js';
 import { rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { launchSubprocessIn, runPluginTool } from './plugin-runner.js';
-import type { EditorBytesDecision } from '../core/plugin-editors.js';
-import type { PluginsApi } from './plugins-replica.js';
 import type { PublisherKeyRegistry } from './marketplace-client.js';
 
 /**
@@ -149,41 +147,6 @@ export class PluginsService {
         const dump = this.dump();
         for (const listener of [...this.#listeners]) listener(dump);
     }
-}
-
-/**
- * A WINDOW WITH NO GENIE-HOST keeps its plugins (the coordinator's ruling for the owner, 2026-11-08: "a window with no
- * genie-host still loads plugins itself, as today, so there's no regression. genie-host owns them whenever it's present").
- * Its own plugin host, re-opened on refresh, behind the same surface a window reads the host's through; and its tools,
- * which that window then serves itself (`localPluginTools`).
- */
-export class LocalPlugins implements PluginsApi {
-    #host: PluginHost;
-    readonly #open: () => Promise<PluginHost>;
-
-    private constructor(host: PluginHost, open: () => Promise<PluginHost>) {
-        this.#host = host;
-        this.#open = open;
-    }
-
-    static async start(open: () => Promise<PluginHost>): Promise<LocalPlugins> {
-        return new LocalPlugins(await open(), open);
-    }
-
-    list(): readonly PluginEntry[] { return this.#host.list(); }
-    panels(): PluginsDump['panels'] { return this.#host.panels(); }
-    editors(): readonly ClaimingEditor[] { return this.#host.editors(); }
-    editorBytes(pluginId: string, path: string): EditorBytesDecision { return this.#host.editorBytes(pluginId, path); }
-    setEnabled(pluginId: string, enabled: boolean): Promise<boolean> { return this.#host.setEnabled(pluginId, enabled); }
-    setNetworkAllowed(pluginId: string, allowed: boolean): Promise<boolean> { return this.#host.setNetworkAllowed(pluginId, allowed); }
-    /** What an enabled plugin's tool may reach as it runs (ADF B5). */
-    capabilities(pluginId: string): PluginCapabilities | null { return this.#host.capabilities(pluginId); }
-    async refresh(): Promise<void> { this.#host = await this.#open(); }
-    /** The ENABLED plugins' tools and each one's guard, live across a refresh. */
-    tools(): ReturnType<PluginHost['tools']> { return this.#host.tools(); }
-    guard(pluginId: string): ReturnType<PluginHost['guard']> { return this.#host.guard(pluginId); }
-    /** Every installable plugin's manifest, for the catalog built from these plugins (ADF A5). */
-    manifests(): ReturnType<PluginHost['manifests']> { return this.#host.manifests(); }
 }
 
 export interface PluginToolsRunOptions {

@@ -27,7 +27,7 @@ import { drivablePages } from './page-navigation-electron.js';
 import { dialFrontDoor, isGenHost, siteDoor } from './relay-site.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, setWorkstationRole, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
-import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
+import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
 import { CommsCache } from '../core/comms.js';
 import { askerLiveFrom } from './asker-live.js';
@@ -56,7 +56,6 @@ import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile } from 'node:fs/promises';
 import { agentOpsApi, agentOpsPorts } from './agent-ops-api.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
-import { TrustVerdicts } from './trust-verdict.js';
 import { restartAgent, SettingApplier } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import type { WatchedReposView } from '../core/issue-watch.js';
@@ -67,7 +66,7 @@ import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
-import { startBeat } from './safe-mode-beat.js';
+import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation, type ActivationRequest } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
@@ -118,17 +117,14 @@ import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watc
 import { WindowCrashRecorder, startHeartbeat } from './window-crash-recorder.js';
 import { RECOVER_REPORT, RECOVER_RESTART, pageMemorySampler, recoverRenderer, rendererErrorPage, type RendererNotice } from './renderer-recovery.js';
 import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-records.js';
-import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
+import { routeExecThroughSpawnHost, SpawnHostClient } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
 import { Session as InspectorSession } from 'node:inspector';
 import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
-import { SpawnLedger } from './spawn-ledger.js';
-import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
-import { randomUUID } from 'node:crypto';
-import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
-import { realListModels, SessionHost, providerBinary } from './session-host.js';
+import { systemProcessTree } from '../core/process-tree.js';
+import { realListModels, providerBinary } from './session-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
@@ -229,7 +225,7 @@ import { uploadSender } from './uploads.js';
 import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { withActionSignal } from './mcp-signal.js';
-import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
+import type { Verification } from './mcp-server.js';
 import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
 import type { TerminalsApi } from './terminals-host.js';
 import type { ProcessBookApi } from './processes-host.js';
@@ -242,11 +238,10 @@ import type { InboxStore } from './inbox-store.js';
 import type { AttentionStore } from './attention-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
-import { localPluginTools } from './plugins-host.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
-import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
+import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
 import { artboardReadFiles, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
@@ -745,12 +740,24 @@ let scratchTerminals: ScratchTerminals | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
 /**
- * SAFE MODE AS THIS WINDOW READS IT (Tynn #386; window-safe-mode.ts): genie-host's over the link, or — on the emergency
- * no-host path, where this window runs everything itself — the same runtime files, read here. Opened once the link is known.
+ * SAFE MODE AS THIS WINDOW READS IT (Tynn #386; window-safe-mode.ts): genie-host's, over the link. Opened once the link is known.
  */
 let windowSafe: WindowSafeMode | null = null;
+/** No genie-host could start: say what is wrong and how to fix it, then try again or leave. The window runs nothing itself (Tynn #415). */
+async function stopForNoHost(reason: string | null): Promise<void> {
+    const logFile = join(genieRoot(), 'logs', 'genie-host.log');
+    const plan = hostDownPlan({ reason, logFile });
+    for (;;) {
+        const { response } = await dialog.showMessageBox({ type: 'error', title: plan.title, message: plan.message, detail: plan.detail, buttons: [...plan.buttons], defaultId: 0, cancelId: 2, noLink: true });
+        const answer = hostDownAnswer(response);
+        if (answer === 'open-log') { void shell.openPath(logFile); continue; }
+        if (answer === 'retry') app.relaunch();
+        app.exit(0);
+        return;
+    }
+}
 const windowSafeNow = (): boolean => windowSafe?.active() === true;
-/** The link to `genie-host` when agents run there (the host split, phase 1); `null` = the engine runs in this process. */
+/** The link to `genie-host` (the host split, phase 1); `null` only before it is made, because a window with no host stops. */
 let agentEngineLink: AgentEngineLink | null = null;
 /** Electron reports no change of proxy settings: asked when a window links and when the machine wakes. */
 let handProxyAnswers: (() => Promise<void>) | null = null;
@@ -1298,13 +1305,11 @@ let servicesComposed: (value: WindowServices) => void = () => {};
 const composedServices = new Promise<WindowServices>((resolve) => { servicesComposed = resolve; });
 /** The same, for what must answer at once. Until then nothing is trusted. */
 let composedNow: WindowServices | null = null;
-let trustVerdicts: TrustVerdicts | null = null;
-// Genie's own MCP server (§6.9) and what its boot probe said (§6.4 "native transport verified at boot").
-let mcp: GenieMcpServer | null = null;
+// What the boot probe of genie-host's MCP server said (§6.4 "native transport verified at boot").
 let mcpVerified: Verification | null = null;
-/** Genie's MCP endpoint when genie-host serves it (P3.1); `mcp` is this window's own only on the emergency path. */
+/** Genie's MCP endpoint: genie-host serves it (P3.1). */
 let hostMcpEndpoint: { url: string; token: string } | null = null;
-const mcpEndpointNow = (): { url: string; token: string } | null => mcp?.endpoint() ?? hostMcpEndpoint;
+const mcpEndpointNow = (): { url: string; token: string } | null => hostMcpEndpoint;
 /** Tell genie-host what its MCP server needs of this window (P3.1), coalesced; a no-op until the tools are built. */
 let pushHostView: () => void = () => {};
 /** A window tool's call, forwarded by genie-host's MCP server; refused until the tools are built. */
@@ -1508,9 +1513,6 @@ async function boot(): Promise<void> {
          * the write was meant to protect. What it costs instead is resume, which is why it is
          * said out loud here.
          */
-        // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
-        // bearer token, and this agent's caller key so the tools know which agent is calling.
-        mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
         // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
         // raised them; the host never prompts on its own.
         // A REMOTE METHOD GENIE-HOST DOES NOT OWN YET (Tynn #409): done here, by this window's own host API.
@@ -1534,9 +1536,9 @@ async function boot(): Promise<void> {
             // Without its Tynn server it still starts (genie#1234): the reason is a note in its chat, never Broken.
             const tynnNote = services?.tynnNote(record.id) ?? null;
             if (tynnNote) void host?.notice(record.id, tynnNote);
-            // With genie-host, the Genie entry is the HOST's (P3.1: it owns the MCP server and the caller keys); only the
-            // agent's private servers are this window's to prepare.
-            return [...(agentEngineLink ? [] : genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id))), ...privateServers];
+            // The Genie entry is the HOST's (P3.1: it owns the MCP server and the caller keys); only the agent's private
+            // servers are this window's to prepare.
+            return [...privateServers];
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
         comms: (agentId: AgentId, since: number) => dashboardComms.read(agentId, since, Date.now()),
@@ -1556,9 +1558,8 @@ async function boot(): Promise<void> {
      * not be routed through my UI … All work should be handled on the host side"). Every session — its provider, its ACP
      * parsing, its ledger, its thread writes, its containment — runs in `genie-host`; this process keeps a replica it reads
      * synchronously and sends commands to. A window that freezes, crashes or restarts no longer stops an agent, and an
-     * agent's work no longer runs on the thread that routes the person's keystrokes. There is no in-process MODE (the owner,
-     * 2026-11-01: "we split host from UI for good"): only a host that cannot start at all falls back to the EMERGENCY
-     * in-process engine below, said on the Deck (plan §4.1).
+     * agent's work no longer runs on the thread that routes the person's keystrokes. There is no in-process mode (the owner,
+     * 2026-11-01: "we split host from UI for good").
      */
     {
         // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
@@ -1605,10 +1606,14 @@ async function boot(): Promise<void> {
             agentName: (id) => registry?.find(id)?.name ?? id,
             log: lifecycleLog,
         });
-        if (agentEngineLink === null) mainErrors.record('agent-host', new Error('Genie could not start its agent host, so agents run inside the window this time (see logs/genie-host.log).'));
-        host = agentEngineLink?.client ?? null;
+        // THE WINDOW NEVER RUNS HOST WORK (Tynn #415): with no host it says what is wrong and how to fix it, and stops here.
+        if (agentEngineLink === null) {
+            await stopForNoHost(hostRuntime.error);
+            return;
+        }
+        host = agentEngineLink.client;
         // THE HEARTBEAT (Tynn #386): every second, its pid and RSS, a notification; the client drops it while unlinked.
-        if (agentEngineLink) heartbeatNow = startHeartbeat({
+        heartbeatNow = startHeartbeat({
             send: (beat) => agentEngineLink?.client.heartbeat(beat),
             pid: process.pid,
             rss: () => process.memoryUsage.rss(),
@@ -1619,11 +1624,10 @@ async function boot(): Promise<void> {
     /*
      * EVERY PROCESS THIS WINDOW STARTS IS STARTED BY GENIE-HOST (the host split, P2.1; plan §11a): #1405's spawn host is
      * the HOST's child now (two profiles: processes, terminals), reached over the engine link — so sites, queue workers
-     * and open terminals outlive this window, and what a previous window left running is taken back below. Only the
-     * emergency in-process fallback (no host at all) forks a spawn host of this window's own, as #1405 did.
+     * and open terminals outlive this window, and what a previous window left running is taken back below.
      * BEFORE anything runs a command: every execFileRunner call from here on is created there, never on main.
      */
-    if (agentEngineLink) {
+    {
         const engineLink = agentEngineLink.client;
         // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them through the host, and
         // re-reads them when another window (or the host) wrote — two windows, one registry. Before its load, below.
@@ -1645,79 +1649,8 @@ async function boot(): Promise<void> {
         });
         if (adoptablePtys.length > 0) lifecycleLog(`spawn host found running=${adoptablePtys.length} (${adoptablePtys.map((p) => p.tag?.kind === 'process' ? p.tag.processId : p.tag?.kind ?? 'untagged').join(', ')})`);
         spawnHostNow = processes;
-    } else {
-        spawnHostNow = startSpawnHost({ entry: join(here, 'spawn-host.js'), execPath: process.execPath, log: lifecycleLog });
     }
     routeExecThroughSpawnHost(spawnHostNow);
-    if (host === null) {
-        /*
-         * THE SPAWN LEDGER (hosting plan 1.5 / 1.6), when the engine runs HERE. Every agent run's processes are written down
-         * as they start and forgotten when a stop VERIFIES they ended; whatever a previous Genie left running — a crash, a
-         * Task-Manager kill, an installer — is ended here, BEFORE anything is started or restored, from that record only
-         * (pid, start time and name must all match). In `genie-host` the host does this itself, at its own start.
-         */
-        const spawnLedger = SpawnLedger.open(join(runtimeDir(genieRoot()), 'children.json'), randomUUID());
-        spawnLedger.sweep(systemProcessTree, lifecycleLog);
-        // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
-        // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
-        // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
-        // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
-        // never what a running process was started from.
-        const supervisor = await prepareGenieSupervisor(runtimeDir(genieRoot())).catch((error: unknown) => {
-            const why = error instanceof Error ? error.message : String(error);
-            lifecycleLog(`containment unready reason=${why}`);
-            console.error(`[genie] agents cannot start contained: ${why}`);
-            mainErrors.record('containment-unready', error);
-            return null;
-        });
-        if (supervisor !== null) {
-            void removeStaleSupervisorBuilds(runtimeDir(genieRoot()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
-                (sweep) => {
-                    for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
-                    for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
-                    for (const path of sweep.failed) lifecycleLog(`supervisor stale kept reason=remove-failed path=${path}`);
-                    if (sweep.unread) lifecycleLog('supervisor stale kept reason=process-listing-unread');
-                },
-                (error: unknown) => lifecycleLog(`supervisor stale sweep failed reason=${error instanceof Error ? error.message : String(error)}`),
-            );
-        }
-        host = new SessionHost({
-            userData: genieRoot(),
-            // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
-            currentRecord: (id) => registry?.find(id) ?? null,
-            lifecycle: {
-                readingFailed: (agentId, run, pids) => lifecycleLog(`reading failed kind=agent owner=${agentId} run=${run} pids=${pids.join(',')}: the machine could not be read after the spawn, twice, so these are recorded with no start time`),
-                spawned: (agentId, run, processes) => {
-                    spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
-                    lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
-                },
-                ended: (agentId, run, verdict) => {
-                    if (verdict.verified) {
-                        spawnLedger.forget('agent', agentId, run);
-                        lifecycleLog(`exit kind=agent owner=${agentId} run=${run} verified ended=${verdict.ended}`);
-                        return;
-                    }
-                    // Kept in the ledger: the next boot ends what is still running. Said on the Deck — never a quiet success.
-                    if (verdict.survivors.length > 0) spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes: verdict.survivors });
-                    lifecycleLog(`refused kind=agent owner=${agentId} run=${run} survivors=${describeProcesses(verdict.survivors)} reason=${verdict.reason}`);
-                    const name = registry?.find(agentId)?.name ?? agentId;
-                    mainErrors.record('stop-unverified', new Error(`${name}: ${verdict.reason}`));
-                },
-                straggler: (agentId, run) => lifecycleLog(`straggler kind=agent owner=${agentId} run=${run} output after stop, not recorded`),
-            },
-            // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
-            heldElsewhere: (record) => {
-                const hold = doctorHoldNow(genieRoot());
-                return hold !== null && hold.workspaceId === record.workspaceId
-                    ? `doctor mode is running an agent in this workspace (pid ${hold.pid}); stop it there, or close doctor mode, then start ${record.name}`
-                    : null;
-            },
-            // THE EMERGENCY ENGINE'S TRUST (genie#1519): this window's own hosting's verdicts — a known exception until P6.
-            untrustedFilesFor: async (record) => (await composedServices).untrustedFilesFor(record),
-            untrustedNow: (record) => composedNow?.untrustedNow(record) ?? true,
-            ...engineCallbacks,
-        });
-    }
 
     // Healthy means this process is up and answering, which is the only claim the local
     // workstation chip can honestly make from in here. A real health model belongs with
@@ -2105,30 +2038,6 @@ async function boot(): Promise<void> {
     });
     loginHost = logins;
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
-    /*
-     * A WORKSPACE'S VERDICT CHANGES WHILE ITS AGENT RUNS (genie#1519, trust-verdict.ts). THE HOST OWNS TRUST: genie-host's
-     * TrustVerdicts act on its own sessions. Only this window's EMERGENCY engine (no host could start) is compared here —
-     * a known exception until P6.
-     */
-    const own = host instanceof SessionHost ? host : null;
-    if (own) {
-        trustVerdicts = new TrustVerdicts({
-            agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => a.id),
-            untrustedNow: (id) => { const record = registry?.find(id); return record ? (composedNow?.untrustedNow(record) ?? true) : false; },
-            launchedUntrusted: (id) => own.launchedUntrusted(id),
-            quiet: (id) => own.quiet(id),
-            inTurn: (id) => own.inTurn(id),
-            workWaiting: (id) => own.workWaiting(id),
-            releaseWork: (id) => { own.releaseWork(id); },
-            runOf: (id) => own.runOf(id),
-            hold: (id, text) => own.holdForNextWork(id, text),
-            withdraw: (id) => own.withdrawHeld(id),
-            notice: (id, text) => { own.notice(id, text); },
-            // Quitting ends it anyway, and the next launch reads the verdict.
-            restart: (id) => (quit.quitting ? Promise.resolve({ ok: true as const }) : restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch())),
-        });
-        own.subscribe((id) => trustVerdicts?.check(id));
-    }
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
         for (const id of host?.pausedAgents(provider) ?? []) {
@@ -2659,22 +2568,20 @@ async function boot(): Promise<void> {
     const appInboxEnv = (source: AppEnvSource): Record<string, string> => (ownAppInboxKeys ? appInboxEnvFor({ url: appInboxServer?.url ?? null, token: ownAppInboxKeys.tokenFor(source) }) : {});
     // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
     // replicas of them. Only the emergency in-process engine opens them here.
-    // SAFE MODE, read before anything of this window's own starts: with no host, from the runtime files (Tynn #386).
-    windowSafe = WindowSafeMode.open({ link: agentEngineLink?.client ?? null, runtimeDir: runtimeDir(genieRoot()), log: (line) => { console.log(`[genie] ${line}`); lifecycleLog(line); } });
+    // SAFE MODE, genie-host's (Tynn #386).
+    windowSafe = WindowSafeMode.open({ link: agentEngineLink.client });
     const engineForStores = agentEngineLink;
     const composeWith = engineForStores
         ? (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })
         : composeServices;
     const composed: WindowServices = await composeWith({
-        // A workspace's trust verdict moved (genie#1519): the trust step is pushed, and — on the emergency path, where this
-        // window runs the agents — its agents are compared with it. With a host, genie-host's TrustVerdicts do that.
-        onTrustVerdict: (workspaceId) => { trustVerdicts?.changed(workspaceId); requestFeaturePush(); },
+        // A workspace's trust verdict moved (genie#1519): the trust step is pushed. genie-host's TrustVerdicts compare its agents.
+        onTrustVerdict: () => { requestFeaturePush(); },
         // AgentInbox's automatic reply to a paused recipient reads the live sessions (genie#1515): the emergency stores only.
         inboxSession: (id) => host?.probe(id) ?? null,
         userData: genieRoot(),
         // No host: this window's own flows, sites and engines start nothing by themselves in safe mode (Tynn #386).
         safeMode: windowSafeNow,
-        heldSite: (siteId, name) => windowSafe?.own()?.hold('site', { id: siteId, name }),
         safeModeLeft: (listener) => { windowSafe?.onChange((view) => { if (!view.active) listener(); }); },
         // Said in the remote welcome (P10.1e): the same build the host's engine welcome says.
         build: hostBuild(app.getVersion(), join(here, 'host.js')),
@@ -2986,7 +2893,6 @@ async function boot(): Promise<void> {
         linkedRemote.forwardEvents((listener) => api.onEvent(listener));
         void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
     }
-    // What an emergency agent's launch was waiting for: its workspace's verdict (genie#1519). Until now nothing is trusted.
     composedNow = composed;
     servicesComposed(composed);
     // Local calls and event subscriptions use late-bound services. Until now the door answers "Genie is still starting".
@@ -3285,7 +3191,6 @@ async function boot(): Promise<void> {
             processVisibility = key; ownBook.visibilityChanged();
         });
         const restoredProcesses = ownBook.restore();
-        if (windowSafeNow()) for (const p of ownBook.kept()) if (restoredProcesses.heldBack.includes(p.id)) windowSafe?.own()?.hold('process', { id: p.id, name: p.name });
         // Leaving safe mode arms the scheduled tasks again; it starts nothing by itself.
         windowSafe?.onChange((view) => { if (!view.active) ownScheduler.plan(); });
         if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
@@ -3368,26 +3273,15 @@ async function boot(): Promise<void> {
             flows: { store: composed.flows, runNow: (id: string) => composed.flowScheduler.runNow(id) },
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
             serviceExec: runServiceExec,
-            // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window, so
-            // this window serves none — unless there is NO host (the emergency path): then its own, as it always did.
-            plugins: composed.ownPlugins ? localPluginTools(composed.ownPlugins, {
-                sandboxDir: join(genieRoot(), 'plugin-sandbox'),
-                // The genie API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
-                api: async (method, params) => {
-                    if (method === 'knowledge.search') return composed.knowledge.search({ ...(typeof params === 'object' && params !== null ? params : {}) } as never);
-                    throw new Error(`${method} is not offered to plugins`);
-                },
-            }) : { tools: () => [], guard: () => null, run: async () => ({ ok: false, reason: "a plugin's tool runs in Genie's host, not this window" }) },
+            // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window.
+            plugins: { tools: () => [], guard: () => null, run: async () => ({ ok: false, reason: "a plugin's tool runs in Genie's host, not this window" }) },
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;
         const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
-        // The endpoint is REMEMBERED across launches (a private file in Genie's home), so the URL and token config sync
-        // wrote into workspaces stay valid after a restart.
         mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
-        const endpointFile = join(genieRoot(), 'mcp-endpoint.json');
         if (engineLink) {
             /*
              * GENIE'S MCP SERVER IS GENIE-HOST'S (the host split, P3.1; plan §11d): agents keep its tools when this window
@@ -3421,23 +3315,7 @@ async function boot(): Promise<void> {
             mcpVerified = status?.verified ?? { ok: false, reason: 'genie-host did not start its MCP server' };
             if (status) mcpToolList = status.tools;
         }
-        if (!engineLink) mcp = genieMcpServer({
-            registrations,
-            remember: {
-                read: () => {
-                    try {
-                        const v = JSON.parse(readFileSync(endpointFile, 'utf8')) as { port?: unknown; token?: unknown };
-                        return typeof v.port === 'number' && typeof v.token === 'string' && v.token.length >= 32 ? { port: v.port, token: v.token } : null;
-                    } catch { return null; }
-                },
-                write: (value) => { try { writeFileSync(endpointFile, JSON.stringify(value), { mode: 0o600 }); } catch (error) { console.error('[mcp] could not remember the endpoint:', (error as Error).message); } },
-            },
-        });
         try {
-            if (mcp) {
-                await mcp.start();
-                mcpVerified = await mcp.verify();
-            }
             // THE WORKSPACE AGENT FILES (the owner: Genie 2 manages them all and upgrades Genie 1's): every workspace once the
             // endpoint is live, and every workspace added after — whichever path added it — by watching the registry.
             const synced = new Set<string>();
@@ -3474,8 +3352,7 @@ async function boot(): Promise<void> {
                 }
             });
         } catch (error) {
-            mcpVerified = { ok: false, reason: error instanceof Error ? error.message : String(error) };
-            console.error('[mcp] the loopback server did not start:', mcpVerified.reason);
+            console.error('[workspace-files] could not start syncing:', error instanceof Error ? error.message : String(error));
         }
         pushFeatures();
     }
@@ -3512,9 +3389,6 @@ async function boot(): Promise<void> {
     // Safe mode reaches every window's snapshot (its banner), and follows the host's changes (a Leave from any window).
     registry.setSafeMode(() => windowSafe?.view() ?? null);
     windowSafe?.onChange(() => registry?.touch());
-    // No host: what a quit recorded is listed on the banner, and this window beats (it is the run).
-    windowSafe?.own()?.wasRunning([...registry.runningAtQuit(), ...registry.interruptedAtQuit()]);
-    if (windowSafe?.own()) startBeat({ started: () => (registry?.listAgents() ?? []).filter((a) => host?.probe(a.id)?.running === true).map((a) => a.id), onChange: (l) => (host instanceof SessionHost ? host.subscribe(() => l()) : () => {}), beat: (ids) => { windowSafe?.beat(ids); } });
     // THE REOPENED WINDOW'S NOTICE (Tynn #386): a hung window was ended and this one started; every snapshot carries it.
     registry.setHangNotice(() => agentEngineLink?.client.crashStateView()?.notice ?? null);
     registry.setRendererNotice(() => rendererNotice);
@@ -4288,7 +4162,7 @@ app.on('before-quit', (event) => {
     void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
         .catch(() => { /* an unwritten row never blocks a quit */ })
         // No host: this window was the run, and its clean end writes the marker, last (Tynn #386). With a host: nothing.
-        .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); windowSafe?.endCleanly('the window quit'); app.quit(); });
+        .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */

@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ALIVE_FILE } from '../src/core/safe-mode.js';
 import { startBeat } from '../src/main/safe-mode-beat.js';
 import { SafeMode } from '../src/main/safe-mode-host.js';
-import { WindowSafeMode } from '../src/main/window-safe-mode.js';
 
 /*
  * THE BANNER LISTS WHAT WAS RUNNING, EVEN RIGHT AFTER A START (Tynn #386; scripts/safe-mode-cdp.mjs D8). The sign of life
@@ -71,18 +70,6 @@ describe('genie-host: an agent started, then an unclean end before the 15 s beat
         for (let i = 0; i < 20; i++) s.event();
         expect(writes).toEqual([[], ['agent_a']]);
         expect(dir).toBeTruthy();
-    });
-});
-
-describe('the no-host window (#1624): its own beat, on its own start and stop', () => {
-    it('an agent it started, then an unclean end before 15 s: listed on the next start, and offered', () => {
-        const dir = runtimeDir();
-        const window = WindowSafeMode.open({ link: null, runtimeDir: dir, now: () => T0, pid: 21 });
-        const s = sessions();
-        startBeat({ started: s.started, onChange: s.onChange, beat: (ids) => window.beat(ids), every: noTimer });
-        s.start('agent_w');
-        const next = WindowSafeMode.open({ link: null, runtimeDir: dir, now: () => T0 + 5_000, pid: 22 });
-        expect(next.view()).toMatchObject({ active: true, agents: ['agent_w'] });
     });
 });
 
