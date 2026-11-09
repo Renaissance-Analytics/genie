@@ -360,7 +360,7 @@ const pageMemory = pageMemorySampler({
 let rendererNotice: RendererNotice | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
 // Which window a connection is decides what it may do (Tynn #578): main's own record, read when the page connects.
-const localDoor = localProtocolDoor(ipcMain, { windowKind: (contents) => (isRemoteWindow(contents as Electron.WebContents) ? 'remote' : 'main') });
+const localDoor = localProtocolDoor(ipcMain, { windowKind: (contents) => (isRemoteWindow(contents as Electron.WebContents) ? 'remote' : 'main'), onClosed: (reason) => rendererErrorLog?.(`local door closed: ${reason}`) });
 /**
  * THE STALL WATCHDOG (beta.53 freezes; main/stall-watchdog.ts): main's held event loop, slow renderer requests and slow
  * outbound calls, the windows' own long tasks and frame gaps, hung renderers and gone child processes — each a line in
@@ -2535,6 +2535,7 @@ async function boot(): Promise<void> {
         ...(linkedRemote ? { remoteAccess: linkedRemote } : {}),
         remoteApi: (remoteApiNow = buildHostApi({
             marketplace: () => agentEngineLink?.client.marketplace() ?? null,
+            gapps: () => agentEngineLink?.client.gapps() ?? null,
             // Following the Tynn tab, by subscription (P4 family 12, Tynn #561).
             tynnWatch: tynnWatchPort,
             localTerminals: createNativeTerminalPort({

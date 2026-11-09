@@ -13,6 +13,7 @@ import { allowEveryPairing } from './support/allow-every-pairing.js';
 import { LocalStagingArea } from '../src/main/local-staging-area.js';
 import type { LocalUploads } from '../src/main/local-uploads.js';
 import { MARKETPLACE_METHODS } from '../src/core/marketplace.js';
+import { GAPP_METHODS } from '../src/core/gapps.js';
 
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
@@ -22,6 +23,8 @@ const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
 };
 const hostOnlyMethods = REMOTE_METHODS.filter((method) => capabilityOf(method) === 'host-only');
 /** Connection-owned reviews cannot go through bare HostApi.invoke. This fixture has no Marketplace service. */
+/** The GApp book's actions are a local window's too, and this fixture has no book. */
+const GAPP_CONNECTION_REFUSALS: Partial<Record<RemoteMethod, string>> = Object.fromEntries(GAPP_METHODS.map((method) => [method, 'GApps are not available on this host.']));
 const MARKETPLACE_CONNECTION_REFUSALS: Partial<Record<RemoteMethod, string>> = {
     'marketplace.search': 'Marketplace is not available on this host.',
     'marketplace.prepare': 'Marketplace is not available on this host.',
@@ -91,6 +94,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'artboard.read': ['work'], 'artboard.review': ['work', 'p1', 'approved', 'review comment'],
     'marketplace.search': [''], 'marketplace.prepare': ['org.example.plugin', '1.0.0'],
     'marketplace.install': ['unknown-review', true], 'marketplace.discard': ['unknown-review'],
+    'gapps.list': [], 'gapps.review': ['/nowhere'], 'gapps.install': ['/nowhere', { scope: 'workstation' }], 'gapps.setOn': ['com.example.app', false], 'gapps.uninstall': ['com.example.app'],
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };
@@ -185,6 +189,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
         expect(Object.keys(ROWS).sort()).toEqual([...REMOTE_METHODS].sort());
         expect(Object.keys(HOST_ONLY_BACKSTOPS).sort()).toEqual([...hostOnlyMethods].sort());
         expect(Object.keys(MARKETPLACE_CONNECTION_REFUSALS).sort()).toEqual([...MARKETPLACE_METHODS].sort());
+        expect(Object.keys(GAPP_CONNECTION_REFUSALS).sort()).toEqual([...GAPP_METHODS].sort());
     });
 
     it.each(REMOTE_METHODS)('%s keeps the direct value, null, or refusal across the wire', async (method) => {
@@ -192,9 +197,10 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
         expect(row, `missing contract row for ${method}`).toBeDefined();
         const args = row!.map((arg) => arg === ROOT ? dir : arg);
         const wireArgs = [...args];
-        const connectionRefusal = MARKETPLACE_CONNECTION_REFUSALS[method];
+        const gappRefusal = GAPP_CONNECTION_REFUSALS[method];
+        const connectionRefusal = MARKETPLACE_CONNECTION_REFUSALS[method] ?? gappRefusal;
         if (connectionRefusal) {
-            expect(await directResult(() => api.invoke(method, args))).toEqual({ ok: false, reason: 'Marketplace actions require their authenticated local window connection.' });
+            expect(await directResult(() => api.invoke(method, args))).toEqual({ ok: false, reason: `${gappRefusal ? 'GApp' : 'Marketplace'} actions require their authenticated local window connection.` });
             expect(await rpc(method, wireArgs)).toEqual({ ok: false, reason: connectionRefusal });
             expect(wireInvocations).not.toContain(method);
             return;

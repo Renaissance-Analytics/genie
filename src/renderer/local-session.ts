@@ -17,7 +17,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace' | 'gapps'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -36,10 +36,19 @@ export interface LocalProtocolControl {
 const STARTING = 'Genie is still starting';
 const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
+/** How long after a drop the link is tried again. The last repeats: it never gives up. */
+const RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000] as const;
+/** How long a change made during a drop waits for the link before it says so. */
+const DROP_WAIT_MS = 15_000;
+const LINK_DOWN = 'Genie isn’t answering this window yet. Try that again in a moment.';
+/** Another connection in this window took the link. Taking it back would fight it forever, so this needs the person. */
+const REPLACED = 'this window opened a replacement protocol connection';
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
 export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'restartWithHandoff'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
+    let wasReady = false;
+    const everReady = () => wasReady;
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
     let client: RemoteClient | null = null;
@@ -54,6 +63,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     };
     const update = (next: LocalProtocolState) => {
         state = next;
+        if (next.phase === 'ready') wasReady = true;
         for (const listener of listeners) listener();
     };
     const release = () => {
@@ -69,24 +79,42 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         update({ ...state, phase: 'failed', reason });
         return { ok: false, reason };
     };
+    /** One connection, up and subscribed. Otherwise released, and the reason. */
+    const connect = async (revise: boolean): Promise<Connected> => {
+        const transport = localTransport(port!);
+        const attempt = connectRemote(transport, { kind: 'local' }, 'this window');
+        client = attempt;
+        const result = await attempt.ready;
+        if (!result.ok) { release(); return result; }
+        offSettings = attempt.bridge.workspaces.onSettingsChanged!((id) => { for (const listener of settingsListeners) listener(id); });
+        offState = attempt.onState((next) => { if (!next.connected && client === attempt) dropped(transport.closeReason()); });
+        for (const entry of subscriptions) entry.off = entry.start(attempt.bridge);
+        update({ phase: 'ready', reason: null, revision: state.revision + (revise ? 1 : 0) });
+        return result;
+    };
+    /** THE LINK WENT (Tynn #590): every later call waits for it, and it is tried until it comes back. */
+    const reconnect = async (): Promise<Connected> => {
+        for (let attempt = 0; ; attempt++) {
+            await new Promise<void>((resolve) => setTimeout(resolve, RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)]));
+            try {
+                const result = await connect(true);
+                if (result.ok) return result;
+            } catch { release(); /* tried again after the next wait */ }
+        }
+    };
+    const dropped = (reason: string | null): void => {
+        if (reason === REPLACED) { fail(reason); ready = Promise.resolve({ ok: false, reason }); return; }
+        release();
+        update({ ...state, phase: 'starting', reason: null });
+        ready = reconnect();
+    };
     const start = async (manual: boolean): Promise<Connected> => {
         update({ ...state, phase: 'starting', reason: null });
         if (!port) return fail('This Genie window has no local protocol connection.');
         for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
             try {
-                client = connectRemote(localTransport(port), { kind: 'local' }, 'this window');
-                const result = await client.ready;
-                if (result.ok) {
-                    const connected = client;
-                    offSettings = connected.bridge.workspaces.onSettingsChanged!((id) => { for (const listener of settingsListeners) listener(id); });
-                    offState = connected.onState((next) => {
-                        if (!next.connected && client === connected) fail('The connection to Genie closed. Retry to reconnect.');
-                    });
-                    for (const entry of subscriptions) entry.off = entry.start(connected.bridge);
-                    update({ phase: 'ready', reason: null, revision: state.revision + (manual ? 1 : 0) });
-                    return result;
-                }
-                release();
+                const result = await connect(manual);
+                if (result.ok) return result;
                 if (result.reason !== STARTING || attempt === ATTEMPTS - 1) return fail(result.reason);
             } catch (error) {
                 return fail(error instanceof Error ? error.message : String(error));
@@ -95,12 +123,19 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         }
         return fail(STARTING);
     };
-    let ready = start(false);
+    let ready: Promise<Connected> = start(false);
+    /** The link, or why it isn't here: a drop is waited out for {@link DROP_WAIT_MS}, startup for as long as it takes. */
+    const linked = (): Promise<Connected> => {
+        if (state.phase === 'ready' || !everReady()) return ready;
+        let timer: ReturnType<typeof setTimeout>;
+        const waited = new Promise<Connected>((resolve) => { timer = setTimeout(() => resolve({ ok: false, reason: LINK_DOWN }), DROP_WAIT_MS); });
+        return Promise.race([ready, waited]).finally(() => clearTimeout(timer));
+    };
     const requestBridge = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T | Refusal> => {
         if (state.phase === 'failed') return { ok: false, reason: state.reason! };
-        const result = await ready;
+        const result = await linked();
         if (!result.ok) return result;
-        if (!client || state.phase !== 'ready') return { ok: false, reason: state.reason ?? 'The connection to Genie closed. Retry to reconnect.' };
+        if (!client || state.phase !== 'ready') return { ok: false, reason: state.reason ?? LINK_DOWN };
         return call(client.bridge);
     };
     const request = <T>(call: (ws: Workspaces) => Promise<T>) => requestBridge((bridge) => call(bridge.workspaces));
@@ -109,9 +144,9 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     // Checking connection state separately avoids mistaking an actual host value for a refusal.
     const read = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T> => {
         if (state.phase === 'failed') throw new Error(state.reason!);
-        const result = await ready;
+        const result = await linked();
         if (!result.ok) throw new Error(result.reason);
-        if (!client || state.phase !== 'ready') throw new Error(state.reason ?? 'The connection to Genie closed. Retry to reconnect.');
+        if (!client || state.phase !== 'ready') throw new Error(state.reason ?? LINK_DOWN);
         return call(client.bridge);
     };
     // The same admitted local client, with the same read/rejection and recovery semantics as the other moved families.
@@ -149,6 +184,13 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     return {
         agentCommands,
         terminals,
+        gapps: {
+            list: () => read(b => b.gapps!.list()),
+            review: folder => read(b => b.gapps!.review(folder)),
+            install: (folder, options) => read(b => b.gapps!.install(folder, options)),
+            setOn: (id, on) => read(b => b.gapps!.setOn(id, on)),
+            uninstall: id => read(b => b.gapps!.uninstall(id)),
+        },
         marketplace: {
             search: (query, cursor) => read(b => b.marketplace!.search(query, cursor)),
             prepare: (id, version) => read(b => b.marketplace!.prepare(id, version)),

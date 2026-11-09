@@ -44,6 +44,8 @@ import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js
 import { isTynnWatchKind, type TynnWatchEvent, type TynnWatchKind, type TynnWatchPort } from '../core/local-tynn-watch.js';
 import type { FilesHubEvent } from './files-watch-hub.js';
 import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
+import { isGappMethod, type GAppsApi } from '../core/gapps.js';
+import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
 
 /**
@@ -60,6 +62,7 @@ import { MarketplaceSession } from './marketplace-session.js';
 
 export interface HostApi {
     readonly marketplace?: () => MarketplaceApi | null;
+    readonly gapps?: () => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
     /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
     readonly tynnWatch?: TynnWatchPort;
@@ -768,6 +771,11 @@ export class RemoteHost {
             if (scoped) return refuse(scoped);
         }
 
+        if (isGappMethod(method)) {
+            if (!connection.local || !this.#connections.has(connection.id)) return refuse('GApp actions need this machine\'s own local window.');
+            try { return ok(await dispatchGapps(() => this.#api.gapps?.() ?? null, method.slice('gapps.'.length), args)); }
+            catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
         if (isMarketplaceMethod(method)) {
             if (!connection.local || !this.#connections.has(connection.id)) return refuse('The Marketplace local window connection is closed.');
             let session = this.#marketplaces.get(connection);

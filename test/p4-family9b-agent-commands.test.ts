@@ -122,7 +122,13 @@ describe('a refusal lands where the IPC path put it', () => {
         await bridge.prompt('a1', 'first');
         door.drop();
         await settle();
-        expect(await row.call(bridge)).toEqual(expect.objectContaining({ ok: false, reason: expect.any(String) }));
+        // A call made during a drop waits for the link (Tynn #590); this door never comes back, so it is answered when the wait ends.
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            const answer = row.call(bridge);
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(await answer).toEqual(expect.objectContaining({ ok: false, reason: expect.any(String) }));
+        } finally { vi.useRealTimers(); }
     });
 
     it('the approval card\'s words, and the New agent form\'s', async () => {

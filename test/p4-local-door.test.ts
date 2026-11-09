@@ -34,6 +34,7 @@ class FakeContents extends EventEmitter {
     destroy() { this.destroyed = true; this.emit('destroyed'); }
 }
 
+const closeReasons: string[] = [];
 let ipc: EventEmitter;
 let door: ReturnType<typeof localProtocolDoor>;
 let host: RemoteHost;
@@ -100,7 +101,8 @@ async function remoteDriver() {
 
 beforeEach(async () => {
     ipc = new EventEmitter();
-    door = localProtocolDoor(ipc);
+    closeReasons.length = 0;
+    door = localProtocolDoor(ipc, { onClosed: (reason) => closeReasons.push(reason) });
     dir = await mkdtemp(join(tmpdir(), 'genie-p4-local-door-'));
     let tokenSeq = 0;
     devices = await DeviceStore.open(dir, { now: Date.now, random: () => `door-fixture-${++tokenSeq}` });
@@ -235,7 +237,7 @@ describe('door connection ownership and cleanup', () => {
         const remote = await remoteDriver();
         const holder = baton.holder();
         const opened = await connected(contents);
-        if (how === 'reload') contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        if (how === 'reload') { contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }); contents.emit('did-navigate'); }
         if (how === 'destroy') contents.destroy();
         if (how === 'renderer gone') contents.emit('render-process-gone');
         if (how === 'client close') opened.client.close();
@@ -267,6 +269,42 @@ describe('door connection ownership and cleanup', () => {
         expect(first.client.state().connected).toBe(false);
         expect(second.client.state().connected).toBe(true);
         expect(activeConnections.size).toBe(1);
+    });
+
+    it('a navigation the window refuses never happened: the connection stays (Tynn #590)', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        const first = await connected(contents);
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        await settled();
+        expect(first.client.state().connected).toBe(true);
+        expect(activeConnections.size).toBe(1);
+    });
+
+    it('the connection goes when the navigation lands (CONTROL), and one opened since it started is left alone', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        const first = await connected(contents);
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        contents.emit('did-navigate');
+        await settled();
+        expect(first.client.state().connected).toBe(false);
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        const second = await connected(contents);
+        contents.emit('did-navigate');
+        await settled();
+        expect(second.client.state().connected).toBe(true);
+    });
+
+    it('every close says why, so the next one can be read in the log', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        await connected(contents);
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        contents.emit('did-navigate');
+        await settled();
+        expect(closeReasons).toEqual(['the local window reloaded or navigated']);
+        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/localProtocolDoor\(ipcMain, \{[^\n]*onClosed: \(reason\) => rendererErrorLog\?\.\(/);
     });
 
     it('closing one window keeps the other window and its subscriptions alive', async () => {

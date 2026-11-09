@@ -131,6 +131,8 @@ export const ENGINE_METHODS = [
     'engine.plugins',
     // Anonymous Marketplace reads and reviewed installs: local window only, with connection-owned review tokens.
     'engine.marketplace',
+    // The GApp book (GApps v2 V7, Tynn #572): `[operation, args]`, a local window's store actions (main/gapps-api.ts).
+    'engine.gapps',
     // THE CATALOG (ADF A4, Tynn #448: protocol 3). `catalog.snapshot []` answers `{ revision, definitions }`, also sent as
     // the `catalog.snapshot` event before `engine.ready`; every change is pushed as `catalog.changed` (upserts and
     // removals from a base revision; a window that missed one asks for the snapshot again). `catalog.docs [kind, id]`
