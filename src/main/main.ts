@@ -1777,7 +1777,7 @@ async function boot(): Promise<void> {
      * The engine is fancy-term-host behind the PtyPort seam. It saves no scrollback (the owner, 2026-11-02).
      */
     // ONE pty engine, shared by the terminal host and the composition root's supervisor.
-    // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
+    // The engine gates its cwd hook on GENIE'S settings, read live (§6.5).
     const ptyPort = realFancyTermPort(() => services?.settings.snapshot() ?? {});
     // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
     // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
@@ -4316,7 +4316,7 @@ app.on('before-quit', (event) => {
             // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
             // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
             const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
+            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
         },
         ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
