@@ -81,6 +81,6 @@ describe('it is where a person sees it (reads the source: no window is opened he
     });
 
     it('a moved verdict is pushed to the windows', () => {
-        expect(read('main/main.ts')).toMatch(/onTrustVerdict: \(workspaceId\) => \{[^}]*requestFeaturePush/);
+        expect(read('main/main.ts')).toMatch(/onTrustVerdict: \(\) => \{[^}]*requestFeaturePush/);
     });
 });

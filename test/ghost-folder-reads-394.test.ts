@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
-import { composeServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
 import { EnvelopeSites } from '../src/main/envelope-sites-host.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
 import { SiteManager } from '../src/main/site-manager.js';

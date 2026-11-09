@@ -32,13 +32,9 @@ import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type Host
 import { holdMigration, portsOf } from './migration-holds.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
-import type { PluginsApi } from './plugins-replica.js';
-import { LocalPlugins } from './plugins-host.js';
+import { PluginsReplica, type PluginsApi } from './plugins-replica.js';
 import { hostCatalog } from './genie-catalog.js';
 import type { ElementDefinition } from '../core/catalog.js';
-import { PluginHost } from './plugin-host.js';
-import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
-import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
 import type { Verification } from './mcp-server.js';
 import { Baton, PairingPins } from '../core/remote.js';
 import { PairApprovals } from '../core/pair-confirm.js';
@@ -67,7 +63,7 @@ import { trustSteps, type TrustApi } from './hosting-trust.js';
 import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
 import type { PtyPort } from './terminal-host.js';
-import { composeHosting, type HostingOptions } from './hosting-compose.js';
+import type { HostingComposeInput, HostingOptions, HostingStack } from './hosting-compose.js';
 import { composeStageDiagnostics, type ComposeStageSample } from './compose-stage-diagnostics.js';
 import type { EnginesApi, EnvelopeSitesApi, HostingApi, SitesApi } from './hosting-host.js';
 import type { SiteManager } from './site-manager.js';
@@ -134,10 +130,12 @@ export interface ComposeInput extends HostingOptions {
     /** genie-host's process supervisor, through this window's replica (P3.3b). Absent = this window runs its own. */
     readonly supervisor?: SupervisorApi;
     /**
-     * genie-host's front door, service engines and site routes, through this window's replica (the host split, P5a): this
-     * window then builds none of its own. Absent = it builds its own (hosting-compose.ts) — the emergency path, until P6.
+     * genie-host's front door, service engines and site routes, through this window's replica (the host split, P5a): the
+     * window builds none of its own (Tynn #584).
      */
     readonly hosting?: HostingApi;
+    /** Tests that compose alone hand in a real hosting stack (test/helpers/compose-alone.ts). Nothing in the app does. */
+    readonly buildOwnHosting?: (input: HostingComposeInput) => Promise<HostingStack>;
     /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
     readonly plugins?: PluginsApi;
     /** genie-host's catalog, through this window's replica (ADF A4/A5). Absent = this window builds its own from its plugins. */
@@ -322,8 +320,6 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     syncAgentDocs(workspacePath: string, source?: SyncSource): Promise<void>;
     /** §6.7: the plugins, genie-host's through its replica (ADF A3); re-read when developer mode changes. */
     readonly plugins: PluginsApi;
-    /** This window's OWN plugins, opened only with no genie-host (the emergency path); `null` when the host owns them. */
-    readonly ownPlugins: LocalPlugins | null;
     /**
      * Every element the catalog holds now (ADF A5): what the window's editors, panels and flow palette are projected from.
      * genie-host's through the replica; with no host, this window's own plugins' catalog.
@@ -353,17 +349,13 @@ const FLOW_SETTLE_ON_QUIT_MS = 5_000;
 /** What a window that composed against genie-host's stores holds (the host split, P3.1). */
 export type WindowServices = ComposedServices<WindowAgentStores>;
 
-/** Compose with the stores agents write to opened HERE: the emergency path (no host), and every test that composes alone. */
-export async function composeServices(input: Omit<ComposeInput, 'agentStores'>): Promise<ComposedServices<OwnAgentStores>> {
-    return (await composeWith(input)) as ComposedServices<OwnAgentStores>;
-}
-
 /** Compose with genie-host's stores, through this window's replicas (the host split, P3.1). */
 export async function composeWindowServices(input: ComposeInput & { readonly agentStores: WindowAgentStores }): Promise<WindowServices> {
     return composeWith(input);
 }
 
-async function composeWith(input: ComposeInput): Promise<WindowServices> {
+/** The composition itself. `composeWindowServices` is the app's way in; a test that composes alone goes through test/helpers/compose-alone.ts. */
+export async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
     const workTracking = (): WorkTracking => (input.tynn?.()?.status().signedIn === true ? 'tynn' : 'files');
     const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
@@ -453,13 +445,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode. They are
     // GENIE-HOST'S (ADF A3, Tynn #447): this window reads them through the host's replica and opens no plugin host itself.
     const pluginsDir = join(input.userData, 'plugins');
-    // With NO genie-host (the emergency path) this window loads its own, as it always did: no regression (the coordinator's
-    // ruling for the owner, 2026-11-08); genie-host owns them whenever it is there.
-    const openOwnPlugins = () => LocalPlugins.start(() => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, publisherChecksOff: settings.snapshot().publisher_checks_off === true, official: OFFICIAL_PLUGINS }));
-    stage?.begin('plugins');
-    const ownPlugins = input.plugins ? null : await openOwnPlugins();
-    stage?.end();
-    const plugins: PluginsApi = input.plugins ?? ownPlugins!;
+    const plugins: PluginsApi = input.plugins ?? new PluginsReplica(async () => false);
     stage?.begin('remote-devices');
     // Linked to genie-host: no devices here (one writer of remote-devices.json); the emergency path keeps its own, as always.
     const remoteDevices = input.remoteAccess
@@ -482,15 +468,15 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         ...(input.build ? { build: input.build } : {}),
     });
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
-    // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA. Its own
-    // (hosting-compose.ts) only on the emergency path, built exactly as it always was.
+    // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA.
     stage?.begin('hosting');
-    const ownHosting = input.hosting ? null : await composeHosting({ ...input, supervisor, settings, appEnv: appEnvOf });
+    if (!input.hosting && !input.buildOwnHosting) throw new Error("compose was given no hosting: it is genie-host's");
+    const ownHosting = input.hosting ? null : await input.buildOwnHosting!({ ...input, supervisor, settings, appEnv: appEnvOf });
     stage?.end();
     const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With genie-host's, this window's own git reads follow the host's
-    // verdicts through the replica, which fails closed; the emergency path's own hosting set this process's policy itself.
+    // verdicts through the replica, which fails closed.
     if (!ownHosting) {
         setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.isTrustedPath(path)));
         hosting.trust.onVerdict((id) => input.onTrustVerdict?.(id));
@@ -691,8 +677,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
             };
         },
         plugins,
-        ownPlugins,
-        catalogDefinitions: () => (input.catalog ? input.catalog.list() : hostCatalog(ownPlugins ?? { tools: () => [] }).list()),
+        catalogDefinitions: () => (input.catalog ? input.catalog.list() : hostCatalog({ tools: () => [] }).list()),
         pluginsDir,
         pluginsRefresh: () => plugins.refresh(),
         syncConfig: async (workspacePath, source = 'start') => {

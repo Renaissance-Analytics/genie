@@ -25,7 +25,7 @@ import { PHP_RECIPES, type PhpPlatform } from '../../src/core/php-versions.js';
 import { httpFetchOver, installPhpVersion, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
 const liveFetch = httpFetchOver(fetch);
 import { execFileRunner, lineStreamRunner } from '../../src/main/toolchain-runner.js';
-import { composeServices } from '../../src/main/compose.js';
+import { composeServices } from '../helpers/compose-alone.js';
 import { realFancyTermPort } from '../../src/main/fancy-term-port.js';
 import { siteAnswers } from '../../src/main/port-probe.js';
 import { routeExecThroughSpawnHost, startSpawnHost } from '../../src/main/spawn-host-client.js';

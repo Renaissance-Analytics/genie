@@ -7,7 +7,8 @@ import { canonicalKind, documentToGraph, graphToDocument, type FlowProblem } fro
 import { FLOW_SCHEMA_URL, flowNodes } from '../../src/core/flow-form.js';
 import type { IssueWatchSummary } from '../../src/core/issue-watch.js';
 import type { AgentRecord } from '../../src/core/identity.js';
-import { composeServices, type ComposedServices } from '../../src/main/compose.js';
+import { composeServices } from '../helpers/compose-alone.js';
+import { type ComposedServices } from '../../src/main/compose.js';
 import { handleFeatureAction } from '../../src/main/feature-ipc.js';
 import type { AgentSessionsPort } from '../../src/main/flow-runner.js';
 import type { FlowRun } from '../../src/main/flow-store.js';

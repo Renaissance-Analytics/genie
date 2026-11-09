@@ -33,10 +33,10 @@ describe('the window reaches the host’s hosting only through the replica', () 
         expect(main).not.toMatch(/new (EnvelopeSites|SiteManager|ServiceRegistry|ServiceDriver|GenRouterServer|HostsSync|DotEnvSync)\b|GenCa\.open\(/);
     });
 
-    it('compose.ts builds its own hosting ONLY when it was handed none', () => {
+    it('compose.ts builds no hosting of its own: it is handed genie-host’s, or a test’s (Tynn #584)', () => {
         const compose = code('src/main/compose.ts');
-        expect(compose.match(/composeHosting\(/g)).toHaveLength(1);
-        expect(compose).toMatch(/const ownHosting = input\.hosting \? null : await composeHosting\(/);
+        expect(compose).not.toMatch(/composeHosting\(/);
+        expect(compose).toMatch(/const ownHosting = input\.hosting \? null : await input\.buildOwnHosting!\(/);
     });
 
     it('an engine update goes through the host’s check (updateEngine), never the registry’s update from a window', () => {
