@@ -1,4 +1,5 @@
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { renameOver } from '../core/atomic-rename.js';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { bridgeAccess, parseManifest, UNVERIFIED_LABEL, type AccessDecision, type AccessRequest, type PluginCapabilities, type PluginManifest } from '../core/plugins.js';
 import { checkPackage, currentDigest } from './plugin-package.js';
@@ -261,7 +262,7 @@ export class PluginHost {
         await mkdir(dirname(this.#networkFile), { recursive: true });
         const tmp = `${this.#networkFile}.${process.pid}.tmp`;
         await writeFile(tmp, JSON.stringify([...this.#networkAllowed]), 'utf8');
-        await rename(tmp, this.#networkFile);
+        await renameOver(tmp, this.#networkFile);
         return true;
     }
 
@@ -283,7 +284,7 @@ export class PluginHost {
         await mkdir(dirname(this.#stateFile), { recursive: true });
         const tmp = `${this.#stateFile}.${process.pid}.tmp`;
         await writeFile(tmp, JSON.stringify([...this.#disabled]), 'utf8');
-        await rename(tmp, this.#stateFile);
+        await renameOver(tmp, this.#stateFile);
         return true;
     }
 }

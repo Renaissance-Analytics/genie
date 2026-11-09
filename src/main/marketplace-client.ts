@@ -1,5 +1,6 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { PluginsService } from './plugins-host.js';
 import type { SessionFetch } from './tynn-account.js';
@@ -254,7 +255,7 @@ export class MarketplaceClient implements PublisherKeyRegistry {
             if (Buffer.byteLength(text) > CACHE_BYTES) throw new Error('Publisher registry cache exceeds its size limit');
             await mkdir(dirname(this.#options.cacheFile), { recursive: true });
             await writeFile(tmp, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-            await rename(tmp, this.#options.cacheFile);
+            await renameOver(tmp, this.#options.cacheFile);
         } catch (error) {
             // Best effort: an old on-disk snapshot must not resurrect a removed key after restart.
             if (reduced) await rm(this.#options.cacheFile, { force: true }).catch(() => {});
@@ -276,7 +277,7 @@ export interface MarketplacePluginsOptions extends MarketplaceClientOptions {
 }
 
 /** Open from disk, then refresh without holding up a windowless host. The host owns and stops this one clock. */
-export async function openMarketplacePlugins(options: MarketplacePluginsOptions): Promise<{ plugins: PluginsService; stop(): void }> {
+export async function openMarketplacePlugins(options: MarketplacePluginsOptions): Promise<{ plugins: PluginsService; registry: MarketplaceClient; stop(): void }> {
     const interval = positive(options.intervalMs ?? 5 * 60_000, 'refresh interval');
     const registry = await MarketplaceClient.open(options);
     let plugins: PluginsService;
@@ -291,5 +292,5 @@ export async function openMarketplacePlugins(options: MarketplacePluginsOptions)
         finally { if (!stopped) cancel = schedule(() => { cancel = null; void refresh(); }, interval); }
     };
     void refresh();
-    return { plugins, stop: () => { stopped = true; cancel?.(); cancel = null; registry.close(); } };
+    return { plugins, registry, stop: () => { stopped = true; cancel?.(); cancel = null; registry.close(); } };
 }

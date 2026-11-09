@@ -168,7 +168,8 @@ function useFeatures(bridge: GenieBridge | undefined): [FeatureData, Dispatch<Se
         // Another host numbers its snapshots from its own start: forget this one's, so its first is taken.
         setData(forgetHost);
         // The NEWER snapshot wins, whichever lands last (genie#1393): pushes and a click's answer race.
-        void features.snapshot().then((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); });
+        // A connection that failed is said by the local protocol's own banner, with Retry.
+        void features.snapshot().then((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); }, () => {});
         const off = features.subscribe((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); });
         return () => { live = false; off(); };
     }, [bridge]);
@@ -318,7 +319,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     // Read again whenever this Genie's Tynn sign-in changes (Tynn #850): read once at open, signing in afterwards left it
     // saying "sign in to Tynn".
     useEffect(() => {
-        const features = typeof window === 'undefined' ? undefined : window.genie?.features;
+        const features = ownWindowBridge()?.features;
         if (!net || !features) return;
         const read = () => { void net.workstations().then(setTynnWorkstations, (error: unknown) => setTynnWorkstations({ ok: false, reason: error instanceof Error ? error.message : String(error) })); };
         return watchTynnSignIn(features, read);
@@ -1914,6 +1915,7 @@ function DesktopApp({ bridge }: AppProps) {
             // workspace (core/chat-scope.ts), so the composer never quietly keeps a project the person left (beta.26).
             onNavigate={(r) => navigate(carryChat(r, parsed, snapshot.agents, openedThreads))}
             features={features}
+            marketplace={resolvedBridge?.marketplace}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) =>
                 (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => {

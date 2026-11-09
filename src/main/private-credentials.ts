@@ -1,3 +1,4 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmod, lstat, mkdir, open, readdir, rename, rm, rmdir } from 'node:fs/promises';
@@ -456,6 +457,6 @@ async function writePrivateCredentialOnce(file: string, text: string): Promise<v
             await stage();
             await restrict([{ path: temp, directory: false }]);
         }
-        await rename(temp, file);
+        await renameOver(temp, file);
     } finally { await cleanup(); }
 }

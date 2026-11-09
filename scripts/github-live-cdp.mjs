@@ -28,7 +28,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
-import { secretNote } from './secret-note.mjs';
+import { secretNote } from './secret-note.mjs';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 const MODE = process.argv[2];
 if (MODE !== 'sign-in' && MODE !== 'run' && MODE !== 'install-check') { console.error('usage: github-live-cdp.mjs sign-in|run|install-check'); process.exit(2); }
@@ -111,7 +113,7 @@ async function launch() {
     await until('window.genie', 30_000, () => cdp.evaluate('typeof window.genie === "object"'));
     return cdp;
 }
-const githubView = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.github ?? null)');
+const githubView = (cdp) => cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.integrations?.github ?? null)');
 // Installations too: with none read yet the clone goes without the sign-in (core/github.ts cloneAuthFor), and this would read as no token.
 const signedInAs = (cdp) => until('the GitHub sign-in and its installations', 60_000, async () => { const g = await githubView(cdp); return g?.status === 'signed-in' && g.installations !== null ? g : null; });
 

@@ -33,6 +33,24 @@ export const TYNN_SECTIONS: readonly TynnSection[] = [
 /** The page the tab opens on: the project's Home, as tynn.ai's project opens on it (row H1). Without a page door, the board. */
 export const TYNN_FIRST_SECTION: TynnSectionId = 'home';
 
+type Store = Pick<Storage, 'getItem' | 'setItem'>;
+const lastSectionKey = (workspaceId: string) => `genie.tynn.section.${workspaceId}`;
+
+/**
+ * THE PAGE YOU WERE ON (Tynn #545): leaving the tab for an agent unmounts it, and it comes back where you left it, per
+ * workspace, on this device. `null` when nothing is remembered, the page is not one this window offers, or the store refuses.
+ */
+export function readTynnSection(storage: Store | null, workspaceId: string, offered: readonly TynnSectionId[]): TynnSectionId | null {
+    try {
+        const raw = storage?.getItem(lastSectionKey(workspaceId)) ?? null;
+        return offered.find((id) => id === raw) ?? null;
+    } catch { return null; }
+}
+
+export function writeTynnSection(storage: Store | null, workspaceId: string, section: TynnSectionId): void {
+    try { storage?.setItem(lastSectionKey(workspaceId), section); } catch { /* a choice that cannot be kept still applies now */ }
+}
+
 /** A page of the tab that is read as one answer (the board has its own door and scope query). */
 export type TynnPage = 'wip' | 'issues' | 'releases' | 'home' | 'features' | 'vip';
 export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'issues', 'releases', 'home', 'features', 'vip'];

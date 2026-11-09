@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
@@ -42,6 +43,8 @@ import { localArtboardArguments } from './local-artboard-api.js';
 import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
 import { isTynnWatchKind, type TynnWatchEvent, type TynnWatchKind, type TynnWatchPort } from '../core/local-tynn-watch.js';
 import type { FilesHubEvent } from './files-watch-hub.js';
+import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
+import { MarketplaceSession } from './marketplace-session.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -56,6 +59,7 @@ import type { FilesHubEvent } from './files-watch-hub.js';
  */
 
 export interface HostApi {
+    readonly marketplace?: () => MarketplaceApi | null;
     readonly filesWatch?: FilesWatchPort;
     /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
     readonly tynnWatch?: TynnWatchPort;
@@ -75,6 +79,9 @@ export interface HostApi {
     /** A TUI started for another machine's Take Over window is done with: its window closed, or never came (Tynn #529 A). */
     takeOverEnded?(terminalId: string): void;
 }
+
+/** The largest payload a local event may carry: room left in one door frame for its envelope (P4 family 11). */
+const LOCAL_EVENT_MAX_BYTES = LOCAL_FRAME_LIMIT_BYTES - 4 * 1024;
 
 /** How long a Take over ticket waits for its window (Tynn #529 part A). */
 const TICKET_TTL_MS = 30_000;
@@ -191,6 +198,7 @@ export class RemoteHost {
     /** Re-pair: the device the PIN on screen was issued to replace, if any. */
     #pinReplaces: string | null = null;
     readonly #connections = new Map<string, Connection>();
+    readonly #marketplaces = new WeakMap<Connection, MarketplaceSession>();
     #localTerminals: LocalTerminalServer | null = null;
     readonly #transport: ServerTransport;
     readonly #now: () => number;
@@ -249,6 +257,8 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        const marketplace = this.#marketplaces.get(connection);
+        if (marketplace) { this.#marketplaces.delete(connection); void marketplace.close().catch(() => console.warn('[genie] Marketplace review cleanup failed')); }
         this.#localTerminals?.dropOwner(connection.id);
         connection.filesViews?.dispose();
         connection.content?.dispose();
@@ -758,6 +768,13 @@ export class RemoteHost {
             if (scoped) return refuse(scoped);
         }
 
+        if (isMarketplaceMethod(method)) {
+            if (!connection.local || !this.#connections.has(connection.id)) return refuse('The Marketplace local window connection is closed.');
+            let session = this.#marketplaces.get(connection);
+            if (!session) { session = new MarketplaceSession(() => this.#api.marketplace?.() ?? null); this.#marketplaces.set(connection, session); }
+            try { return ok(await session.call(method.slice('marketplace.'.length), args)); }
+            catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
         // Staged bytes are taken only now, after every gate passed (genie#1346): never a path, never bytes inline.
         if (isLocalTerminalMethod(method)) {
             if (!connection.local || !this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
@@ -793,6 +810,9 @@ export class RemoteHost {
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices and the connections. Only an owner sees them.
+            // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
+            // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
+            if (connection.local && (method === 'features.snapshot' || method === 'features.soundData')) return ok(this.#content(connection).jsonResult(value, method));
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).
@@ -915,7 +935,14 @@ export class RemoteHost {
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
             if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);
             if (out !== NOT_SENT && c.profile === 'mobile') out = this.#forPhone(c, channel, out);
-            if (out !== NOT_SENT) this.#send(c, { kind: 'event', channel, payload: out });
+            if (out === NOT_SENT) continue;
+            // THE GUARD (P4 family 11): a frame over the door's cap ends a window's whole connection, so a local event that
+            // large is dropped and said, never sent. Local events are signals; content crosses through a read.
+            if (c.local && Buffer.byteLength(JSON.stringify(out)) > LOCAL_EVENT_MAX_BYTES) {
+                console.warn(`[genie] the local event ${channel} was too large to send and was dropped`);
+                continue;
+            }
+            this.#send(c, { kind: 'event', channel, payload: out });
         }
     }
 
