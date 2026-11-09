@@ -138,13 +138,10 @@ export interface AgentDetail {
     takeOver?: TakeOverProbe | null;
 }
 
-/** The three feature channels, named ONCE. Preload and main import this; neither retypes a string. */
+/** The feature channel a window still owns, named ONCE. Preload and main import this; neither retypes a string. */
 export const FEATURE_CHANNELS = {
-    act: 'genie:features-act',
     /** The renderer reports where the browser box is, so main can place the WebContentsView over it. */
     browserBounds: 'genie:features-browser-bounds',
-    /** The host's own file picker reports what it picked: the only host paths an AgentInbox send may attach (genie#1354). */
-    picked: 'genie:features-picked',
 } as const;
 
 /** The Dashboard lanes' feeds (beta.33 item 10). */
@@ -655,7 +652,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  */
 export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
-    features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData'>;
+    features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
     workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;

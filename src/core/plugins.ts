@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
 
 /**
- * PLUGINS (§6.7) — pure. A plugin is a package with a `genie-plugin.json`. The manifest is STRICT:
+ * PLUGINS (§6.7) — pure. A plugin is a package with a `genie-package.json`. The manifest is STRICT:
  * unknown keys are refused, because "undeclared access does not exist" — every capability a plugin may
  * use is declared here, granted at install, and the bridge refuses anything else BY NAME, with the fix in
  * the reason. Nothing defaults open. Plugins are SIGNED BY DEFAULT (Ed25519 over the manifest bytes by a
@@ -56,7 +56,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const refuse = (reason: string): ParseResult => ({ ok: false, reason });
 
 export function parseManifest(raw: unknown): ParseResult {
-    if (!isRecord(raw)) return refuse('genie-plugin.json must be a JSON object');
+    if (!isRecord(raw)) return refuse('genie-package.json must be a JSON object');
     for (const key of Object.keys(raw)) {
         if (!TOP_KEYS.has(key)) return refuse(`unknown key "${key}" — undeclared access does not exist; remove it or declare a known capability`);
     }
@@ -166,12 +166,12 @@ export function bridgeAccess(manifest: PluginManifest, request: AccessRequest): 
     const no = (what: string, fix: string): AccessDecision => ({ allowed: false, reason: `${manifest.id} did not declare ${what} — undeclared access does not exist; ${fix}` });
     switch (request.kind) {
         case 'genieApi':
-            return manifest.capabilities.genieApi.includes(request.name) ? { allowed: true } : no(`genieApi "${request.name}"`, 'declare it in genie-plugin.json capabilities.genieApi and reinstall');
+            return manifest.capabilities.genieApi.includes(request.name) ? { allowed: true } : no(`genieApi "${request.name}"`, 'declare it in genie-package.json capabilities.genieApi and reinstall');
         case 'network':
-            return manifest.capabilities.network.hosts.includes(request.host) ? { allowed: true } : no(`network host "${request.host}"`, 'declare it in genie-plugin.json capabilities.network.hosts and reinstall');
+            return manifest.capabilities.network.hosts.includes(request.host) ? { allowed: true } : no(`network host "${request.host}"`, 'declare it in genie-package.json capabilities.network.hosts and reinstall');
         case 'fs': {
             const fs = manifest.capabilities.fs;
-            if (!fs) return no('fs access', 'declare it in genie-plugin.json capabilities.fs and reinstall');
+            if (!fs) return no('fs access', 'declare it in genie-package.json capabilities.fs and reinstall');
             const root = normalise(request.workspacePath);
             const path = normalise(request.path);
             if (!path.startsWith(`${root}/`)) return { allowed: false, reason: `${manifest.id} may only touch files inside the workspace; ${request.path} is outside the workspace` };

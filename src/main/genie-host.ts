@@ -21,7 +21,10 @@ import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
-import { SessionHost } from './session-host.js';
+import { providerBinary, realListModels, SessionHost } from './session-host.js';
+import { HostRegistryStore } from './agent-stores-replica.js';
+import { ProviderModelCache } from '../core/provider-models.js';
+import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -60,6 +63,7 @@ import { FlowStore } from './flow-store.js';
 import { FlowsReplica, FlowsService } from './flows-host.js';
 import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
+import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
@@ -84,7 +88,11 @@ import { resolveProgram } from '../core/program-lookup.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
-import { hostRemoteApi, RelayBridgeHost, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
+import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
+import { RelayHostService } from './relay-host-service.js';
+import { droneRefusal } from '../core/workstation-role.js';
+import { readWorkstationRole } from './workstation-role-reader.js';
+import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
 import { Registry } from './registry.js';
@@ -103,7 +111,7 @@ import { setWin32ProcessReader } from '../core/process-tree.js';
 import { sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
-import { mintConnectGrant } from './tynn-network.js';
+import { mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
 import { RemoteBrowsers } from './remote-browsers.js';
 import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
@@ -130,6 +138,7 @@ import { MarketplaceHost } from './marketplace-host.js';
 import { MARKETPLACE_ARCHIVE_BYTES } from './marketplace-archive.js';
 import { CatalogService } from './catalog-host.js';
 import { GAppBook } from './gapps-host.js';
+import { GAppServer } from './gapp-server.js';
 import { setOfferedFlowKinds } from '../core/flow-canvas.js';
 import { catalogFlowKinds } from '../core/catalog-projections.js';
 import { hostCatalog } from './genie-catalog.js';
@@ -381,12 +390,17 @@ async function main(): Promise<void> {
         void stores.registrySettled().then(() => { for (const l of [...workspacesListeners]) l(); });
     });
     let hosting: HostingStack | null = null;
+    /** GApps v2 V4: the server of installed apps, once the book is open; the front door asks it for their routes. */
+    let gappServer: GAppServer | null = null;
+    const gappRouteListeners = new Set<() => void>();
     /** Genie Mail G5: the process book, once open, whose running processes restart with new mail credentials. */
     let mailProcessBook: ProcessBook | null = null;
     /** The running agents compared with their workspace's verdict (genie#1519): bound once the sessions exist. */
     let hostVerdicts: TrustVerdicts | null = null;
     try {
         hosting = await composeHosting({
+            gappRoutes: () => gappServer?.routes() ?? [],
+            onGappRoutesChange: (listener) => { gappRouteListeners.add(listener); },
             // THE HOST OWNS TRUST (genie#1519): the record and the verdicts are this host's, beside the sites that read them.
             onTrustVerdict: (workspaceId) => hostVerdicts?.changed(workspaceId),
             ...(await hostHostingOptions(hostMachinePaths(process.env, home), say)),
@@ -468,6 +482,7 @@ async function main(): Promise<void> {
      */
     const flowsService = new FlowsService();
     const flowCallers = new FlowCallers((id) => hostRegistry.workspace(id)?.path ?? null);
+    const gappCallers = new GAppCallers((id) => hostRegistry.workspace(id)?.path ?? null);
     // The flows as the host's own `flows` tool reads and drives them: the service's list, its actions in place.
     const hostFlows = new FlowsReplica((method, args) => flowsService.call(method, args));
     flowsService.onEvent((event) => hostFlows.apply(event));
@@ -760,6 +775,17 @@ async function main(): Promise<void> {
         });
         gappBook.onChange(() => catalogService.rebuild());
         catalogService.rebuild();
+        // GApps v2 V4: installed apps at their own origins, behind the front door.
+        const gappBridge = new GAppBridge({
+            book: gappBook,
+            catalog: (id) => catalogService.snapshot().definitions.find((d) => d.id === id) ?? null,
+            run: createGAppToolRunner({ registrations: () => mcp?.registrations() ?? [], callers: gappCallers }),
+            onCatalogChange: (listener) => catalogService.onEvent((change) => listener(change.revision)),
+        });
+        gappServer = new GAppServer({ book: gappBook, bridge: gappBridge });
+        await gappServer.listen(0);
+        gappBook.onChange(() => { for (const listener of gappRouteListeners) listener(); });
+        for (const listener of gappRouteListeners) listener();
     } catch (error) {
         say(`The GApp book could not open: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -792,9 +818,50 @@ async function main(): Promise<void> {
             }
         },
     });
-    const relayBridge = new RelayBridgeHost((owner, event) => engineRef?.remoteAccessEvent(owner, { kind: 'bridge', event }));
     const remoteHub = transportHub(remoteListen.transport);
-    remoteHub.add(relayBridge);
+    // THIS MACHINE'S KEY IS HERE (P3.4), and the relay that signs with it (Tynn #410).
+    const workstationService = new WorkstationService({
+        store: workstationKeyStore(join(home, 'workstation.json'), keychain),
+        request: async (path, init) => (await tynnOpening).request(path, init),
+        host: () => TYNN_HOST,
+        hostname,
+        machineKey: () => readMachineId({
+            platform: process.platform,
+            readFile: (path) => readFileText(path, 'utf8'),
+            exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
+        }).then((id) => (id ? machineKeyOf(id) : null)),
+    });
+    /*
+     * THIS MACHINE ON THE TYNN RELAY, AS A HOST (Tynn #410, host split P5d.3): registered with Tynn, its role read, and the
+     * link run here, so a Pilot or a share link reaches this machine with every window closed.
+     */
+    const relayFetch = async (url: string, init?: RequestInit): Promise<Response> => {
+        const memory = await proxyMemory;
+        return hostHttpsFetch({ proxyRoutes: (target) => memory.routesFor(target), log: say })(url, init as never) as unknown as Response;
+    };
+    const relayHostService: RelayHostService = new RelayHostService({
+        account: () => tynnAccountNow,
+        workstation: workstationService,
+        enabled: () => settings.snapshot().remote_access === true,
+        readRole: (request) => readWorkstationRole(request),
+        start: ({ host, workstationId, fingerprint, onStatus }) => startRelayHost({
+            ports: relayHostPorts({ tynnHost: host, workstationId, authHeader: () => workstationService.authHeader(host), fetch: relayFetch }),
+            socket: (url) => deviceSocket(url),
+            workstationId,
+            fingerprint,
+            sign: (data) => workstationService.sign(host, data),
+            attach: (transport) => remoteHub.add(transport),
+            onStatus,
+            log: (message) => say(`tynn relay: ${message}`),
+            ...(hostingStack ? { site: { dial: (name: string) => dialFrontDoor(hostingStack.frontDoorPort, name), ca: () => hostingStack.browserTrust().caPem } } : {}),
+        }),
+        onChange: () => engineRef?.relayHostEvent(relayHostService.status()),
+    });
+    void tynnOpening.then((account) => {
+        account.onChange(() => { void relayHostService.register(); });
+        void relayHostService.register();
+    }, () => {});
+    setInterval(() => { void relayHostService.readRole(); }, 5 * 60_000).unref();
     /** genie-host's own answers to a phone (Tynn #551): built once its session host is up, below. */
     let phoneApi: HostApi | null = null;
     const remoteAccessHost = await RemoteAccessHost.open({
@@ -818,8 +885,8 @@ async function main(): Promise<void> {
     });
     // OFF BY DEFAULT (Tynn #820): the listener runs only while `remote_access` is on, applied at boot and on every change.
     let remoteAccessService: RemoteAccessService | null = null;
-    const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => remoteAccessService?.pushStatus() });
-    remoteAccessService = new RemoteAccessService(remoteAccessHost, relayBridge, {
+    const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => { remoteAccessService?.pushStatus(); void relayHostService.apply(); } });
+    remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
         newestWindow: () => engineRef?.newestLocalWindow() ?? null,
         windowEvent: (channel, payload) => { for (const l of [...remoteWindowEvents]) l(channel, payload); },
@@ -880,6 +947,7 @@ async function main(): Promise<void> {
              */
             relay: {
                 signedIn: () => tynnAccountNow?.status().signedIn === true,
+                refusal: () => droneRefusal(relayHostService.role()),
                 keypair: () => PopKeypair.generate(),
                 mint: (workstationId, jwk) => (tynnAccountNow
                     ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
@@ -889,17 +957,8 @@ async function main(): Promise<void> {
             },
             browsers: new RemoteBrowsers(siteDoor),
         }),
-        workstation: new WorkstationService({
-            store: workstationKeyStore(join(home, 'workstation.json'), keychain),
-            request: async (path, init) => (await tynnOpening).request(path, init),
-            host: () => TYNN_HOST,
-            hostname,
-            machineKey: () => readMachineId({
-                platform: process.platform,
-                readFile: (path) => readFileText(path, 'utf8'),
-                exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
-            }).then((id) => (id ? machineKeyOf(id) : null)),
-        }),
+        workstation: workstationService,
+        relayHost: relayHostService,
         // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
         keyring: ((service: KeyringService) => { keyringNotices.push((text) => service.setNotice(text)); return service; })(new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
             onReady: () => {
@@ -960,6 +1019,8 @@ async function main(): Promise<void> {
     files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
+    // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
+    const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
     await lockIdentity;
     const host = new SessionHost({
         userData: home,
@@ -976,6 +1037,7 @@ async function main(): Promise<void> {
         },
         untrustedNow: (record) => hostUntrustedNow(record),
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
+        onHeadroom: (provider, room) => { headroomFeed.offer(provider, room); engineHostOptions.onHeadroom(provider, room); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
             const hold = doctorHoldNow(home);
@@ -1040,7 +1102,8 @@ async function main(): Promise<void> {
      * over a registry on this host's own registry store, this session host, its attention, inbox and approval stores, and
      * the workspaces' files. The remote host uses it for the phone's methods only while no window is connected.
      */
-    const phoneRegistry = new Registry(registryStore);
+    // Its writes go the way a window's do (AgentStoresService), so genie-host's own model and every window follow them.
+    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));
@@ -1093,6 +1156,10 @@ async function main(): Promise<void> {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
+        windowConnected: () => engine.newestLocalWindow() !== null,
+        headroom: headroomFeed,
+        models: new ProviderModelCache(realListModels),
+        providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
         attention: own.attention,
         approvals,
         inbox: own.inbox,
@@ -1291,7 +1358,7 @@ async function main(): Promise<void> {
                 updateEngine: (id: string, options: { consent: boolean; approvedDependents?: readonly string[] }) => hostingStack.updateEngine(id, options),
             },
         } : {}),
-        flowCallers,
+        flowCallers: { callerFor: (key) => flowCallers.callerFor(key) ?? gappCallers.callerFor(key) },
         // The plugins' tools, run here (ADF A3): an official one in process, anyone else's in its sandboxed child. The Genie
         // API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
         plugins: hostPluginTools(pluginsService, {
@@ -1387,6 +1454,7 @@ async function main(): Promise<void> {
         // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
         await stopHostedOnce();
         await appInboxDoor.close().catch(() => undefined);
+        await gappServer?.close().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
         const current = parseHostRecord(readOrNull(recordFile));

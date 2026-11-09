@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,6 +109,9 @@ describe('a host killed outright leaves whole lines, in order, once the next sta
                 child.stdout!.on('data', (d: Buffer) => { said += d.toString('utf8'); if (said.includes('LOGGING')) resolve(); });
                 child.once('exit', (code) => reject(new Error(`the logger ended by itself (${code})`)));
             });
+            // Only once a batch has reached the file: a kill before the first write leaves nothing, and proves nothing.
+            const file = join(dir, 'lifecycle.log');
+            for (const end = Date.now() + 30_000; Date.now() < end && !(existsSync(file) && statSync(file).size > 0);) await new Promise((r) => setTimeout(r, 5));
             // Somewhere in its stream of writes: never the same moment twice.
             await new Promise((r) => setTimeout(r, 40 + ((i * 37) % 160)));
             const gone = new Promise((r) => child.once('exit', r));

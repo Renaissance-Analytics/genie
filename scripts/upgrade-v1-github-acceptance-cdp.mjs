@@ -21,6 +21,9 @@ import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 
+// features.act is on the page's own bridge now: window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
+
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this removes a profile; test machines only'); process.exit(2); }
 process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
 process.env.DBUS_SESSION_BUS_ADDRESS ??= `unix:path=${process.env.XDG_RUNTIME_DIR}/bus`;
@@ -178,7 +181,7 @@ try {
     check(Boolean(book), 'S10.5-the-book-says-done');
 
     say('signed out');
-    await cdp.evaluate(`window.genie.features.act({ kind: 'integrations.githubSignOut' }).then(() => true)`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'integrations.githubSignOut' }).then(() => true)`);
     const out = await until('the sign-out to reach the file', 30_000, () => githubRow()?.state === 'signed-out');
     check(Boolean(out), 'S10.6-signed-out-is-on-disk', JSON.stringify(githubRow()));
     check((await held(ACCESS)) === null && (await held(REFRESH)) === null, 'S10.7-and-the-keychain-holds-neither');

@@ -71,6 +71,10 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
             readBytes: async (_w, path) => ({ ok: false as const, path, error: 'n/a' }),
             upload: async () => ({ ok: false as const, reason: 'n/a' }),
         },
+        models: { get: async () => ({ models: [] }) as never },
+        providerInstalled: () => true,
+        windowConnected: () => false,
+        headroom: { view: () => ({}), subscribe: () => () => {} },
         ...over,
     };
 }

@@ -29,6 +29,38 @@ export class HeadroomBoard {
     }
 }
 
+/**
+ * THE BOARD, AND WHO HEARS IT (Tynn #553): what the window and genie-host each keep. A reading that clears its buffer is kept
+ * and told to every listener once; one inside it costs a comparison. The buffer is asked at each reading, so a change to
+ * the setting applies at once.
+ */
+export class HeadroomFeed {
+    readonly #board = new HeadroomBoard();
+    readonly #listeners = new Set<(room: Readonly<Record<string, Headroom>>) => void>();
+    readonly #bufferMs: () => number;
+    readonly #now: () => number;
+
+    constructor(bufferMs: () => number, now: () => number = Date.now) {
+        this.#bufferMs = bufferMs;
+        this.#now = now;
+    }
+
+    offer(provider: string, room: Headroom): void {
+        if (!this.#board.offer(provider, room, this.#now(), this.#bufferMs())) return;
+        const view = this.#board.view();
+        for (const listener of this.#listeners) listener(view);
+    }
+
+    view(): Record<string, Headroom> {
+        return this.#board.view();
+    }
+
+    subscribe(listener: (room: Readonly<Record<string, Headroom>>) => void): () => void {
+        this.#listeners.add(listener);
+        return () => { this.#listeners.delete(listener); };
+    }
+}
+
 /** The buffer from the host setting `rate_limit_refresh` (seconds); 1 minute by default, and for anything not offered. */
 export function headroomBufferMs(values: Readonly<Record<string, unknown>>): number {
     const seconds = Number(values['rate_limit_refresh']);

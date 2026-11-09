@@ -86,7 +86,6 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'panel_layout', group: 'workstation', scope: 'workspace', label: 'Terminal layout', description: 'How this workspace’s terminals are laid out: one at a time, two columns, two rows, or a 2×2 grid. Remembered per workspace.', type: 'enum', options: ['single', 'columns', 'rows', 'grid'], default: 'single' },
     { key: 'track_cwd', group: 'workstation', scope: 'host', label: 'Track terminal directory', description: 'Let terminals report their working directory so a new one opens where the last was.', type: 'boolean', default: true },
     { key: 'rate_limit_refresh', group: 'workstation', scope: 'host', label: 'Rate-limit refresh on the Dashboard', description: 'How often each provider’s rate-limit reading in the Dashboard header may change, in seconds. A reading that arrives sooner is ignored, so many agents reporting at once do not churn the window.', type: 'enum', options: ['30', '60', '120', '300'], default: '60' },
-    { key: 'detached_terminals', group: 'workstation', scope: 'host', label: 'Keep terminals through a quit', description: 'Terminals survive Genie closing and are rejoined on the next launch.', type: 'boolean', default: false },
     { key: 'theme', group: 'appearance', scope: 'device', label: 'Theme', description: 'Dark, light, or follow the system.', type: 'enum', options: ['dark', 'light', 'system'], default: 'system' },
     { key: 'sidebar_width', group: 'appearance', scope: 'device', label: 'Sidebar width', description: 'Pixels.', type: 'string', default: '208' },
     // One row per alert kind, DERIVED from the registry — never a hand-kept list.
@@ -109,7 +108,6 @@ const V1_MAP: Readonly<Record<string, string>> = {
     theme: 'theme',
     update_channel: 'update_channel',
     track_cwd: 'track_cwd',
-    detached_terminals: 'detached_terminals',
     // Genie 1's master sound switch is `notify_sound` ('on' / 'off'; genie main/db.ts). This map named
     // `notification_sounds`, which Genie 1 never had, so nobody's sound settings carried over (Tynn #766).
     notify_sound: 'notification_sounds',
@@ -139,6 +137,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {
+    // genie-host owns the terminals and keeps them past a window's quit (Tynn #416).
+    detached_terminals: 'genie-host keeps the terminals past a window closing; there is no setting',
     // Genie 2 has no restore switch (the owner, 2026-10-20): every agent that was running always comes back.
     restore_agents_on_launch: 'Genie 2 always starts again the agents that were running; there is no setting',
     agent_command: 'agents are sessions in Genie 2; there is no launch line to carry',

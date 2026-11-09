@@ -1,10 +1,10 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import { Baton, PairingPins } from '../core/remote.js';
-import type { CallContext, PreAuth, RemoteMethod, ServerConnection, ServerTransport } from '../core/remote-protocol.js';
+import type { CallContext, RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
-import { PHONE_METHODS } from './host-alone-api.js';
+import { HOST_ALONE_METHODS } from './host-alone-api.js';
 
 /**
  * REMOTE ACCESS'S HOST SIDE, IN GENIE-HOST (Tynn #409, host split P5d.1). A phone (over the tailnet) and a Pilot (over the
@@ -44,7 +44,7 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             const own = ports.own[method];
             if (own) return own(args);
             if (ports.window.connected()) return ports.window.invoke(method, args, context);
-            const answers = PHONE_METHODS.has(method) ? alone() : null;
+            const answers = HOST_ALONE_METHODS.has(method) ? alone() : null;
             if (answers) return answers.invoke(method, args, context);
             throw new Error(`${ports.hostName} answers ${method} only while a Genie window is open there: open Genie on ${ports.hostName}`);
         },
@@ -75,7 +75,7 @@ export interface RemoteAccessHostOptions {
     readonly home: string;
     readonly hostName: string;
     readonly api: HostApi;
-    /** Where remote connections come from: the tailnet listener, and the relay connections the window's relay host bridges. */
+    /** Where remote connections come from: the tailnet listener and the Tynn relay host. */
     readonly transport: ServerTransport;
     readonly now?: () => number;
     readonly confirm?: PairConfirm & Pick<PairApprovals, 'requests' | 'answer' | 'onChange'>;
@@ -149,110 +149,8 @@ export class RemoteAccessHost {
     }
 }
 
-/**
- * THE RELAY BRIDGE, HOST SIDE (Tynn #409; the coordinator's option 1). Until the relay host itself moves here (P5d.3,
- * #410), a window's relay host admits a Pilot or a guest by its Tynn grant and hands the connection to genie-host, so
- * every remote connection meets the ONE baton, lock and device list here.
- *
- * SECURITY. A bridged connection is exactly what the relay admitted, never more:
- * - only a relay proof crosses: a pre-auth that says `local`, or none at all, is refused (a bridged connection must never
- *   become this machine's own window, nor say a tailnet hello: remote-host.ts's #348 binding then holds as for any relay
- *   connection);
- * - the pre-auth is checked field by field and copied, so nothing else rides along;
- * - each connection's id is minted HERE, random, and belongs to the window that opened it: a frame for an id that is not
- *   that window's, or that has closed, is refused (no replay onto a closed or someone else's connection);
- * - the window that opened it leaving closes it.
- */
-export type BridgeEvent = { readonly id: string; readonly frame: string } | { readonly id: string; readonly closed: true };
-
-interface Bridged {
-    readonly owner: string;
-    readonly messages: Set<(text: string) => void>;
-    readonly closes: Set<() => void>;
-    closed: boolean;
-}
-
-const LABEL_MAX = 200;
-
-/** A relay pre-auth, checked and copied; `null` when it is not one. */
-export function relayPreAuth(value: unknown): PreAuth | null {
-    if (value === null || typeof value !== 'object') return null;
-    const v = value as Record<string, unknown>;
-    const allowed = new Set(['kind', 'label', 'isOwner', 'workspaceId', 'readonly']);
-    if (Object.keys(v).some((k) => !allowed.has(k))) return null;
-    if (v.kind !== undefined && v.kind !== 'relay') return null;
-    if (typeof v.label !== 'string' || v.label.trim() === '' || v.label.length > LABEL_MAX) return null;
-    if (typeof v.isOwner !== 'boolean' || typeof v.readonly !== 'boolean') return null;
-    // `null`: the whole host (the owner, or a `host:all` guest, relay-grant.ts principalOf); else the one workspace.
-    if (v.workspaceId !== null && (typeof v.workspaceId !== 'string' || v.workspaceId === '')) return null;
-    return { kind: 'relay', label: v.label, isOwner: v.isOwner, workspaceId: v.workspaceId as string | null, readonly: v.readonly };
-}
-
-export class RelayBridgeHost implements ServerTransport {
-    readonly #listeners = new Set<(connection: ServerConnection) => void>();
-    readonly #open = new Map<string, Bridged>();
-    readonly #send: (owner: string, event: BridgeEvent) => void;
-
-    /** `send`: a frame (or the close) for the window that owns the connection. */
-    constructor(send: (owner: string, event: BridgeEvent) => void) {
-        this.#send = send;
-    }
-
-    onConnection(listener: (connection: ServerConnection) => void): () => void {
-        this.#listeners.add(listener);
-        return () => { this.#listeners.delete(listener); };
-    }
-
-    /** A relay connection the window's relay host admitted. */
-    open(owner: string, preAuth: unknown): { ok: true; id: string } | { ok: false; reason: string } {
-        const pre = relayPreAuth(preAuth);
-        if (!pre) return { ok: false, reason: 'only a connection the Tynn relay admitted is bridged, with its relay proof' };
-        const id = randomUUID();
-        const b: Bridged = { owner, messages: new Set(), closes: new Set(), closed: false };
-        this.#open.set(id, b);
-        const connection: ServerConnection = {
-            remoteAddress: `relay:${pre.label}`,
-            preAuth: pre,
-            send: (text) => { if (!b.closed) this.#send(owner, { id, frame: text }); },
-            onMessage: (l) => { b.messages.add(l); return () => { b.messages.delete(l); }; },
-            onClose: (l) => { b.closes.add(l); return () => { b.closes.delete(l); }; },
-            close: () => { if (this.#end(id)) this.#send(owner, { id, closed: true }); },
-        };
-        for (const l of this.#listeners) l(connection);
-        return { ok: true, id };
-    }
-
-    /** A frame from the Pilot, through the window that owns the connection. */
-    frame(owner: string, id: string, text: string): { ok: true } | { ok: false; reason: string } {
-        const b = this.#open.get(id);
-        if (!b || b.closed || b.owner !== owner) return { ok: false, reason: 'no such bridged connection' };
-        for (const l of [...b.messages]) l(text);
-        return { ok: true };
-    }
-
-    /** The Pilot left (the window says so). */
-    closed(owner: string, id: string): void {
-        const b = this.#open.get(id);
-        if (b && b.owner === owner) this.#end(id);
-    }
-
-    /** The window that opened them left: its connections end. */
-    dropOwner(owner: string): void {
-        for (const [id, b] of [...this.#open]) if (b.owner === owner) this.#end(id);
-    }
-
-    #end(id: string): boolean {
-        const b = this.#open.get(id);
-        if (!b || b.closed) return false;
-        b.closed = true;
-        this.#open.delete(id);
-        for (const l of [...b.closes]) l();
-        return true;
-    }
-}
-
 /** What genie-host tells its local windows about remote access. */
-export type RemoteAccessEvent = { readonly kind: 'status'; readonly status: RemoteAccessStatus } | { readonly kind: 'bridge'; readonly event: BridgeEvent };
+export type RemoteAccessEvent = { readonly kind: 'status'; readonly status: RemoteAccessStatus };
 
 export interface RemoteAccessServicePorts {
     /** The listener's switch (remote-access.ts): applied when `remote_access` changes, Restart from Settings. */
@@ -268,18 +166,16 @@ export interface RemoteAccessServicePorts {
 /**
  * REMOTE ACCESS, AS THE WINDOW DRIVES IT (Tynn #409): the engine link's `engine.remoteAccess`, from a LOCAL window only
  * (session-engine-server.ts). Settings → Workstation's remote section reads the status and drives the PIN, the devices,
- * the lock and the pair answers; the window's relay host bridges its connections; the newest window forwards its events.
+ * the lock and the pair answers; the newest window forwards its events.
  */
 const CHANGES_STATUS = new Set(['issuePin', 'revokeDevice', 'lock', 'unlock', 'answerPair', 'apply', 'restart', 'start', 'stop']);
 
 export class RemoteAccessService {
     readonly #access: RemoteAccessHost;
-    readonly #bridge: RelayBridgeHost;
     readonly #ports: RemoteAccessServicePorts;
 
-    constructor(access: RemoteAccessHost, bridge: RelayBridgeHost, ports: RemoteAccessServicePorts) {
+    constructor(access: RemoteAccessHost, ports: RemoteAccessServicePorts) {
         this.#access = access;
-        this.#bridge = bridge;
         this.#ports = ports;
         access.onChange(() => this.pushStatus());
     }
@@ -310,9 +206,6 @@ export class RemoteAccessService {
             case 'stop': await this.#ports.switch.stop(); return a.status();
             case 'health': { const s = a.status(); return { host: s.host, listening: s.url !== null, why: s.unavailable }; }
             case 'restart': await this.#ports.switch.restart(); return a.status();
-            case 'bridge.open': return this.#bridge.open(owner, args[0]);
-            case 'bridge.frame': return this.#bridge.frame(owner, String(args[0]), String(args[1]));
-            case 'bridge.close': this.#bridge.closed(owner, String(args[0])); return true;
             case 'event':
                 // One window feeds remote connections: the newest local one, the same that does their calls.
                 if (owner !== this.#ports.newestWindow()) return false;
@@ -320,9 +213,5 @@ export class RemoteAccessService {
                 return true;
             default: throw new Error(`remote access has no ${method}`);
         }
-    }
-
-    dropOwner(owner: string): void {
-        this.#bridge.dropOwner(owner);
     }
 }

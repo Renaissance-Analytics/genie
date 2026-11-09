@@ -103,7 +103,7 @@ describe('on the host: update and uninstall', () => {
     afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
     const writePlugin = async (version: string, tools: string[]) => {
         await mkdir(join(dir, 'plugins', 'acme-lint'), { recursive: true });
-        await writeFile(join(dir, 'plugins', 'acme-lint', 'genie-plugin.json'), JSON.stringify({ ...manifest(version, tools), mcpTools: tools.map(tool) }));
+        await writeFile(join(dir, 'plugins', 'acme-lint', 'genie-package.json'), JSON.stringify({ ...manifest(version, tools), mcpTools: tools.map(tool) }));
     };
 
     it('an update replaces the package’s elements at one new revision: never half the old and half the new', async () => {

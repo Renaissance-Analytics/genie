@@ -2,7 +2,10 @@ import type { AgentId } from '../core/identity.js';
 import type { RemoteMethod } from '../core/remote-protocol.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import { agentDetailFor } from './agent-detail.js';
-import { restartAgent, type AgentRestartPorts } from './agent-ops-host.js';
+import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
+import { agentOpsApi, agentOpsPorts, type AgentOpsWiring } from './agent-ops-api.js';
+import { restartAgent, SettingApplier } from './agent-ops-host.js';
+import { agentShells } from '../core/agent-shells.js';
 import type { Finished } from './attention-store.js';
 import { answerDeck, type DeckAnswerPorts } from './deck-answer.js';
 import { buildHostApi, type HostApiDeps } from './host-api.js';
@@ -29,10 +32,27 @@ export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
     'files.children', 'files.open', 'files.readMedia', 'files.upload',
 ]);
 
+/**
+ * A PILOT'S AGENT OPERATIONS (Tynn #553, P5d.5a): the same set, on the same terms: only while no window is connected,
+ * after the remote host's own owner, read-only and workspace checks. Later families of P5d.5 join {@link HOST_ALONE_METHODS}.
+ */
+export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
+    'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope',
+    'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions',
+    'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput',
+]);
+
+/** The Dashboard's lanes and rate limits (Tynn #553, P5d.5b). */
+export const HOST_FEED_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['activity', 'headroom']);
+
+/** Every method genie-host answers itself while no window is connected. */
+export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS]);
+
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
     'probe' | 'start' | 'stop' | 'ended' | 'deliverOwed' | 'cancel' | 'resumeLimit' | 'prompt' | 'promptWith' | 'resolvePrompt' | 'answerApproval'
-    | 'subscribe' | 'needsNewDriver' | 'notice' | 'ledgerFor' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'>;
+    | 'subscribe' | 'needsNewDriver' | 'notice' | 'ledgerFor' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'
+    | 'modelState' | 'switchModel' | 'settleParked' | 'historyRows' | 'toolOutput'>;
 
 export interface HostAlonePorts {
     readonly hostName: string;
@@ -41,13 +61,20 @@ export interface HostAlonePorts {
     readonly engine: () => HostAloneEngine | null;
     readonly cwdFor: HostApiDeps['cwdFor'];
     /** Why a start would be refused (an asleep workspace, the agent cap), as Start always obeys. */
-    readonly startRefusal: AgentRestartPorts['startRefusal'];
+    readonly startRefusal: AgentOpsWiring['startRefusal'];
+    /** Each provider's model list, asked of its CLI once and kept. */
+    readonly models: AgentOpsWiring['models'];
+    readonly providerInstalled: AgentOpsWiring['providerInstalled'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     readonly inbox: DeckAnswerPorts['inbox'] & { involving(id: AgentId, limit: number): readonly InboxMessage[] };
     /** An approval's note, delivered to the agent as your message. */
     readonly deliverToAgent: (agentId: string, text: string) => boolean | Promise<boolean>;
     readonly files: NonNullable<HostApiDeps['files']>;
+    /** A window is connected: it answers, so genie-host builds no activity feed nobody it serves will read. */
+    readonly windowConnected: () => boolean;
+    /** Each provider's latest rate-limit reading, kept by genie-host whether or not a window is open. */
+    readonly headroom: NonNullable<HostApiDeps['headroom']>;
     readonly updates?: HostApiDeps['updates'];
     readonly schedule?: HostApiDeps['schedule'];
 }
@@ -64,18 +91,27 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         if (!e) throw new Error(`Genie’s agents on ${hostName} are still starting; try again in a moment`);
         return e;
     };
-    const restartPorts: AgentRestartPorts = {
-        registry: { find: (id) => registry.find(id as AgentId), clearThread: (id) => registry.clearThread(id) },
-        host: {
-            start: (record, cwd) => engine().start(record, cwd),
-            stop: (id) => engine().stop(id),
-            ended: (id) => engine().ended(id),
-            probe: (id) => ports.engine()?.probe(id) ?? null,
-            deliverOwed: (id, then) => engine().deliverOwed(id, then),
-        },
-        startRefusal: ports.startRefusal,
+    const agentOps = agentOpsPorts({
+        registry: () => registry,
+        engine,
+        models: ports.models,
         cwdFor: ports.cwdFor,
-    };
+        startRefusal: ports.startRefusal,
+        finished: () => ports.attention.finished(),
+        providerInstalled: ports.providerInstalled,
+        applyOnStart: (id) => settingApplier.requested(id),
+    });
+    // A model change waiting for its agent to be free applies the moment it is, with or without a window.
+    const settingApplier = new SettingApplier(agentOps, (id) => agentShells(ports.engine()?.rowsFor(id) ?? []).count);
+    ports.engine()?.subscribe((id) => settingApplier.changed(id as AgentId));
+    const activityFeeds = new ActivityFeeds({
+        host: {
+            subscribe: (listener) => ports.engine()?.subscribe((id) => { if (!ports.windowConnected()) listener(id); }) ?? (() => {}),
+            ledgerFor: (id) => ports.engine()?.ledgerFor(id) ?? [],
+            probe: (id) => ports.engine()?.probe(id) ?? null,
+        },
+        ...(ports.schedule ? { schedule: (fn: () => void, ms: number) => { ports.schedule!(ms, fn); } } : {}),
+    });
     const startOnDemand = (record: Parameters<HostApiDeps['cwdFor']>[0]) => startForWork({
         probe: (id) => ports.engine()?.probe(id) ?? null,
         start: (r, cwd) => engine().start(r, cwd),
@@ -94,7 +130,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,
-            restart: (id) => restartAgent(restartPorts, id, 'graceful'),
+            restart: (id) => restartAgent(agentOps, id, 'graceful'),
             notice: (id, message) => ports.engine()?.notice(id, message) ?? false,
         }, record),
         host: {
@@ -116,7 +152,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         serviceEnvFor: () => ({}),
         // Its settings-changed subscription is wired with the events: a no-op here, nothing else of it answers.
         workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', { onSettingsChanged: () => () => {} }),
-        agentOps: windowOnly<HostApiDeps['agentOps']>('agents', { restart: (id, kind) => restartAgent(restartPorts, id, kind) }),
+        agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
         features: windowOnly<HostApiDeps['features']>('features', {
             // The Deck's answer only (the phone's Deck, deck-answer.ts); the phone reads nothing back from it.
             act: async (action: FeatureAction) => {
@@ -126,6 +162,8 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             },
             onChange: () => () => {},
         }),
+        activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry.listAgents(), workspaceId), subscribe: (listener) => activityFeeds.subscribe(listener) },
+        headroom: ports.headroom,
         updates: ports.updates ?? null,
     };
     return buildHostApi(deps);

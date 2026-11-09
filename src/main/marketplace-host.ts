@@ -1,8 +1,10 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, rmdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { compareMarketplaceVersions, needsMarketplaceConsent, type MarketplaceApi, type MarketplacePackage, type MarketplaceReview, type MarketplaceRow, type MarketplaceVersion } from '../core/marketplace.js';
+import { PACKAGE_MANIFEST_FILE } from '../core/plugin-integrity.js';
 import { parseManifest, type PluginCapabilities, type PluginManifest } from '../core/plugins.js';
 import { extractMarketplaceArchive, MARKETPLACE_ARCHIVE_BYTES } from './marketplace-archive.js';
 import { MARKETPLACE_PAGE_BYTES, type MarketplaceClient } from './marketplace-client.js';
@@ -109,7 +111,7 @@ async function writeJson(file: string, value: unknown, limit: number): Promise<v
     try {
         const output = await open(tmp, 'wx', 0o600);
         try { await output.writeFile(text, 'utf8'); await output.sync(); } finally { await output.close(); }
-        await rename(tmp, file);
+        await renameOver(tmp, file);
     } finally { await rm(tmp, { force: true }); }
 }
 async function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -246,7 +248,7 @@ export class MarketplaceHost implements MarketplaceApi {
     async #verify(dir: string, pkg: MarketplacePackage): Promise<PluginManifest> {
         const registry = this.#options.registry;
         if (registry.keyState(pkg.version.key_id) !== 'trusted') throw new Error('Publisher registry key is withdrawn or no longer trusted; refresh before installing');
-        const parsed = parseManifest(JSON.parse(await readFile(join(dir, 'genie-plugin.json'), 'utf8')));
+        const parsed = parseManifest(JSON.parse(await readFile(join(dir, PACKAGE_MANIFEST_FILE), 'utf8')));
         if (!parsed.ok) throw new Error(`Invalid package manifest: ${parsed.reason}`);
         const manifest = parsed.manifest;
         if (manifest.id !== pkg.id || manifest.version !== pkg.version.version || manifest.publisher.keyId !== pkg.version.key_id || manifest.publisher.name !== pkg.publisher.name || manifest.name !== pkg.name) throw new Error('Signed manifest identity disagrees with registry metadata');
@@ -373,7 +375,7 @@ export class MarketplaceHost implements MarketplaceApi {
         const digest = async (folder: string): Promise<string | null> => {
             if (!await plain(folder)) return null;
             const current = await currentDigest(folder);
-            const manifest = JSON.parse(await readFile(join(folder, 'genie-plugin.json'), 'utf8')) as { id?: unknown };
+            const manifest = JSON.parse(await readFile(join(folder, PACKAGE_MANIFEST_FILE), 'utf8')) as { id?: unknown };
             if (!current.ok || manifest.id !== raw.id) throw new Error('Marketplace recovery package identity or digest cannot be verified; files retained.');
             return current.digest;
         };

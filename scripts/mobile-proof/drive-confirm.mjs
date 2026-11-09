@@ -37,7 +37,7 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const act = (g, action) => g.call((a) => window.genie.features.act(a).then((d) => d.remote), action);
+const act = (g, action) => g.call((a) => (window.genieTest ?? window.genie).features.act(a).then((d) => d.remote), action);
 const snap = (g) => g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote)');
 
 /**

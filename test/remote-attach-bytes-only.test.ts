@@ -143,8 +143,8 @@ describe('HostPicks', () => {
 
 /*
  * THE WIRING (main.ts): read as text, comments stripped, because main.ts only runs inside Electron. The remote API's
- * `features.act` must name NO origin (so it is the default, remote); main's own IPC must derive the origin from the
- * SENDER — whether it is one of the remote windows — and record picks only from a window that is not one.
+ * `features.act` takes its origin from what the host admitted (host-picks.ts `featureOriginOf`), and a pick counts only
+ * from this machine's own window (host-api.ts); p4-call-context.test.ts and p4-features-act.test.ts assert who that is.
  */
 describe('main.ts wiring', () => {
     const source = readFileSync('src/main/main.ts', 'utf8')
@@ -152,13 +152,8 @@ describe('main.ts wiring', () => {
         .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
         .join('\n');
 
-    // The host API decides by who it admitted (Tynn #578): only this machine's own window is local; see p4-call-context.test.ts.
-    it('the remote API’s features.act takes its origin from the host’s context, never from the action', () => {
-        expect(source).toMatch(/act: \(action, context\) => handleFeatureAction\(services!, action, featureState, featurePorts, featureOriginOf\(context, hostPicks\)\),/);
-    });
-
-    it('main’s own IPC derives the origin from the sender, and records picks only from a window that is not remote', () => {
-        expect(source).toMatch(/ipcMain\.handle\(FEATURE_CHANNELS\.act, async \(event, raw: unknown\) => \{[\s\S]{0,400}handleFeatureAction\(composed, action, featureState, featurePorts, featureOrigin\(\{ remoteWindow: isRemoteWindow\(event\.sender\), picks: hostPicks \}\)\)/);
-        expect(source).toMatch(/ipcMain\.handle\(FEATURE_CHANNELS\.picked, \(event, raw: unknown\) => \{\s*if \(isRemoteWindow\(event\.sender\)\) return;/);
+    it('an action’s origin is the host’s context, never the action, and a pick is recorded by the host', () => {
+        expect(source).toMatch(/handleFeatureAction\(composed, action, featureState, featurePorts, featureOriginOf\(context, hostPicks\)\)/);
+        expect(source).toMatch(/picked: \(paths\) => hostPicks\.record\(paths\)/);
     });
 });

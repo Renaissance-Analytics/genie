@@ -72,10 +72,10 @@ async function fixture(version = '1.0.0', capabilities = baseCaps): Promise<Fixt
     const manifest = Buffer.from(JSON.stringify({ id, name: 'Example plugin', version, publisher: { name: publisher.name, keyId }, capabilities, mcpTools: [{ name: 'hello', description: 'Hello', inputSchema: { type: 'object' }, run: 'tools.cjs', process: 'subprocess', gated: true }] }));
     // This would fail the install if any installer tried to execute third-party code while checking it.
     const tool = Buffer.from('throw new Error("plugin code must not execute during install");');
-    await writeFile(join(folder, 'genie-plugin.json'), manifest);
+    await writeFile(join(folder, 'genie-package.json'), manifest);
     await writeFile(join(folder, 'tools.cjs'), tool);
     const digest = await signPackage(folder, pair.privateKey);
-    const files = { 'genie-plugin.json': manifest, 'tools.cjs': tool, 'genie-plugin.sig': await readFile(join(folder, 'genie-plugin.sig')) };
+    const files = { 'genie-package.json': manifest, 'tools.cjs': tool, 'genie-plugin.sig': await readFile(join(folder, 'genie-plugin.sig')) };
     const result: Fixture = {
         files, bytes: await zip(files),
         package: { id, name: 'Example plugin', publisher, version: { version, digest, key_id: keyId, permissions: capabilities, file_count: 2, uncompressed_size: manifest.length + tool.length, published_at: '2026-11-08T12:00:00Z', download_url: `https://tynn.ai/api/v1/marketplace/packages/${id}/versions/${version}/download` } },
@@ -249,7 +249,7 @@ describe('C4 host-owned Marketplace review and installation', () => {
         if (activated) await rename(join(folder, 'contents'), join(pluginsDir, id));
         await writeFile(grantsFile, JSON.stringify({ version: 1, origin: 'https://tynn.ai', grants: [] }));
         const recovered = await open();
-        expect(JSON.parse(await readFile(join(pluginsDir, id, 'genie-plugin.json'), 'utf8'))).toMatchObject({ version: '1.0.0' });
+        expect(JSON.parse(await readFile(join(pluginsDir, id, 'genie-package.json'), 'utf8'))).toMatchObject({ version: '1.0.0' });
         expect(installed()).toMatchObject({ version: '1.0.0', state: 'enabled' });
         expect(JSON.parse(await readFile(grantsFile, 'utf8'))).toMatchObject({ grants: previous.grants });
         expect(await readdir(stagingDir)).not.toContain('activation.json');
