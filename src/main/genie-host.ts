@@ -24,6 +24,7 @@ import { runningAgentNote } from '../core/crash-record.js';
 import { providerBinary, realListModels, SessionHost } from './session-host.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
+import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -1018,6 +1019,8 @@ async function main(): Promise<void> {
     files = new FilesWatchHub({ source: workerWatchSource({ log: say }), send: (owner, event) => engine.filesEvent(owner, event), workspaceVisible: (id) => { const w = hostRegistry.workspace(id); return !!w && w.asleep !== true; }, gitTree: gitTreeStatus, repoStatus, log: say });
     stores.onEvent((event) => { if (event.store === 'registry') files?.visibilityChanged(); });
     const engineHostOptions = engine.hostOptions();
+    // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
+    const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
     await lockIdentity;
     const host = new SessionHost({
         userData: home,
@@ -1034,6 +1037,7 @@ async function main(): Promise<void> {
         },
         untrustedNow: (record) => hostUntrustedNow(record),
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
+        onHeadroom: (provider, room) => { headroomFeed.offer(provider, room); engineHostOptions.onHeadroom(provider, room); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
             const hold = doctorHoldNow(home);
@@ -1152,6 +1156,8 @@ async function main(): Promise<void> {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
+        windowConnected: () => engine.newestLocalWindow() !== null,
+        headroom: headroomFeed,
         models: new ProviderModelCache(realListModels),
         providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
         attention: own.attention,

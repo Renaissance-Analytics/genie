@@ -116,7 +116,8 @@ describe('the activity feeds with no window', () => {
         const alone = hostAloneApi(ports(e, { schedule: clock.schedule, windowConnected: () => true }));
         const invoke = vi.spyOn(alone, 'invoke');
         const api = gate(alone, { connected: () => true, invoke: async (method) => `window answered ${method}` });
-        api.onEvent(() => {});
+        // No agent watched: an agent's detail reads the ledger too, and this counts only what the feeds read.
+        api.onEvent(() => {}, { wantsAgent: () => false });
         e.emit(atlas.id);
         clock.run();
         expect(ledgerReads).toBe(0);
