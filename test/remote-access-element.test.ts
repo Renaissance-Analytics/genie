@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { REMOTE_ACCESS_ELEMENT } from '../src/main/genie-catalog.js';
 import { genieCatalog } from '../src/main/genie-catalog.js';
-import { hostRemoteApi, RelayBridgeHost, RemoteAccessHost, RemoteAccessService } from '../src/main/remote-access-host.js';
+import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from '../src/main/remote-access-host.js';
 
 /*
  * REMOTE ACCESS IS AN ADF ELEMENT (Tynn #409; the owner: the host split is built on ADF). `genie.remote-access` is a
@@ -34,7 +34,7 @@ describe('genie.remote-access in the catalog', () => {
             home, hostName: 'alphar', transport: { onConnection: () => () => {} },
             api: hostRemoteApi({ hostName: 'alphar', own: {}, window: { connected: () => false, invoke: async () => null } }),
         });
-        const service = new RemoteAccessService(access, new RelayBridgeHost(() => {}), {
+        const service = new RemoteAccessService(access, {
             switch: { apply: async () => { listener.on = true; }, restart: async () => {}, stop: async () => { listener.on = false; } },
             newestWindow: () => null, windowEvent: () => {}, send: () => {},
         });

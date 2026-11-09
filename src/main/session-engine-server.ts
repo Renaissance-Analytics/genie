@@ -97,7 +97,9 @@ export interface EngineServerOptions {
     /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
     readonly deviceLink?: DeviceLinkService;
     /** Remote access's host side (Tynn #409, P5d.1): driven from a LOCAL window only; a window leaving ends its bridged connections. */
-    readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown; dropOwner(owner: string): void };
+    readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown };
+    /** The Tynn relay host's registration, role and link (Tynn #410): read and driven from a LOCAL window only. */
+    readonly relayHost?: { call(method: string, args: unknown[]): unknown };
     /** A workspace's agent config (P3.4): one writer, here. */
     readonly configSync?: (asked: WorkspaceConfigRequest) => Promise<readonly SyncResult[]>;
     /** The keyring card, as the host found it (P3.4 cut c). */
@@ -397,6 +399,11 @@ export class SessionEngineServer {
         for (const conn of this.#connections) if (conn.authed && conn.local && (owner === null || conn.id === owner)) this.#event(conn, 'remoteAccess.event', event);
     }
 
+    /** The relay host's state, to every local window (Tynn #410). */
+    relayHostEvent(view: unknown): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'relayHost.event', view);
+    }
+
     /** Whether a LOCAL window is connected now: the only kind asked to elevate (P5a.2). */
     localWindowConnected(): boolean {
         return [...this.#connections].some((c) => c.authed && c.window && c.local);
@@ -453,7 +460,6 @@ export class SessionEngineServer {
             if (was) this.#options.tynnFeatures?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
-            if (was) this.#options.remoteAccess?.dropOwner(conn.id);
             if (was) this.#options.heartbeat?.dropped(conn.id);
         });
     }
@@ -580,6 +586,11 @@ export class SessionEngineServer {
             if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
             if (!conn.local) throw new Error('Remote access is driven from a local window only.');
             return this.#options.remoteAccess.call(conn.id, typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
+        }
+        if (method === 'engine.relayHost') {
+            if (!this.#options.relayHost) throw new Error('This host runs no relay host.');
+            if (!conn.local) throw new Error('The relay host is driven from a local window only.');
+            return this.#options.relayHost.call(typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
         }
         // The catalog is the host's own, ready before any agent engine is (ADF A4): answered here.
         if (method === 'catalog.snapshot' || method === 'catalog.docs') {
