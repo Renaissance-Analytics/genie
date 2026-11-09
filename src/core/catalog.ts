@@ -62,6 +62,8 @@ export interface FieldSpec {
     readonly problem?: string;
     /** Rule `oneOf`: the values it may take. */
     readonly options?: readonly string[];
+    /** Its TypeScript type for the app-sdk (core/sdk-types.ts), when its rule alone does not say. */
+    readonly tsType?: string;
 }
 
 export interface KindSpec {
@@ -182,7 +184,7 @@ export const KIND_SPECS: readonly KindSpec[] = [
         summary: 'A GApp: a UI that runs in its own window and talks to Genie only through the host, over the bridge, within what the person granted it. Its window draws it; its grant, storage and calls live in genie-host.',
         fields: [
             { name: 'entry', type: 'path inside the package, like `app/index.html`', required: true, description: 'The app\'s first page, one of the package\'s own signed files.', rule: 'packagePath' },
-            { name: 'window', type: '`{ width?, height?, minWidth?, minHeight?, resizable? }`', required: false, default: { width: 1024, height: 720, resizable: true }, description: 'How its window opens.', rule: 'object', problem: 'payload.window must be an object: { width?, height?, minWidth?, minHeight?, resizable? }' },
+            { name: 'window', type: '`{ width?, height?, minWidth?, minHeight?, resizable? }`', tsType: '{ width?: number; height?: number; minWidth?: number; minHeight?: number; resizable?: boolean }', required: false, default: { width: 1024, height: 720, resizable: true }, description: 'How its window opens.', rule: 'object', problem: 'payload.window must be an object: { width?, height?, minWidth?, minHeight?, resizable? }' },
             { name: 'uses', type: 'list of element ids', required: false, default: [], description: 'The catalog elements it may call. Each is a grant the person sees at install, by its catalog name.', rule: 'elementIds' },
             { name: 'storage', type: '`"none"` or `"app"`', required: false, default: 'app', description: 'Whether it keeps data in its own isolated store (50 MB).', rule: 'oneOf', options: ['none', 'app'] },
         ],
