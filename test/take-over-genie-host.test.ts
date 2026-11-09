@@ -349,7 +349,7 @@ describe('the wiring', () => {
     it('a window with a genie-host asks it, and opens only its own window', () => {
         const main = src('src/main/main.ts');
         expect(main).toContain('agentEngineLink.client.takeOvers()');
-        expect(main).toMatch(/takeOvers instanceof TakeOverReplica/);
+        expect(main).toMatch(/await takeOvers\.start\(raw\)/);
     });
 
     it('the tools\' caller is found with no window having told the host', () => {

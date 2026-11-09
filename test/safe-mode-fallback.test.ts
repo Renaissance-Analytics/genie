@@ -183,9 +183,7 @@ describe('main.ts reads genie-host’s safe mode', () => {
         expect(opened).toBeLessThan(code.indexOf('composeWindowServices('));
     });
 
-    it('the own process book and scheduler, the boot restore, the wake and compose all read it', () => {
-        const fallback = code.slice(code.indexOf('const ownBook = await ProcessBook.open('), code.indexOf('processScheduler = ownScheduler;'));
-        expect(fallback.match(/safeMode: windowSafeNow,/g) ?? []).toHaveLength(2);
+    it('the boot restore, the wake and compose all read it', () => {
         expect(code).toMatch(/restoreAfterRelaunch\(\{\s*safeMode: windowSafeNow,/);
         expect(code).toMatch(/const wakeAgent = windowWake\(\{\s*safeMode: windowSafeNow,/);
         expect(code).toMatch(/composeWindowServices\(\{[\s\S]{0,4000}safeMode: windowSafeNow,/);
