@@ -175,7 +175,7 @@ describe('family4 subscriptions on the shared page connection', () => {
         const f = setup(), source = server(f.deps), port = source.port(); vi.stubGlobal('window', { genieLocalProtocol: port });
         const bridge = pageBridge({ subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge), received = vi.fn(), off = bridge.activity!.subscribe(received);
         await tick(); f.activity.emit(feed); await tick(); expect(received).toHaveBeenCalledTimes(1);
-        port.send('close', '', ''); await tick(); expect(bridge.localProtocol!.state().phase).toBe('failed'); bridge.localProtocol!.retry(); await tick();
+        port.send('close', '', ''); await tick(); expect(bridge.localProtocol!.state().phase).toBe('starting'); await vi.waitFor(() => { expect(bridge.localProtocol!.state().phase).toBe('ready'); }); await tick();
         f.activity.emit(feed); await tick(); expect(received).toHaveBeenCalledTimes(2); off(); await tick(); f.activity.emit(feed); await tick(); expect(received).toHaveBeenCalledTimes(2);
     });
     it('retires all three native event send/listen paths', () => {

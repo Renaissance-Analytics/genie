@@ -2,11 +2,12 @@ import type { LocalFramePort } from '../core/local-frame.js';
 import type { ClientTransport } from '../core/remote-protocol.js';
 
 /** A window's ClientTransport over the one preload frame pair. */
-export function localTransport(port: LocalFramePort): ClientTransport {
+export function localTransport(port: LocalFramePort): ClientTransport & { closeReason(): string | null } {
     const handle = globalThis.crypto.randomUUID();
     const messages = new Set<(text: string) => void>();
     const closes = new Set<() => void>();
     let closed = false;
+    let reason: string | null = null;
     let offFrame = () => {};
     const finish = () => {
         if (closed) return;
@@ -18,11 +19,12 @@ export function localTransport(port: LocalFramePort): ClientTransport {
     };
     offFrame = port.onFrame((action, connection, text) => {
         if (closed || connection !== handle) return;
-        if (action === 'closed') finish();
+        if (action === 'closed') { reason = text; finish(); }
         else for (const listener of messages) listener(text);
     });
     port.send('open', handle, '');
     return {
+        closeReason: () => reason,
         send: (text) => { if (!closed) port.send('frame', handle, text); },
         onMessage: (listener) => { if (!closed) messages.add(listener); return () => { messages.delete(listener); }; },
         onClose: (listener) => { if (!closed) closes.add(listener); return () => { closes.delete(listener); }; },
