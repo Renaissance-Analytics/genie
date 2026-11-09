@@ -1,6 +1,6 @@
 import { Button } from '@particle-academy/react-fancy';
 import { useState } from 'react';
-import { isProviderProgramProblem } from '../../core/provider-program.js';
+import { isProviderProgramProblem, providerOfProgramProblem } from '../../core/provider-program.js';
 
 export type ProviderProgramChosen = { ok: true } | { ok: false; reason?: string };
 
@@ -8,12 +8,13 @@ export type ProviderProgramChosen = { ok: true } | { ok: false; reason?: string 
 export function ProviderProgramChoice({ provider, reason, onChoose }: { provider: string; reason: string; onChoose: () => Promise<ProviderProgramChosen> }) {
     const [busy, setBusy] = useState(false);
     const [failed, setFailed] = useState<string | null>(null);
+    const [chosen, setChosen] = useState(false);
     if (!isProviderProgramProblem(reason)) return null;
     const choose = (): void => {
         setBusy(true);
         setFailed(null);
         void onChoose().then(
-            (r) => { setBusy(false); if (!r.ok && r.reason) setFailed(r.reason); },
+            (r) => { setBusy(false); if (r.ok) setChosen(true); else if (r.reason) setFailed(r.reason); },
             (error: unknown) => { setBusy(false); setFailed(error instanceof Error ? error.message : String(error)); },
         );
     };
@@ -23,6 +24,19 @@ export function ProviderProgramChoice({ provider, reason, onChoose }: { provider
                 {busy ? 'Choosing…' : `Choose ${provider}.exe`}
             </Button>
             {failed !== null ? <span data-provider-choose-failed className="ml-2">{failed}</span> : null}
+            {chosen ? <span data-provider-chosen className="ml-2">Chosen. Try again.</span> : null}
         </>
+    );
+}
+
+/** A start refused because a batch wrapper hides the provider, on the agent's own view, with the same picker (Tynn #577). */
+export function ProviderStartRefusal({ reason, onChoose }: { reason: string | null | undefined; onChoose: (provider: string) => Promise<ProviderProgramChosen> }) {
+    const provider = reason ? providerOfProgramProblem(reason) : null;
+    if (!reason || provider === null) return null;
+    return (
+        <div data-start-refusal="" className="mx-5 my-2 shrink-0 rounded-[10px] border border-[var(--danger)] bg-[var(--bg-1)] px-3 py-2 text-[12px] text-[var(--danger)]">
+            <span>{reason}</span>
+            <ProviderProgramChoice provider={provider} reason={reason} onChoose={() => onChoose(provider)} />
+        </div>
     );
 }

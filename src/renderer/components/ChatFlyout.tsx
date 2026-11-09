@@ -1,6 +1,8 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
+import { providerOfProgramProblem } from '../../core/provider-program.js';
+import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { Button, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
@@ -202,6 +204,8 @@ export function ChatDeliveryRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpe
 }
 
 export interface ChatFlyoutProps {
+    /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). */
+    onChooseProviderProgram?: ((provider: string) => Promise<ProviderProgramChosen>) | undefined;
     thread: ChatThread | null;
     /** How many lines the chat shows now (core/chat-window.ts): the caller derives only those from the ledger. */
     onWindowLines?: ((lines: number) => void) | undefined;
@@ -332,12 +336,15 @@ function withSendError(errors: Readonly<Record<string, string>>, chat: string, e
  * never a send that silently did nothing. react-fancy's own `role="alert"` is visually hidden and is the one announced,
  * so this line is not a second alert. Gone with the chat's next send.
  */
-export function ComposerSendError({ chat, error }: { chat: string; error: string | null }) {
+export function ComposerSendError({ chat, error, onChooseProviderProgram }: { chat: string; error: string | null; onChooseProviderProgram?: ((provider: string) => Promise<ProviderProgramChosen>) | undefined }) {
     if (!error) return null;
+    // A first message starts the agent: its refused start is met here first (Tynn #577).
+    const provider = onChooseProviderProgram ? providerOfProgramProblem(error) : null;
     return (
         <div data-chat-send-error={chat} className="flex items-center gap-1.5 px-1 pt-1.5 text-[12px] text-[var(--danger)]">
             <Icon name="circle-alert" size="xs" />
             <span>Not sent: {error}</span>
+            {provider !== null ? <ProviderProgramChoice provider={provider} reason={error} onChoose={() => onChooseProviderProgram!(provider)} /> : null}
         </div>
     );
 }
@@ -349,6 +356,7 @@ const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatM
 export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 
 function ChatFlyoutBody({
+    onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
     onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
@@ -910,7 +918,7 @@ function ChatFlyoutBody({
                     )}
                 </ChatComposers>
                 ) : null}
-                <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} />
+                <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
         </aside>
     );
