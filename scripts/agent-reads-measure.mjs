@@ -107,9 +107,22 @@ async function main() {
     session = await attach({ port: PORT, inspect: INSPECT, label: MODE });
     const { cdp, inspector } = session;
     await cdp.evaluate(GAUGE, 5_000);
-    const workspaceId = (await cdp.evaluate('window.genieTest.snapshot()', 15_000))?.workspaces?.[0]?.id;
-    if (typeof workspaceId !== 'string') throw new Error('no workspace in this home');
-    const result = { mode: MODE, platform: process.platform };
+    // What the first reads really answered, kept in the result: a snapshot that is empty at first is a finding, not a wait.
+    const firstReads = [];
+    const started = Date.now();
+    let workspaceId = null, last = null;
+    while (Date.now() - started < 30_000 && typeof workspaceId !== 'string') {
+        try {
+            last = await cdp.evaluate(`window.genieTest.snapshot().then((s) => ({ workspaces: s?.workspaces === null ? null : s?.workspaces === undefined ? 'undefined' : s.workspaces.map((w) => w.id), agents: s?.agents?.length ?? null, keys: Object.keys(s ?? {}).length, isNull: s === null, kind: typeof s }))`, 15_000);
+        } catch (error) { last = { threw: error instanceof Error ? error.message : String(error) }; }
+        firstReads.push({ afterMs: Date.now() - started, read: last });
+        workspaceId = Array.isArray(last?.workspaces) ? last.workspaces[0] ?? null : null;
+        if (typeof workspaceId !== 'string') await sleep(100);
+    }
+    console.log(`  first snapshot reads (${firstReads.length}): ${JSON.stringify(firstReads.slice(0, 40))}`);
+    if (typeof workspaceId !== 'string') throw new Error(`no workspace in this home after 30 s; the last read answered ${JSON.stringify(last)}`);
+    check(firstReads.length === 1, 'the first snapshot read already had the workspace', `${firstReads.length} read(s), ${firstReads.at(-1).afterMs} ms`);
+    const result = { mode: MODE, platform: process.platform, firstReads };
 
     step('B', 'proving the gauge on a deliberate 120 ms block');
     const blockedGapMs = await cdp.evaluate(`new Promise((resolve) => { window.__gauge.reset(); setTimeout(() => { const end = performance.now() + 120; while (performance.now() < end); setTimeout(() => resolve(window.__gauge.max()), 30); }, 50); })`, 10_000);
