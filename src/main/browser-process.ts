@@ -59,6 +59,9 @@ export async function runBrowserProcess(): Promise<void> {
     });
     watchWorkspaceStores(cookies);
 
+    /** Another workstation's door, per window key: what its session reads live. */
+    const remoteDoors = new Map<string, { port: number; ca: string | null }>();
+
     const onFacts = (facts: BrowserFacts): void => {
         door = { frontDoorPort: facts.frontDoorPort, caPem: facts.caPem };
         hosts = facts.hosts;
@@ -105,11 +108,14 @@ export async function runBrowserProcess(): Promise<void> {
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         facts: onFacts,
         door: (up) => { if (!locked) windows?.setNotice(up ? null : DOOR_DOWN); },
-        open: (url, activation) => {
+        open: (url, activation, remote) => {
             opened = true;
-            const answer = windows?.open(url ?? undefined, activation);
+            if (remote) remoteDoors.set(remote.key, { port: remote.port, ca: remote.ca });
+            // Its door is read live: a reconnect moves it, and the host's CA is known only after its first site is asked for.
+            const answer = windows?.open(url ?? undefined, activation, remote ? { key: remote.key, title: remote.title, hosts: remote.hosts, port: () => remoteDoors.get(remote.key)?.port ?? remote.port, ca: () => remoteDoors.get(remote.key)?.ca ?? null } : undefined);
             if (answer && !answer.ok) log(`open refused: ${answer.error}`);
         },
+        remoteVia: (key, port, ca) => { if (remoteDoors.has(key)) remoteDoors.set(key, { port, ca }); },
         openSingle: (panelKey, url) => { opened = true; windows?.openSingle(panelKey, url); },
         closeSingle: (panelKey) => { windows?.closeSingle(panelKey); },
         quit: () => { app.quit(); },

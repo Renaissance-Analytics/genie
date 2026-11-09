@@ -21,7 +21,7 @@ import type { TynnResponse } from './tynn-account.js';
  *
  * Tynn answers every unauthorized call with 404; the client reads that as signed out with the sign-in kept, and so does
  * the host (issue-watch-client.ts, tynn-account.ts). Everything outside is a port: the whole life is tested with a fake
- * Tynn. In the window only on the emergency no-host path (issue-watch-emergency.ts) until P6.
+ * Tynn.
  */
 
 /** The signed-in Tynn the host holds (its TynnAccount): the person's id (null = signed out) and session-bound requests. */

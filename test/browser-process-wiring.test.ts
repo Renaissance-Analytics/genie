@@ -80,7 +80,8 @@ describe('the window', () => {
 
     it('opens this machine’s sites through the host, and publishes what a browser needs', () => {
         const src = main();
-        expect(src).toMatch(/browserCall\('open', \[/);
+        expect(src).toMatch(/browserCall\('open', args\)/);
+        expect(src).toMatch(/askBrowser\(\[url \?\? null, activation\]\)/);
         expect(src).toMatch(/browserCall\('publish', \[/);
         expect(src).toMatch(/args: \[\.\.\.\(app\.isPackaged \? \[\] : \[app\.getAppPath\(\)\]\), '--genie-browser'/);
     });
