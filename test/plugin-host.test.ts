@@ -7,7 +7,7 @@ import { PluginHost } from '../src/main/plugin-host.js';
 import { signPackage } from './plugin-sign-helper.js';
 
 /**
- * THE PLUGIN HOST (§6.7) over a REAL plugins directory. Every folder with a `genie-plugin.json` is
+ * THE PLUGIN HOST (§6.7) over a REAL plugins directory. Every folder with a `genie-package.json` is
  * listed — valid and signed, valid but unsigned, or invalid — each with its state and the reason, so
  * nothing is silently dropped. Enable/disable is persisted. The host hands the bridge a guard bound to
  * the plugin's declared capabilities; an unknown or disabled plugin has no guard at all.
@@ -26,7 +26,7 @@ beforeEach(async () => {
     plugins = join(dir, 'plugins');
     const put = async (folder: string, text: string, signIt: boolean) => {
         await mkdir(join(plugins, folder), { recursive: true });
-        await writeFile(join(plugins, folder, 'genie-plugin.json'), text);
+        await writeFile(join(plugins, folder, 'genie-package.json'), text);
         if (signIt) await signPackage(join(plugins, folder), pair.privateKey);
     };
     await put('presentation', manifest('com.example.presentation'), true);
@@ -37,6 +37,16 @@ beforeEach(async () => {
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 describe('PluginHost', () => {
+    it('a folder holding only the old manifest name is not a package: there is no fallback', async () => {
+        await mkdir(join(plugins, 'old-name'), { recursive: true });
+        await writeFile(join(plugins, 'old-name', 'genie-plugin' + '.json'), manifest('com.example.oldname'));
+        await signPackage(join(plugins, 'old-name'), pair.privateKey);
+        const ids = (await PluginHost.open({ dir: plugins, keys, publisherChecksOff: false })).list().map((p) => p.id);
+        expect(ids).toContain('com.example.presentation'); // Control: the same kind of folder, under the current name, is listed.
+        expect(ids).not.toContain('com.example.oldname');
+        expect(ids).not.toContain('(old-name)');
+    });
+
     it('lists every manifest folder with its state and reason; signed+valid is installable, unsigned and invalid are refused (not dropped); folders without a manifest are not plugins', async () => {
         const host = await PluginHost.open({ dir: plugins, keys, publisherChecksOff: false });
         expect(host.list().map((p) => ({ id: p.id, state: p.state }))).toEqual([

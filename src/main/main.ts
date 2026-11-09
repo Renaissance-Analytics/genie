@@ -7,7 +7,7 @@ import { readTynnPage, runTynnPageAction } from './tynn-page-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { readTynnIssueChanges, readTynnIssues, runTynnIssueAction } from './tynn-issues-client.js';
 import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
-import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
+import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
@@ -136,8 +136,7 @@ import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { DESIGN_LOGIN, tellDesignLoginRan } from '../core/design-login.js';
 import { PlanKeepalive } from '../core/plan-keepalive.js';
-import { ActivityFeeds } from './activity-feeds.js';
-import type { ActivityFeed } from '../core/activity-feed.js';
+import { ActivityFeeds, activityOfWorkspace } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
 import { ChatDraftStore } from './chat-draft-store.js';
@@ -599,8 +598,7 @@ function recoverTynnAgents(asked: { secretsMoved?: boolean } = {}): void {
 }
 
 /** Each provider's rate limit as the Dashboard header shows it, buffered (core/headroom-board.ts). */
-const headroomBoard = new HeadroomBoard();
-const headroomListeners = new Set<(room: Readonly<Record<string, Headroom>>) => void>();
+const headroomFeed = new HeadroomFeed(() => headroomBufferMs(services?.settings.snapshot() ?? {}));
 
 /** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
 function alertAccountPaused(provider: string): void {
@@ -770,13 +768,6 @@ let keepaliveNow: PlanKeepalive | null = null;
 /** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
 let activityFeeds: ActivityFeeds | null = null;
 
-/** One workspace's agents' activity feeds, by agent id — the lanes' first paint; each change is pushed after. */
-function activityOf(raw: unknown): Record<string, ActivityFeed> {
-    const out: Record<string, ActivityFeed> = {};
-    if (typeof raw !== 'string' || activityFeeds === null) return out;
-    for (const agent of registry?.listAgents() ?? []) if (agent.workspaceId === raw) out[agent.id] = activityFeeds.feedFor(agent.id);
-    return out;
-}
 /**
  * Has Genie heard the roster and the session host ONCE? Until then a question's agent cannot be judged: "we have not
  * heard" is not "it is gone", so the Deck marks nothing stale (`askerLive` answers `undefined`). Set after the
@@ -1494,10 +1485,7 @@ async function boot(): Promise<void> {
         onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
-        onHeadroom: (provider: string, room: Headroom) => {
-            if (!headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) return;
-            for (const listener of headroomListeners) listener(headroomBoard.view());
-        },
+        onHeadroom: (provider: string, room: Headroom) => headroomFeed.offer(provider, room),
         // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
         // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
         // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
@@ -1776,7 +1764,7 @@ async function boot(): Promise<void> {
      * The engine is fancy-term-host behind the PtyPort seam. It saves no scrollback (the owner, 2026-11-02).
      */
     // ONE pty engine, shared by the terminal host and the composition root's supervisor.
-    // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
+    // The engine gates its cwd hook on GENIE'S settings, read live (§6.5).
     const ptyPort = realFancyTermPort(() => services?.settings.snapshot() ?? {});
     // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
     // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
@@ -2858,11 +2846,8 @@ async function boot(): Promise<void> {
                 },
             },
             // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).
-            activity: { feeds: (workspaceId) => activityOf(workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
-            headroom: {
-                view: () => headroomBoard.view(),
-                subscribe: (listener) => { headroomListeners.add(listener); return () => { headroomListeners.delete(listener); }; },
-            },
+            activity: { feeds: (workspaceId) => activityOfWorkspace(activityFeeds, registry?.listAgents() ?? [], workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
+            headroom: headroomFeed,
             retryPausedAccount: (provider) => { retryPausedAccount?.(provider); },
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
@@ -4260,7 +4245,7 @@ app.on('before-quit', (event) => {
             // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
             // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
             const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
+            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
         },
         ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });

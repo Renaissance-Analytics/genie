@@ -24,7 +24,7 @@ const manifest = {
 };
 const open = async (publisherChecksOff: boolean) => {
     await mkdir(join(dir, 'notes'), { recursive: true });
-    await writeFile(join(dir, 'notes', 'genie-plugin.json'), JSON.stringify(manifest));
+    await writeFile(join(dir, 'notes', 'genie-package.json'), JSON.stringify(manifest));
     return PluginHost.open({ dir, keys: {}, publisherChecksOff });
 };
 const summary = { publisher: 'Example Co', adds: { tools: ['append'], panels: ['Board'], editors: ['Deck'] }, touches: { files: ['.md'], network: ['api.example.com'], genieApi: ['knowledge.search'] } };
@@ -46,7 +46,7 @@ describe('each entry says who it is from, what it adds and what it may touch', (
 
     it('a package with no file access says none', async () => {
         await mkdir(join(dir, 'plain'), { recursive: true });
-        await writeFile(join(dir, 'plain', 'genie-plugin.json'), JSON.stringify({ id: 'com.example.plain', name: 'Plain', version: '1.0.0', publisher: { name: 'P', keyId: 'k' } }));
+        await writeFile(join(dir, 'plain', 'genie-package.json'), JSON.stringify({ id: 'com.example.plain', name: 'Plain', version: '1.0.0', publisher: { name: 'P', keyId: 'k' } }));
         const host = await PluginHost.open({ dir, keys: {}, publisherChecksOff: true });
         expect(host.list().find((p) => p.id === 'com.example.plain')).toMatchObject({ adds: { tools: [], panels: [], editors: [] }, touches: { files: null, network: [], genieApi: [] } });
     });

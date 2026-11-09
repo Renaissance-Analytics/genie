@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { APP_BRIDGE } from '../src/core/catalog.js';
-import { GAPP_MANIFEST_FILE, GAppBook } from '../src/main/gapps-host.js';
+import { PACKAGE_MANIFEST_FILE } from '../src/core/plugin-integrity.js';
+import { GAppBook } from '../src/main/gapps-host.js';
 import { genieCatalog, hostCatalog } from '../src/main/genie-catalog.js';
 import { signPackage } from './plugin-sign-helper.js';
 
@@ -51,7 +52,7 @@ afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 async function appFolder(name: string, over: Parameters<typeof manifest>[0] = {}, sign = true): Promise<string> {
     const dir = join(root, 'src', name);
     await mkdir(join(dir, 'app'), { recursive: true });
-    await writeFile(join(dir, GAPP_MANIFEST_FILE), JSON.stringify(manifest(over), null, 2));
+    await writeFile(join(dir, PACKAGE_MANIFEST_FILE), JSON.stringify(manifest(over), null, 2));
     await writeFile(join(dir, 'app', 'index.html'), `<!doctype html><title>Notes ${over.version ?? '1.0.0'}</title>`);
     if (sign) await signPackage(dir, pair.privateKey);
     return dir;
@@ -150,7 +151,7 @@ describe('the package checks (B4, B5)', () => {
         const book = await open();
         const dir = await appFolder('noapp');
         const m = manifest();
-        await writeFile(join(dir, GAPP_MANIFEST_FILE), JSON.stringify({ ...m, contributions: [] }));
+        await writeFile(join(dir, PACKAGE_MANIFEST_FILE), JSON.stringify({ ...m, contributions: [] }));
         await signPackage(dir, pair.privateKey);
         expect(await book.reviewInstall(dir)).toMatchObject({ ok: false, reason: expect.stringMatching(/exactly one app/) });
     });

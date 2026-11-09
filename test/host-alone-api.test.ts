@@ -73,6 +73,8 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
         },
         models: { get: async () => ({ models: [] }) as never },
         providerInstalled: () => true,
+        windowConnected: () => false,
+        headroom: { view: () => ({}), subscribe: () => () => {} },
         ...over,
     };
 }

@@ -215,6 +215,8 @@ describe('the archive: every byte the bound drops or cuts', () => {
             store.markSeen(store.finished().at(-1)!.id);
             clock += 1_000;
         }
+        // markSeen writes without waiting: one more awaited change, so nothing is still writing when the folder is removed.
+        await store.imDone({ agentId: a, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: 'the last' });
         await (store as unknown as { archived(): Promise<void> }).archived?.();
         const archive = await archiveOf();
         expect(archive.find((x) => x.handoff === long)).toBeDefined();

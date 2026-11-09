@@ -79,7 +79,7 @@ describe('the host’s MCP server follows the plugins with no restart', () => {
     });
     const writePlugin = async (version: string, tools: string[]) => {
         await mkdir(join(dir, 'plugins', 'acme-lint'), { recursive: true });
-        await writeFile(join(dir, 'plugins', 'acme-lint', 'genie-plugin.json'), JSON.stringify({
+        await writeFile(join(dir, 'plugins', 'acme-lint', 'genie-package.json'), JSON.stringify({
             id: 'acme.lint', name: 'Acme Lint', version, publisher: { name: 'Acme', keyId: 'k' },
             mcpTools: tools.map((name) => ({ name, description: `Run ${name}`, inputSchema: { type: 'object' }, run: 'tools/x.js', process: 'subprocess', gated: false })),
         }));

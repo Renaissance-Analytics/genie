@@ -1,7 +1,6 @@
 /**
  * QUIT CONFIRMATION (§6.5) — defaults to the SAFE thing. Nothing running → just quit. Agents or
- * terminals live → ask, name what ends, default Cancel. With detached terminals on, the terminals
- * survive the quit and the message says so; live agents still make Genie ask, because an agent
+ * terminals live → ask, name what ends, default Cancel. Live agents make Genie ask, because an agent
  * session ends with the app (§2.5) and nothing revives it on its own.
  *
  * WITH GENIE-HOST (the host split, P1b; the owner's decision 5): the agents, the terminals and the kept processes run in
@@ -25,13 +24,12 @@ const listed = (items: readonly string[]) => (items.length <= 1 ? items.join('')
 export function quitPlan(input: {
     runningAgents: readonly string[];
     liveTerminals: number;
-    detachedTerminals: boolean;
     /** Set while a live genie-host runs the agents and can outlive this window; absent or null = this process is the host. */
     host?: { readonly keptProcesses: number; readonly armedFlows: number; readonly scheduledTasks: number } | null;
 }): QuitPlan {
     const agents = input.runningAgents.length;
     if (input.host) return hostPlan(input.runningAgents, input.liveTerminals, input.host.keptProcesses, input.host.armedFlows, input.host.scheduledTasks);
-    const terminalsEnd = input.detachedTerminals ? 0 : input.liveTerminals;
+    const terminalsEnd = input.liveTerminals;
     if (agents === 0 && terminalsEnd === 0) return { confirm: false };
 
     const parts: string[] = [];
@@ -44,14 +42,11 @@ export function quitPlan(input: {
         parts.push(`${terminalsEnd} ${plural(terminalsEnd, 'terminal is', 'terminals are')} open`);
         ends.push(terminalsEnd === 1 ? 'closes it' : 'closes the terminals');
     }
-    let message = `${parts.join(' and ')}. Quitting ${ends.join(' and ')}.`;
-    if (input.detachedTerminals && input.liveTerminals > 0) {
-        message = `${parts.join(' and ')}. Quitting ${ends.join(' and ')}; the ${input.liveTerminals} open ${plural(input.liveTerminals, 'terminal keeps', 'terminals keep')} running detached and ${plural(input.liveTerminals, 'rejoins', 'rejoin')} next launch.`;
-    }
+    const message = `${parts.join(' and ')}. Quitting ${ends.join(' and ')}.`;
     return { confirm: true, defaultChoice: 'cancel', title: 'Quit Genie?', message, buttons: ['Cancel', 'Quit'] };
 }
 
-/** The host keeps the agents, every terminal (the detached setting is moot: the host owns them), the kept processes, and what waits on its clock. */
+/** The host keeps the agents, every terminal (the host owns them), the kept processes, and what waits on its clock. */
 function hostPlan(runningAgents: readonly string[], terminals: number, processes: number, flows: number, tasks: number): QuitPlan {
     const agents = runningAgents.length;
     const total = agents + terminals + processes + flows + tasks;

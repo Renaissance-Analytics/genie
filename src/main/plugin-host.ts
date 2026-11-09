@@ -2,6 +2,7 @@ import { renameOver } from '../core/atomic-rename.js';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { bridgeAccess, parseManifest, UNVERIFIED_LABEL, type AccessDecision, type AccessRequest, type PluginCapabilities, type PluginManifest } from '../core/plugins.js';
+import { PACKAGE_MANIFEST_FILE } from '../core/plugin-integrity.js';
 import { checkPackage, currentDigest } from './plugin-package.js';
 import { editorBytesAccess, type ClaimingEditor, type EditorBytesDecision } from '../core/plugin-editors.js';
 import type { OfficialPlugin } from '../core/official-plugins.js';
@@ -14,7 +15,7 @@ function publisherRefusal(state: PublisherKeyState | undefined, signed: boolean)
 }
 
 /**
- * THE PLUGIN HOST (§6.7). Scans a plugins directory: every folder with a `genie-plugin.json` is listed
+ * THE PLUGIN HOST (§6.7). Scans a plugins directory: every folder with a `genie-package.json` is listed
  * with its state — enabled, disabled, refused (unsigned without developer mode), invalid (a manifest
  * Genie cannot vouch for) — and the reason, so nothing is silently dropped. Enable/disable is persisted
  * beside the plugins. The bridge asks `guard(id)` for a checker bound to the plugin's DECLARED
@@ -123,13 +124,13 @@ export class PluginHost {
         for (const folder of folders) {
             let text: string;
             try {
-                text = await readFile(join(input.dir, folder, 'genie-plugin.json'), 'utf8');
+                text = await readFile(join(input.dir, folder, PACKAGE_MANIFEST_FILE), 'utf8');
             } catch {
                 continue; // a folder without a manifest is not a plugin
             }
             let raw: unknown;
             try { raw = JSON.parse(text); } catch { raw = undefined; }
-            const parsed = raw === undefined ? { ok: false as const, reason: 'genie-plugin.json is not valid JSON' } : parseManifest(raw);
+            const parsed = raw === undefined ? { ok: false as const, reason: `${PACKAGE_MANIFEST_FILE} is not valid JSON` } : parseManifest(raw);
             if (!parsed.ok) {
                 entries.push({ id: `(${folder})`, folder, name: folder, version: null, state: 'invalid', label: null, reason: parsed.reason, manifest: null });
                 continue;
