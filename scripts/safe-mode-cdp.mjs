@@ -28,6 +28,9 @@ import {
     readOr, refuseOffTestMachines, running, sleep, step, stubPids, tickerOn, ticksOf, twoStreamingAgents, until, whyOf,
 } from './crash-cdp-lib.mjs';
 
+// Agent commands are on the page's own bridge now: window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
+
 refuseOffTestMachines('safe-mode-cdp');
 const PORT = Number(process.env.SAFE_CDP_PORT ?? 9352);
 const INSPECT = Number(process.env.SAFE_CDP_INSPECT ?? 9353);
@@ -36,7 +39,7 @@ const DID_NOT_END = /safe mode: the last run did not end cleanly/;
 let app = null;
 let session = null;
 const done = finish('SAFE MODE', h, [
-    async () => { if (session) for (const id of agentIds) await session.cdp.evaluate(`window.genie.stopAgent(${JSON.stringify(id)}); true`, 10_000).catch(() => {}); },
+    async () => { if (session) for (const id of agentIds) await session.cdp.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(id)}); true`, 10_000).catch(() => {}); },
     async () => { if (session && app && !app.exited) { await cleanQuit(session.inspector).catch(() => {}); await Promise.race([app.exit, sleep(30_000)]); } },
     async () => { const pid = hostPid(h); if (pid !== null && alive(pid)) { killHard(pid); await gone(pid, 10_000); } },
     async () => { if (app && !app.exited) { killHard(app.child.pid); await Promise.race([app.exit, sleep(10_000)]); } },
@@ -135,7 +138,7 @@ try {
     const startedAgain = await until(() => running(session.cdp, first.id), 45_000);
     check(startedAgain === true, `E1. ${first.name} runs again (the host says so)`, startedAgain === true ? '' : await whyOf(session.cdp, first.id));
     check(await until(() => session.cdp.evaluate(`document.querySelector('[data-safe-mode-outcome=${JSON.stringify(`agent:${first.id}`)}]')?.textContent === 'Started'`, 10_000), 30_000) === true, 'E2. the banner says Started for it');
-    await session.cdp.evaluate(`window.genie.prompt(${JSON.stringify(first.id)}, 'Stream ticks until stopped.')`, 15_000).catch(() => null);
+    await session.cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(first.id)}, 'Stream ticks until stopped.')`, 15_000).catch(() => null);
     const streaming = await until(async () => { const x = await ticksOf(session.cdp, first.id); return x.last !== null && !providersBefore.has(x.last) && alive(x.last) ? x : null; }, 45_000);
     check(streaming !== null, `E3. ${first.name}'s new provider streams`, streaming ? `pid ${streaming.last}` : 'none');
     check(await running(session.cdp, second.id) === false, `E4. ${second.name} is still not running: the Start was for that one only`);

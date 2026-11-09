@@ -212,14 +212,14 @@ export async function twoStreamingAgents(cdp, tag) {
     const agents = [];
     for (const n of [1, 2]) {
         const name = `${tag}-${n}`;
-        const added = await cdp.evaluate(`window.genie.addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the crash check.', provider: 'codex' })`, 30_000);
+        const added = await cdp.evaluate(`(window.genieTest ?? window.genie).addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the crash check.', provider: 'codex' })`, 30_000);
         if (!check(added?.ok === true, `agent ${name} added`, added?.ok ? added.id : added?.reason)) throw new Error(`agent ${name} not added`);
         agents.push({ id: added.id, name });
     }
     for (const a of agents) {
         await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(a.id)}, "graceful"); true`, 15_000);
         check(await until(() => running(cdp, a.id), 30_000) === true, `${a.name}'s session is running (the host says so)`);
-        await cdp.evaluate(`window.genie.prompt(${JSON.stringify(a.id)}, 'Stream ticks until stopped.')`, 15_000);
+        await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(a.id)}, 'Stream ticks until stopped.')`, 15_000);
     }
     for (const a of agents) {
         const t = await until(async () => { const x = await ticksOf(cdp, a.id); return x.max >= 4 ? x : null; }, 45_000);

@@ -73,6 +73,8 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    /** The roster should be read again: an agent was restarted (Tynn #563). */
+    rosterChanged?(): void;
     marketplace?: () => MarketplaceApi | null;
     localTerminals?: NativeTerminalPort;
     artboard?: LocalArtboardPort;
@@ -412,10 +414,13 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'answerApproval': {
                 const r = agent(args[0]);
-                // The host's refusal, with its reason, goes back to the card that pressed (core/approval-answering.ts).
-                return r ? deps.host.answerApproval(r.id, str(args[1]), typeof args[2] === 'string' ? args[2] : '') : { ok: false, reason: 'unknown agent' };
+                // Every refusal names its reason: the card that pressed says it (core/approval-answering.ts).
+                if (!r) return { ok: false, reason: 'Genie does not know this agent' };
+                if (typeof args[1] !== 'string') return { ok: false, reason: 'no option was chosen' };
+                return deps.host.answerApproval(r.id, args[1], typeof args[2] === 'string' ? args[2] : '');
             }
             case 'addAgent': {
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'no workspace named' };
                 const raw = (typeof args[1] === 'object' && args[1] !== null ? args[1] : {}) as Record<string, unknown>;
                 const created = await deps.registerAgent(str(args[0]), { name: str(raw['name']), purpose: str(raw['purpose']), provider: str(raw['provider']) });
                 return created.ok ? { ok: true, id: created.id } : created;
@@ -424,7 +429,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const r = agent(args[0]);
                 if (!r) return { ok: false, reason: 'unknown agent' };
                 // The one restart (genie#1238), then the note.
-                return restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
+                const restarted = await restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
+                deps.rosterChanged?.();
+                return restarted;
             }
             case 'agents.restart':
                 if (typeof args[0] !== 'string' || (args[1] !== 'graceful' && args[1] !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
