@@ -63,6 +63,7 @@ import { RelayConnecting } from './components/RelayConnecting.js';
 import type { RelayConnect } from '../core/relay-connect.js';
 import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
+import { shareDoor } from './share-door.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
 import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
 import { AddWorkspaceWizard, type SourceReadView } from './components/AddWorkspaceWizard.js';
@@ -1227,10 +1228,10 @@ function DesktopApp({ bridge }: AppProps) {
         void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r));
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
-    // SHARE THROUGH TYNN (Tynn #839): this Genie's own workspaces only — never from a window driving another host.
-    const shares = !remote.state?.connected ? ownWindowBridge()?.tynnNetwork?.shares : undefined;
-    const [share, setShare] = useState<{ workspaceId: string; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
-    const readShares = (forWorkspace: string) => {
+    // SHARE THROUGH TYNN (Tynn #839, #587): this machine's, or the host's while its owner drives it; a guest has none.
+    const shares = shareDoor({ connected: remote.state?.connected === true, isOwner: remote.state?.isOwner === true, own: ownWindowBridge()?.tynnNetwork?.shares, remote: remote.client?.shares });
+    const [share, setShare] = useState<{ workspaceId: string | null; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
+    const readShares = (forWorkspace: string | null) => {
         void shares?.list(forWorkspace).then((r) => setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, links: r.ok ? r.links : [], problem: r.ok ? s.problem : r.reason } : s)));
     };
     /*
@@ -1849,6 +1850,7 @@ function DesktopApp({ bridge }: AppProps) {
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
             servable={SERVABLE}
+            onShareWorkstation={shares ? () => { setShare({ workspaceId: null, name: remote.state?.host ?? snapshot.workstation?.name ?? 'this workstation', links: null, minted: null, problem: null, busy: false }); readShares(null); } : undefined}
             remote={remote.state?.connected && remote.state.host ? {
                 host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked,
                 lostTo: remote.state.batonLostTo ?? null, onTakeControl: () => { void remote.takeControl(); },
@@ -2144,6 +2146,7 @@ function DesktopApp({ bridge }: AppProps) {
         {share && shares ? (
             <ShareWorkspaceModal
                 workspaceName={share.name}
+                workstation={share.workspaceId === null}
                 links={share.links}
                 minted={share.minted}
                 problem={share.problem}
