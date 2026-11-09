@@ -22,6 +22,7 @@ import type { LiveSession } from '../core/roster.js';
 import { turnStopOffered } from '../core/agent-view.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
 import { AgentView, type AgentOpsProps } from './components/AgentView.js';
+import type { ProviderProgramChosen } from './components/ProviderProgramChoice.js';
 import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
@@ -226,6 +227,7 @@ export interface ShellProps {
     crashReport?: import('./components/SafeModeBanner.js').CrashReportPort | undefined;
     /** The workspace header's Terminal button (Tynn story #378): a throwaway terminal in a window. Absent = no button. */
     onOpenScratchTerminal?: ((workspaceId: string) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined;
+    onChooseProviderProgram?: ((provider: string) => Promise<ProviderProgramChosen>) | undefined;
     /** A broken row's `Restart` (graceful) from the Dashboard — the same operation the Agent view's header offers. */
     onRestartAgent?: ((agentId: string) => void) | undefined;
     /** "Stop agent" — END the agent's session (§6.2 stop): the Agent view's operations menu. Not the turn's Stop. */
@@ -359,6 +361,7 @@ export function Shell({
     onTakeOver,
     crashReport,
     onOpenScratchTerminal,
+    onChooseProviderProgram,
     onRestartAgent,
     onStopAgent,
     onCancelTurn,
@@ -756,6 +759,7 @@ export function Shell({
                                 onDiscussStep={(step) => discussStep(agentDetail.agent.id, step)}
                                 agent={agentDetail.agent}
                                 session={agentDetail.session}
+                                startRefusal={agentDetail.refusal}
                                 rows={agentDetail.rows}
                                 tab={parsed.tab}
                                 lanes={parseLanes(parsed.lane)}
@@ -937,6 +941,7 @@ export function Shell({
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ErrorBoundary surface="Chat" resetKeys={[chatThread?.agentId ?? null]}>
                     <ChatFlyout
+                        onChooseProviderProgram={onChooseProviderProgram}
                         thread={chatThread}
                         drafts={chatDrafts}
                         insert={chatInsert}
