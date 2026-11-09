@@ -428,7 +428,7 @@ describe('the actions cross to the host only from a local window', () => {
         const server = readFileSync(join('src', 'main', 'session-engine-server.ts'), 'utf8');
         expect(server).toMatch(/if \(method === 'engine\.gapps'\) \{\s*if \(!conn\.local \|\| !conn\.window\) throw/);
         expect(readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8')).toMatch(/gappBook \? \{ gapps: gappsApi\(gappBook\) \} : \{\}/);
-        expect(readFileSync(join('src', 'main', 'main.ts'), 'utf8')).toMatch(/gapps: \(\) => agentEngineLink\?\.client\.gapps\(\) \?\? null/);
+        expect(readFileSync(join('src', 'main', 'main.ts'), 'utf8')).toMatch(/gapps: \(\) => withGappWindows\(agentEngineLink\?\.client\)/);
     });
 
     it('the shell gives the title bar the store\'s actions (source guard)', () => {

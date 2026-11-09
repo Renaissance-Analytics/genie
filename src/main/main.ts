@@ -239,6 +239,8 @@ import type { AttentionStore } from './attention-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
+import type { GAppBookApi, GAppsApi } from '../core/gapps.js';
+import { gappWindowsElectron } from './gapp-windows-electron.js';
 import { genieToolDeps, toolRoster } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { clearGenieRunning, markGenieRunning } from './genie-running-file.js';
@@ -1334,6 +1336,12 @@ const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); retur
 let browserPane: BrowserPane | null = null;
 /** The Genie browser window (beta.35 item 36): this workstation's Genie sites in a window of their own. */
 let genieBrowserWindow: GenieBrowserWindows | null = null;
+/** Installed apps' windows (Tynn #595): this process opens them, on sessions the host mints. */
+let gappWindowsNow: ReturnType<typeof gappWindowsElectron> | null = null;
+function withGappWindows(client: { gapps(): GAppBookApi } | undefined): GAppsApi | null {
+    if (!client) return null;
+    return { ...client.gapps(), open: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id); } };
+}
 /**
  * THIS MACHINE'S SITES, IN THE GENIE BROWSER'S OWN PROCESS (the host split, P2b): asked through the host, which starts it.
  * Another workstation's window stays here until P5, and so does the emergency no-host path.
@@ -2586,7 +2594,7 @@ async function boot(): Promise<void> {
         ...(linkedRemote ? { remoteAccess: linkedRemote } : {}),
         remoteApi: (remoteApiNow = buildHostApi({
             marketplace: () => agentEngineLink?.client.marketplace() ?? null,
-            gapps: () => agentEngineLink?.client.gapps() ?? null,
+            gapps: () => withGappWindows(agentEngineLink?.client),
             // Following the Tynn tab, by subscription (P4 family 12, Tynn #561).
             tynnWatch: tynnWatchPort,
             localTerminals: createNativeTerminalPort({
@@ -3771,6 +3779,7 @@ async function boot(): Promise<void> {
     // THE FRONT DOOR AS IT IS NOW (P5a.2): genie-host's, so it can come back on another port or with another CA. Every
     // browser session reads these, and is routed again when they change.
     frontDoorNow = { port: composed.frontDoorPort, caPem: browserTrust.caPem };
+    gappWindowsNow = gappWindowsElectron({ sessions: () => agentEngineLink?.client.gappSessions() ?? null, frontDoor: () => frontDoorNow, preload: join(here, 'gapp-preload.cjs') });
     composed.onFrontDoorChange(() => {
         const trust = composed.browserTrust();
         if (frontDoorNow.port === composed.frontDoorPort && frontDoorNow.caPem === trust.caPem) return;
@@ -3778,6 +3787,7 @@ async function boot(): Promise<void> {
         console.log(`[genie] browser: the front door is on :${frontDoorNow.port} now${trust.caPem === null ? ` with no CA (${trust.reason})` : ''}`);
         followFrontDoorInPanes();
         rerouteGenieBrowserSession({ frontDoorPort: frontDoorNow.port, caPem: frontDoorNow.caPem });
+        gappWindowsNow?.reroute();
         publishBrowserFacts?.();
     });
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),

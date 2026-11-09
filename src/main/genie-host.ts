@@ -66,7 +66,7 @@ import { FlowsReplica, FlowsService } from './flows-host.js';
 import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
-import { gappsApi } from './gapps-api.js';
+import { gappSessions, gappsApi } from './gapps-api.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
@@ -942,6 +942,7 @@ async function main(): Promise<void> {
         plugins: pluginsService,
         marketplace: marketplaceHost,
         ...(gappBook ? { gapps: gappsApi(gappBook) } : {}),
+        ...(gappBook && gappServer ? { gappSessions: gappSessions(gappBook, gappServer) } : {}),
         catalog: catalogService,
         flows: flowsService,
         browser: browserService,

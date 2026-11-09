@@ -155,6 +155,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             install: (folder, options) => read(b => b.gapps!.install(folder, options)),
             setOn: (id, on) => read(b => b.gapps!.setOn(id, on)),
             uninstall: id => read(b => b.gapps!.uninstall(id)),
+            open: id => read(b => b.gapps!.open(id)),
         },
         marketplace: {
             search: (query, cursor) => read(b => b.marketplace!.search(query, cursor)),
