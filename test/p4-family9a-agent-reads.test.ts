@@ -249,7 +249,7 @@ describe('M7: a window that reconnects', () => {
         b.subscribe((s) => snapshots.push(s));
         await vi.waitFor(() => expect(ledger.at(-1)?.rows).toHaveLength(3));
         const phases: string[] = [b.localProtocol!.state().phase];
-        b.localProtocol!.onState(() => phases.push(b.localProtocol!.state().phase));
+        b.localProtocol!.onState(() => phases.push(`${b.localProtocol!.state().phase}@${performance.now() | 0} ${String(new Error().stack).split('\n').slice(2, 9).map((l) => l.trim().replace(/^at /, '').replace(/.*src./, '')).join(' < ')}`));
         d.drop();
         await vi.waitFor(() => expect(b.localProtocol!.state().phase).toBe('failed'), { timeout: 3_000 }).catch((e) => { console.error('M7 PROBE', JSON.stringify({ phases, reason: b.localProtocol!.state().reason, frames: d.frames.length, closedSeen: d.closedSeen() })); throw e; });
         rows.push({ id: 'while-away', text: 'x' });
