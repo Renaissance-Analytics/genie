@@ -180,7 +180,7 @@ try {
     const binary = ['genie', 'Genie', 'ai.tynn.genie'].map((name) => join(root, name)).find((file) => existsSync(file));
     if (!binary) throw new Error(`no Genie binary in ${root}: ${readdirSync(root).slice(0, 30).join(', ')}`);
     const old = await launch(binary, []);
-    const said = await old.evaluate(`window.genie.features.act({ kind: 'integrations.tynnCode', code: ${JSON.stringify(signInCode())} }).then((r) => r.tynnMessage ?? null)`);
+    const said = await old.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'integrations.tynnCode', code: ${JSON.stringify(signInCode())} }).then((r) => r.tynnMessage ?? null)`);
     if (said) say(`Tynn said: ${String(said).slice(0, 160)}`);
     check(Boolean(await until('beta.56 to be signed in', 60_000, () => signedIn(old))), '2-beta56-signed-in');
     const seenOld = new Set(records().map((r) => r.pid));

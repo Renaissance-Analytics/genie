@@ -229,7 +229,7 @@ async function signIn() {
     repoOf(process.env.GITHUB_CLONE_URL);
     repoOf(process.env.GITHUB_PUSH_URL);
     const cdp = await launch();
-    await cdp.evaluate(`window.genie.features.act({ kind: 'integrations.githubSignIn' }).then(() => true)`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'integrations.githubSignIn' }).then(() => true)`);
     const device = await until('a device code', 60_000, async () => (await githubView(cdp))?.device ?? null);
     if (!device) throw new Error(`no device code: ${JSON.stringify(await githubView(cdp))}`);
     const lasts = Math.max(0, Math.round((device.expiresAt - Date.now()) / 1000));
@@ -350,7 +350,7 @@ async function a5() {
     const cdp = await launch();
     await signedInAs(cdp);
     const finalToken = await held(ACCESS);
-    await cdp.evaluate(`window.genie.features.act({ kind: 'integrations.githubSignOut' }).then(() => true)`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'integrations.githubSignOut' }).then(() => true)`);
     const out = await until('the sign-out to reach the file', 30_000, () => { try { return json(githubFile).state === 'signed-out'; } catch { return false; } });
     check(Boolean(out), 'A5.1-signed-out-is-on-disk');
     check((await held(ACCESS)) === null && (await held(REFRESH)) === null, 'A5.2-both-entries-are-gone');

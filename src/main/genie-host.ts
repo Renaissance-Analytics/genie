@@ -21,7 +21,9 @@ import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
-import { SessionHost } from './session-host.js';
+import { providerBinary, realListModels, SessionHost } from './session-host.js';
+import { HostRegistryStore } from './agent-stores-replica.js';
+import { ProviderModelCache } from '../core/provider-models.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -60,6 +62,7 @@ import { FlowStore } from './flow-store.js';
 import { FlowsReplica, FlowsService } from './flows-host.js';
 import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
+import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
@@ -134,6 +137,7 @@ import { MarketplaceHost } from './marketplace-host.js';
 import { MARKETPLACE_ARCHIVE_BYTES } from './marketplace-archive.js';
 import { CatalogService } from './catalog-host.js';
 import { GAppBook } from './gapps-host.js';
+import { GAppServer } from './gapp-server.js';
 import { setOfferedFlowKinds } from '../core/flow-canvas.js';
 import { catalogFlowKinds } from '../core/catalog-projections.js';
 import { hostCatalog } from './genie-catalog.js';
@@ -385,12 +389,17 @@ async function main(): Promise<void> {
         void stores.registrySettled().then(() => { for (const l of [...workspacesListeners]) l(); });
     });
     let hosting: HostingStack | null = null;
+    /** GApps v2 V4: the server of installed apps, once the book is open; the front door asks it for their routes. */
+    let gappServer: GAppServer | null = null;
+    const gappRouteListeners = new Set<() => void>();
     /** Genie Mail G5: the process book, once open, whose running processes restart with new mail credentials. */
     let mailProcessBook: ProcessBook | null = null;
     /** The running agents compared with their workspace's verdict (genie#1519): bound once the sessions exist. */
     let hostVerdicts: TrustVerdicts | null = null;
     try {
         hosting = await composeHosting({
+            gappRoutes: () => gappServer?.routes() ?? [],
+            onGappRoutesChange: (listener) => { gappRouteListeners.add(listener); },
             // THE HOST OWNS TRUST (genie#1519): the record and the verdicts are this host's, beside the sites that read them.
             onTrustVerdict: (workspaceId) => hostVerdicts?.changed(workspaceId),
             ...(await hostHostingOptions(hostMachinePaths(process.env, home), say)),
@@ -472,6 +481,7 @@ async function main(): Promise<void> {
      */
     const flowsService = new FlowsService();
     const flowCallers = new FlowCallers((id) => hostRegistry.workspace(id)?.path ?? null);
+    const gappCallers = new GAppCallers((id) => hostRegistry.workspace(id)?.path ?? null);
     // The flows as the host's own `flows` tool reads and drives them: the service's list, its actions in place.
     const hostFlows = new FlowsReplica((method, args) => flowsService.call(method, args));
     flowsService.onEvent((event) => hostFlows.apply(event));
@@ -764,6 +774,17 @@ async function main(): Promise<void> {
         });
         gappBook.onChange(() => catalogService.rebuild());
         catalogService.rebuild();
+        // GApps v2 V4: installed apps at their own origins, behind the front door.
+        const gappBridge = new GAppBridge({
+            book: gappBook,
+            catalog: (id) => catalogService.snapshot().definitions.find((d) => d.id === id) ?? null,
+            run: createGAppToolRunner({ registrations: () => mcp?.registrations() ?? [], callers: gappCallers }),
+            onCatalogChange: (listener) => catalogService.onEvent((change) => listener(change.revision)),
+        });
+        gappServer = new GAppServer({ book: gappBook, bridge: gappBridge });
+        await gappServer.listen(0);
+        gappBook.onChange(() => { for (const listener of gappRouteListeners) listener(); });
+        for (const listener of gappRouteListeners) listener();
     } catch (error) {
         say(`The GApp book could not open: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1077,7 +1098,8 @@ async function main(): Promise<void> {
      * over a registry on this host's own registry store, this session host, its attention, inbox and approval stores, and
      * the workspaces' files. The remote host uses it for the phone's methods only while no window is connected.
      */
-    const phoneRegistry = new Registry(registryStore);
+    // Its writes go the way a window's do (AgentStoresService), so genie-host's own model and every window follow them.
+    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));
@@ -1130,6 +1152,8 @@ async function main(): Promise<void> {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
+        models: new ProviderModelCache(realListModels),
+        providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
         attention: own.attention,
         approvals,
         inbox: own.inbox,
@@ -1328,7 +1352,7 @@ async function main(): Promise<void> {
                 updateEngine: (id: string, options: { consent: boolean; approvedDependents?: readonly string[] }) => hostingStack.updateEngine(id, options),
             },
         } : {}),
-        flowCallers,
+        flowCallers: { callerFor: (key) => flowCallers.callerFor(key) ?? gappCallers.callerFor(key) },
         // The plugins' tools, run here (ADF A3): an official one in process, anyone else's in its sandboxed child. The Genie
         // API a plugin may ask for, by name: knowledge search only, for now; everything else is not offered.
         plugins: hostPluginTools(pluginsService, {
@@ -1424,6 +1448,7 @@ async function main(): Promise<void> {
         // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
         await stopHostedOnce();
         await appInboxDoor.close().catch(() => undefined);
+        await gappServer?.close().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
         const current = parseHostRecord(readOrNull(recordFile));

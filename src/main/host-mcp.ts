@@ -115,6 +115,8 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
     let verified: Verification | null = null;
     let tools: Array<{ name: string; description: string }> = [];
     let starting: Promise<void> | null = null;
+    /** The endpoint file's private write, while it is landing. It never rejects: a failure is logged. */
+    let endpointWrite: Promise<void> = Promise.resolve();
     let native = new Map<string, import('./mcp-tools.js').Registration>();
     let servedNow: readonly import('./mcp-tools.js').Registration[] = [];
     /** Callers the window vouched for, for the length of one call (runNative). */
@@ -187,7 +189,8 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
                         return typeof v.port === 'number' && typeof v.token === 'string' && v.token.length >= 32 ? { port: v.port, token: v.token } : null;
                     } catch { return null; }
                 },
-                write: (value) => { void writeTextPrivate(ports.endpointFile, JSON.stringify(value)).catch((error: unknown) => ports.log(`mcp: could not remember its endpoint: ${error instanceof Error ? error.message : String(error)}`)); },
+                // Not waited for here (the server is already serving); stop() waits for it (Tynn #583).
+                write: (value) => { endpointWrite = writeTextPrivate(ports.endpointFile, JSON.stringify(value)).catch((error: unknown) => ports.log(`mcp: could not remember its endpoint: ${error instanceof Error ? error.message : String(error)}`)); },
             },
         });
         try {
@@ -211,7 +214,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         sessionServers: (record) => genieMcpServers(server?.endpoint() ?? null, book.keyFor(record.id)),
         endpoint: () => server?.endpoint() ?? null,
         status: () => ({ endpoint: server?.endpoint() ?? null, verified, tools }),
-        stop: async () => { await server?.stop().catch(() => undefined); },
+        stop: async () => { await server?.stop().catch(() => undefined); await endpointWrite; },
         refreshTools: () => {
             if (!server) return;
             try {

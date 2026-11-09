@@ -15,7 +15,7 @@ describe('channels', () => {
         // Five since the attachments picker (§6.4): the host's own file dialog, never a typed path. Six since an alert's own
         // sound (Tynn #766 B2): read by main, asked by setting key — never a path. Seven since the host picker reports its
         // picks (genie#1354): an AgentInbox send attaches only host paths the host's own window picked.
-        expect(FEATURE_CHANNELS).toEqual({ act: 'genie:features-act', browserBounds: 'genie:features-browser-bounds', picked: 'genie:features-picked' });
+        expect(FEATURE_CHANNELS).toEqual({ browserBounds: 'genie:features-browser-bounds' });
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
         for (const src of [preload, main]) {
