@@ -1919,6 +1919,8 @@ function DesktopApp({ bridge }: AppProps) {
             onNavigate={(r) => navigate(carryChat(r, parsed, snapshot.agents, openedThreads))}
             features={features}
             marketplace={resolvedBridge?.marketplace}
+            gapps={resolvedBridge?.gapps}
+            pickGappFolder={() => pickFolder('Choose the folder of the app package')}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) =>
                 (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => {
