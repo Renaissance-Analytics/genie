@@ -42,6 +42,19 @@ describe('prism-acp 0.41, shipped and signed', () => {
         expect(check).toContain('resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-arm64/prism-acp-supervisor.exe');
     });
 
+    it('the packed-tree check requires both, and the sign plan signs them', async () => {
+        const tree: string = '../scripts/packed-tree-check.mjs', plan: string = '../scripts/win-sign-plan.mjs';
+        const { required, leftovers } = await import(tree) as { required: () => string[]; leftovers: (files: string[]) => unknown[] };
+        const { shouldSignFile } = await import(plan) as { shouldSignFile: (file: string, signExts: readonly string[]) => boolean };
+        const signExts = (/^\s*signExts: \[(.*)\]$/m.exec(read('electron-builder.yml'))?.[1] ?? '').split(',').map((e) => e.trim().replace(/^'|'$/g, ''));
+        const files = ['resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-x64/prism-acp-supervisor.exe', 'resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-arm64/prism-acp-supervisor.exe'];
+        for (const file of files) {
+            expect(required()).toContain(file);
+            expect(shouldSignFile(`C:/out/win-unpacked/${file}`, signExts)).toBe(true);
+        }
+        expect(leftovers(files)).toEqual([]);
+    });
+
     it('no compiler is involved any more: Genie no longer reads the supervisor source', () => {
         expect(read('src/main/prism-supervisor.ts')).not.toContain('SUPERVISOR_CS');
         expect(read('src/main/prism-supervisor.ts')).not.toMatch(/directory:/);
