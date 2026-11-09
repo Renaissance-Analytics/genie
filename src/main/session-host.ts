@@ -86,6 +86,9 @@ export interface SessionLifecycle {
     phase?(agentId: AgentId, run: number, phase: AgentStartPhase): void;
 }
 
+/** How long a start may go unanswered before the person is told (Tynn #558). A normal start takes about a second. */
+export const START_REPORT_MS = 20_000;
+
 /** A start's progress: its connections, the provider's handshake, then up, failed, or still not up when reported. */
 export type AgentStartPhase = 'preparing' | 'handshake' | 'ready' | 'failed' | 'slow';
 
@@ -555,6 +558,7 @@ export class SessionHost {
     readonly #processTree: ProcessTree | undefined;
     readonly #stopGraceMs: number;
     readonly #lifecycle: SessionLifecycle | undefined;
+    readonly #startReportMs: number;
     /** Stops still in their grace or verification, by agent: a start waits for them (hosting plan 1.3). */
     readonly #ending = new Map<AgentId, Promise<StopVerdict>>();
     /** The last stop's verdict, by agent — what `ended()` answers once the stop is over. */
@@ -659,6 +663,8 @@ export class SessionHost {
         stopGraceMs?: number;
         /** Every run's processes and how it ended — the ledger, the log, the Deck. Absent = told to nobody. */
         lifecycle?: SessionLifecycle;
+        /** How long before a start that has not come up is reported. Absent = `START_REPORT_MS`. */
+        startReportMs?: number;
     }) {
         this.#userData = options.userData;
         // ONE store for every thread this host reads and writes (genie#1340): it keeps each log's line count, so a run's
@@ -681,6 +687,7 @@ export class SessionHost {
         this.#processTree = options.processTree;
         this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
         this.#lifecycle = options.lifecycle;
+        this.#startReportMs = options.startReportMs ?? START_REPORT_MS;
         this.#onThreadId = options.onThreadId;
         this.#onCarryOverSent = options.onCarryOverSent;
         this.#onRedockSent = options.onRedockSent;
@@ -915,8 +922,13 @@ export class SessionHost {
 
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
+        // WHERE A START HAS GOT TO (Tynn #558): told to the lifecycle log, and to the person if it does not come up.
+        const startPhase = (phase: AgentStartPhase): void => { const run = this.#running.get(record.id)?.run; if (run !== undefined) this.#lifecycle?.phase?.(record.id, run, phase); };
+        const deferred = this.#prepareMcpServers !== undefined || this.#untrustedFilesFor !== undefined;
+        let waitingFor = deferred ? 'its connections (MCP servers and sign-ins)' : 'the provider to answer';
+        let startReport: ReturnType<typeof setTimeout> | null = null;
         // Read before each launch, not kept: a workspace trusted or changed since the last one counts now. A failure here starts nothing.
-        const driverFactory = this.#prepareMcpServers || this.#untrustedFilesFor ? deferredDriverFactory(async (signal) => {
+        const driverFactory = deferred ? deferredDriverFactory(async (signal) => {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
@@ -934,6 +946,8 @@ export class SessionHost {
                 }
                 this.#emit(record.id);
             }
+            waitingFor = 'the provider to answer';
+            startPhase('handshake');
             return factory;
         }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
         if (!driverFactory) {
@@ -1022,6 +1036,10 @@ export class SessionHost {
             ...(record.redockAt ? { redockAt: record.redockAt, onRedockSent: (at: string) => this.#onRedockSent?.(record.id, at) } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
+            onStartSettled: (ok) => {
+                if (startReport !== null) clearTimeout(startReport);
+                if (this.#running.get(record.id)?.session === session) startPhase(ok ? 'ready' : 'failed');
+            },
             onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
@@ -1162,7 +1180,18 @@ export class SessionHost {
          * workspace folder, which is now refused above, by name, before anything spawns.
          */
         try {
+            startPhase(deferred ? 'preparing' : 'handshake');
             session.start();
+            // NEVER SILENT (Tynn #558): a start that has not come up says what it is waiting for. It may still come up.
+            if (session.starting) {
+                startReport = setTimeout(() => {
+                    if (this.#running.get(record.id)?.session !== session || !session.starting) return;
+                    const lastWords = session.recentStderr.at(-1);
+                    session.notice(`${record.name} has not come up after ${Math.round(this.#startReportMs / 1000)} seconds: still waiting for ${waitingFor}.${lastWords ? ` It last said: ${lastWords}` : ''} It may still start. If it does not, restart it.`);
+                    startPhase('slow');
+                }, this.#startReportMs);
+                startReport.unref?.();
+            }
             // Its login is at its limit (the provider's reading says so): held from the start, so nothing is sent to a
             // provider that would refuse it — and the chat says why and until when (Tynn #556).
             if (this.#gate.limitedByReading(this.#loginOf(record.provider), this.#clock())) {
