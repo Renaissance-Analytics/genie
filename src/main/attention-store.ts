@@ -661,7 +661,10 @@ export class AttentionStore {
         return scopedListOf(this.#data, input);
     }
 
-    /** The data as it is (the host split, P3.1): what genie-host sends the window's replica. Read-only. */
+    /**
+     * The data as it is (the host split, P3.1): what genie-host sends the window's replica. Read-only. Every change gives
+     * the part it changes a NEW array (never a push in place), so a part that is the same array did not change (Tynn #546).
+     */
     snapshot(): Readonly<AttentionData> {
         return this.#data;
     }
