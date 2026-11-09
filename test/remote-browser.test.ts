@@ -172,11 +172,11 @@ describe('the Electron half, from source', () => {
         expect(handler).toMatch(/browserConnectionFor\(\{/);
         expect(handler).toMatch(/webContents === event\.sender/);
         expect(handler).toMatch(/c\.sender === event\.sender/);
-        expect(handler).toMatch(/remoteBrowsers\.connect\(/);
+        expect(handler).toMatch(/link\.browserVia\(/);
     });
 
     it('a relay channel records which workstation it reaches', () => {
-        expect(main).toMatch(/relayChannels\.set\(channel, \{ transport: opened\.transport, sender, workstationId \}\)/);
+        expect(main).toMatch(/linkedRelays\.set\(opened\.channel, \{ sender, workstationId \}\)/);
     });
 
     it('the preload carries the host’s site names; the relay window’s bridge is given the browser (the direct one is not)', () => {

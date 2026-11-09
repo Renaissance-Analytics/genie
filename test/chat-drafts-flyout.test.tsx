@@ -138,8 +138,8 @@ describe('wiring', () => {
 
     it('main keeps the drafts: opens the store after the registry has loaded, prunes deleted agents when the roster changes, answers the window', () => {
         const main = strip('../src/main/main.ts');
-        expect(main).toMatch(/ChatDraftStore\.open\(genieRoot\(\)\)/);
-        expect(main.indexOf('ChatDraftStore.open(')).toBeGreaterThan(main.indexOf('await registry.load('));
+        expect(main).toMatch(/const drafts = agentEngineLink\.client\.stores\(\)\.drafts;/);
+        expect(main.indexOf('client.stores().drafts')).toBeGreaterThan(main.indexOf('await registry.load('));
         // On a roster change, not every snapshot (beta.60): test/drafts-prune-on-roster-change.test.ts counts the calls.
         expect(main).toMatch(/rosterPruner\(\{ ids: draftAgents, prune: \(ids\) => drafts\.prune\(ids\)/);
         expect(main).toMatch(/registry\.subscribe\(\(\) => draftPruner\.changed\(\)\)/);

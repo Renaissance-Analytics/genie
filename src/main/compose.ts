@@ -136,6 +136,8 @@ export interface ComposeInput extends HostingOptions {
     readonly hosting?: HostingApi;
     /** Tests that compose alone hand in a real hosting stack (test/helpers/compose-alone.ts). Nothing in the app does. */
     readonly buildOwnHosting?: (input: HostingComposeInput) => Promise<HostingStack>;
+    /** The same for what genie-host owns besides (Tynn #594): only a test that composes alone sets this. */
+    readonly alone?: ComposeAlone;
     /** genie-host's plugins, through this window's replica (ADF A3, Tynn #447). Absent = this window opens its own (no host). */
     readonly plugins?: PluginsApi;
     /** genie-host's catalog, through this window's replica (ADF A4/A5). Absent = this window builds its own from its plugins. */
@@ -247,6 +249,18 @@ export type { FrontDoorStatus } from './hosting-compose.js';
 /** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
 type S_Settings = NonNullable<WindowAgentStores['settings']>;
 
+/** What a test that composes alone opens for itself. The app never does: every one of these is genie-host's (Tynn #594). */
+export interface ComposeAlone {
+    openSettings(): Promise<SettingsStore>;
+    openStores(limits: () => ReturnType<typeof attentionLimitsFrom>): Promise<OwnStores>;
+    openFlows(): Promise<FlowStore>;
+    readonly startFlows: typeof startFlowsEngine;
+    supervisor(): ProcessSupervisor;
+    approvals(options: ConstructorParameters<typeof ApprovalQueue>[0]): ApprovalQueue;
+    openDevices(options: Parameters<typeof DeviceStore.open>[1]): Promise<DeviceStore>;
+}
+type OwnStores = Awaited<ReturnType<typeof openAgentStores>>;
+
 export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown' | 'sites' | 'engines' | 'envelopeSites' | 'trust'> {
     /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
     prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
@@ -356,6 +370,7 @@ export async function composeWindowServices(input: ComposeInput & { readonly age
 
 /** The composition itself. `composeWindowServices` is the app's way in; a test that composes alone goes through test/helpers/compose-alone.ts. */
 export async function composeWith(input: ComposeInput): Promise<WindowServices> {
+    if (!input.agentStores?.settings && !input.alone) throw new Error("compose was given no settings: they are genie-host's");
     // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
     const workTracking = (): WorkTracking => (input.tynn?.()?.status().signedIn === true ? 'tynn' : 'files');
     const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
@@ -373,7 +388,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     let ownSettings: SettingsStore | null = null;
     stage?.begin('settings');
     if (!input.agentStores?.settings) {
-        ownSettings = await SettingsStore.open(input.userData, iso);
+        ownSettings = await input.alone!.openSettings();
         stage?.end(); stage?.begin('settings-carry-over');
         await ownSettings.carryOverFromV1(input.v1Settings());
     }
@@ -385,7 +400,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
     stage?.begin('agent-stores');
     if (!input.agentStores) {
-        ownStores = await openAgentStores(input.userData, iso, input.inboxSession, () => attentionLimitsFrom(settings.snapshot()));
+        ownStores = await input.alone!.openStores(() => attentionLimitsFrom(settings.snapshot()));
         stage?.end(); stage?.begin('agent-store-imports');
         importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
         await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
@@ -409,7 +424,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     let ownFlows: FlowStore | null = null;
     stage?.begin('flows');
     if (!input.flowsEngine) {
-        ownFlows = await FlowStore.open(input.userData, now);
+        ownFlows = await input.alone!.openFlows();
         ownFlows.setHiddenWorkspaces(hiddenWorkspaces);
         // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
         if (input.v1Flows) await runV1FlowImport(ownFlows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -422,7 +437,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     let supervisor: SupervisorApi;
     if (input.supervisor) supervisor = input.supervisor;
     else {
-        const own = new ProcessSupervisor(input.processPty ?? input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
+        const own = input.alone!.supervisor();
         for (const pty of input.adoptPtys ?? []) own.adopt(pty);
         supervisor = own;
     }
@@ -431,7 +446,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         input.appInboxEnv && settings.snapshotFor(source.workspaceId).app_inbox !== false ? input.appInboxEnv(source) : {};
     // An autonomous agent's gated actions run without asking, recorded (Tynn #801): read from its record at each ask.
     // A permission switch the person turned on answers its own actions the same way (genie#1294, SWITCH_ANSWERS).
-    const ownApprovals = input.agentStores ? null : new ApprovalQueue({
+    const ownApprovals = input.agentStores ? null : input.alone!.approvals({
         now,
         autoApproved: (caller) => (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true),
         granted: (caller, action) => {
@@ -450,7 +465,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     // Linked to genie-host: no devices here (one writer of remote-devices.json); the emergency path keeps its own, as always.
     const remoteDevices = input.remoteAccess
         ? DeviceStore.memory({ now, random: () => randomBytes(24).toString('base64url') })
-        : await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
+        : await input.alone!.openDevices({ now, random: () => randomBytes(24).toString('base64url') });
     stage?.end();
     // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
     const pairing = new PairApprovals({ host: hostName, now });
@@ -544,7 +559,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const workspaceRef = (id: string): WorkspaceRef | undefined => workspacesNow().find((w) => w.id === id);
     const asleep = (id: string): boolean => workspaceRef(id)?.asleep === true;
     const sessions: AgentSessionsPort = input.agentSessions ?? { session: () => null, rows: () => [], prompt: () => false, subscribe: () => () => {} };
-    const ownEngine = ownFlows ? startFlowsEngine({
+    const ownEngine = ownFlows ? input.alone!.startFlows({
         store: ownFlows,
         now,
         asleep,

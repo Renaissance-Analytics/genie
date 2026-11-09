@@ -33,10 +33,10 @@ async function fixture(seed = true) {
 }
 
 it('production pairing storage is inside its own directory and declares the old file for migration', async () => {
-    const source = await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    const main = source.match(/await TynnAccount\.open\(\{[\s\S]*?\n    \}\)/)?.[0];
-    expect(main).toMatch(/file:\s*join\(genieRoot\(\),\s*'credentials',\s*'tynn\.json'\)/);
-    expect(main).toMatch(/legacyFile:\s*join\(genieRoot\(\),\s*'tynn\.json'\)/);
+    const host = await readFile(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
+    expect(host).toMatch(/file:\s*join\(home,\s*'credentials',\s*'tynn\.json'\)/);
+    const main = await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    expect(main).toMatch(/file:\s*join\(genieRoot\(\),\s*'credentials',\s*'tynn\.json'\),\s*legacyFile:\s*join\(genieRoot\(\),\s*'tynn\.json'\)/);
 });
 
 describe.skipIf(process.platform === 'win32')('Tynn account credential migration', () => {

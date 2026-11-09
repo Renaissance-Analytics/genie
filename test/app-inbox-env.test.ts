@@ -190,7 +190,7 @@ describe('main wires it where the plan says, and nowhere else', () => {
     const main = readFileSync(join(__dirname, '..', 'src', 'main', 'main.ts'), 'utf8');
     it('the process book and the scheduler are given the app env; the window mints none of its own (Tynn #584)', () => {
         expect(main).not.toMatch(/appInboxEnv:/);
-        expect((main.match(/appEnv:\s*\(/g) ?? []).length).toBeGreaterThanOrEqual(2);
+        expect((readFileSync(join(__dirname, '..', 'src', 'main', 'genie-host.ts'), 'utf8').match(/appEnv:\s*\(/g) ?? []).length).toBeGreaterThanOrEqual(2);
     });
     it('the token is never put into a terminal’s env or the MCP env', () => {
         const mcpEnvLine = main.split('\n').find((l) => l.includes('const mcpEnv ='))!;

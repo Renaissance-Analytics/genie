@@ -142,8 +142,8 @@ describe('remote access over the engine link', () => {
 describe('with genie-host linked, the window starts no listener and opens no device store (source guards)', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     const compose = readFileSync(new URL('../src/main/compose.ts', import.meta.url), 'utf8');
-    it('main.ts builds the tailnet listener only without genie-host', () => {
-        expect(main).toMatch(/const remoteSocket = linkedRemote \? null : remoteListener\(/);
+    it('main.ts builds no tailnet listener', () => {
+        expect(main).not.toMatch(/remoteListener\(/);
     });
     it('compose.ts opens the device file only without genie-host', () => {
         expect(compose).toMatch(/input\.remoteAccess\s*\?\s*DeviceStore\.memory\(/);

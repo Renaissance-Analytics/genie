@@ -512,7 +512,7 @@ describe('where it is wired', () => {
         expect(host).toMatch(/hostTynnRecovery\(/);
         expect(host).toMatch(/\.onChange\(\(\) => [^\n]*recover/);
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        expect(main).toMatch(/agentEngineLink && !asked\.secretsMoved/);
+        expect(main).toMatch(/!agentEngineLink \|\| !asked\.secretsMoved/);
     });
 });
 
