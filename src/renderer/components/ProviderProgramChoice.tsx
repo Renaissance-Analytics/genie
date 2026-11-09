@@ -1,6 +1,6 @@
 import { Button } from '@particle-academy/react-fancy';
 import { useState } from 'react';
-import { isProviderProgramProblem, providerOfProgramProblem } from '../../core/provider-program.js';
+import { isProviderProgramProblem, providerOfProgramProblem } from '../../core/provider-program-words.js';
 
 export type ProviderProgramChosen = { ok: true } | { ok: false; reason?: string };
 
