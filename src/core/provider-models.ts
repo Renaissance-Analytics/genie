@@ -1,4 +1,5 @@
 // TYPES ONLY from prism-acp: this module is the renderer's too, and prism-acp's runtime spawns processes.
+import { supervisorFailureWords } from './supervisor-failure.js';
 import type { AvailableModel, SessionModelState } from '@particle-academy/prism-acp';
 import { isAcpProvider, type AcpProvider } from './engine.js';
 
@@ -35,6 +36,8 @@ export type ListProviderModels = (provider: AcpProvider) => Promise<SessionModel
 export function modelListReason(provider: string, error: unknown): string {
     // By NAME, not instanceof: a type-only import (above), and a ModelListError is still one across module copies.
     if (error instanceof Error && error.name === 'ModelListError') return error.message;
+    const supervisor = supervisorFailureWords(error);
+    if (supervisor !== null) return `could not start ${provider}: ${supervisor}`;
     return `could not start ${provider}: ${error instanceof Error ? error.message : String(error)}`;
 }
 

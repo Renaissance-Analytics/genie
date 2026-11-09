@@ -186,7 +186,7 @@ describe('Windows release signing', () => {
         expect(existsSync('scripts/verify-windows-signatures.ps1')).toBe(true);
         if (process.platform !== 'win32') return; // actual PowerShell script runs on the Windows guard row
         const dir = mkdtempSync(join(tmpdir(), 'genie-sign-verify-'));
-        const files = ['win-unpacked/Genie.exe', 'win-unpacked/resources/bin/genie-launch.exe',
+        const files = ['win-unpacked/Genie.exe', 'win-unpacked/resources/bin/genie-launch.exe', 'win-unpacked/resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-x64/prism-acp-supervisor.exe', 'win-unpacked/resources/app.asar.unpacked/node_modules/@particle-academy/prism-acp/native/win32-arm64/prism-acp-supervisor.exe',
             'win-unpacked/resources/deep/ours.dll', 'Genie-test-setup.exe', 'signature-evidence/nsis-uninstaller.exe'];
         try {
             for (const file of files) {

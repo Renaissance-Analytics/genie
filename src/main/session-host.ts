@@ -12,6 +12,7 @@ import { resetsIn, type Headroom } from '../core/headroom.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Comms } from '../core/comms.js';
 import { readFileSync, statSync } from 'node:fs';
+import { supervisorFailureWords } from '../core/supervisor-failure.js';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
@@ -1132,7 +1133,7 @@ export class SessionHost {
 
             const configured = providerBinary(record.provider);
             const reason = [
-                `Genie could not start ${record.provider}: ${String((error as Error).message ?? error)}.`,
+                `Genie could not start ${record.provider}: ${supervisorFailureWords(error) ?? String((error as Error).message ?? error)}.`,
                 // The configured PATH, when there is one. An error like "spawn EINVAL" names
                 // no file, so on its own it sends the reader looking in the wrong place — and
                 // a `GENIE2_<PROVIDER>_BINARY` pointing somewhere stale is a cause nothing
