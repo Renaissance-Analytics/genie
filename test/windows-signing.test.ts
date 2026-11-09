@@ -15,12 +15,16 @@ type UploadRun = Pick<SpawnSyncReturns<string>, 'status' | 'signal' | 'stdout' |
 
 /** What one spawn of the upload script must have done, for a release in this state. */
 function expectUploadRun(state: string, run: UploadRun): void {
+    const status = run.status === null ? 'null' : `${run.status} (0x${(run.status >>> 0).toString(16)})`;
+    const seen = `release state ${state}: status ${status}, signal ${run.signal}, stdout ${JSON.stringify(run.stdout)}, stderr ${JSON.stringify(run.stderr)}`;
     if (state === 'true') {
-        expect(run.status, run.stderr).toBe(0);
-        expect(run.stdout).toContain('UPLOAD_CALLED');
+        expect(run.status, seen).toBe(0);
+        expect(run.stdout, seen).toContain('UPLOAD_CALLED');
     } else {
-        expect(run.status, `release state ${state} allowed upload: ${run.stdout}`).not.toBe(0);
-        expect(run.stdout).not.toContain('UPLOAD_CALLED');
+        // The script's own refusal, not merely "not 0": a shell that crashed also exits non-zero.
+        expect(run.status, seen).toBe(1);
+        expect(run.stdout, seen).toContain('Windows upload requires an existing draft release');
+        expect(run.stdout, seen).not.toContain('UPLOAD_CALLED');
     }
 }
 
