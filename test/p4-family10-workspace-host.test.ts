@@ -153,6 +153,8 @@ describe('the IPC path is gone', () => {
 
     it('a hibernate still tells the registry, as the IPC path did (the rail redraws the sleeping workspace)', async () => {
         const main = strip(await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8'));
-        expect(main).toMatch(/hibernate: \(id\) => hibernateWorkspace\(workspaceOps, id, \{ handoffWaitMs: 20_000, pollMs: 500 \}\)\.finally\(\(\) => registry\?\.touch\(\)\),/);
+        expect(main).toMatch(/workspaceLifecycleApi\(lifecycle, lifecycleWiring, \(\) => registry\?\.touch\(\),/);
+        const api = strip(await readFile(new URL('../src/main/workspace-lifecycle-api.ts', import.meta.url), 'utf8'));
+        expect(api).toMatch(/hibernate: \(id\) => hibernateWorkspace\(workspaceOps, id, \{ handoffWaitMs: 20_000, pollMs: 500 \}\)\.finally\(touch\),/);
     });
 });
