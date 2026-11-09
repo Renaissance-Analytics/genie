@@ -271,7 +271,8 @@ describe('the wiring', () => {
     });
 
     it('every write in the adapter refreshes what clients see', () => {
-        const adapter = src('src/main/agent-ops-api.ts');
+        const whole = src('src/main/agent-ops-api.ts');
+        const adapter = whole.slice(whole.indexOf('export function agentOpsApi'));
         for (const method of ['restart', 'delete', 'switchDriver', 'setBudget', 'setMode', 'setAccessScope', 'setAccessAgents', 'setAutoApprove', 'setManageTabs', 'setDrivePages', 'setIssueWatch', 'setPermissions', 'setModel']) {
             const line = adapter.split('\n').find((l) => l.trimStart().startsWith(`${method}:`));
             expect(line, method).toBeDefined();

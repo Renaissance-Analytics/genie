@@ -136,8 +136,8 @@ describe('the window never reads the host’s thread logs', () => {
     });
 
     it('the switch’s history port asks the engine', () => {
-        expect(code('src/main/main.ts')).toMatch(/history: [^\n]*historyRows\(/);
+        expect(code('src/main/agent-ops-api.ts')).toMatch(/history: [^\n]*historyRows\(/);
         // It asks for what a carry-over needs, never the whole ledger.
-        expect(code('src/main/main.ts')).toMatch(/historyRows\(record\.id, \{ limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES \}\)/);
+        expect(code('src/main/agent-ops-api.ts')).toMatch(/historyRows\(record\.id, \{ limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES \}\)/);
     });
 });

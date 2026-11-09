@@ -68,10 +68,7 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
             }
         },
         // What a provider switch carries (Tynn story #380): the agent's rows, asked of the agent host, which reads its own store.
-        history: async (record) => {
-            const engine = wiring.engine();
-            return engine ? (await engine.historyRows(record.id, { limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES })).rows : [];
-        },
+        history: async (record) => (await wiring.engine()?.historyRows(record.id, { limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES }))?.rows ?? [],
         removeDir: (path) => rm(path, { recursive: true, force: true }),
         realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
         // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.
