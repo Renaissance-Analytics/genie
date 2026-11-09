@@ -2069,6 +2069,7 @@ function DesktopApp({ bridge }: AppProps) {
             onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId); }}
+            onChooseProviderProgram={resolvedBridge?.chooseProviderProgram ? (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) : undefined}
             onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] start refused:', r.reason); }); }}
             onSafeModeStartAgent={restartOne}
             onSelectRow={setSelectedRowId}

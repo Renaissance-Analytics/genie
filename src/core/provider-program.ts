@@ -108,6 +108,11 @@ export function providerProgramProblem(provider: string, ports: ProviderProgramP
     return program.kind === 'wrapper' ? `${provider} on PATH ${PROBLEM}: ${program.file}. Choose ${provider}'s .exe` : null;
 }
 
+/** The provider a reason of that kind names, or `null` for any other reason: a chat's "Not sent" line has no provider of its own. */
+export function providerOfProgramProblem(reason: string): string | null {
+    return new RegExp(`(\\S+) on PATH ${PROBLEM}`).exec(reason)?.[1] ?? null;
+}
+
 /** Whether a reason is that problem: the settings offer the picker with it, and only with it. */
 export function isProviderProgramProblem(reason: string): boolean {
     return reason.includes(PROBLEM);
