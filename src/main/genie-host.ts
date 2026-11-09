@@ -126,6 +126,8 @@ import { attentionLimitsFrom } from './attention-store.js';
 import { startHostMcp, type HostMcp } from './host-mcp.js';
 import { hostPluginTools } from './plugins-host.js';
 import { MARKETPLACE_PAGE_BYTES, openMarketplacePlugins } from './marketplace-client.js';
+import { MarketplaceHost } from './marketplace-host.js';
+import { MARKETPLACE_ARCHIVE_BYTES } from './marketplace-archive.js';
 import { CatalogService } from './catalog-host.js';
 import { GAppBook } from './gapps-host.js';
 import { setOfferedFlowKinds } from '../core/flow-canvas.js';
@@ -727,6 +729,16 @@ async function main(): Promise<void> {
         }, log: say,
     });
     const pluginsService = marketplacePlugins.plugins;
+    let marketplaceArchiveTransport: ReturnType<typeof hostHttpsFetch> | undefined;
+    const marketplaceHost = await MarketplaceHost.open({
+        pluginsDir: join(home, 'plugins'), stagingDir: join(home, 'marketplace-staging'), grantsFile: join(home, 'marketplace-grants.json'),
+        registry: marketplacePlugins.registry, plugins: pluginsService, origin: TYNN_HOST, log: say,
+        fetch: async (url, init) => {
+            const memory = await proxyMemory;
+            marketplaceArchiveTransport ??= hostHttpsFetch({ proxyRoutes: target => memory.routesFor(target), log: say, streamResponse: true, maxResponseBytes: MARKETPLACE_ARCHIVE_BYTES });
+            return marketplaceArchiveTransport(url, init);
+        },
+    }).catch((error: unknown) => { say(`Marketplace is unavailable: ${error instanceof Error ? error.message : String(error)}`); return undefined; });
     /*
      * THE CATALOG (ADF A4, Tynn #448): Genie's own elements and every ENABLED installed plugin's, revisioned. Built again
      * whenever the plugins change; every window follows it over the engine connection (catalog.snapshot, catalog.changed).
@@ -843,6 +855,7 @@ async function main(): Promise<void> {
         appInbox: appInboxDoor,
         processes: processesService,
         plugins: pluginsService,
+        marketplace: marketplaceHost,
         catalog: catalogService,
         flows: flowsService,
         browser: browserService,
@@ -1359,6 +1372,7 @@ async function main(): Promise<void> {
         shuttingDown = true;
         hangWatchdog.shuttingDown();
         say(`shutting down: ${why}`);
+        if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
         lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
         browserService.quit();
         const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());

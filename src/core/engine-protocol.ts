@@ -129,6 +129,8 @@ export const ENGINE_METHODS = [
     // The host's plugins (ADF A3, Tynn #447: plugins-host.ts): `[method, args]` — a LOCAL window's setEnabled or refresh.
     // Their state is sent as `plugins.event` before `engine.ready` and again on every change.
     'engine.plugins',
+    // Anonymous Marketplace reads and reviewed installs: local window only, with connection-owned review tokens.
+    'engine.marketplace',
     // THE CATALOG (ADF A4, Tynn #448: protocol 3). `catalog.snapshot []` answers `{ revision, definitions }`, also sent as
     // the `catalog.snapshot` event before `engine.ready`; every change is pushed as `catalog.changed` (upserts and
     // removals from a base revision; a window that missed one asks for the snapshot again). `catalog.docs [kind, id]`

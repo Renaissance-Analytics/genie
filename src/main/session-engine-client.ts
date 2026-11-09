@@ -53,6 +53,7 @@ import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { PluginsDump } from './plugins-host.js';
 import { PluginsReplica } from './plugins-replica.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
 import { CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../core/catalog-sync.js';
 import type { CatalogKind, ElementDefinition } from '../core/catalog.js';
 import type { BrowserEvent } from './browser-service.js';
@@ -182,6 +183,7 @@ export class SessionEngineClient {
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #plugins: PluginsReplica | null = null;
+    #marketplace: MarketplaceApi | null = null;
     #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
@@ -802,6 +804,22 @@ export class SessionEngineClient {
         const reply = await this.call('catalog.docs', [kind, id]);
         if (!reply.ok) throw new Error(reply.reason);
         return reply.value as ElementDefinition | null;
+    }
+
+    /** The local window's Marketplace actions. Only the host downloads, verifies and activates packages. */
+    marketplace(): MarketplaceApi {
+        const request = async <T>(operation: keyof MarketplaceApi, args: unknown[]): Promise<T> => {
+            const answer = await this.call('engine.marketplace', [operation, args]);
+            if (!answer.ok) throw new Error(answer.reason);
+            return answer.value as T;
+        };
+        this.#marketplace ??= {
+            search: (query, cursor) => request('search', cursor === undefined ? [query] : [query, cursor]),
+            prepare: (id, version) => request('prepare', [id, version]),
+            install: (token, consent) => request('install', [token, consent]),
+            discard: async token => { await request('discard', [token]); },
+        };
+        return this.#marketplace;
     }
 
     /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */

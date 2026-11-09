@@ -36,6 +36,7 @@ export interface LocalOwnerBridge {
     tynnNetwork: Pick<TynnNetworkBridge, 'workstations' | 'setRole' | 'shares'>;
 }
 import type { LiveSession } from '../core/roster.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
 import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { AgentDetailViews, type AgentWireSubscribe } from '../core/agent-push-wire.js';
@@ -153,6 +154,8 @@ export interface ActivityBridge {
 }
 
 export interface GenieBridge {
+    /** The admitted local window's Marketplace; absent on a remote bridge. */
+    marketplace?: MarketplaceApi;
     /** This window's local connection status; absent when connected to another host. */
     localProtocol?: LocalProtocolControl;
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
@@ -652,7 +655,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
@@ -721,6 +724,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const { subscribeAgentWire: _wire, ...rest } = preload;
     const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
+        marketplace: local.marketplace,
         appInbox: local.owner.appInbox,
         deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },

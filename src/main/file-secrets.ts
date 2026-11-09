@@ -1,6 +1,7 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, chmod, mkdir, open, readFile, rename, rm, stat, type FileHandle } from 'node:fs/promises';
+import { access, chmod, mkdir, open, readFile, rm, stat, type FileHandle } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { Keychain, type KeyringModule } from './keychain.js';
 import { isOwnerOnlyFile, restrictPrivateDirectories } from './private-credentials.js';
@@ -210,7 +211,7 @@ export async function openFileSecrets(options: FileSecretsOptions): Promise<Keyr
                 } finally {
                     await handle.close();
                 }
-                await rename(temp, this.#file);
+                await renameOver(temp, this.#file);
                 staged = false;
             } catch (error) {
                 throw new Error(`${this.#name}: it could not be written (${code(error)}).`);
