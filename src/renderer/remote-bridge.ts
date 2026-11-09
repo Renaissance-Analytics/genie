@@ -55,6 +55,8 @@ export interface RemoteClient {
     readonly pages?: PageClient;
     /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
     readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
+    /** Share links on the host this client is connected to (Tynn #587): that host makes them, for itself. */
+    readonly shares: NonNullable<import('./relay-transport.js').TynnNetworkBridge['shares']>;
     readonly bridge: GenieBridge;
     readonly ready: Promise<{ ok: true } | { ok: false; reason: string }>;
     state(): RemoteState;
@@ -671,6 +673,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         ...(uploads ? { uploads } : {}),
         ...(pages ? { pages } : {}),
         ...(localOwner ? { localOwner } : {}),
+        shares: {
+            list: (workspaceId) => answer('tynnNetwork.shares.list', workspaceId),
+            mint: (input) => answer('tynnNetwork.shares.mint', input),
+            revoke: (linkId) => answer('tynnNetwork.shares.revoke', linkId),
+        },
         ready,
         state: () => state,
         onState: (l) => { stateListeners.add(l); return () => { stateListeners.delete(l); }; },

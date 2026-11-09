@@ -262,6 +262,8 @@ export interface ShellProps {
     remote?: ShellRemote | undefined;
     /** The client side of remote: this window driving another machine (Settings → Workstation). */
     remoteConnect?: RemoteConnectProps | undefined;
+    /** Share this workstation through Tynn (Tynn #587); absent for a guest. */
+    onShareWorkstation?: (() => void) | undefined;
     /** Agent operations (§6.2) for the Agent view; absent when this window cannot operate agents. */
     agentOps?: AgentOpsProps | undefined;
     /** Workspace operations (§6.1) for the Workspace surface; absent when this window cannot operate workspaces. */
@@ -398,6 +400,7 @@ export function Shell({
     deckFormRefusal,
     remote,
     remoteConnect,
+    onShareWorkstation,
     agentOps,
     workspaceOps,
     addPreview,
@@ -529,6 +532,7 @@ export function Shell({
                 controlsInset={controlsInset}
                 workstation={snapshot.workstation}
                 remote={remote}
+                share={onShareWorkstation ? { onShare: onShareWorkstation } : undefined}
                 onNavigate={onNavigate}
                 onOpenPalette={onOpenPalette}
                 paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
@@ -753,6 +757,7 @@ export function Shell({
                                     designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
                                     agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
                                     current={{ kind: 'agent', id: parsed.agentId }}
+                                    onShare={workspaceOps?.onShare}
                                     color={agentWorkspace.color ?? null}
                                     canDesign={Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
                                     hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
