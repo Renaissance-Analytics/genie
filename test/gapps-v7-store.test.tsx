@@ -72,7 +72,7 @@ afterEach(() => {
     document.body.innerHTML = '';
 });
 
-const draw = (apps: readonly GAppListing[] = [notes], given: GAppStoreActions | undefined = actions) => act(() => {
+const draw = (apps: readonly GAppListing[] = [notes], given: GAppStoreActions | null = actions) => act(() => {
     root.render(<GAppStoreFlyout open onClose={() => undefined} apps={apps} {...(given ? { actions: given } : {})} />);
 });
 const q = (selector: string) => document.querySelector<HTMLElement>(selector);
@@ -273,7 +273,7 @@ describe('what the store shows', () => {
     });
 
     it('a window with no actions only lists', () => {
-        draw([notes], undefined as never);
+        draw([notes], null);
         expect(q('[data-gapp-store]')).not.toBeNull();
         expect(q('[data-gapp-action]')).toBeNull();
     });
