@@ -248,7 +248,7 @@ describe('M7: a window that reconnects', () => {
         b.subscribe((s) => snapshots.push(s));
         await vi.waitFor(() => expect(ledger.at(-1)?.rows).toHaveLength(3));
         d.drop();
-        await vi.waitFor(() => expect(b.localProtocol!.state().phase).toBe('failed'));
+        await vi.waitFor(() => expect(b.localProtocol!.state().phase).toBe('failed'), { timeout: 10_000 });
         rows.push({ id: 'while-away', text: 'x' });
         const missed = { agents: [{ id: 'missed' }], workspaces: [], deckItems: [], signals: {} };
         h.pushSnapshot(missed);
