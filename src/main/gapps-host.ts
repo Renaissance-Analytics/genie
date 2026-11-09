@@ -123,6 +123,26 @@ export class GAppBook {
         return this.#book.apps.filter((e) => e.state === 'installed').flatMap((e) => this.#packages.get(e.packageId) ?? []);
     }
 
+    /** Where an installed app's files are (V4 serves them); null for an app the book does not have. */
+    installedDir(packageId: string): string | null {
+        const entry = this.#book.apps.find((e) => e.packageId === packageId);
+        return entry ? join(this.#ports.dir, entry.packageId, entry.version) : null;
+    }
+
+    /** An installed app's `app` element (its entry and window); null when the book does not have it. */
+    appElement(packageId: string): ElementDefinition | null {
+        return this.#packages.get(packageId)?.contributions.find((d) => d.kind === 'app') ?? null;
+    }
+
+    /** Are the installed files still the ones installed (B4's re-check, as an app loads)? Null if so; why not, in words. */
+    async verifyInstalled(packageId: string): Promise<string | null> {
+        const entry = this.#book.apps.find((e) => e.packageId === packageId);
+        if (!entry) return `${packageId} is not installed`;
+        const now = await currentDigest(join(this.#ports.dir, entry.packageId, entry.version));
+        if (now.ok && now.digest === entry.digest) return null;
+        return `${entry.name} is refused as tampered: ${now.ok ? 'a file changed, was added or was removed after it was installed' : now.reason}; reinstall it from its publisher.`;
+    }
+
     /** An app's isolated store (V5's bridge reads and writes it). */
     storageDir(packageId: string): string {
         return join(this.#ports.dir, packageId, 'storage');
