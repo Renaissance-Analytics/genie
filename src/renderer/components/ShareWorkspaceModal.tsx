@@ -19,6 +19,8 @@ const button = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hov
 
 export interface ShareWorkspaceModalProps {
     readonly workspaceName: string;
+    /** Opened on the whole workstation (Tynn #587): there is no workspace to choose. */
+    readonly workstation?: boolean | undefined;
     /** Links that reach this workspace; `null` = not read yet. */
     readonly links: readonly ShareLink[] | null;
     /** The link just made — its URL is served this once. */
@@ -49,10 +51,10 @@ export function ShareWorkspaceModal(props: ShareWorkspaceModalProps) {
     );
 }
 
-export function ShareWorkspaceForm({ workspaceName, links, minted, problem, busy, onMint, onRevoke }: ShareWorkspaceModalProps) {
+export function ShareWorkspaceForm({ workspaceName, workstation = false, links, minted, problem, busy, onMint, onRevoke }: ShareWorkspaceModalProps) {
     const [capability, setCapability] = useState<'control' | 'readonly'>('control');
     const [days, setDays] = useState<number>(7);
-    const [whole, setWhole] = useState(false);
+    const [whole, setWhole] = useState(workstation);
     // Copied through main's clipboard, and it says whether it landed (CopyText).
     const linkCopy = useCopyText();
     // Where each row's Revoke stands, and what the last one that worked did.
@@ -85,10 +87,12 @@ export function ShareWorkspaceForm({ workspaceName, links, minted, problem, busy
                             <span className="font-medium">Expires after</span>
                             <Select aria-label="Expires after" list={EXPIRY.map((d) => ({ value: String(d), label: d === 1 ? '1 day' : `${d} days` }))} value={String(days)} onValueChange={(v) => setDays(Number(v))} />
                         </label>
+                        {workstation ? null : (
                         <label data-share-reach="" className="flex flex-col gap-1">
                             <span className="font-medium">Reaches</span>
                             <Select aria-label="Reaches" list={[{ value: 'workspace', label: `${workspaceName} only` }, { value: 'whole', label: 'The whole workstation' }]} value={whole ? 'whole' : 'workspace'} onValueChange={(v) => setWhole(v === 'whole')} />
                         </label>
+                        )}
                         <Button size="xs" type="button" data-action="mint-share-link" disabled={busy} onClick={() => { linkCopy.reset(); onMint({ capability, expiresInDays: days, whole }); }} className={button}>Create link</Button>
                     </div>
                     {minted?.url ? (
