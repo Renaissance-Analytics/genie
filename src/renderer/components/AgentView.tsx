@@ -13,7 +13,7 @@ import { FidelityDot } from './Dashboard.js';
 import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
-import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
+import { ProviderProgramChoice, ProviderStartRefusal, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { Breadcrumbs, Button, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
@@ -281,6 +281,8 @@ export interface AgentViewProps {
     onDesignLogin?: ((agentId: string) => void) | undefined;
     /** `Start` for a declared agent that is not running: start it (it reattaches rather than starting a second). */
     onStart?: ((agentId: string) => void) | undefined;
+    /** Why this agent's last start was refused (`AgentDetail.refusal`). */
+    startRefusal?: string | null | undefined;
     /** The Settings tab's sub-tab — controlled, for tests that render server-side; otherwise the view keeps its own (General first). */
     settingsSection?: SettingsSection | undefined;
 }
@@ -336,7 +338,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    startRefusal, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
@@ -1017,6 +1019,7 @@ function AgentViewBody({
                              * THE ERROR CARD (the board): the turn did not finish. The last tool call has no result,
                              * and nothing after the break was received. Inline, at the end — where the reader is.
                              */}
+                            <ProviderStartRefusal reason={startRefusal} {...(ops?.onChooseProviderProgram ? { onChoose: (provider: string) => ops.onChooseProviderProgram!(provider).then((r) => { if (r.ok) onStart?.(agent.id); return r; }) } : {})} />
                             {session?.failure ? (
                                 <div data-stream-error="" className="mx-5 my-2 shrink-0 rounded-[10px] border border-[var(--danger)] bg-[var(--bg-1)] px-3 py-2 text-[12px]">
                                     <div className="flex items-center gap-2 font-mono text-[12px] text-[var(--danger)]">
