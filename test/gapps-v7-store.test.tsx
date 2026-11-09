@@ -53,6 +53,7 @@ function fakeApi(): Fake {
         install: vi.fn<GAppsApi['install']>().mockResolvedValue(notes),
         setOn: vi.fn<GAppsApi['setOn']>().mockResolvedValue(undefined),
         uninstall: vi.fn<GAppsApi['uninstall']>().mockResolvedValue(undefined),
+        open: vi.fn<GAppsApi['open']>().mockResolvedValue(undefined),
     };
 }
 

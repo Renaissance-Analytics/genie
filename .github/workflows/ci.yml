@@ -557,6 +557,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: a real installed app opens in its own window
+        run: timeout 300 node scripts/gapp-open-cdp.mjs
+
       - name: ArtBoard images, paged posts and the native image-post path
         run: timeout 360 node scripts/artboard-cdp.mjs --trace-main
 
@@ -931,6 +934,10 @@ jobs:
           path: smoke-out/chat-drafts*
           if-no-files-found: warn
           retention-days: 7
+
+      - name: a real installed app opens in its own window
+        shell: pwsh
+        run: node scripts/gapp-open-cdp.mjs
 
       - name: ArtBoard images, paged posts and the native image-post path
         shell: pwsh
