@@ -107,7 +107,7 @@ import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
 import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit, type EnvelopePorts } from './envelope-wizard-host.js';
 import { parseEnvelopePlan } from '../core/envelope-plan.js';
-import { chmod, mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
@@ -214,7 +214,8 @@ import { repoStatus } from './repo-git.js';
 import { fileExporter } from './file-export.js';
 import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
-import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
+import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf } from './repo-ops-host.js';
+import { repoOpsPorts, workspaceSettingsOps } from './workspace-reads-api.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
@@ -2403,16 +2404,7 @@ async function boot(): Promise<void> {
     // Import from Git's browser (item 8): what the sign-in reaches; signed out says so.
     const githubRepos = (): Promise<RepoListing> => (githubAccount ? githubAccount.repoListing() : Promise.resolve({ status: 'signed-out' }));
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
-    const repoOps: RepoOpsPorts = {
-        fs: {
-            ...workspaceOps.fs,
-            // The repo chips read `.git/HEAD` and stat `.git/index.lock`; "Remove stale lock" unlinks it (only when stale).
-            readText: async (p) => { try { return await readFileText(p, 'utf8'); } catch { return null; } },
-            mtime: async (p) => { try { return (await statPath(p)).mtimeMs; } catch { return null; } },
-            unlink: async (p) => { const { unlink } = await import('node:fs/promises'); await unlink(p); },
-        },
-        registry: { workspace: (id) => registry?.workspace(id) ?? null },
-    };
+    const repoOps = repoOpsPorts((id) => registry?.workspace(id) ?? null);
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
     // The parent is picked in the window over the host's disk (Tynn #835).
     const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
@@ -2867,9 +2859,7 @@ async function boot(): Promise<void> {
                 removeRepo: (id, slug) => removeRepoFrom(repoOps, id, slug),
                 removeRepoLock: (id, slug) => removeRepoLockOf(repoOps, id, slug),
                 commitsSince: (id, since) => commitsSinceIn(repoOps, id, since),
-                settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
-                setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
-                resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
+                ...workspaceSettingsOps(() => services!.settings),
                 onSettingsChanged: (listener) => services!.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
                 setGoverns: (id, children) => registry!.setGoverns(id, children),
                 setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),

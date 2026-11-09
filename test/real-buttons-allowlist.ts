@@ -23,7 +23,7 @@ export const REAL_BUTTONS_ALLOWLIST: readonly AllowlistEntry[] = [
     { file: 'components/StreamRow.tsx', rule: 'click-on-non-interactive', count: 1, reason: 'special: link delegation on the prose cell for real <a> elements rendered by the markdown renderer (file, agent and workspace links). The row itself is a react-fancy Button when it is a control.' },
     { file: 'components/TynnBoardPanel.tsx', rule: 'click-on-non-interactive', count: 1, reason: 'special: role="menu" container only stops propagation so a click inside the menu does not close it.' },
     { file: 'components/TynnBoardPanel.tsx', rule: 'raw-button', count: 9, reason: 'debt: converts in the Tynn tab PR' },
-    { file: 'components/Workspace.tsx', rule: 'raw-button', count: 32, reason: 'debt: converts in the workspace shell PR' },
+    { file: 'components/Workspace.tsx', rule: 'raw-button', count: 31, reason: 'debt: converts in the workspace shell PR' },
     { file: 'components/AddWorkspaceWizard.tsx', rule: 'menu-as-button', count: 1, reason: 'special: the wizard\'s stepper (aria-current="step"); react-fancy has no stepper component, so it stays a Button until fancy ships one' },
     { file: 'components/DesignedTab.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: a menu or tab item made into a Button; becomes react-fancy Tabs/Sidebar/Navbar in the menus branch (the owner, 2026-11-01: "it\'s a menu")' },
     { file: 'components/FeatureSurfaces.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: the Browser surface\'s site chips (aria-current on a Button) navigate, so they become links in the menus follow-up PR; the Settings nav is already a react-fancy Sidebar' },

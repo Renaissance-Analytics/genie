@@ -89,6 +89,8 @@ export interface TitleBarProps {
      * icon routes as before.
      */
     gapps?: { apps: readonly GAppListing[] | null } | undefined;
+    /** Share this workstation through Tynn (Tynn #587), the host's when driving one. Absent for a guest. */
+    share?: { readonly onShare: () => void } | undefined;
     connect?: {
         workstations: TynnWorkstationList | null;
         onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
@@ -112,7 +114,7 @@ export interface RemoteBadge {
     readonly onTakeControl?: (() => void) | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect, gapps }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect, gapps, share }: TitleBarProps) {
     const [storeOpen, setStoreOpen] = useState(false);
     /**
      * The modifier label, from the KIT rather than from our own copy.
@@ -212,6 +214,19 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                                     {inbox.unread > 99 ? '99+' : inbox.unread}
                                 </span>
                             ) : null}
+                        </Button>
+                    </Tooltip>
+                ) : null}
+                {share ? (
+                    <Tooltip content="Share this workstation" placement="bottom">
+                        <Button variant="ghost" size="xs" labelClassName="contents"
+                            type="button"
+                            data-action="share-workstation"
+                            aria-label="Share this workstation"
+                            onClick={share.onShare}
+                            className="[-webkit-app-region:no-drag] flex size-6 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
+                        >
+                            <Icon name="share-2" size="sm" />
                         </Button>
                     </Tooltip>
                 ) : null}
