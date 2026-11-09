@@ -1,12 +1,12 @@
 import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PACKAGE_SIGNATURE_FILE, packageDigest, packageSigningBytes, publisherKeyId } from '../src/core/plugin-integrity.js';
+import { PACKAGE_MANIFEST_FILE, PACKAGE_SIGNATURE_FILE, packageDigest, packageSigningBytes, publisherKeyId } from '../src/core/plugin-integrity.js';
 import { readPackageFiles } from '../src/main/plugin-package.js';
 import { extractMarketplaceArchive } from '../src/main/marketplace-archive.js';
 import { hostHttpsFetch, type HostHttpsResponse } from '../src/main/host-https-fetch.js';
@@ -38,7 +38,7 @@ beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'genie-c5-publish-')); dir = join(root, 'package');
     keyFile = join(root, 'publisher.pem'); tokenFile = join(root, 'publisher.token');
     await mkdir(join(dir, 'nested'), { recursive: true });
-    await writeFile(join(dir, 'genie-plugin.json'), JSON.stringify(identity));
+    await writeFile(join(dir, PACKAGE_MANIFEST_FILE), JSON.stringify(identity));
     await writeFile(join(dir, 'nested', 'bytes.bin'), Buffer.from([0, 0xff, 0xfe, 0x80, 10]));
     await writeFile(join(dir, '.included'), 'dotfiles are signed too');
     await writeFile(keyFile, privatePem, { mode: 0o600 }); await writeFile(tokenFile, token + '\n', { mode: 0o600 });
@@ -71,7 +71,7 @@ describe('C5 signed publisher upload', () => {
         const zip = join(root, 'received.zip'), extracted = join(root, 'received'); await writeFile(zip, bytes.subarray(start, end)); await mkdir(extracted);
         await extractMarketplaceArchive(zip, extracted, new AbortController().signal);
         const read = await readPackageFiles(extracted); expect(read.ok).toBe(true); if (!read.ok) throw new Error(read.reason);
-        expect(read.files.map(file => file.path).sort()).toEqual(['.included', 'genie-plugin.json', 'genie-plugin.sig', 'nested/bytes.bin']);
+        expect(read.files.map(file => file.path).sort()).toEqual(['.included', PACKAGE_MANIFEST_FILE, 'genie-plugin.sig', 'nested/bytes.bin']);
         const digest = packageDigest(read.files), signature = read.files.find(file => file.path === PACKAGE_SIGNATURE_FILE)!.bytes;
         expect(verify(null, packageSigningBytes(digest), pair.publicKey, Buffer.from(signature.toString().trim(), 'base64'))).toBe(true);
         expect(digest).toBe(result.digest); expect(await readFile(join(extracted, 'nested/bytes.bin'))).toEqual(Buffer.from([0, 0xff, 0xfe, 0x80, 10]));
@@ -81,6 +81,11 @@ describe('C5 signed publisher upload', () => {
     it('accepts an identical retry without modifying an existing source signature', async () => {
         const { publishPlugin } = await load(); await writeFile(join(dir, PACKAGE_SIGNATURE_FILE), 'old detached signature'); upload.mockImplementation(() => accepted(200));
         expect(await publishPlugin(options())).toMatchObject({ created: false }); expect(await readFile(join(dir, PACKAGE_SIGNATURE_FILE), 'utf8')).toBe('old detached signature');
+    });
+    it('requires the canonical manifest and refuses an old-only package without fallback', async () => {
+        const { publishPlugin } = await load(); await publishPlugin(options()); expect(upload).toHaveBeenCalledTimes(1);
+        await rename(join(dir, PACKAGE_MANIFEST_FILE), join(dir, 'genie-plugin.json'));
+        await expect(publishPlugin(options())).rejects.toThrow(/manifest|genie-package/i); expect(upload).toHaveBeenCalledTimes(1);
     });
     it('accepts a dedicated environment token without a token file', async () => {
         const { publishPlugin } = await load(); const input = options(); delete input.tokenFile;
@@ -104,8 +109,8 @@ describe('C5 signed publisher upload', () => {
     });
     it.each(['mismatched key', 'invalid manifest', 'not Ed25519'])('refuses %s before upload', async state => {
         const { publishPlugin } = await load();
-        if (state === 'mismatched key') await writeFile(join(dir, 'genie-plugin.json'), JSON.stringify({ ...identity, publisher: { ...identity.publisher, keyId: 'sha256:' + '0'.repeat(64) } }));
-        if (state === 'invalid manifest') await writeFile(join(dir, 'genie-plugin.json'), '{');
+        if (state === 'mismatched key') await writeFile(join(dir, PACKAGE_MANIFEST_FILE), JSON.stringify({ ...identity, publisher: { ...identity.publisher, keyId: 'sha256:' + '0'.repeat(64) } }));
+        if (state === 'invalid manifest') await writeFile(join(dir, PACKAGE_MANIFEST_FILE), '{');
         if (state === 'not Ed25519') await writeFile(keyFile, generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' }));
         await expect(publishPlugin(options())).rejects.toThrow(/manifest|key|Ed25519/i); expect(upload).not.toHaveBeenCalled();
     });

@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { ZipFile } from 'yazl';
-import { packageDigest, packageSigningBytes, publisherKeyId } from '../../src/core/plugin-integrity.js';
+import { PACKAGE_MANIFEST_FILE, packageDigest, packageSigningBytes, publisherKeyId } from '../../src/core/plugin-integrity.js';
 import type { MarketplaceReview, MarketplaceRow } from '../../src/core/marketplace.js';
 import { hostHttpsFetch } from '../../src/main/host-https-fetch.js';
 import { MarketplaceClient } from '../../src/main/marketplace-client.js';
@@ -30,14 +30,14 @@ async function prepare(): Promise<void> {
     await writeFile(keyFile, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 }); await writeFile(join(secrets, 'publisher.public.pem'), publicPem);
     const fixture: Fixture = { id: `org.example.c5-${randomBytes(6).toString('hex')}`, keyId: publisherKeyId(publicPem), version: '1.2.3' };
     await writeFile(join(root, 'fixture.json'), JSON.stringify(fixture));
-    await writeFile(join(source, 'genie-plugin.json'), JSON.stringify({ ...fixture, keyId: undefined, name: 'Disposable C5 proof', publisher: { name: 'C5 proof publisher', keyId: fixture.keyId }, capabilities: { network: { hosts: [] }, genieApi: [] }, mcpTools: [{ name: 'hello', description: 'Proof only', inputSchema: { type: 'object' }, run: 'tools.cjs', process: 'subprocess', gated: true }] }));
+    await writeFile(join(source, PACKAGE_MANIFEST_FILE), JSON.stringify({ ...fixture, keyId: undefined, name: 'Disposable C5 proof', publisher: { name: 'C5 proof publisher', keyId: fixture.keyId }, capabilities: { network: { hosts: [] }, genieApi: [] }, mcpTools: [{ name: 'hello', description: 'Proof only', inputSchema: { type: 'object' }, run: 'tools.cjs', process: 'subprocess', gated: true }] }));
     await writeFile(join(source, 'tools.cjs'), 'throw new Error("proof plugin must not execute during publishing or installation");');
     await writeFile(join(source, 'bytes.bin'), Buffer.from([0, 255, 254, 128, 10]));
     console.log('C5 fixture files prepared; private key stays outside the package.');
 }
 async function signedControl(privatePem: string): Promise<Buffer> {
     const read = await readPackageFiles(source); if (!read.ok) throw new Error('Control package cannot be read');
-    const files = read.files.map(file => file.path === 'genie-plugin.json' ? { ...file, bytes: Buffer.from(JSON.stringify({ ...JSON.parse(file.bytes.toString()), version: '0.0.0' })) } : file);
+    const files = read.files.map(file => file.path === PACKAGE_MANIFEST_FILE ? { ...file, bytes: Buffer.from(JSON.stringify({ ...JSON.parse(file.bytes.toString()), version: '0.0.0' })) } : file);
     const archive = new ZipFile(), chunks: Buffer[] = [];
     const done = new Promise<Buffer>((resolve, reject) => { archive.outputStream.on('data', chunk => chunks.push(chunk as Buffer)); archive.outputStream.once('end', () => resolve(Buffer.concat(chunks))); archive.outputStream.once('error', reject); });
     for (const file of files) archive.addBuffer(file.bytes, file.path, { mode: 0o100644 });

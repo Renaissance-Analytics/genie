@@ -1,6 +1,7 @@
 import { createPrivateKey, createPublicKey, randomBytes, sign, type KeyObject } from 'node:crypto';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, sep } from 'node:path';
+import type { Readable } from 'node:stream';
 import { ZipFile } from 'yazl';
 import { compareMarketplaceVersions } from '../core/marketplace.js';
 import { PACKAGE_SIGNATURE_FILE, packageDigest, packageLimitProblem, packageSigningBytes, publisherKeyId, type PackageFile } from '../core/plugin-integrity.js';
@@ -50,7 +51,7 @@ async function zipSnapshot(files: readonly PackageFile[], signature: Buffer): Pr
         zip.on('error', reject); zip.outputStream.on('error', reject);
         zip.outputStream.on('data', (bytes: Buffer) => {
             size += bytes.length;
-            if (size > ARCHIVE_BYTES) { zip.outputStream.destroy(new Error('Package archive exceeds its size limit.')); return; }
+            if (size > ARCHIVE_BYTES) { (zip.outputStream as Readable).destroy(new Error('Package archive exceeds its size limit.')); return; }
             chunks.push(bytes);
         });
         zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)));
