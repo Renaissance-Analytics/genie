@@ -161,7 +161,7 @@ try {
     check(afterClose.total === withAgent.total, '9. closing the terminal takes exactly that one pty away', `${withTerm.total} → ${afterClose.total}`);
 
     // STOP MEANS STOP: after stop returns, a process scan finds nothing of the agent.
-    await cdp.evaluate(`window.genie.stopAgent(${JSON.stringify(codexId)}); true`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(codexId)}); true`);
     codexId = null;
     let stubsAfter = stubProcesses();
     for (const end = Date.now() + 15_000; Date.now() < end && stubsAfter !== 0;) { await sleep(500); stubsAfter = stubProcesses(); }
@@ -172,7 +172,7 @@ try {
     check(false, 'the check threw', String(error));
 } finally {
     try { if (terminalId) await cdp.evaluate(`window.genieTest.terminals.close(${JSON.stringify(terminalId)}).then(() => true)`); } catch { /* gone */ }
-    try { if (codexId) await cdp.evaluate(`window.genie.stopAgent(${JSON.stringify(codexId)}); true`); } catch { /* gone */ }
+    try { if (codexId) await cdp.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(codexId)}); true`); } catch { /* gone */ }
     try { cdp.close(); } catch { /* gone */ }
 }
 
