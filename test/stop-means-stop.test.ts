@@ -6,7 +6,8 @@ import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src
 import { HUMAN } from '../src/core/inbox.js';
 import type { DriverEvents, SessionDriverFactory, TurnOutcomeLike } from '../src/core/session.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { wireInboxPush } from '../src/main/inbox-push.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';

@@ -190,7 +190,7 @@ describe('the agent’s own tool', () => {
 
 describe('the notice Genie composes (compose.inboxReminders)', () => {
     it('counts app mail and names the app on the notice row the chat shows', async () => {
-        const { composeServices } = await import('../src/main/compose.js');
+        const { composeServices } = await import('./helpers/compose-alone.js');
         const pty = { open: () => ({ id: 't', pid: 1, shell: 'sh', scrollback: '' }), write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} };
         const services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: async () => ({ stdout: '', exitCode: 0 }), portFree: async () => true, roster: () => [auto] });
         try {

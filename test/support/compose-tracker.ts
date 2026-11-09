@@ -1,4 +1,5 @@
-import { composeServices, type ComposedServices } from '../../src/main/compose.js';
+import { composeServices } from '../helpers/compose-alone.js';
+import { type ComposedServices } from '../../src/main/compose.js';
 import { onceIssuer } from './once-issuer.js';
 
 /**

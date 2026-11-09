@@ -2,7 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 

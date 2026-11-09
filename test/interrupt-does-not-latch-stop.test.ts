@@ -100,17 +100,13 @@ describe('the interrupt reaches the session as an interrupt, on every route', ()
         expect(shell).toMatch(/onStopTurn=\{chatTurnStop && chatThread \? \(\) => onCancelTurn\?\.\(chatThread\.agentId, 'stop'\)/);
     });
 
-    it('the renderer bridges and the IPC registration hand the intent on (main.ts\'s handler is inline in boot; its own text is checked)', () => {
+    it('the renderer bridges and the host API hand the intent on (P4 family 9b: this window goes through the door too)', () => {
         expect(read('src/renderer/App.tsx')).toMatch(/onCancelTurn=\{\(agentId, intent\) => \{ void resolvedBridge\?\.cancelTurn\(agentId, intent\); \}\}/);
-        expect(read('src/main/preload.ts')).toMatch(/cancelTurn: \(agentId, intent\) => ipcRenderer\.invoke\('genie:cancel-turn', agentId, intent\)/);
+        expect(read('src/renderer/local-session.ts')).toMatch(/cancelTurn: \(id, intent\) => answered\(\(b\) => b\.cancelTurn\(id, intent\)\)/);
         expect(read('src/renderer/remote-bridge.ts')).toMatch(/cancelTurn: \(agentId, intent\) => answer<[^>]*>\('cancelTurn', agentId, intent\)/);
-        const main = read('src/main/main.ts');
-        // The handler's own text, from its registration to its closing `});` (as test/stop-cancels-turn.test.ts slices it).
-        const handler = main.match(/ipcMain\.handle\('genie:cancel-turn'[^]*?\n {4}\}\);/)?.[0] ?? '';
-        expect(handler).toContain('(_event, raw: unknown, intent: unknown)');
-        expect(handler).toContain("host.cancel(record.id, 'you', cancelIntent(intent))");
-        // The remote API's dependency, as main.ts gives it.
-        expect(main).toMatch(/cancel: \(id, intent\) => host!\.cancel\(id, 'you', intent\)/);
+        expect(read('src/main/host-api.ts')).toContain('deps.host.cancel(r.id, cancelIntent(args[1]))');
+        // The host API's dependency, as main.ts gives it.
+        expect(read('src/main/main.ts')).toMatch(/cancel: \(id, intent\) => agentsUp\(\)\.cancel\(id, 'you', intent\)/);
     });
 
     it('BEHAVIOUR: the engine carries a window\'s intent to SessionHost.cancel (engine.cancel, window to genie-host)', async () => {

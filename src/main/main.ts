@@ -1,7 +1,6 @@
 import { limitOf } from '../core/shell-limits.js';
 import { createNativeTerminalPort } from './local-terminal-native.js';
 import { rosterPruner } from '../core/chat-drafts.js';
-import { cancelIntent } from '../core/session.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
 import { readTynnPage, runTynnPageAction } from './tynn-page-client.js';
 import type { BoardIds, BoardScope } from '../core/tynn-board.js';
@@ -98,7 +97,6 @@ import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '..
 import { wordTynnRefusal } from './drone-refusal.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
-import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { featureOriginOf, HostPicks, isWindowCaller } from './host-picks.js';
 import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
@@ -140,7 +138,7 @@ import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
 import { ChatDraftStore } from './chat-draft-store.js';
 import { engineDraftsPort } from './engine-draft-files-client.js';
-import { composeServices, composeWindowServices, type ComposeInput, type WindowServices } from './compose.js';
+import { composeWindowServices, type ComposeInput, type WindowServices } from './compose.js';
 import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
 import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
 import { QuestionWindow } from './question-window.js';
@@ -248,9 +246,7 @@ import { artboardReadFiles, artboardReview, repoCall, type PanelsHostDeps } from
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
-import { AppInboxKeys } from './app-inbox-keys.js';
 import type { AppInboxReplica } from './app-inbox-host.js';
-import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
 import { type AppSourceKind } from '../core/app-inbox.js';
 import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
@@ -1911,89 +1907,17 @@ async function boot(): Promise<void> {
     }, record);
     // THE PERSON'S MESSAGE (main/start-on-demand.ts `startForYourMessage`): the same rule, and a new driver through the one
     // Restart when the run's own stopped itself. `agentOps` is read when a message comes, never while main is wiring up.
+    // A command before the agent host is up is refused in words, where the caller shows them (Tynn #563).
+    const agentsUp = (): NonNullable<typeof host> => {
+        if (!host) throw new Error('Genie’s agents are not running yet');
+        return host;
+    };
     const startForYours = (record: AgentRecord): Promise<StartForWork> => startForYourMessage({
         startForWork: startOnDemand,
         needsNewDriver: (id) => host?.needsNewDriver(id) ?? false,
         restart: (id) => restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch()),
         notice: (id, message) => host?.notice(id, message) ?? false,
     }, record);
-
-    ipcMain.handle('genie:open-agent', (_event, raw: unknown) => {
-        // The renderer is not trusted to hand over a well-formed id. `asAgentId` returning
-        // `null` is a refusal, not a repair: looking up `''` would find nothing and render an
-        // empty session forever, which is the §0.4 failure reached through the bridge.
-        const record = agentFromRenderer(raw);
-        if (!record || !host) return { ok: false, reason: 'unknown agent' };
-        // OPENING an agent SHOWS it (q_04ce323c) — its history, its settings, its Start. It starts nothing: a session it
-        // has (running, or Broken to be read) is the one the window shows, as it is; one it has not stays stopped until
-        // something sends it work (`startOnDemand`) or the person presses Start (the one restart, genie#1238).
-        return { ok: true };
-    });
-
-    ipcMain.handle('genie:stop-agent', async (_event, raw: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host) return { ok: false };
-        return { ok: await host.stop(record.id) };
-    });
-
-    // `Stop this turn` (the chat's context line, the Agent view's header): the current turn ends, the agent keeps
-    // running. Ending the agent is `genie:stop-agent` above — a separate action, never reached from here.
-    // `Resume now` (Tynn #794): the agent's provider login is opened at once and its held agents go on.
-    ipcMain.handle('genie:resume-limit', (_event, raw: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host) return { ok: false, reason: 'not-running' };
-        host.resumeLimit(record.provider);
-        return { ok: true };
-    });
-
-    ipcMain.handle('genie:cancel-turn', (_event, raw: unknown, intent: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host) return { ok: false, reason: 'not-running' };
-        // Stop this turn latches the session until the person acts; Interrupt and send does not (Tynn #672 part 3).
-        return host.cancel(record.id, 'you', cancelIntent(intent));
-    });
-
-    ipcMain.handle('genie:prompt', async (_event, raw: unknown, text: unknown, files: unknown) => {
-        const record = agentFromRenderer(raw);
-        const attachments = attachmentsFromRenderer(files);
-        if (!record || !host || typeof text !== 'string' || attachments === null || (text.length === 0 && attachments.length === 0)) return { ok: false };
-        // THE FIRST MESSAGE STARTS IT (q_04ce323c): a stopped or never-started agent is started here, and the message
-        // waits in its session's queue for the start (the chat shows it waiting, then sent). A refused start is said. A
-        // run whose driver stopped itself (Claude's uncertain Stop, prism-acp 0.37.0) is started again on its conversation.
-        const started = await startForYours(record);
-        if (!started.ok) return { ok: false, reason: started.reason };
-        if (!host) return { ok: false };
-        // The composer: the turn is started by YOU, and the ledger says so.
-        const sent = await host.promptWith(record.id, text, attachments, 'you');
-        return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
-    });
-
-    ipcMain.handle('genie:resolve-prompt', (_event, raw: unknown, promptId: unknown, action: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host || typeof promptId !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
-        return host.resolvePrompt(record.id, promptId, action);
-    });
-
-    ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown, note: unknown) => {
-        const record = agentFromRenderer(raw);
-        // Every refusal names its reason: the card says it (core/approval-answering.ts). A bare `{ ok: false }` was a
-        // button that did nothing.
-        if (!record) return { ok: false, reason: 'Genie does not know this agent' };
-        if (!host) return { ok: false, reason: 'Genie’s agents are not running yet' };
-        if (typeof optionId !== 'string') return { ok: false, reason: 'no option was chosen' };
-        // The session checks the id against the parked request. A refusal leaves the approval
-        // parked, which is recoverable; answering with something meaningless is not.
-        return host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '');
-    });
-
-    // The New agent form (the owner, 2026-10-23: "it just created an agent with some dumb name and default settings").
-    ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown, rawInput: unknown) => {
-        if (typeof rawWorkspaceId !== 'string' || !registry) return { ok: false, reason: 'no workspace named' };
-        const input = (typeof rawInput === 'object' && rawInput !== null ? rawInput : {}) as Record<string, unknown>;
-        const text = (v: unknown) => (typeof v === 'string' ? v : '');
-        const created = await createAgent(agentCreatePorts(), rawWorkspaceId, { name: text(input['name']), purpose: text(input['purpose']), provider: text(input['provider']) });
-        return created.ok ? { ok: true, id: created.id } : created;
-    });
 
     /*
      * The terminal handlers. Every argument is `unknown` and narrowed here — the renderer is
@@ -2070,17 +1994,6 @@ async function boot(): Promise<void> {
         const started = logins.start(record.provider);
         return started.ok ? { ok: true } : started;
     });
-    ipcMain.handle('genie:restart-with-handoff', async (_event, raw: unknown, finishedId: unknown) => {
-        const record = agentFromRenderer(raw);
-        if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
-        // The one restart (genie#1238) → the handoff as the next prompt → seen. The order and the refusals live in
-        // restart-with-handoff.ts; this is the thin call.
-        const live = host;
-        const r = await restartWithHandoff({ restart: (id) => restartAgent(agentOps, id, 'graceful'), prompt: (id, text, by) => live.prompt(id, text, by) }, services.attention, record, finishedId);
-        registry?.touch();
-        return r;
-    });
-
     // A CRASH REPORT THE PERSON CHOOSES TO SEND (Tynn #386 part 4): the draft the safe-mode banner shows, and the send.
     const crashReports = crashReportHost({
         view: () => agentEngineLink?.client.safeModeView() ?? null,
@@ -2538,47 +2451,15 @@ async function boot(): Promise<void> {
      */
     // WITH GENIE-HOST LINKED THE DOOR AND ITS KEYS ARE THE HOST'S (P5a.2 ruling 3): every credential is minted there, window or
     // no window. This window starts no door and opens no keys (one writer of app-inbox.json); it drives the host's through the
-    // replica — a script key's secret reaches it once, in the answer to its own create. Its own door only on the emergency path.
-    const linkedAppInbox = agentEngineLink ? agentEngineLink.client.appInbox() : null;
-    const ownAppInboxKeys = linkedAppInbox ? null : await AppInboxKeys.open(genieRoot());
-    const appInboxKeys: Pick<AppInboxReplica, 'createScriptKey' | 'scriptKeys' | 'revokeScriptKey' | 'rotate' | 'revokeSource' | 'allowSource' | 'sources' | 'revokedSources'> = linkedAppInbox ?? ownAppInboxKeys!;
-    const appInboxEndpointFile = join(genieRoot(), 'app-inbox-endpoint.json');
-    let appInboxServer: AppInboxServer | null = null;
-    const appInboxService = ownAppInboxKeys ? new AppInboxService({
-        keys: ownAppInboxKeys,
-        // Late-bound: a request that arrives while Genie is still composing is answered, never crashed on.
-        inbox: {
-            send: (input) => (services ? services.inbox.send(input) : Promise.reject(new Error('Genie is still starting; try again in a moment'))),
-            unread: (participant) => services?.inbox.unread(participant) ?? [],
-            all: () => services?.inbox.all() ?? [],
-        },
-        roster: () => registry?.listAgents() ?? [],
-        slugs: () => registry?.workspaceSlugs() ?? new Map(),
-        defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
-        refusalForRecipient: (text, workspaceId) => registry?.mailRefusal(text, workspaceId) ?? null,
-        enabled: (workspaceId) => services?.settings.snapshotFor(workspaceId).app_inbox !== false,
-        siteHosts: (workspaceId) => services?.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host) ?? [],
-        log: (line) => console.log(line),
-    }) : null;
-    if (appInboxService) try {
-        let remembered: number | undefined;
-        try { const v = JSON.parse(readFileSync(appInboxEndpointFile, 'utf8')) as { port?: unknown }; if (typeof v.port === 'number') remembered = v.port; } catch { remembered = undefined; }
-        appInboxServer = await startAppInboxServer({ service: appInboxService, port: remembered ?? APP_INBOX_PORT });
-        if (appInboxServer.port !== remembered) writeFileSync(appInboxEndpointFile, JSON.stringify({ url: appInboxServer.url, port: appInboxServer.port }), { mode: 0o600 });
-        console.log(`[app-inbox] apps and scripts post to ${appInboxServer.url}`);
-    } catch (error) {
-        console.error(`[app-inbox] the door for apps could not listen: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    /** A site's or process's OWN credential — never the service env's (compose lays it over that one source only). */
-    const appInboxEnv = (source: AppEnvSource): Record<string, string> => (ownAppInboxKeys ? appInboxEnvFor({ url: appInboxServer?.url ?? null, token: ownAppInboxKeys.tokenFor(source) }) : {});
+    // replica — a script key's secret reaches it once, in the answer to its own create (Tynn #584: no door of its own).
+    const linkedAppInbox = agentEngineLink.client.appInbox();
+    const appInboxKeys: Pick<AppInboxReplica, 'createScriptKey' | 'scriptKeys' | 'revokeScriptKey' | 'rotate' | 'revokeSource' | 'allowSource' | 'sources' | 'revokedSources'> = linkedAppInbox;
     // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
-    // replicas of them. Only the emergency in-process engine opens them here.
+    // replicas of them.
     // SAFE MODE, genie-host's (Tynn #386).
     windowSafe = WindowSafeMode.open({ link: agentEngineLink.client });
     const engineForStores = agentEngineLink;
-    const composeWith = engineForStores
-        ? (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })
-        : composeServices;
+    const composeWith = (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() });
     const composed: WindowServices = await composeWith({
         // A workspace's trust verdict moved (genie#1519): the trust step is pushed. genie-host's TrustVerdicts compare its agents.
         onTrustVerdict: () => { requestFeaturePush(); },
@@ -2601,8 +2482,8 @@ async function boot(): Promise<void> {
         ...(agentEngineLink ? { supervisor: agentEngineLink.client.supervisor() } : {}),
         // GENIE'S HOSTING IS GENIE-HOST'S (P5a): the front door, the engines and the site routes are built there and kept with
         // the UI closed; this window reads them (the front door's port and CA arrived before the link was ready) and drives
-        // them through the replica. Built here only on the emergency path.
-        ...(agentEngineLink ? { hosting: agentEngineLink.client.hosting() } : {}),
+        // them through the replica.
+        hosting: agentEngineLink.client.hosting(),
         // FLOWS ARE GENIE-HOST'S (P3.3d): an armed flow fires on its clock with no window; this window edits, arms and runs
         // them through the replica.
         ...(agentEngineLink ? { flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() } } : {}),
@@ -2687,7 +2568,6 @@ async function boot(): Promise<void> {
         inboxParticipantVisible: (id) => registry?.mailParticipantVisible(id) ?? true,
         inboxVisibilityVersion: () => registry?.mailVisibilityVersion(),
         // Each site's own app credential (genie#1345), under its workspace's switch — compose never puts it in the service env.
-        appInboxEnv: (source) => appInboxEnv(source),
         // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain
         // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
         workspaces: () => registry?.workspaceStates() ?? [],
@@ -2786,14 +2666,14 @@ async function boot(): Promise<void> {
             startForYourMessage: (record) => startForYours(record),
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
-                stop: (id) => host!.stop(id),
-                cancel: (id, intent) => host!.cancel(id, 'you', intent),
-                resumeLimit: (provider) => host!.resumeLimit(provider),
-                prompt: (id, text, by) => host!.prompt(id, text, by),
-                // A phone's photo in the chat (genie#1346): the composer's own attach path, the same as `genie:prompt`.
-                promptWith: (id, text, attachments, by) => host!.promptWith(id, text, attachments, by),
-                resolvePrompt: (id, promptId, action) => host!.resolvePrompt(id, promptId, action),
-                answerApproval: (id, optionId, note) => host!.answerApproval(id, optionId, note ?? ''),
+                stop: (id) => agentsUp().stop(id),
+                cancel: (id, intent) => agentsUp().cancel(id, 'you', intent),
+                resumeLimit: (provider) => agentsUp().resumeLimit(provider),
+                prompt: (id, text, by) => agentsUp().prompt(id, text, by),
+                // The composer's own attach path, for this window and a phone's photo (genie#1346).
+                promptWith: (id, text, attachments, by) => agentsUp().promptWith(id, text, attachments, by),
+                resolvePrompt: (id, promptId, action) => agentsUp().resolvePrompt(id, promptId, action),
+                answerApproval: (id, optionId, note) => agentsUp().answerApproval(id, optionId, note ?? ''),
                 subscribe: (cb) => host!.subscribe(cb),
             },
             // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
@@ -2807,6 +2687,7 @@ async function boot(): Promise<void> {
                 upload: (workspaceId, dir, name, bytes) => filesHost?.upload(workspaceId, dir, name, bytes) ?? Promise.resolve({ ok: false as const, reason: 'no files host' }),
             },
             registerAgent: (workspaceId, input) => createAgent(agentCreatePorts(), workspaceId, input),
+            rosterChanged: () => registry?.touch(),
             attention: { finished: () => services!.attention.finished(), markSeen: (id) => services!.attention.markSeen(id) },
             terminals: {
                 open: (options) => terminals!.open(options),
@@ -3463,7 +3344,7 @@ async function boot(): Promise<void> {
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
     const appInboxState = (workspaceId: string) => ({
-        url: appInboxServer?.url ?? linkedAppInbox?.url() ?? null,
+        url: linkedAppInbox.url(),
         enabled: composed.settings.snapshotFor(workspaceId).app_inbox !== false,
         sources: appInboxKeys.sources(workspaceId),
         revoked: appInboxKeys.revokedSources(workspaceId),

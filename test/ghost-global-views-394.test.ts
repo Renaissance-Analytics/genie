@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
-import { composeServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
 import { featureSnapshot, handleFeatureAction, type FeaturePorts } from '../src/main/feature-ipc.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 

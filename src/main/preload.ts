@@ -96,29 +96,9 @@ const bridge: PreloadBridge = {
         };
     },
 
-    openAgent: (agentId) => {
-        void ipcRenderer.invoke('genie:open-agent', agentId);
-    },
-
-    stopAgent: (agentId) => {
-        void ipcRenderer.invoke('genie:stop-agent', agentId);
-    },
-
-    cancelTurn: (agentId, intent) => ipcRenderer.invoke('genie:cancel-turn', agentId, intent) as Promise<{ ok: true } | { ok: false; reason: string }>,
-    resumeLimit: (agentId) => ipcRenderer.invoke('genie:resume-limit', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     providerLogin: (agentId) => ipcRenderer.invoke('genie:provider-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
-    prompt: (agentId, text, attachments) => ipcRenderer.invoke('genie:prompt', agentId, text, attachments) as Promise<{ ok: boolean; reason?: string }>,
-    resolvePrompt: (agentId, promptId, action) => ipcRenderer.invoke('genie:resolve-prompt', agentId, promptId, action) as never,
-
-    addAgent: (workspaceId, input) => ipcRenderer.invoke('genie:add-agent', workspaceId, input) as Promise<{ ok: true; id: string } | { ok: false; reason: string }>,
-
-    // The host's reply comes back: `ok` ends the answer's flight, a refusal is said on the card (core/approval-answering.ts).
-    answerApproval: (agentId, optionId, note) => ipcRenderer.invoke('genie:answer-approval', agentId, optionId, note ?? '') as Promise<{ ok: true } | { ok: false; reason: string }>,
-
-    restartWithHandoff: (agentId, finishedId) =>
-        ipcRenderer.invoke('genie:restart-with-handoff', agentId, finishedId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     workspaces: {
     },
