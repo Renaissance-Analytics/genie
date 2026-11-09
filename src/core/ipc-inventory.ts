@@ -2,7 +2,12 @@ import { CLIPBOARD_WRITE_CHANNEL } from './clipboard-wire.js';
 import { LOCAL_FRAME_CHANNELS } from './local-frame.js';
 
 /** P4's remaining IPC registrations. Protocol rows disappear with their handler in that family's PR. */
-export type IpcDestination = `protocol:${string}` | 'protocol-door' | 'window-port' | `later:${string}`;
+/**
+ * `browser-process`: answered by the Genie browser process (genie-browser-electron.ts); the window keeps its fallback copy until
+ * P6 removes it. `window-port`: stays in the window, which is also where the site panels are, as webviews by design (one login
+ * per site).
+ */
+export type IpcDestination = `protocol:${string}` | 'protocol-door' | 'window-port' | 'browser-process' | `later:${string}`;
 export type IpcInventoryEntry = readonly [channel: string, destination: IpcDestination];
 
 /** Protocol destinations include the local-only methods to be registered as their families move. */
@@ -18,21 +23,21 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['doctor:start', 'later:doctor window'],
     ['doctor:answer-approval', 'later:doctor window'],
 
-    ['browser-window:state', 'later:P2b browser process'],
-    ['browser-window:navigate', 'later:P2b browser process'],
-    ['browser-window:open', 'later:P2b browser process'],
-    ['browser-window:show-site', 'later:P2b browser process'],
-    ['browser-window:new-tab', 'later:P2b browser process'],
-    ['browser-window:activate', 'later:P2b browser process'],
-    ['browser-window:close', 'later:P2b browser process'],
-    ['browser-window:back', 'later:P2b browser process'],
-    ['browser-window:forward', 'later:P2b browser process'],
-    ['browser-window:reload', 'later:P2b browser process'],
-    ['browser-window:preset', 'later:P2b browser process'],
-    ['browser-window:bounds', 'later:P2b browser process'],
-    ['browser-window:overlay-colors', 'later:P2b browser process'],
-    ['browser-window:pop-back', 'later:P2b browser process'],
-    ['browser-window:restart', 'later:P2b browser process'],
+    ['browser-window:state', 'browser-process'],
+    ['browser-window:navigate', 'browser-process'],
+    ['browser-window:open', 'browser-process'],
+    ['browser-window:show-site', 'browser-process'],
+    ['browser-window:new-tab', 'browser-process'],
+    ['browser-window:activate', 'browser-process'],
+    ['browser-window:close', 'browser-process'],
+    ['browser-window:back', 'browser-process'],
+    ['browser-window:forward', 'browser-process'],
+    ['browser-window:reload', 'browser-process'],
+    ['browser-window:preset', 'browser-process'],
+    ['browser-window:bounds', 'browser-process'],
+    ['browser-window:overlay-colors', 'browser-process'],
+    ['browser-window:pop-back', 'browser-process'],
+    ['browser-window:restart', 'browser-process'],
 
     ['genie:window-overlay-colors', 'window-port'],
     ['genie:window-overlay-colors-current', 'window-port'],
@@ -64,7 +69,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-reveal', 'window-port'],
     // The picker stays a window port; its copy step moves to the host in P5.
     ['genie:files-export', 'window-port'],
-    ['genie:browser-window-open', 'later:P2b browser process'],
+    ['genie:browser-window-open', 'window-port'],
     ['genie:files-popout', 'window-port'],
     ['genie:remote-open-window', 'window-port'],
     ['genie:connect-link', 'window-port'],
@@ -88,10 +93,10 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['question:file', 'later:question window'],
     ['question:drawer', 'later:question window'],
 
-    ['site-panel:prepare', 'later:P2b browser process'],
-    ['site-panel:pop-out', 'later:P2b browser process'],
-    ['site-panel:pop-back', 'later:P2b browser process'],
-    ['site-panel:popped', 'later:P2b browser process'],
-    ['site-panel:restart', 'later:P2b browser process'],
-    ['site-panel:open-window', 'later:P2b site panels'],
+    ['site-panel:prepare', 'window-port'],
+    ['site-panel:pop-out', 'window-port'],
+    ['site-panel:pop-back', 'window-port'],
+    ['site-panel:popped', 'window-port'],
+    ['site-panel:restart', 'window-port'],
+    ['site-panel:open-window', 'window-port'],
 ];
