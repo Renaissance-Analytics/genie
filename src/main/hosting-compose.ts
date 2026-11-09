@@ -173,6 +173,9 @@ export interface HostingComposeInput extends HostingOptions {
      * book, and Genie's shared Mailpit asks no one for credentials.
      */
     readonly mailSecrets?: MailServicePorts['secrets'] | undefined;
+    /** GApps v2 V4: the installed apps' routes, and a way to hear that they changed. */
+    readonly gappRoutes?: (() => readonly GenRoute[]) | undefined;
+    readonly onGappRoutesChange?: ((listener: () => void) => void) | undefined;
     /** Genie Mail G5: restart the running background processes of these workspaces with their env as it is now. */
     readonly restartWorkspaceProcesses?: MailServicePorts['restartProcesses'];
 }
@@ -648,7 +651,8 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     settings.onChange((key, _value, workspaceId) => { if (key === 'app_inbox') sites.serviceEnvChanged(workspaceId); });
     // The sites' routes and the shared WebSockets server's browser-facing ones (core/services.ts websocketRoutes).
     // Mailpit's web inbox at its .gen name (core/mailpit-name.ts): the Genie browser opens .gen sites only.
-    const routes = () => [...sites.routes(), ...websocketRoutes(engines.list()), ...mailpitRoutes(engines.list())];
+    // GApps v2 V4: each installed app's <app-slug>.apps.gen, from the host's GApp server (main/gapp-server.ts).
+    const routes = () => [...sites.routes(), ...websocketRoutes(engines.list()), ...mailpitRoutes(engines.list()), ...(input.gappRoutes?.() ?? [])];
     // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.
     const siteRunState = join(runtimeDir(input.userData), 'site-run-state.json');
     const envelopeSites = new EnvelopeSites(sites, {
@@ -715,7 +719,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         sites,
         supervisor,
         routes,
-        onRoutesChange: (listener) => { engines.onChange(listener); },
+        onRoutesChange: (listener) => { engines.onChange(listener); input.onGappRoutesChange?.(listener); },
         configuredHosts,
         hostsIo: input.hostsIo ?? realHostsIo({ platform: process.platform, tmpDir: runtimeDir(input.userData) }),
         hostsPath: hostsFilePath(process.platform),

@@ -39,6 +39,7 @@ function labelsProblem(n: string): string | null {
 const KEPT_FOR_GENIE: Readonly<Record<string, string>> = {
     mail: 'its mail inbox (Mailpit)',
     websockets: 'its WebSockets server',
+    apps: 'its GApps, each at its own <app>.apps.gen',
 };
 
 /** Why `name` cannot be a site's name, or `null` when it can. Kept names are refused for SITES only — still routable. */

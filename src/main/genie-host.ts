@@ -134,6 +134,7 @@ import { MarketplaceHost } from './marketplace-host.js';
 import { MARKETPLACE_ARCHIVE_BYTES } from './marketplace-archive.js';
 import { CatalogService } from './catalog-host.js';
 import { GAppBook } from './gapps-host.js';
+import { GAppServer } from './gapp-server.js';
 import { setOfferedFlowKinds } from '../core/flow-canvas.js';
 import { catalogFlowKinds } from '../core/catalog-projections.js';
 import { hostCatalog } from './genie-catalog.js';
@@ -385,12 +386,17 @@ async function main(): Promise<void> {
         void stores.registrySettled().then(() => { for (const l of [...workspacesListeners]) l(); });
     });
     let hosting: HostingStack | null = null;
+    /** GApps v2 V4: the server of installed apps, once the book is open; the front door asks it for their routes. */
+    let gappServer: GAppServer | null = null;
+    const gappRouteListeners = new Set<() => void>();
     /** Genie Mail G5: the process book, once open, whose running processes restart with new mail credentials. */
     let mailProcessBook: ProcessBook | null = null;
     /** The running agents compared with their workspace's verdict (genie#1519): bound once the sessions exist. */
     let hostVerdicts: TrustVerdicts | null = null;
     try {
         hosting = await composeHosting({
+            gappRoutes: () => gappServer?.routes() ?? [],
+            onGappRoutesChange: (listener) => { gappRouteListeners.add(listener); },
             // THE HOST OWNS TRUST (genie#1519): the record and the verdicts are this host's, beside the sites that read them.
             onTrustVerdict: (workspaceId) => hostVerdicts?.changed(workspaceId),
             ...(await hostHostingOptions(hostMachinePaths(process.env, home), say)),
@@ -764,6 +770,11 @@ async function main(): Promise<void> {
         });
         gappBook.onChange(() => catalogService.rebuild());
         catalogService.rebuild();
+        // GApps v2 V4: installed apps at their own origins, behind the front door.
+        gappServer = new GAppServer({ book: gappBook });
+        await gappServer.listen(0);
+        gappBook.onChange(() => { for (const listener of gappRouteListeners) listener(); });
+        for (const listener of gappRouteListeners) listener();
     } catch (error) {
         say(`The GApp book could not open: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1424,6 +1435,7 @@ async function main(): Promise<void> {
         // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
         await stopHostedOnce();
         await appInboxDoor.close().catch(() => undefined);
+        await gappServer?.close().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
         const current = parseHostRecord(readOrNull(recordFile));
