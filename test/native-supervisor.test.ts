@@ -76,12 +76,10 @@ describe('at startup', () => {
         expect(prepared.calls).toEqual([{ executable: EXE }]);
     });
 
-    it('genie-host and the window both do it before any agent starts, once each', () => {
+    it('genie-host does it once, before any agent starts; the window runs no agents, so never (Tynn #415)', () => {
         const code = (file: string) => read(file).split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-        for (const file of ['src/main/genie-host.ts', 'src/main/main.ts']) {
-            const source = code(file);
-            expect(source.match(/prepareGenieSupervisor\(\)/g)).toHaveLength(1);
-        }
+        expect(code('src/main/genie-host.ts').match(/prepareGenieSupervisor\(\)/g)).toHaveLength(1);
+        expect(code('src/main/main.ts')).not.toMatch(/prepareGenieSupervisor\(/);
         expect(code('src/main/genie-host.ts').indexOf('prepareGenieSupervisor()')).toBeLessThan(code('src/main/genie-host.ts').indexOf('new SessionHost('));
     });
 });
