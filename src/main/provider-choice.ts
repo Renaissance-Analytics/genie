@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { renameOverSync } from '../core/atomic-rename.js';
 
 /**
  * THE PROGRAM THE PERSON CHOSE FOR A PROVIDER (Tynn #577), one small file both of Genie's processes read when a provider
@@ -32,7 +33,7 @@ export function writeProviderChoice(file: string, provider: string, path: string
         mkdirSync(dirname(file), { recursive: true });
         const temp = `${file}.${process.pid}.tmp`;
         writeFileSync(temp, JSON.stringify({ ...read(file), [provider]: path }), 'utf8');
-        renameSync(temp, file);
+        renameOverSync(temp, file);
         return { ok: true };
     } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message : String(error) };

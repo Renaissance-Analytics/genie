@@ -29,14 +29,17 @@ export function ProviderProgramChoice({ provider, reason, onChoose }: { provider
     );
 }
 
-/** A start refused because a batch wrapper hides the provider, on the agent's own view, with the same picker (Tynn #577). */
-export function ProviderStartRefusal({ reason, onChoose }: { reason: string | null | undefined; onChoose: (provider: string) => Promise<ProviderProgramChosen> }) {
-    const provider = reason ? providerOfProgramProblem(reason) : null;
-    if (!reason || provider === null) return null;
+/**
+ * WHY THIS AGENT'S START WAS REFUSED, on its own view: every refusal, never only a console line (the owner's rule: never a
+ * dead click). With the picker when a batch wrapper hides its provider and this window can choose (Tynn #577).
+ */
+export function ProviderStartRefusal({ reason, onChoose }: { reason: string | null | undefined; onChoose?: ((provider: string) => Promise<ProviderProgramChosen>) | undefined }) {
+    if (!reason) return null;
+    const provider = onChoose ? providerOfProgramProblem(reason) : null;
     return (
         <div data-start-refusal="" className="mx-5 my-2 shrink-0 rounded-[10px] border border-[var(--danger)] bg-[var(--bg-1)] px-3 py-2 text-[12px] text-[var(--danger)]">
             <span>{reason}</span>
-            <ProviderProgramChoice provider={provider} reason={reason} onChoose={() => onChoose(provider)} />
+            {provider !== null && onChoose ? <ProviderProgramChoice provider={provider} reason={reason} onChoose={() => onChoose(provider)} /> : null}
         </div>
     );
 }

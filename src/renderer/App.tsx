@@ -2031,7 +2031,7 @@ function DesktopApp({ bridge }: AppProps) {
             {...(resolvedBridge?.crashReport ? { crashReport: { draft: () => resolvedBridge.crashReport!.draft(), send: (text: string, notes: string) => resolvedBridge.crashReport!.send(text, notes), copy: (text: string) => copyToClipboard({ plain: text }) } } : {})}
             {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
-            onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] restart refused:', r.reason); }); }}
+            onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onCancelTurn={(agentId) => { void resolvedBridge?.cancelTurn(agentId); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
@@ -2039,7 +2039,7 @@ function DesktopApp({ bridge }: AppProps) {
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId); }}
             onChooseProviderProgram={resolvedBridge?.chooseProviderProgram ? (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) : undefined}
-            onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] start refused:', r.reason); }); }}
+            onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onSafeModeStartAgent={restartOne}
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
