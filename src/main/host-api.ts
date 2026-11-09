@@ -125,7 +125,7 @@ export interface HostApiDeps {
      * is refused with where to do it, as before.
      */
     takeOver?: {
-        start(agentId: string): { ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string };
+        start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
         ended(terminalId: string): void;
     };
     terminals: {

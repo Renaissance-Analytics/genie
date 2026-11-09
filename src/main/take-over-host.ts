@@ -32,7 +32,7 @@ import type { TerminalsApi } from './terminals-host.js';
  */
 
 export interface TakeOverOptions {
-    terminals: TerminalsApi;
+    terminals: Pick<TerminalsApi, 'open' | 'close' | 'onData' | 'onExit'>;
     /** Open (or re-open — the opener decides whether that means focus) a window on a route. */
     openWindow: (route: string) => void;
     clock?: () => number;
@@ -55,7 +55,8 @@ interface Live {
 const BURSTS_KEPT = 600;
 
 export class TakeOverHost {
-    readonly #terminals: TerminalsApi;
+    readonly #terminals: TakeOverOptions['terminals'];
+    readonly #listeners = new Set<() => void>();
     readonly #openWindow: (route: string) => void;
     readonly #clock: () => number;
     readonly #mcp: () => { mcpUrl: string; token: string } | null;
@@ -78,12 +79,13 @@ export class TakeOverHost {
             entry.lastOutputAt = at;
             entry.bursts.push({ at, bytes: data.length });
             if (entry.bursts.length > BURSTS_KEPT) entry.bursts.splice(0, entry.bursts.length - BURSTS_KEPT);
+            this.#changed();
         });
 
         // The TUI ended. The take-over simply ends with it — no restart, no revive, no fault.
         this.#terminals.onExit((id) => {
             for (const [agentId, entry] of this.#live) {
-                if (entry.terminalId === id) this.#live.delete(agentId);
+                if (entry.terminalId === id) { this.#live.delete(agentId); this.#changed(); }
             }
         });
     }
@@ -118,6 +120,7 @@ export class TakeOverHost {
         const opened = this.#terminals.open({ workspaceId: record.workspaceId, cwd, command: tui, personal: true, limited: false, ...(env === undefined ? {} : { env }) });
         if (env !== undefined) this.#callers.set(callerId, { agentId: record.id, agentName: record.name, workspaceId: record.workspaceId, workspacePath: cwd });
         this.#live.set(record.id, { terminalId: opened.id, startedAt: this.#clock(), lastOutputAt: null, bursts: [] });
+        this.#changed();
         if (!window) return { ok: true, terminalId: opened.id, started: true };
         this.#openWindow(`genie://takeover/${opened.id}`);
         return { ok: true, terminalId: opened.id };
@@ -146,7 +149,23 @@ export class TakeOverHost {
             if (entry.terminalId !== terminalId) continue;
             this.#live.delete(agentId);
             this.#terminals.close(terminalId);
+            this.#changed();
         }
+    }
+
+    /** Every open TUI, as {@link probe} reads each. */
+    live(): Record<string, TakeOverProbe> {
+        return Object.fromEntries([...this.#live.keys()].map((id) => [id, this.probe(id)!]));
+    }
+
+    /** Something a reader would see changed: a TUI started or ended, or one printed. */
+    onChange(listener: () => void): () => void {
+        this.#listeners.add(listener);
+        return () => { this.#listeners.delete(listener); };
+    }
+
+    #changed(): void {
+        for (const listener of this.#listeners) listener();
     }
 
     #byTerminal(terminalId: string): Live | null {

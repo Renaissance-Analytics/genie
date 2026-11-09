@@ -41,6 +41,7 @@ import { appMenuTemplate } from './app-menu.js';
 import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
+import { TakeOverReplica } from './take-over-replica.js';
 import { crashReportHost } from './crash-report-host.js';
 import { FilesWindows } from './files-windows.js';
 import { availableParallelism, homedir, hostname } from 'node:os';
@@ -737,7 +738,8 @@ let filesHost: FilesHost | null = null;
  */
 let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): boolean | Promise<boolean>; unwatch(viewId: string): void; close(): void } | null = null;
 const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
-let takeOvers: TakeOverHost | null = null;
+/** genie-host's, read through its replica; this window's own only on the emergency path (no genie-host, until P6). */
+let takeOvers: TakeOverHost | TakeOverReplica | null = null;
 /** This workstation's Tynn identity, once known: a crash report is sent with its host proof (Tynn #386 part 4). */
 let crashReportMachine: WorkstationPort | null = null;
 /** The workspace header's throwaway terminals (Tynn story #378): each in its own window, closed with it. */
@@ -850,8 +852,14 @@ function takeOverWindow(route: string, request: ActivationRequest, remote: { sea
  * TAKE OVER (§1): the agent's TUI in a workspace terminal. `window: true` is this machine's click, with a window here;
  * `window: false` is another machine's (Tynn #529 part A), whose own Take Over window attaches over the link.
  */
-function takeOverHere(raw: unknown, options: { window: boolean }): { ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string } {
+async function takeOverHere(raw: unknown, options: { window: boolean }): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }> {
     if (!takeOvers || typeof raw !== 'string') return { ok: false, reason: 'No agent named.' };
+    // genie-host decides and starts it (Tynn #553); only the window, if one is wanted here, is this process's to open.
+    if (takeOvers instanceof TakeOverReplica) {
+        const started = await takeOvers.start(raw);
+        if (started.ok && options.window) openTakeOverWindow(`genie://takeover/${started.terminalId}`, 'user-gesture');
+        return started;
+    }
     const record = registry?.find(raw as AgentId) ?? null;
     if (!record) return { ok: false, reason: `No agent is registered as ${raw}.` };
     const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId) ?? null;
@@ -1841,7 +1849,7 @@ async function boot(): Promise<void> {
      */
     const terminalsForTakeOver = terminals;
     scratchTerminals = new ScratchTerminals({ terminals: terminalsForTakeOver, openWindow: (route) => openTakeOverWindow(route, 'user-gesture') });
-    takeOvers = new TakeOverHost({
+    takeOvers = agentEngineLink ? agentEngineLink.client.takeOvers() : new TakeOverHost({
         terminals: terminalsForTakeOver,
         // Take Over is a button the person pressed (genie:take-over); nothing else starts one (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
@@ -1849,7 +1857,12 @@ async function boot(): Promise<void> {
         mcp: () => { const e = mcpEndpointNow(); return e ? { mcpUrl: e.url, token: e.token } : null; },
     });
     const takeOversNow = takeOvers;
-    theRegistry.setObservedProbe((id) => takeOversNow.probe(id));
+    theRegistry.setObservedProbe((id) => takeOversNow.probe(id as AgentId));
+    if (takeOversNow instanceof TakeOverReplica) {
+        // A window opened after a Pilot's Take over sees it; the Observed row follows each TUI starting and ending.
+        takeOversNow.onChange(() => { theRegistry.touch(); });
+        void takeOversNow.refresh().catch((error: unknown) => console.error(`[take over] ${error instanceof Error ? error.message : String(error)}`));
+    }
 
     /*
      * UPDATES (§7), GENIE-HOST'S (the host split, P5b; updates-host.ts). The host holds the state, checks on its schedule —
