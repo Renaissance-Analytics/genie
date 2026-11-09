@@ -93,9 +93,10 @@ export interface Caller {
     /**
      * `flow`: a FLOW calling as one of its steps (main/flow-tools.ts, genie#1204). A flow the person armed acts with the
      * PERSON's authority — Genie 1's flows acted "as the USER" (main/flows/store.ts at v0.7.0-beta.342) — so where an
-     * agent's reach is its own (the inbox tiers), a flow's is the person's. Absent = an agent.
+     * agent's reach is its own (the inbox tiers), a flow's is the person's. `app`: a GApp calling an element it was
+     * granted (main/gapp-bridge.ts); it has no more reach than an agent. Absent = an agent.
      */
-    readonly kind?: 'flow';
+    readonly kind?: 'flow' | 'app';
 }
 
 export interface GenieToolsDeps {

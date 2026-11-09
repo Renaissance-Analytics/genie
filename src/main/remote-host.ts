@@ -728,7 +728,7 @@ export class RemoteHost {
         if (capability === 'local' && !connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
 
         // Allow is pressed on THIS machine's screen, never sent from another device — not even the owner's (q_8c07b142).
-        if (method === 'features.act' && isAnswerPair(args)) return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
+        if (method === 'features.act' && isAnswerPair(args) && this.#callContext(connection).origin !== 'local-window') return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
 
         // A phone has no terminals (genie#1346): refused here, before anything on the host is asked.
         if (connection.profile === 'mobile' && PHONE_REFUSES(method)) return refuse(`${method}: a phone has no terminals; open one on ${this.#hostName}`);
@@ -812,7 +812,7 @@ export class RemoteHost {
             // paired devices and the connections. Only an owner sees them.
             // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
             // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
-            if (connection.local && (method === 'features.snapshot' || method === 'features.soundData')) return ok(this.#content(connection).jsonResult(value, method));
+            if (connection.local && (method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).

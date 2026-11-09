@@ -1181,7 +1181,7 @@ if (!approvalEnabled) {
             edges: [{ id: 'trigger-say', source: 'trigger', target: 'say' }],
         } };
         try {
-            const data = await window.genie.features.act({ kind: 'flows.saveGraph', workspaceId: ws, name: 'smoke flow', document: document_ });
+            const data = await (window.genieTest ?? window.genie).features.act({ kind: 'flows.saveGraph', workspaceId: ws, name: 'smoke flow', document: document_ });
             return JSON.stringify(data?.flows?.saved ?? { ok: false, problems: [{ message: 'no answer' }] });
         } catch (e) { return JSON.stringify({ ok: false, problems: [{ message: String(e) }] }); }
     })()`));

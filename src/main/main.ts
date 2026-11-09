@@ -53,11 +53,11 @@ import { AGENT_PUSH_INTERVAL_MS, AgentPush, wireInboxChatUpdates } from './agent
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { LatestPush } from '../core/latest-push.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
-import { readFile, realpath, rm } from 'node:fs/promises';
-import { sessionHostPort } from './agent-ops-host-port.js';
+import { readFile } from 'node:fs/promises';
+import { agentOpsApi, agentOpsPorts } from './agent-ops-api.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
 import { TrustVerdicts } from './trust-verdict.js';
-import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessAgents, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { restartAgent, SettingApplier } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import type { WatchedReposView } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
@@ -98,7 +98,7 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
-import { featureOrigin, featureOriginOf, HostPicks } from './host-picks.js';
+import { featureOriginOf, HostPicks, isWindowCaller } from './host-picks.js';
 import { startForWork, startForYourMessage, type StartForWork } from './start-on-demand.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
@@ -127,7 +127,6 @@ import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { realListModels, SessionHost, providerBinary } from './session-host.js';
-import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
@@ -2072,65 +2071,20 @@ async function boot(): Promise<void> {
      * Tynn identity layer is wired — so a delete plan lists no external system, honestly.
      */
     const providerModels = new ProviderModelCache(realListModels);
-    const agentOps: AgentOpsPorts = {
-        registry: {
-            find: (id) => registry?.find(id as AgentId) ?? null,
-            forget: (id) => registry!.forget(id),
-            clearThread: (id) => registry!.clearThread(id),
-            setProvider: (id, provider, options) => registry!.setProvider(id, provider, options),
-            setBudget: (id, usd) => registry!.setBudget(id, usd),
-            setMode: (id, mode) => registry!.setMode(id, mode),
-            setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
-            setAccessAgents: (id, ids) => registry!.setAccessAgents(id, ids),
-            setAutoApprove: (id, on) => registry!.setAutoApprove(id, on),
-            setManageTabs: (id, on) => registry!.setManageTabs(id, on),
-            setDrivePages: (id, on) => registry!.setDrivePages(id, on),
-            setIssueWatch: (id, setting) => registry!.setIssueWatch(id, setting),
-            setPermissions: (id, permissions) => registry!.setPermissions(id, permissions),
-            setModel: (id, model) => registry!.setModel(id, model),
-        },
-        // The real session host (agent-ops-host-port.ts — the same wiring the restart tests drive).
-        host: sessionHostPort(() => host),
-        // Each provider's models, asked of the CLI an agent of it launches with — once, kept until Refresh.
+    const agentOps = agentOpsPorts({
+        registry: () => registry,
+        engine: () => host,
         models: providerModels,
         cwdFor,
-        workspacePathFor: (record) => registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path ?? null,
-        readManifest: async (record) => {
-            const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path;
-            if (!workspace) return null;
-            try {
-                return await readFile(join(workspace, record.instructions ?? join('.agents', record.name, 'AGENT.md')), 'utf8');
-            } catch {
-                return null;
-            }
-        },
-        // What a provider switch carries (Tynn story #380): the agent's rows, asked of the agent host, which reads its own store.
-        history: async (record) => (host ? (await host.historyRows(record.id, { limit: CARRY_OVER_ROWS, maxBytes: CARRY_OVER_BYTES })).rows : []),
-        removeDir: (path) => rm(path, { recursive: true, force: true }),
-        realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
-        // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.
-        handoff: {
-            ask: (id, text) => host?.prompt(id, text, 'genie') ?? false,
-            landedSince: (id, since) => (services?.attention.finished() ?? []).some((f) => f.agentId === id && f.handoff !== null && Date.parse(f.at) >= since),
-            now: Date.now,
-            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-            waitMs: 45_000,
-            pollMs: 1_000,
-        },
-        removeHandoff: async (record) => {
-            const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path;
-            if (workspace) await rm(join(workspace, '.ai', 'handoff', `${record.name}.md`), { force: true });
-        },
-        linkedSystems: () => [],
+        finished: () => services?.attention.finished() ?? [],
         providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
-        signedIn: () => true,
         applyOnStart: (id) => settingApplier!.requested(id),
         // Start is the restart now (genie#1238): what Start always obeyed — an asleep workspace, the agent cap — it obeys.
         startRefusal: (record) => startRefusal(workspaceOps, record, {
             running: registry!.agentsOf(record.workspaceId).filter((a) => host?.probe(a.id)?.running === true).length,
             cap: agentCapFrom(services?.settings.snapshotFor(record.workspaceId) ?? {}),
         }),
-    };
+    });
     // Background tasks die with the process: a setting waits for the agent's to end (the Shells tab's own count).
     settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
     // `Log in to <provider>` (the owner, 2026-10-18): the provider's own login in a scratch folder, in a window of its own.
@@ -3002,29 +2956,11 @@ async function boot(): Promise<void> {
                 setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),
                 setColor: (id, color) => setWorkspaceColor(id, color),
             },
-            agentOps: {
-                restart: (id, kind) => restartAgent(agentOps, id, kind).finally(() => registry?.touch()),
-                previewDelete: (id, outcome, also) => previewDelete(agentOps, id, outcome, also),
-                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }).finally(() => registry?.touch()),
-                switchDriver: (id, to) => switchDriver(agentOps, id, to).finally(() => registry?.touch()),
-                setBudget: (id, usd) => setBudget(agentOps, id, usd).finally(() => registry?.touch()),
-                setMode: (id, mode) => setMode(agentOps, id, mode).finally(() => registry?.touch()),
-                setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope).finally(() => registry?.touch()),
-                setAccessAgents: (id, ids) => setAccessAgents(agentOps, id, ids).finally(() => registry?.touch()),
-                setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on).finally(() => registry?.touch()),
-                setManageTabs: (id, on) => setManageTabs(agentOps, id, on).finally(() => registry?.touch()),
-                setDrivePages: (id, on) => setDrivePages(agentOps, id, on).finally(() => registry?.touch()),
-                setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting).finally(() => registry?.touch()),
-                setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions).finally(() => registry?.touch()),
-                setModel: (id, model) => setModel(agentOps, id, model).finally(() => registry?.touch()),
-                models: (id, refresh) => listModels(agentOps, id, refresh),
-                diagnose: (id) => diagnose(agentOps, id),
-                // A tool row's whole output, read by the agent host from its own store (Tynn story #386).
-                toolOutput: (id, toolCallId) => (host ? host.toolOutput(id as AgentId, toolCallId) : Promise.resolve({ ok: false as const, reason: 'Genie’s agents are not running yet' })),
-            },
+            agentOps: agentOpsApi(agentOps, () => registry?.touch(), () => host),
             features: {
                 snapshot: () => featureSnapshot(services!, featureState, processPorts()),
-                act: (action, context) => handleFeatureAction(services!, action, featureState, featurePorts, featureOriginOf(context, hostPicks)),
+                act: (action, context) => runFeatureAction(action, context),
+                picked: (paths) => hostPicks.record(paths),
                 // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
                 soundData: (key) => customSoundData(services!.settings, key),
                 onChange: (cb) => { featureListeners.add(cb); return () => { featureListeners.delete(cb); }; },
@@ -4012,17 +3948,12 @@ async function boot(): Promise<void> {
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
     /*
-     * WHO MAY NAME A HOST PATH (genie#1354, host-picks.ts): this window's own IPC, from a window that is NOT a remote window
-     * (one driving another host), is the only local origin; the remote API's `features.act` passes none and is remote.
-     * The picks are the host picker's, reported by such a window — an attachment path it never picked is refused.
+     * AN ACTION, FROM WHOEVER THE HOST ADMITTED (genie#1354, host-picks.ts; Tynn #560). Only this machine's own window names
+     * a host path. A window's action also moves the window's own state and its browser pane; another device's never did.
      */
-    ipcMain.handle(FEATURE_CHANNELS.picked, (event, raw: unknown) => {
-        if (isRemoteWindow(event.sender)) return;
-        if (Array.isArray(raw)) hostPicks.record(raw);
-    });
-    ipcMain.handle(FEATURE_CHANNELS.act, async (event, raw: unknown) => {
-        const action = raw as FeatureAction;
-        const data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOrigin({ remoteWindow: isRemoteWindow(event.sender), picks: hostPicks }));
+    async function runFeatureAction(action: FeatureAction, context: CallContext | undefined): Promise<FeatureData> {
+        const data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOriginOf(context, hostPicks));
+        if (!isWindowCaller(context)) return data;
         if (action.kind.startsWith('integrations.tynn')) featureState = { ...featureState, tynnSignInUrl: data.integrations?.tynn.signInUrl ?? null, tynnMessage: data.integrations?.tynn.message ?? null };
         if (action.kind.startsWith('toolchain.')) featureState = { ...featureState, ...toolchainStateFrom(data.toolchain), toolchainBusy: null };
         featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd, lastSync: data.integrations?.lastSync ?? featureState.lastSync ?? null };
@@ -4038,7 +3969,7 @@ async function boot(): Promise<void> {
         // An engine's log, once asked for, stays open across pushed snapshots until the person hides it (H6).
         featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null, serviceLogs: data.services?.logs ?? null, serviceUpdating: data.services?.updating ?? null };
         return data;
-    });
+    }
 
     // PUSH, both ways. The registry says when the estate changed; the host says when one
     // agent did. Nothing here is on a timer.

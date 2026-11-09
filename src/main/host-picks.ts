@@ -18,7 +18,7 @@ import type { CallContext } from '../core/remote-protocol.js';
  * request never reaches.
  *
  * Locally, a path is attached only when the host's own picker picked it: the window reports its picks to main
- * (`FEATURE_CHANNELS.picked`, again only from a window that is not remote) and main keeps them here.
+ * (`features.picked` over the local door, again only from a window that is not remote) and main keeps them here.
  */
 
 /** The paths the host's own picker picked, by resolved absolute path; the oldest fall out past `limit`. */
@@ -60,6 +60,11 @@ export function featureOrigin(input: { remoteWindow: boolean; picks: HostPicks }
 /** The same rule for a call through the host API: this machine's own window only, as RemoteHost admitted it (Tynn #578). */
 export function featureOriginOf(context: Pick<CallContext, 'origin'> | undefined, picks: HostPicks): FeatureOrigin {
     return featureOrigin({ remoteWindow: context?.origin !== 'local-window', picks });
+}
+
+/** Whether a call came from a Genie window on this machine, whose action also moves the window's own state (Tynn #560). */
+export function isWindowCaller(context: Pick<CallContext, 'origin'> | undefined): boolean {
+    return context?.origin === 'local-window' || context?.origin === 'remote-window';
 }
 
 /** Why these host paths may not be attached from `origin` — or `null` when every one may. Nothing is read here. */

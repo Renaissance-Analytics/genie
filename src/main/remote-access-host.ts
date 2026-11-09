@@ -4,7 +4,7 @@ import { Baton, PairingPins } from '../core/remote.js';
 import type { CallContext, RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
-import { PHONE_METHODS } from './host-alone-api.js';
+import { HOST_ALONE_METHODS } from './host-alone-api.js';
 
 /**
  * REMOTE ACCESS'S HOST SIDE, IN GENIE-HOST (Tynn #409, host split P5d.1). A phone (over the tailnet) and a Pilot (over the
@@ -44,7 +44,7 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             const own = ports.own[method];
             if (own) return own(args);
             if (ports.window.connected()) return ports.window.invoke(method, args, context);
-            const answers = PHONE_METHODS.has(method) ? alone() : null;
+            const answers = HOST_ALONE_METHODS.has(method) ? alone() : null;
             if (answers) return answers.invoke(method, args, context);
             throw new Error(`${ports.hostName} answers ${method} only while a Genie window is open there: open Genie on ${ports.hostName}`);
         },

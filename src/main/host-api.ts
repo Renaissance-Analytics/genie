@@ -257,6 +257,8 @@ export interface HostApiDeps {
         act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
         /** An alert's own sound as a data URL, by its setting key; `null` when it cannot be read (P4 family 11). */
         soundData?(key: string): Promise<string | null>;
+        /** What the host's own file picker picked, from this machine's window: the only host paths a send may attach (genie#1354). */
+        picked?(paths: unknown[]): void;
         onChange(listener: (data: FeatureData) => void): () => void;
     };
     updates: {
@@ -644,6 +646,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.features.snapshot();
             case 'features.soundData':
                 return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0]) : null;
+            case 'features.picked':
+                if (context.origin === 'local-window' && Array.isArray(args[0])) deps.features.picked?.(args[0] as unknown[]);
+                return null;
             case 'features.act':
                 return deps.features.act(args[0] as FeatureAction, context);
             case 'host.listDir':
