@@ -259,7 +259,7 @@ export function issueWatchNotice(events: readonly IwEvent[], to: { workspace: st
 export type IwDelivery = 'push' | 'next-turn' | 'count' | 'off';
 
 export const IW_DELIVERIES: ReadonlyArray<{ value: IwDelivery; label: string }> = [
-    { value: 'push', label: 'Wake it now' },
+    { value: 'push', label: 'Now, waking it' },
     { value: 'next-turn', label: 'When running' },
     { value: 'count', label: 'Count only' },
     { value: 'off', label: 'Off' },
