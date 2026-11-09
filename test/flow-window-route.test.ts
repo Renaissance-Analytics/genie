@@ -7,7 +7,8 @@ import { addressOf, isInternalRoute, routeOfAddress, type AddressContext } from 
 import { DEFAULT_ROUTE, parseRoute, type Route } from '../src/core/route.js';
 import { windowLabelOf } from '../src/core/window-activation.js';
 import type { AgentRecord } from '../src/core/identity.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction } from '../src/main/feature-ipc.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 

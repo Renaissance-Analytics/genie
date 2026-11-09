@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { appInboxEnvFor, type AppEnvSource } from '../src/main/app-inbox-service.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import { terminalEnvFor } from '../src/main/hosting-actions.js';
 import { ProcessBook } from '../src/main/process-book.js';
@@ -187,8 +188,8 @@ describe('the workspace’s SERVICE env never carries it (composed for real)', (
 
 describe('main wires it where the plan says, and nowhere else', () => {
     const main = readFileSync(join(__dirname, '..', 'src', 'main', 'main.ts'), 'utf8');
-    it('compose, the process book and the scheduler are given the app env', () => {
-        expect(main).toMatch(/appInboxEnv:\s*\(/);
+    it('the process book and the scheduler are given the app env; the window mints none of its own (Tynn #584)', () => {
+        expect(main).not.toMatch(/appInboxEnv:/);
         expect((main.match(/appEnv:\s*\(/g) ?? []).length).toBeGreaterThanOrEqual(2);
     });
     it('the token is never put into a terminal’s env or the MCP env', () => {

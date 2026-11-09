@@ -6,7 +6,8 @@ import type { AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import { ReminderBook } from '../src/core/inbox-reminders.js';
 import { deliveryHeader, summarizeInboxPrompt } from './helpers/inbox-delivery.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**

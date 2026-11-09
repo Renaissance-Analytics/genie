@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { agentRecord, mintAgentId } from '../../src/core/identity.js';
 import { AppInboxKeys } from '../../src/main/app-inbox-keys.js';
 import { AppInboxService, appInboxEnvFor, startAppInboxServer } from '../../src/main/app-inbox-service.js';
-import { composeServices } from '../../src/main/compose.js';
+import { composeServices } from '../helpers/compose-alone.js';
 import { realFancyTermPort } from '../../src/main/fancy-term-port.js';
 import { ProcessBook } from '../../src/main/process-book.js';
 import { ProcessScheduler } from '../../src/main/process-scheduler.js';
