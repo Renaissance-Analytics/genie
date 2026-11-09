@@ -1,3 +1,4 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, rmdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -109,7 +110,7 @@ async function writeJson(file: string, value: unknown, limit: number): Promise<v
     try {
         const output = await open(tmp, 'wx', 0o600);
         try { await output.writeFile(text, 'utf8'); await output.sync(); } finally { await output.close(); }
-        await rename(tmp, file);
+        await renameOver(tmp, file);
     } finally { await rm(tmp, { force: true }); }
 }
 async function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
