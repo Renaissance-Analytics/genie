@@ -1,7 +1,7 @@
 /** Connection resources for local content reads; families adopt them separately. */
 export const BLOB_METHODS = ['blob.open', 'blob.read', 'blob.close'] as const;
 /** workspace-file includes content derived from the workspace: diffs, conflicts, git output and errors. */
-export const BLOB_KINDS = ['draft-file', 'artboard-post', 'workspace-file', 'terminal-json'] as const;
+export const BLOB_KINDS = ['draft-file', 'artboard-post', 'workspace-file', 'terminal-json', 'features-json'] as const;
 export type BlobKind = typeof BLOB_KINDS[number];
 export const BLOB_READ_BYTES = 512 * 1024;
 export const MAX_OPEN_BLOBS = 8;

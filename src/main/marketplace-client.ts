@@ -1,5 +1,6 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { PluginsService } from './plugins-host.js';
 import type { SessionFetch } from './tynn-account.js';
@@ -254,7 +255,7 @@ export class MarketplaceClient implements PublisherKeyRegistry {
             if (Buffer.byteLength(text) > CACHE_BYTES) throw new Error('Publisher registry cache exceeds its size limit');
             await mkdir(dirname(this.#options.cacheFile), { recursive: true });
             await writeFile(tmp, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-            await rename(tmp, this.#options.cacheFile);
+            await renameOver(tmp, this.#options.cacheFile);
         } catch (error) {
             // Best effort: an old on-disk snapshot must not resurrect a removed key after restart.
             if (reduced) await rm(this.#options.cacheFile, { force: true }).catch(() => {});
