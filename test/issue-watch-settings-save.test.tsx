@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import { IW_DELIVERIES, IW_EVENT_KINDS, type IssueWatchPrefs, type IssueWatchSetting } from '../src/core/issue-watch.js';
-import * as AgentViewModule from '../src/renderer/components/AgentView.js';
+import { IssueWatchSettings } from '../src/renderer/components/AgentView.js';
 import { Registry } from '../src/main/registry.js';
 import { Store } from '../src/main/store.js';
 
@@ -18,9 +18,7 @@ import { Store } from '../src/main/store.js';
  */
 
 type Answer = { ok: true } | { ok: false; reason: string };
-interface Props { name: string; prefs: IssueWatchPrefs; onSet: (setting: IssueWatchSetting) => Promise<Answer> }
-/** Reached loosely so these are red by assertion, not by a compile error, until it is exported. */
-const IssueWatchSettings = (AgentViewModule as unknown as { IssueWatchSettings?: (props: Props) => unknown }).IssueWatchSettings as ((props: Props) => React.ReactElement);
+type Props = Parameters<typeof IssueWatchSettings>[0];
 
 const g = globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean };
 let host: HTMLDivElement;
@@ -37,7 +35,6 @@ function pendingSave() {
     return { sent, onSet: (s: IssueWatchSetting) => { sent.push(s); return new Promise<Answer>((r) => { answer = r; }); }, finish: (a: Answer) => act(async () => { answer(a); await Promise.resolve(); }) };
 }
 function mount(onSet: Props['onSet'], prefs = PREFS) {
-    expect(IssueWatchSettings, 'IssueWatchSettings is exported').toBeTypeOf('function');
     act(() => root.render(<IssueWatchSettings name="atlas" prefs={prefs} onSet={onSet} />));
 }
 const box = (kind: string) => host.querySelector(`[data-issue-watch-kind="${kind}"] input`) as HTMLInputElement;

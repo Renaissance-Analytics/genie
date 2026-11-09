@@ -365,7 +365,7 @@ const pageMemory = pageMemorySampler({
 /** The main window's page ended and was brought back (renderer-recovery.ts): the notice every snapshot carries. */
 let rendererNotice: RendererNotice | null = null;
 /** Only the window constructors using preload.cjs admit contents to this local frame door. */
-const localDoor = localProtocolDoor(ipcMain);
+const localDoor = localProtocolDoor(ipcMain, { onClosed: (reason) => rendererErrorLog?.(`local door closed: ${reason}`) });
 /**
  * THE STALL WATCHDOG (beta.53 freezes; main/stall-watchdog.ts): main's held event loop, slow renderer requests and slow
  * outbound calls, the windows' own long tasks and frame gaps, hung renderers and gone child processes — each a line in

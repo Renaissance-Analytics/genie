@@ -105,20 +105,20 @@ export interface IwEvent {
  * most agents. Comments, reviews, pushes and CI arrive with Tynn's GitHub webhooks.
  */
 export const IW_EVENT_KINDS: ReadonlyArray<{ kind: IwEventKind; label: string; default: boolean }> = [
-    { kind: 'issue.new', label: 'A new issue', default: true },
-    { kind: 'pr.new', label: 'A new pull request', default: true },
-    { kind: 'security.new', label: 'A new security alert (Dependabot, code scanning, secret scanning)', default: true },
-    { kind: 'feedback.new', label: 'New feedback in Tynn', default: true },
-    { kind: 'issue.updated', label: 'An issue changes', default: false },
-    { kind: 'pr.updated', label: 'A pull request changes', default: false },
-    { kind: 'security.updated', label: 'A security alert changes', default: false },
-    { kind: 'closed', label: 'Items close (one line for all of them)', default: false },
+    { kind: 'issue.new', label: 'Issue opened', default: true },
+    { kind: 'pr.new', label: 'PR opened', default: true },
+    { kind: 'security.new', label: 'Security alert', default: true },
+    { kind: 'feedback.new', label: 'Feedback', default: true },
+    { kind: 'issue.updated', label: 'Issue changed', default: false },
+    { kind: 'pr.updated', label: 'PR changed', default: false },
+    { kind: 'security.updated', label: 'Alert changed', default: false },
+    { kind: 'closed', label: 'Closed', default: false },
     // From Tynn's GitHub webhooks (the owner: "Now, with the first release"), each off until chosen.
-    { kind: 'comment', label: 'Someone comments on an issue or pull request', default: false },
-    { kind: 'review', label: 'A pull request is reviewed', default: false },
-    { kind: 'push', label: 'New commits are pushed to a pull request', default: false },
-    { kind: 'ci.failed', label: 'A CI run fails', default: false },
-    { kind: 'ci.passed', label: 'A CI run passes', default: false },
+    { kind: 'comment', label: 'Comment', default: false },
+    { kind: 'review', label: 'Review', default: false },
+    { kind: 'push', label: 'New commits', default: false },
+    { kind: 'ci.failed', label: 'CI failed', default: false },
+    { kind: 'ci.passed', label: 'CI passed', default: false },
 ];
 
 const family = (item: IwItem): 'issue' | 'pr' | 'security' | 'feedback' =>
@@ -259,10 +259,10 @@ export function issueWatchNotice(events: readonly IwEvent[], to: { workspace: st
 export type IwDelivery = 'push' | 'next-turn' | 'count' | 'off';
 
 export const IW_DELIVERIES: ReadonlyArray<{ value: IwDelivery; label: string }> = [
-    { value: 'push', label: 'pushed to it now, waking it if it is stopped' },
-    { value: 'next-turn', label: 'when it is next running — never woken for it' },
-    { value: 'count', label: 'only the count, on imDone' },
-    { value: 'off', label: 'not at all' },
+    { value: 'push', label: 'Right away' },
+    { value: 'next-turn', label: 'When next running' },
+    { value: 'count', label: 'Count only' },
+    { value: 'off', label: 'Off' },
 ];
 
 /** An agent's own IssueWatch setting, as kept on its record. */

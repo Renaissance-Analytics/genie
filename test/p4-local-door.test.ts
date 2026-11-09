@@ -102,7 +102,7 @@ async function remoteDriver() {
 beforeEach(async () => {
     ipc = new EventEmitter();
     closeReasons.length = 0;
-    door = (localProtocolDoor as unknown as (i: EventEmitter, o: { onClosed(reason: string): void }) => ReturnType<typeof localProtocolDoor>)(ipc, { onClosed: (reason) => closeReasons.push(reason) });
+    door = localProtocolDoor(ipc, { onClosed: (reason) => closeReasons.push(reason) });
     dir = await mkdtemp(join(tmpdir(), 'genie-p4-local-door-'));
     let tokenSeq = 0;
     devices = await DeviceStore.open(dir, { now: Date.now, random: () => `door-fixture-${++tokenSeq}` });
