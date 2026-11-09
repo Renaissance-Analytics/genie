@@ -1,14 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
-import { CLEAN_EXIT_FILE, type SafeModeView } from '../src/core/safe-mode.js';
+import { type SafeModeView } from '../src/core/safe-mode.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import type { FlowScheduler } from '../src/main/flow-scheduler.js';
 import { FlowStore } from '../src/main/flow-store.js';
-import { SafeMode } from '../src/main/safe-mode-host.js';
 import type { PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
 import { WindowSafeMode, type LinkSafeMode } from '../src/main/window-safe-mode.js';
 import { windowWake } from '../src/main/window-wake.js';
@@ -32,53 +31,28 @@ afterEach(async () => {
 const tempDir = (prefix: string): string => { const d = mkdtempSync(join(tmpdir(), prefix)); dirs.push(d); return d; };
 const settle = async (n = 20) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 0)); };
 
-/** A run that ended (cleanly or not), as the files say: what the next start reads. */
-function pastRun(runtime: string, ended: 'clean' | 'crash'): void {
-    SafeMode.open(runtime, { now: () => 1_000, pid: 1 }).writeCleanExit('a window asked');
-    const run = SafeMode.open(runtime, { now: () => 2_000, pid: 2 });
-    run.beat(['agent_was_running']);
-    if (ended === 'clean') run.writeCleanExit('a window asked');
-}
-
 // ─── the state, read by the window with no host ──────────────────────────────────────────────────────────────────────────
 
-describe('the window reads safe mode itself when there is no host', () => {
-    it('NO HOST, an unclean end: safe mode from the same runtime files; Leave works; the window writes the marker at its end', async () => {
-        const runtime = tempDir('fallback-state-');
-        pastRun(runtime, 'crash');
-        const mode = WindowSafeMode.open({ link: null, runtimeDir: runtime, now: () => 3_000, pid: 3 });
-        expect(mode.active()).toBe(true);
-        expect(mode.view()).toMatchObject({ active: true, at: 2_000, agents: ['agent_was_running'] });
-        const told: boolean[] = [];
-        mode.onChange((v) => told.push(v.active));
-        expect(await mode.leave()).toEqual({ ok: true });
-        expect(mode.active()).toBe(false);
-        expect(told).toEqual([false]);
-        // It is the run: its clean end writes the marker, and the next start is normal.
-        mode.endCleanly('the window quit');
-        expect(existsSync(join(runtime, CLEAN_EXIT_FILE))).toBe(true);
-        expect(WindowSafeMode.open({ link: null, runtimeDir: runtime, now: () => 4_000, pid: 4 }).active()).toBe(false);
-    });
-
-    it('CONTROL, NO HOST after a clean end: not in safe mode', () => {
-        const runtime = tempDir('fallback-state-');
-        pastRun(runtime, 'clean');
-        expect(WindowSafeMode.open({ link: null, runtimeDir: runtime, now: () => 3_000, pid: 3 }).active()).toBe(false);
-    });
-
-    it('WITH A HOST: the host’s view, and the window never touches the files (the marker is the host’s to read and write)', async () => {
-        const runtime = tempDir('fallback-state-');
-        pastRun(runtime, 'clean');
+describe('the window reads genie-host’s safe mode', () => {
+    it('the host’s view, the host’s Leave, and what the host says next', async () => {
         const hostView: SafeModeView = { active: true, at: 9, cause: 'unknown', crashLoop: false, agents: [], processes: [], sites: [] };
         let left = 0;
-        const link: LinkSafeMode = { safeModeView: () => hostView, leaveSafeMode: async () => { left += 1; return { ok: true }; }, onSafeMode: () => () => {} };
-        const mode = WindowSafeMode.open({ link, runtimeDir: runtime, now: () => 3_000, pid: 3 });
+        let tell: (view: SafeModeView) => void = () => {};
+        const link: LinkSafeMode = { safeModeView: () => hostView, leaveSafeMode: async () => { left += 1; return { ok: true }; }, onSafeMode: (l) => { tell = l; return () => {}; } };
+        const mode = WindowSafeMode.open({ link });
         expect(mode.active()).toBe(true);
+        expect(mode.view()).toBe(hostView);
         expect(await mode.leave()).toEqual({ ok: true });
         expect(left).toBe(1);
-        mode.endCleanly('the window quit');
-        // The host's marker from the run before is still there, untouched: the window read nothing and wrote nothing.
-        expect(JSON.parse(readFileSync(join(runtime, CLEAN_EXIT_FILE), 'utf8'))).toMatchObject({ pid: 2 });
+        const told: boolean[] = [];
+        mode.onChange((v) => told.push(v.active));
+        tell({ ...hostView, active: false });
+        expect(told).toEqual([false]);
+    });
+
+    it('CONTROL: a host not yet heard is not safe mode', () => {
+        const link: LinkSafeMode = { safeModeView: () => null, leaveSafeMode: async () => ({ ok: true }), onSafeMode: () => () => {} };
+        expect(WindowSafeMode.open({ link }).active()).toBe(false);
     });
 });
 
@@ -198,12 +172,12 @@ describe('compose’s own flows and sites (no host)', () => {
 
 // ─── main.ts on the no-host path: every own clock and restore asks the window's safe mode ────────────────────────────────
 
-describe('main.ts wires the no-host path to the window’s safe mode', () => {
+describe('main.ts reads genie-host’s safe mode', () => {
     const main = readFileSync(resolve('src/main/main.ts'), 'utf8');
     const code = main.split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n');
 
-    it('opens it from the runtime files when there is no host, after the link is known and before anything is composed', () => {
-        const opened = code.indexOf('WindowSafeMode.open({ link: agentEngineLink?.client ?? null, runtimeDir: runtimeDir(genieRoot())');
+    it('opens it from the link, after the link is known and before anything is composed', () => {
+        const opened = code.indexOf('WindowSafeMode.open({ link: agentEngineLink.client })');
         expect(opened).toBeGreaterThan(code.indexOf('agentEngineLink = await connectAgentEngine('));
         expect(opened).toBeLessThan(code.indexOf('composeWindowServices('));
     });
@@ -216,8 +190,8 @@ describe('main.ts wires the no-host path to the window’s safe mode', () => {
         expect(code).toMatch(/composeWindowServices\(\{[\s\S]{0,4000}safeMode: windowSafeNow,/);
     });
 
-    it('the window writes the marker only through WindowSafeMode, after its quit has run — a no-op with a host', () => {
-        expect(code).toMatch(/void runQuit\(quitPorts, \{ drainMs: QUIT_WRITES_MS \}\)[\s\S]{0,200}windowSafe\?\.endCleanly\(/);
+    it('the window never writes the marker: it is the host’s', () => {
+        expect(code).not.toContain('endCleanly');
         expect(code).not.toContain('writeCleanExit');
     });
 });
