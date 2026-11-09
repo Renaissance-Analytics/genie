@@ -1,8 +1,9 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { unreadableFile, type MigrationSource, type OldRead } from './keychain-migration.js';
 import type { SecretName } from './keychain.js';
 import { gitAddSubmodule, gitClone, gitPushMain } from './git-ports.js';
 import type { TynnSecrets } from './tynn-account.js';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import {
     GENIE_GITHUB_CLIENT_ID,
@@ -103,7 +104,7 @@ export async function githubSealedSources(options: { file: string; cipher: { dec
         await mkdir(dirname(options.file), { recursive: true });
         const tmp = `${options.file}.tmp`;
         await writeFile(tmp, JSON.stringify(value, null, 2), { mode: 0o600 });
-        await rename(tmp, options.file);
+        await renameOver(tmp, options.file);
     };
     const open = (blob: string): OldRead => {
         try {
@@ -291,7 +292,7 @@ export class GithubAccount implements GithubAccountPort {
         await mkdir(dirname(this.#ports.file), { recursive: true });
         const tmp = `${this.#ports.file}.tmp`;
         await writeFile(tmp, JSON.stringify(file, null, 2), { mode: 0o600 });
-        await rename(tmp, this.#ports.file);
+        await renameOver(tmp, this.#ports.file);
     }
 
     async #restore(stored: SignedInFile): Promise<void> {

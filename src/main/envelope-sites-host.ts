@@ -1,4 +1,5 @@
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { renameOver } from '../core/atomic-rename.js';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { insideOrRoot } from './workspace-confine.js';
 import { editedSiteEntry, firstStartWords, formatLike, parseTrustBook, readEnvelopeSites, siteEntryFor, siteKeyFor, siteRunFingerprint, withSiteEntry, type ServableSite, type TrustBook } from '../core/envelope-sites.js';
@@ -69,20 +70,7 @@ export function nodeEnvelopeFs(): EnvelopeSitesPorts['fs'] {
         writeTextAtomic: async (path, text) => {
             const tmp = `${path}.${process.pid}.${++tmpCounter}.tmp`;
             await writeFile(tmp, text, 'utf8');
-            for (let attempt = 0; ; attempt += 1) {
-                try {
-                    await rename(tmp, path);
-                    return;
-                } catch (error) {
-                    const code = (error as NodeJS.ErrnoException).code;
-                    if (attempt < 5 && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
-                        await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
-                        continue;
-                    }
-                    await rm(tmp, { force: true }).catch(() => undefined);
-                    throw error;
-                }
-            }
+            await renameOver(tmp, path);
         },
         exists: async (path) => { try { await stat(path); return true; } catch { return false; } },
     };
