@@ -122,9 +122,10 @@ describe('adding a workspace', () => {
 
     it('a new workspace is made on disk and registered', async () => {
         const api = gate(hostAloneApi(ports()));
-        expect(await api.invoke('workspaces.create', ['fresh', dir])).toMatchObject({ ok: true });
-        await expect(stat(join(dir, 'fresh', 'project.json'))).resolves.toBeDefined();
-        expect((await reopened()).listWorkspaces().some((w) => w.path === join(dir, 'fresh'))).toBe(true);
+        const made = (await api.invoke('workspaces.create', ['fresh', dir])) as { ok: true; path: string };
+        expect(made).toMatchObject({ ok: true });
+        await expect(stat(join(made.path, 'project.json'))).resolves.toBeDefined();
+        expect((await reopened()).listWorkspaces().some((w) => w.path === made.path)).toBe(true);
     });
 
     it('a remote it cannot understand is refused, and nothing is made (CONTROL)', async () => {
@@ -134,7 +135,7 @@ describe('adding a workspace', () => {
     });
 
     it('signed out of GitHub says so; the Tynn projects come from genie-host\'s own account', async () => {
-        const api = gate(hostAloneApi(ports({}, { tynn: () => ({ projects: async () => [{ id: 'p1', name: 'Tynn' }], host: () => 'https://tynn.test', status: () => ({ signedIn: true }) }) })));
+        const api = gate(hostAloneApi(ports({}, { tynn: () => ({ projects: async () => [{ id: 'p1', name: 'Tynn', slug: 'tynn' }], host: () => 'https://tynn.test', status: () => ({ signedIn: true }) }) })));
         expect(await api.invoke('workspaces.githubRepos', [])).toEqual({ status: 'signed-out' });
         expect(JSON.stringify(await api.invoke('workspaces.tynnProjects', []))).toContain('p1');
     });

@@ -131,7 +131,7 @@ describe('the wiring', () => {
     it('the window and genie-host answer through the same code', () => {
         for (const file of ['src/main/main.ts', 'src/main/host-alone-api.ts']) {
             expect(src(file), file).toContain('workspaceSettingsOps(');
-            expect(src(file), file).toContain('repoOpsPorts(');
+            expect(src(file), file).toContain('workspaceLifecyclePorts(');
         }
     });
 

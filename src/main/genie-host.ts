@@ -1189,6 +1189,7 @@ async function main(): Promise<void> {
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
         windowConnected: () => engine.newestLocalWindow() !== null,
+        settings,
         workspaceLifecycle: {
             terminals: () => terminalHost,
             supervisor: () => processSupervisor,
@@ -1203,7 +1204,6 @@ async function main(): Promise<void> {
             stagingDirectory: () => hostScratch.directory(),
         },
         colors: workspaceColors,
-        settings,
         terminals: terminalHost,
         takeOver: (id) => takeOverHost.probe(id),
         headroom: headroomFeed,
