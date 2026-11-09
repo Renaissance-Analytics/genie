@@ -72,7 +72,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'terminals.open': ['work', { cols: 80, rows: 24 }], 'terminals.write': ['term_1', 'hello'],
     'terminals.resize': ['term_1', 80, 24], 'terminals.close': ['term_1'],
     'terminals.attach': ['work', 'missing'], 'terminals.list': ['work'],
-    'features.snapshot': [], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
+    'features.snapshot': [], 'features.soundData': ['sound_question'], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
     'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'], 'host.home': [],
     'updates.check': [], 'updates.download': [], 'updates.install': [], 'updates.notes': [],
     headroom: [], accountRetry: ['agent_a'],

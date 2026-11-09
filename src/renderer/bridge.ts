@@ -140,13 +140,9 @@ export interface AgentDetail {
 
 /** The three feature channels, named ONCE. Preload and main import this; neither retypes a string. */
 export const FEATURE_CHANNELS = {
-    snapshot: 'genie:features-snapshot',
     act: 'genie:features-act',
-    changed: 'genie:features-changed',
     /** The renderer reports where the browser box is, so main can place the WebContentsView over it. */
     browserBounds: 'genie:features-browser-bounds',
-    /** An alert's own sound file, read by main into a data URL — asked by setting KEY, never by path (Tynn #766 B2). */
-    soundData: 'genie:features-sound-data',
     /** The host's own file picker reports what it picked: the only host paths an AgentInbox send may attach (genie#1354). */
     picked: 'genie:features-picked',
 } as const;
@@ -657,8 +653,9 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
+    features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
     workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
@@ -730,7 +727,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
         files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
-        terminals: local.terminals, host: local.host,
+        terminals: local.terminals, host: local.host, features: { ...preload.features, ...local.features },
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
     if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;

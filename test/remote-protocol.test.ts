@@ -95,9 +95,10 @@ describe('the capability table', () => {
         // 141 with the Home's Details save (genie#1295 H1): a write, owner-only and workspace-scoped.
         // 142 with host.home, where a picker opens on the host this window drives (Tynn #527): a read.
         // 144 with the Tynn tab's two changes reads, local (P4 family 12, Tynn #561).
-        // 148 with C4's four connection-owned Marketplace operations; none is callable remotely.
-        expect(REMOTE_METHODS.length).toBe(148);
+        // 149 with family11's local features.soundData and C4's four connection-owned Marketplace operations.
+        expect(REMOTE_METHODS.length).toBe(149);
         for (const method of ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const) expect(capabilityOf(method)).toBe('local');
+        expect(capabilityOf('features.soundData')).toBe('local');
         for (const method of LOCAL_TERMINAL_METHODS) expect(capabilityOf(method)).toBe('local');
         for (const method of ['artboard.read', 'artboard.review'] as const) expect(capabilityOf(method)).toBe('local');
         for (const method of ['chatDrafts.load', 'chatDrafts.save', 'chatDrafts.putFile', 'chatDrafts.readFile', 'chatDrafts.release'] as const) expect(capabilityOf(method)).toBe('local');

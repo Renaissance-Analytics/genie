@@ -22,7 +22,9 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { homedir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { join } from 'node:path';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this changes GNOME settings and a seeded profile; test machines only'); process.exit(2); }
 
@@ -152,7 +154,7 @@ try {
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     // The account asks again on its own backoff (30 s first); that call meets a port with nothing on it.
     const message = await until('Settings to name the proxy', 60_000, async () => {
-        const text = await cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.tynn?.message ?? null)');
+        const text = await cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.integrations?.tynn?.message ?? null)');
         return typeof text === 'string' && text.includes(String(proxyPort)) ? text : null;
     });
     check(Boolean(message), '6-settings-names-the-dead-proxy', String(message));
