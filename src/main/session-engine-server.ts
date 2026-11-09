@@ -44,8 +44,8 @@ import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './i
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView } from '../core/crash-record.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
-import type { GAppsApi } from '../core/gapps.js';
-import { dispatchGapps } from './gapps-api.js';
+import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
+import { dispatchGapps, GAppSessionOwner } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
 
 /**
@@ -180,7 +180,9 @@ export interface EngineServerOptions {
     readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
     readonly marketplace?: MarketplaceApi | undefined;
     /** The GApp book's actions (GApps v2 V7). Absent = the book could not open, and the store says so. */
-    readonly gapps?: GAppsApi | undefined;
+    readonly gapps?: GAppBookApi | undefined;
+    /** One window of one app (Tynn #595), for the window process to open; never asked for by a page. */
+    readonly gappSessions?: GAppSessionsApi | undefined;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -262,6 +264,7 @@ export class SessionEngineServer {
     readonly #options: EngineServerOptions;
     #host: SessionHost | null = null;
     readonly #marketplaceReviews = new WeakMap<Connection, MarketplaceSession>();
+    readonly #gappSessionOwners = new WeakMap<Connection, GAppSessionOwner>();
     readonly #records = new Map<string, AgentRecord>();
     readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
@@ -452,6 +455,7 @@ export class SessionEngineServer {
             }
             const was = conn.authed;
             this.#connections.delete(conn);
+            this.#gappSessionOwners.get(conn)?.closeAll();
             const reviews = this.#marketplaceReviews.get(conn);
             if (reviews) {
                 this.#marketplaceReviews.delete(conn);
@@ -587,6 +591,11 @@ export class SessionEngineServer {
         if (method === 'engine.marketplace') return this.#marketplace(conn, args);
         if (method === 'engine.gapps') {
             if (!conn.local || !conn.window) throw new Error('GApp actions require a local window.');
+            if (args[0] === 'openSession' || args[0] === 'closeSession') {
+                let owner = this.#gappSessionOwners.get(conn);
+                if (!owner) { owner = new GAppSessionOwner(() => this.#options.gappSessions ?? null); this.#gappSessionOwners.set(conn, owner); }
+                return owner.call(args[0], Array.isArray(args[1]) ? args[1] : []);
+            }
             return dispatchGapps(() => this.#options.gapps ?? null, args[0], Array.isArray(args[1]) ? args[1] : []);
         }
         // The crash state is the host's own, ready before any agent engine is: answered here.

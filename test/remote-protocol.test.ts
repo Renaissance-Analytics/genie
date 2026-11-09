@@ -96,8 +96,8 @@ describe('the capability table', () => {
         // 142 with host.home, where a picker opens on the host this window drives (Tynn #527): a read.
         // 144 with the Tynn tab's two changes reads, local (P4 family 12, Tynn #561).
         // 150 with family 11's local features.soundData and features.picked, and C4's four connection-owned Marketplace operations.
-        // 155 with GApps v2 V7's five local store actions.
-        expect(REMOTE_METHODS.length).toBe(155);
+        // 155 with GApps v2 V7's five local store actions. 156 with opening an app's window (Tynn #595).
+        expect(REMOTE_METHODS.length).toBe(156);
         for (const method of ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const) expect(capabilityOf(method)).toBe('local');
         expect(capabilityOf('features.soundData')).toBe('local');
         expect(capabilityOf('features.picked')).toBe('local');

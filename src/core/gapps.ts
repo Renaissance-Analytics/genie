@@ -6,7 +6,7 @@
 import type { GrantScope, ReviewItem } from './gapp-grants.js';
 
 /** What a window can ask of the GApp book (V7), its own window's, never another machine's. */
-export const GAPP_METHODS = ['gapps.list', 'gapps.review', 'gapps.install', 'gapps.setOn', 'gapps.uninstall'] as const;
+export const GAPP_METHODS = ['gapps.list', 'gapps.review', 'gapps.install', 'gapps.setOn', 'gapps.uninstall', 'gapps.open'] as const;
 export type GAppMethod = (typeof GAPP_METHODS)[number];
 export const isGappMethod = (method: unknown): method is GAppMethod => typeof method === 'string' && (GAPP_METHODS as readonly string[]).includes(method);
 
@@ -34,6 +34,25 @@ export interface GAppsApi {
     install(folder: string, options: { scope: GrantScope; consent?: { digest: string; items: readonly ReviewItem[] } }): Promise<GAppListing>;
     setOn(id: string, on: boolean): Promise<void>;
     uninstall(id: string): Promise<void>;
+    /** Open the app's own window, or bring it to the front. Rejects with why it could not. */
+    open(id: string): Promise<void>;
+}
+
+/** What the host's book does; opening is the window process's own. */
+export type GAppBookApi = Omit<GAppsApi, 'open'>;
+
+/** One window of one app, from the host to the process that opens it. The token never reaches a Genie page. */
+export interface GAppSessionInfo {
+    readonly packageId: string;
+    readonly url: string;
+    readonly channel: string;
+    readonly token: string;
+    readonly window: Readonly<Record<string, unknown>>;
+}
+
+export interface GAppSessionsApi {
+    open(packageId: string): Promise<GAppSessionInfo>;
+    close(token: string): void;
 }
 
 export interface GAppListing {

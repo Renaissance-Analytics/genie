@@ -94,7 +94,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'artboard.read': ['work'], 'artboard.review': ['work', 'p1', 'approved', 'review comment'],
     'marketplace.search': [''], 'marketplace.prepare': ['org.example.plugin', '1.0.0'],
     'marketplace.install': ['unknown-review', true], 'marketplace.discard': ['unknown-review'],
-    'gapps.list': [], 'gapps.review': ['/nowhere'], 'gapps.install': ['/nowhere', { scope: 'workstation' }], 'gapps.setOn': ['com.example.app', false], 'gapps.uninstall': ['com.example.app'],
+    'gapps.list': [], 'gapps.review': ['/nowhere'], 'gapps.install': ['/nowhere', { scope: 'workstation' }], 'gapps.setOn': ['com.example.app', false], 'gapps.uninstall': ['com.example.app'], 'gapps.open': ['com.example.app'],
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };
