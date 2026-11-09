@@ -43,6 +43,8 @@ import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView } from '../core/crash-record.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
+import { MarketplaceSession } from './marketplace-session.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -171,6 +173,7 @@ export interface EngineServerOptions {
     readonly catalog?: Pick<import('./catalog-host.js').CatalogService, 'snapshot' | 'docs' | 'onEvent'>;
     /** The host's plugins (ADF A3: plugins-host.ts). Absent = `engine.plugins` is refused and no window is told of any. */
     readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
+    readonly marketplace?: MarketplaceApi | undefined;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -251,6 +254,7 @@ interface Connection {
 export class SessionEngineServer {
     readonly #options: EngineServerOptions;
     #host: SessionHost | null = null;
+    readonly #marketplaceReviews = new WeakMap<Connection, MarketplaceSession>();
     readonly #records = new Map<string, AgentRecord>();
     readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
@@ -431,6 +435,11 @@ export class SessionEngineServer {
             }
             const was = conn.authed;
             this.#connections.delete(conn);
+            const reviews = this.#marketplaceReviews.get(conn);
+            if (reviews) {
+                this.#marketplaceReviews.delete(conn);
+                void reviews.close().catch(() => this.#options.log?.('Marketplace review cleanup failed after a window disconnected.'));
+            }
             for (const p of conn.pending.values()) p.reject(new Error('The window closed before it answered.'));
             conn.pending.clear();
             if (was) this.#options.onClients?.(this.clients);
@@ -548,9 +557,18 @@ export class SessionEngineServer {
         conn.transport.send(JSON.stringify(reply.ok ? { kind: 'result', id, ok: true, value: reply.value ?? null } : { kind: 'result', id, ok: false, reason: reply.reason }));
     }
 
+    async #marketplace(conn: Connection, args: unknown[]): Promise<unknown> {
+        if (!conn.local || !conn.window) throw new Error('Marketplace actions require a local window.');
+        if (args.length !== 2 || !Array.isArray(args[1])) throw new Error('Invalid Marketplace operation arguments.');
+        let session = this.#marketplaceReviews.get(conn);
+        if (!session) { session = new MarketplaceSession(() => this.#options.marketplace ?? null, this.#options.log); this.#marketplaceReviews.set(conn, session); }
+        return session.call(args[0], args[1]);
+    }
+
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
         // The updater helper's link calls its own method and nothing else (P5b).
         if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
+        if (method === 'engine.marketplace') return this.#marketplace(conn, args);
         // The crash state is the host's own, ready before any agent engine is: answered here.
         if (method === 'engine.crash') {
             if (!this.#options.crash || !conn.local) throw new Error('This window is not told about crashes here.');
