@@ -22,7 +22,7 @@ import { checkPackage, currentDigest } from './plugin-package.js';
  * and keeps grant and storage; uninstall leaves nothing of the app. No workspace is ever made for an app (decision 2).
  *
  * The book's own record is `<dir>/book.json`; each app's files are `<dir>/<packageId>/<version>/`, its isolated store
- * `<dir>/<packageId>/storage/` (the bridge's, V5).
+ * `<dir>/<packageId>/storage/`, a preview's `<dir>/<packageId>/preview-storage/` (the bridge's, V5).
  */
 export const GAPP_MANIFEST_FILE = 'genie-package.json';
 
@@ -144,9 +144,22 @@ export class GAppBook {
         return `${entry.name} is refused as tampered: ${now.ok ? 'a file changed, was added or was removed after it was installed' : now.reason}; reinstall it from its publisher.`;
     }
 
-    /** An app's isolated store (V5's bridge reads and writes it). */
-    storageDir(packageId: string): string {
-        return join(this.#ports.dir, packageId, 'storage');
+    /** An app's isolated store (V5's bridge reads and writes it); a preview has its own, which can never read the installed app's. */
+    storageDir(packageId: string, preview = false): string {
+        return join(this.#ports.dir, packageId, preview ? 'preview-storage' : 'storage');
+    }
+
+    /** Take back one element or one network host from an app's grant; it counts from the next call. `false` for an unknown app. */
+    takeBack(packageId: string, what: { element: string } | { host: string }): Promise<boolean> {
+        return this.#serial(async () => {
+            const entry = this.#book.apps.find((e) => e.packageId === packageId);
+            if (!entry) return false;
+            const grant: GAppGrant = 'element' in what
+                ? { ...entry.grant, uses: entry.grant.uses.filter((id) => id !== what.element) }
+                : { ...entry.grant, network: entry.grant.network.filter((host) => host !== what.host) };
+            await this.#write({ apps: this.#book.apps.map((e) => (e.packageId === packageId ? { ...e, grant } : e)) });
+            return true;
+        });
     }
 
     onChange(listener: () => void): () => void {

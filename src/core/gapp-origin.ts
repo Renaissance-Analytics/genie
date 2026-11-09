@@ -8,6 +8,8 @@ export const PREVIEW_DOMAIN = 'preview.apps.gen';
 
 /** The path of an app's channel to the host, on its own origin. */
 export const APP_CHANNEL_PATH = '/.genie/channel';
+/** The largest message on an app channel: room for a 50 MB store value in JSON, so the store is what refuses it, in words. */
+export const APP_CHANNEL_MAX_BYTES = 64 * 1024 * 1024;
 
 const MAX_LABEL = 63;
 
