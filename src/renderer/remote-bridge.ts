@@ -560,6 +560,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
     }) : undefined;
     if (local) {
+        bridge.marketplace = {
+            search: (query, cursor) => cursor === undefined ? read('marketplace.search', query) : read('marketplace.search', query, cursor),
+            prepare: (id, version) => read('marketplace.prepare', id, version),
+            install: (token, consent) => read('marketplace.install', token, consent),
+            discard: async token => { await read('marketplace.discard', token); },
+        };
         // ONE limiter for every family on this connection: together they never ask the host to hold more than it can (Tynn #547).
         const limit = heldLimiter();
         /*

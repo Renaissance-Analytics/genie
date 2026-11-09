@@ -1,5 +1,6 @@
 import { Agent, request } from 'node:https';
 import tls from 'node:tls';
+import type { IncomingMessage } from 'node:http';
 import { routeLabel, type ProxyRoute } from '../core/proxy-answer.js';
 import type { SessionFetch } from './tynn-account.js';
 
@@ -37,6 +38,37 @@ export interface HostHttpsOptions {
     readonly followSameOrigin?: number;
     /** Optional protocol-specific cap, enforced while receiving bytes, including chunked responses. */
     readonly maxResponseBytes?: number;
+    /** A byte-preserving, backpressured body for signed Marketplace archives. */
+    readonly streamResponse?: boolean;
+}
+
+export interface HostHttpsResponse {
+    readonly ok: boolean;
+    readonly status: number;
+    readonly headers: { get(name: string): string | null };
+    readonly body?: ReadableStream<Uint8Array>;
+    text(): Promise<string>;
+}
+export type HostHttpsFetch = (url: string, init: Parameters<SessionFetch>[1]) => Promise<HostHttpsResponse>;
+
+function binaryBody(res: IncomingMessage, limit: number | undefined): ReadableStream<Uint8Array> {
+    // No flowing data listener: the socket stays backpressured until its owner reads or cancels it.
+    const iterator = res[Symbol.asyncIterator]();
+    let bytes = 0;
+    return new ReadableStream<Uint8Array>({
+        start(controller) { res.on('error', error => controller.error(error)); },
+        async pull(controller) {
+            try {
+                const part = await iterator.next();
+                if (part.done) { controller.close(); return; }
+                const chunk = part.value as Buffer;
+                bytes += chunk.byteLength;
+                if (limit !== undefined && bytes > limit) throw new Error('The response exceeds its size limit.');
+                controller.enqueue(chunk);
+            } catch (error) { controller.error(error); res.destroy(); }
+        },
+        cancel() { res.destroy(); },
+    }, { highWaterMark: 0 });
 }
 
 /** Each of these is cached by Node for the process; so is this. A root added to the OS store is read at the next host start. */
@@ -66,7 +98,7 @@ function hostOfProxy(url: string): string {
     try { return new URL(url).host; } catch { return 'the proxy in HTTPS_PROXY'; }
 }
 
-export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
+export function hostHttpsFetch(options: HostHttpsOptions = {}): HostHttpsFetch {
     const env = options.env ?? process.env;
     /** One agent per route: a context over every root costs real time, and a call should not. */
     const agents = new Map<string, Agent>();
@@ -103,7 +135,7 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
         return { target: next, init };
     };
 
-    const send = (target: URL, init: Parameters<SessionFetch>[1], agent: Agent, hops = 0): ReturnType<SessionFetch> => new Promise((resolve, reject) => {
+    const send = (target: URL, init: Parameters<SessionFetch>[1], agent: Agent, hops = 0): ReturnType<HostHttpsFetch> => new Promise((resolve, reject) => {
         const ask = request(target, { method: init.method, headers: init.headers, agent, rejectUnauthorized: true, signal: init.signal }, (res) => {
             const status = res.statusCode ?? 0;
             if (status >= 300 && status < 400) {
@@ -112,6 +144,18 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
                     const next = redirected(target, init, status, res.headers.location, hops);
                     resolve(send(next.target, next.init, agent, hops + 1));
                 } catch (error) { reject(error as Error); }
+                return;
+            }
+            const headers = { get: (name: string): string | null => { const value = res.headers[name.toLowerCase()]; return Array.isArray(value) ? value.join(', ') : value ?? null; } };
+            if (options.streamResponse) {
+                const body = binaryBody(res, options.maxResponseBytes);
+                resolve({ ok: status >= 200 && status < 300, status, headers, body, text: async () => {
+                    const reader = body.getReader(); const chunks: Uint8Array[] = [];
+                    try {
+                        for (;;) { const part = await reader.read(); if (part.done) break; chunks.push(part.value); }
+                        return Buffer.concat(chunks).toString('utf8');
+                    } finally { reader.releaseLock(); }
+                } });
                 return;
             }
             const chunks: Buffer[] = [];
@@ -133,8 +177,7 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
             });
             // A status-only caller need not read it; its failure must still be handled.
             void body.catch(() => {});
-            const headers = { get: (name: string): string | null => { const value = res.headers[name.toLowerCase()]; return Array.isArray(value) ? value.join(', ') : value ?? null; } };
-            resolve({ ok: status >= 200 && status < 300, status, headers, text: () => body } as never);
+            resolve({ ok: status >= 200 && status < 300, status, headers, text: () => body });
         });
         ask.on('error', reject);
         ask.end(init.body);

@@ -277,7 +277,7 @@ export interface MarketplacePluginsOptions extends MarketplaceClientOptions {
 }
 
 /** Open from disk, then refresh without holding up a windowless host. The host owns and stops this one clock. */
-export async function openMarketplacePlugins(options: MarketplacePluginsOptions): Promise<{ plugins: PluginsService; stop(): void }> {
+export async function openMarketplacePlugins(options: MarketplacePluginsOptions): Promise<{ plugins: PluginsService; registry: MarketplaceClient; stop(): void }> {
     const interval = positive(options.intervalMs ?? 5 * 60_000, 'refresh interval');
     const registry = await MarketplaceClient.open(options);
     let plugins: PluginsService;
@@ -292,5 +292,5 @@ export async function openMarketplacePlugins(options: MarketplacePluginsOptions)
         finally { if (!stopped) cancel = schedule(() => { cancel = null; void refresh(); }, interval); }
     };
     void refresh();
-    return { plugins, stop: () => { stopped = true; cancel?.(); cancel = null; registry.close(); } };
+    return { plugins, registry, stop: () => { stopped = true; cancel?.(); cancel = null; registry.close(); } };
 }

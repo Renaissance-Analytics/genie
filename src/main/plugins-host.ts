@@ -33,6 +33,8 @@ export class PluginsService {
     readonly #open: () => Promise<PluginHost>;
     readonly #registry: PublisherKeyRegistry | undefined;
     #refreshing: Promise<boolean> | null = null;
+    #reloadRevision = 0;
+    #latestReload: Promise<void> = Promise.resolve();
     readonly #listeners = new Set<(dump: PluginsDump) => void>();
 
     private constructor(plugins: PluginHost, open: () => Promise<PluginHost>, registry?: PublisherKeyRegistry) {
@@ -66,6 +68,26 @@ export class PluginsService {
     onEvent(listener: (dump: PluginsDump) => void): () => void {
         this.#listeners.add(listener);
         return () => { this.#listeners.delete(listener); };
+    }
+
+    /** Re-read local packages after a verified install; network availability cannot decide whether activation succeeded. */
+    async reload(): Promise<void> {
+        const revision = ++this.#reloadRevision;
+        let waiting = (async (): Promise<void> => {
+            const next = await this.#open();
+            if (revision !== this.#reloadRevision) return;
+            this.#plugins = next;
+            this.#emit();
+        })();
+        this.#latestReload = waiting;
+        for (;;) {
+            try { await waiting; }
+            catch (error) { if (waiting === this.#latestReload) throw error; }
+            // An install validates the loaded snapshot after this returns. If another read superseded it, wait for that
+            // newest read too; neither a late old value nor its old error may replace the new installation.
+            if (waiting === this.#latestReload) return;
+            waiting = this.#latestReload;
+        }
     }
 
     /**
@@ -108,8 +130,7 @@ export class PluginsService {
         const folder = resolve(dir, entry.folder);
         if (dirname(folder) !== resolve(dir) || entry.folder.length === 0) throw new Error(`${pluginId} is not a folder of the plugins directory`);
         await rm(folder, { recursive: true, force: true });
-        this.#plugins = await this.#open();
-        this.#emit();
+        await this.reload();
         return true;
     }
 
@@ -119,8 +140,7 @@ export class PluginsService {
         try { await this.#registry?.refresh(); }
         catch (error) { failed = true; failure = error; }
         // Even offline, re-open against current cache freshness and any completed-snapshot withdrawals.
-        this.#plugins = await this.#open();
-        this.#emit();
+        await this.reload();
         if (failed) throw failure;
         return true;
     }
