@@ -1,5 +1,6 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
     addToList,
@@ -649,7 +650,7 @@ export class AttentionStore {
             await mkdir(dir, { recursive: true });
             const tmp = `${path}.${randomUUID()}.tmp`;
             await writeFile(tmp, `${input.handoff.trimEnd()}\n`, 'utf8');
-            await rename(tmp, path);
+            await renameOver(tmp, path);
             return { saved: true, path };
         } catch (error) {
             return { saved: false, reason: `writing ${path} failed: ${(error as Error).message}` };

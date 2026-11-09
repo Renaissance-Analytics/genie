@@ -1,4 +1,5 @@
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { renameOver } from '../core/atomic-rename.js';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { providerProtocol, sharedProtocol } from '../core/genie-protocol.js';
 import { GENIE_SKILLS, skillFile } from './agent-skills.js';
@@ -21,7 +22,7 @@ export async function writeGenieInstructions(home: string, tools: readonly { nam
         await mkdir(dirname(path), { recursive: true });
         const temporary = `${path}.${process.pid}.${++written}.tmp`;
         await writeFile(temporary, text, 'utf8');
-        await rename(temporary, path);
+        await renameOver(temporary, path);
     };
     const promptText = [sharedProtocol(tools), providerProtocol('claude'), NOTE].join('\n\n');
     await put(promptFile, promptText);
