@@ -128,7 +128,8 @@ describe('at each call', () => {
 describe('Genie\'s own tools that act as the person are never granted', () => {
     it('each is grantable: false in Genie\'s catalog; an app listing one is refused by name', () => {
         const genie = genieCatalog();
-        expect([...PERSON_ONLY_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'createAgent', 'imDone', 'manageTerminals', 'pages', 'processes', 'services', 'sites', 'workspaceTabs'].sort());
+        // `lists` too (the coordinator's ruling, 2026-11-08): its items put work in front of the person; start conservative.
+        expect([...PERSON_ONLY_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'createAgent', 'imDone', 'lists', 'manageTerminals', 'pages', 'processes', 'services', 'sites', 'workspaceTabs'].sort());
         for (const id of PERSON_ONLY_TOOLS) {
             expect(genie.get(id)?.payload.grantable, id).toBe(false);
             const r = installReview(request({ uses: [id] }), (x) => genie.get(x));

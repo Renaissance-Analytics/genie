@@ -1,3 +1,4 @@
+import { renameOver } from './atomic-rename.js';
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, open, readFile, rename, stat, truncate, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -119,7 +120,7 @@ export class ThreadStore extends FileSessionStore {
     async #saveIndex(key: string, list: readonly Segment[]): Promise<void> {
         const file = this.#indexFile(key), temp = `${file}.${process.pid}.tmp`;
         await writeFile(temp, JSON.stringify({ v: 1, segments: list }), 'utf8');
-        await rename(temp, file);
+        await renameOver(temp, file);
     }
 
     /** The key's segments, NEWEST first, each with its path: what a reader pages into once the active log is read. */

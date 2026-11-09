@@ -25,7 +25,7 @@ import {
 } from '../core/engine-protocol.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { cancelIntent } from '../core/session.js';
-import type { ClientTransport } from '../core/remote-protocol.js';
+import type { CallContext, ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
@@ -381,8 +381,8 @@ export class SessionEngineServer {
     }
 
     /** A remote method genie-host does not own yet, done by the newest LOCAL window (Tynn #409). Rejects with none. */
-    remoteInvoke(method: string, args: unknown[]): Promise<unknown> {
-        return this.#reverse('client.remoteInvoke', [method, args], { localOnly: true });
+    remoteInvoke(method: string, args: unknown[], context?: CallContext): Promise<unknown> {
+        return this.#reverse('client.remoteInvoke', [method, args, context ?? null], { localOnly: true });
     }
 
     /** The newest local window's connection: the one remote calls go to, and whose events remote connections follow. */

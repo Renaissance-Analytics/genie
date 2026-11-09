@@ -562,6 +562,41 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     if (local) {
         // ONE limiter for every family on this connection: together they never ask the host to hold more than it can (Tynn #547).
         const limit = heldLimiter();
+        /*
+         * THE FEATURE SNAPSHOT (P4 family 11, Tynn #560): it has no bound of its own, so it crosses inline when small and
+         * as one blob when not; a change is pushed as a revision, and the window re-reads: one read at a time, the latest last.
+         */
+        const decodeJson = <T>(read0: () => Promise<unknown>): Promise<T> => limit(async () => {
+            const result = await read0();
+            if (!result || typeof result !== 'object' || !('jsonContent' in result)) return result as T;
+            const content = (result as { jsonContent: { ref: string; blob: string } }).jsonContent;
+            try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await blobs!.readAll('features-json', content.blob))) as T; }
+            finally { await blobRead('content.release', content.ref); }
+        });
+        const snapshotNow = (): Promise<FeatureData> => decodeJson<FeatureData>(() => read('features.snapshot'));
+        const featureListeners = new Set<(data: FeatureData) => void>();
+        let rereading = false, again = false;
+        const reread = async (): Promise<void> => {
+            if (rereading) { again = true; return; }
+            rereading = true;
+            try {
+                do {
+                    again = false;
+                    const data = await snapshotNow();
+                    for (const listener of [...featureListeners]) listener(data);
+                } while (again);
+            } catch (error) {
+                // The next change reads again; a connection that went is said by the session.
+                console.warn(`[genie] the feature snapshot could not be read: ${error instanceof Error ? error.message : String(error)}`);
+            } finally { rereading = false; }
+        };
+        on(LOCAL_EVENTS.features, () => { if (featureListeners.size > 0) void reread(); });
+        Object.assign(bridge.features, {
+            snapshot: snapshotNow,
+            // Reads at once: a subscribe is also a window coming back, and a revision sent while it was away is not sent again.
+            subscribe: (listener: (data: FeatureData) => void) => { featureListeners.add(listener); void reread(); return () => { featureListeners.delete(listener); }; },
+            soundData: (key: string) => decodeJson<string | null>(() => read('features.soundData', key)),
+        });
         terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });
         bridge.terminals = terminalClient.terminals;
         bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });

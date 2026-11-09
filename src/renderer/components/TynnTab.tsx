@@ -1,7 +1,7 @@
 import { Icon, Sidebar } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
-import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type HomeView, type ReleasesView, type VipView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
+import { PageFollower, readTynnSection, writeTynnSection, TYNN_FIRST_SECTION, TYNN_SECTIONS, type HomeView, type ReleasesView, type VipView, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
 import { TynnFeaturesPanel } from './TynnFeaturesPanel.js';
 import { TynnVipPanel } from './TynnVipPanel.js';
@@ -276,14 +276,21 @@ export function TynnReleasesTab({ workspaceId, host }: { workspaceId: string; ho
 }
 
 /** The tab: the page nav, and the page that is open. */
+/** This device's store; `null` where there is none, or it refuses. */
+function deviceStore(): Storage | null {
+    try { return typeof window === 'undefined' ? null : window.localStorage; } catch { return null; }
+}
+
 export function TynnTab({ workspaceId, host, issues, initialSection }: { workspaceId: string; host: TynnTabHost; issues?: TynnIssuesHost | undefined; initialSection?: TynnSectionId }) {
-    // The tab opens on Home, as tynn.ai's project does; a window with no page door opens on the board.
-    const [section, setSection] = useState<TynnSectionId>(initialSection ?? (host.page ? TYNN_FIRST_SECTION : 'board'));
     // A page this host cannot read is not offered; the board always is. Issues has its own door (row I1).
     const offered = TYNN_SECTIONS.map((s) => s.id).filter((id) => id === 'board' || (id === 'issues' ? issues !== undefined : host.page !== undefined));
+    // A link that names a page wins; else the page you were on (Tynn #545); else Home, as tynn.ai's project opens, or the
+    // board in a window with no page door.
+    const [section, setSection] = useState<TynnSectionId>(() => initialSection ?? readTynnSection(deviceStore(), workspaceId, offered) ?? (host.page ? TYNN_FIRST_SECTION : 'board'));
+    const choose = (id: TynnSectionId) => { setSection(id); writeTynnSection(deviceStore(), workspaceId, id); };
     return (
         <div data-tynn-tab="" className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {offered.length > 1 ? <TynnSectionNav current={section} onSection={setSection} offered={offered} /> : null}
+            {offered.length > 1 ? <TynnSectionNav current={section} onSection={choose} offered={offered} /> : null}
             <div className="flex min-h-0 min-w-0 flex-1 overflow-auto">
                 {section === 'issues' && issues ? <TynnIssuesTab workspaceId={workspaceId} host={issues} />
                     : section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} />

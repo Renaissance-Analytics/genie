@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import { Baton, PairingPins } from '../core/remote.js';
-import type { RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
+import type { CallContext, RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
 import { PHONE_METHODS } from './host-alone-api.js';
@@ -24,7 +24,7 @@ export interface HostRemoteApiPorts {
     /** Methods genie-host performs itself, window or not. */
     readonly own: Partial<Record<RemoteMethod, (args: unknown[]) => Promise<unknown>>>;
     /** The newest local window, while one is connected: it performs what the host does not own yet. */
-    readonly window: { connected(): boolean; invoke(method: RemoteMethod, args: unknown[]): Promise<unknown> };
+    readonly window: { connected(): boolean; invoke(method: RemoteMethod, args: unknown[], context?: CallContext): Promise<unknown> };
     /** Events for remote connections: the host's own, and those a connected window forwards. */
     readonly onEvent?: (listener: (channel: string, payload: unknown) => void) => () => void;
     /**
@@ -40,12 +40,12 @@ export interface HostRemoteApiPorts {
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const alone = (): HostApi | null => (typeof ports.alone === 'function' ? ports.alone() : ports.alone ?? null);
     return {
-        invoke: async (method, args) => {
+        invoke: async (method, args, context) => {
             const own = ports.own[method];
             if (own) return own(args);
-            if (ports.window.connected()) return ports.window.invoke(method, args);
+            if (ports.window.connected()) return ports.window.invoke(method, args, context);
             const answers = PHONE_METHODS.has(method) ? alone() : null;
-            if (answers) return answers.invoke(method, args);
+            if (answers) return answers.invoke(method, args, context);
             throw new Error(`${ports.hostName} answers ${method} only while a Genie window is open there: open Genie on ${ports.hostName}`);
         },
         onEvent: (listener, options) => {

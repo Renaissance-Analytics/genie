@@ -23,7 +23,9 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { homedir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { join } from 'node:path';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this stops the keyring; test machines only'); process.exit(2); }
 process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
@@ -133,7 +135,7 @@ async function launch() {
     if (!page) throw new Error('no window on the debugger port');
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     await until('window.genie', 30_000, () => cdp.evaluate('typeof window.genie === "object"'));
-    const card = () => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.keyring ?? null)');
+    const card = () => cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.integrations?.keyring ?? null)');
     return { cdp, card };
 }
 

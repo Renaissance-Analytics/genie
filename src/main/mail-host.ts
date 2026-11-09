@@ -1,5 +1,6 @@
+import { renameOver } from '../core/atomic-rename.js';
 import { randomBytes } from 'node:crypto';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { inboxAddress, inboxNameProblem, MAILPIT_SMTP_AUTH_FILE, renderSmtpAuthFile, type Inbox } from '../core/mail.js';
 import { makePrivate, PRIVATE_FILE, readJson, writeJsonAtomic } from './store.js';
@@ -129,7 +130,7 @@ export class MailHost {
         const temporary = `${file}.${process.pid}.tmp`;
         // Readable by Mailpit's own user inside its container: hashes only, never a password.
         await writeFile(temporary, renderSmtpAuthFile(this.#book.inboxes), { encoding: 'utf8', mode: 0o644 });
-        await rename(temporary, file);
+        await renameOver(temporary, file);
         this.#ports.onWrite?.('auth');
     }
 
