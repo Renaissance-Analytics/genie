@@ -56,7 +56,7 @@ beforeEach(async () => {
     plugins = join(dir, 'plugins');
     for (const [folder, id, signed] of [['local', 'com.example.local', false], ['signed', 'com.example.signed', true]] as const) {
         await mkdir(join(plugins, folder), { recursive: true });
-        await writeFile(join(plugins, folder, 'genie-plugin.json'), manifest(id, signed));
+        await writeFile(join(plugins, folder, 'genie-package.json'), manifest(id, signed));
         await writeFile(join(plugins, folder, 'tool.mjs'), FETCH_TOOL);
         if (signed) await signPackage(join(plugins, folder), pair.privateKey);
     }

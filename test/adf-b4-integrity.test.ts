@@ -39,7 +39,7 @@ beforeEach(async () => {
     plugins = join(dir, 'plugins');
     pkg = join(plugins, 'notes');
     await mkdir(join(pkg, 'lib'), { recursive: true });
-    await writeFile(join(pkg, 'genie-plugin.json'), MANIFEST);
+    await writeFile(join(pkg, 'genie-package.json'), MANIFEST);
     await writeFile(join(pkg, 'tools.cjs'), TOOLS);
     await writeFile(join(pkg, 'lib', 'format.cjs'), 'module.exports = (s) => s.trim();\n');
 });
@@ -79,7 +79,7 @@ describe('a signed package: the signature covers every file', () => {
         expect((await stateOf(true))!.reason).toMatch(/tampered/);
         await writeFile(join(pkg, 'lib', 'format.cjs'), 'module.exports = (s) => s.trim();\n');
         expect((await stateOf(false))!.state).toBe('enabled');
-        await writeFile(join(pkg, 'genie-plugin.json'), MANIFEST.replace('"Notes"', '"Notez"'));
+        await writeFile(join(pkg, 'genie-package.json'), MANIFEST.replace('"Notes"', '"Notez"'));
         expect((await stateOf(true))!.reason).toMatch(/tampered/);
     });
 
@@ -218,9 +218,9 @@ describe('the digest', () => {
     const file = (path: string, text: string) => ({ path, bytes: Buffer.from(text) });
 
     it('lists every file by path and SHA-256, sorted, without the signature file; the order files were read in does not matter', () => {
-        const a = [file('tools.cjs', 'x'), file('genie-plugin.json', '{}'), file('lib/a.cjs', 'y'), file(PACKAGE_SIGNATURE_FILE, 'sig')];
+        const a = [file('tools.cjs', 'x'), file('genie-package.json', '{}'), file('lib/a.cjs', 'y'), file(PACKAGE_SIGNATURE_FILE, 'sig')];
         const b = [a[2]!, a[3]!, a[0]!, a[1]!];
-        expect(packageListing(a).split('\n').filter(Boolean).map((l) => l.split('  ')[1])).toEqual(['genie-plugin.json', 'lib/a.cjs', 'tools.cjs']);
+        expect(packageListing(a).split('\n').filter(Boolean).map((l) => l.split('  ')[1])).toEqual(['genie-package.json', 'lib/a.cjs', 'tools.cjs']);
         expect(packageDigest(a)).toBe(packageDigest(b));
         expect(packageDigest(a)).toMatch(/^[0-9a-f]{64}$/);
     });
