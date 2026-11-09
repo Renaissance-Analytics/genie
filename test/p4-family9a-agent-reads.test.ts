@@ -33,7 +33,6 @@ function serve(api: HostApi) {
         let closeCurrent = () => {};
         let write: (t: string) => void = () => {};
         let overCap = false;
-        let closedSeen = 0;
         const listeners = new Set<Parameters<LocalFramePort['onFrame']>[0]>();
         const port: LocalFramePort = {
             onFrame: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
@@ -46,7 +45,7 @@ function serve(api: HostApi) {
                         if (Buffer.byteLength(t, 'utf8') > LOCAL_FRAME_LIMIT_BYTES) { overCap = true; pair.client.close(); return; }
                         for (const l of listeners) l('frame', handle, t);
                     });
-                    pair.client.onClose(() => { closedSeen += 1; for (const l of listeners) l('closed', handle, 'closed'); });
+                    pair.client.onClose(() => { for (const l of listeners) l('closed', handle, 'closed'); });
                     closeCurrent = () => pair.client.close();
                     closers.push(closeCurrent);
                     write = (t: string) => pair.client.send(t);
@@ -55,7 +54,7 @@ function serve(api: HostApi) {
                 else closeCurrent();
             },
         };
-        return { port, frames, texts, overCap: () => overCap, drop: () => closeCurrent(), closedSeen: () => closedSeen };
+        return { port, frames, texts, overCap: () => overCap, drop: () => closeCurrent() };
     };
     const relay = async () => {
         const pair = inMemoryPair();
@@ -248,14 +247,11 @@ describe('M7: a window that reconnects', () => {
         b.subscribeAgent('a1', (x) => ledger.push(x as never));
         b.subscribe((s) => snapshots.push(s));
         await vi.waitFor(() => expect(ledger.at(-1)?.rows).toHaveLength(3));
-        const phases: string[] = [b.localProtocol!.state().phase];
-        b.localProtocol!.onState(() => phases.push(`${b.localProtocol!.state().phase}@${performance.now() | 0} ${String(new Error().stack).split('\n').slice(2, 9).map((l) => l.trim().replace(/^at /, '').replace(/.*src./, '')).join(' < ')}`));
+        // The session reconnects by itself after a drop (first after 250 ms): what changes in that gap is what it must catch up on.
         d.drop();
-        await vi.waitFor(() => expect(b.localProtocol!.state().phase).toBe('failed'), { timeout: 3_000 }).catch((e) => { console.error('M7 PROBE', JSON.stringify({ phases, reason: b.localProtocol!.state().reason, frames: d.frames.length, closedSeen: d.closedSeen() })); throw e; });
         rows.push({ id: 'while-away', text: 'x' });
         const missed = { agents: [{ id: 'missed' }], workspaces: [], deckItems: [], signals: {} };
         h.pushSnapshot(missed);
-        b.localProtocol!.retry();
         await vi.waitFor(() => expect(ledger.at(-1)?.rows.map((r) => r.id)).toEqual(['r0', 'r1', 'r2', 'while-away']), { timeout: 10_000 });
         await vi.waitFor(() => expect(snapshots.at(-1)).toEqual(missed));
     });
