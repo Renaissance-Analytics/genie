@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APP_BRIDGE } from '../src/core/catalog.js';
+import { APP_CHANNEL_MAX_BYTES } from '../src/core/gapp-origin.js';
 
 /**
  * GAPPS V2, V4 (Tynn #569): THE APP WINDOW'S PRELOAD. It exposes `window.genieApp` and nothing else. The channel's address
@@ -34,6 +35,30 @@ afterEach(() => { process.argv = argv; vi.unstubAllGlobals(); });
 const api = () => exposed[0]![1] as { request(method: string, params?: unknown): Promise<unknown>; on(event: string, fn: (d: unknown) => void): () => void };
 
 describe('the sealed preload', () => {
+    it('a call not granted rejects as NotGrantedError naming the element: an Error crossing to the page keeps only its message', async () => {
+        const socket = FakeSocket.last;
+        socket.fire('open');
+        socket.fire('message', { ok: true, packageId: 'com.example.notes' });
+        const pending = api().request('app.call', { elementId: 'knowledge' });
+        await Promise.resolve();
+        const sent = JSON.parse(socket.sent.at(-1)!) as { id: number };
+        socket.fire('message', { id: sent.id, error: 'not granted', notGranted: 'knowledge' });
+        await expect(pending).rejects.toThrow('NotGrantedError(knowledge): not granted');
+    });
+
+    it('a call too large for the channel is refused in words here and never sent, so the channel stays up', async () => {
+        const socket = FakeSocket.last;
+        socket.fire('open');
+        socket.fire('message', { ok: true, packageId: 'com.example.notes' });
+        const before = socket.sent.length;
+        await expect(api().request('app.storage.set', { key: 'k', value: 'x'.repeat(APP_CHANNEL_MAX_BYTES) })).rejects.toThrow(/too large/);
+        expect(socket.sent.length).toBe(before);
+    });
+
+    it('its copy of the channel limit is the same as the host one', () => {
+        expect(readFileSync(join('src', 'main', 'gapp-preload.ts'), 'utf8')).toContain(`const MAX_BYTES = ${APP_CHANNEL_MAX_BYTES};`);
+    });
+
     it('exposes window.genieApp and nothing else', () => {
         expect(exposed.map(([name]) => name)).toEqual(['genieApp']);
         expect(Object.keys(api()).sort()).toEqual(['on', 'request']);

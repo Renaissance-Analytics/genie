@@ -56,7 +56,7 @@ async function install(id: string): Promise<void> {
 beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'genie2-v4-'));
     book = await GAppBook.open({ dir: join(root, 'gapps'), keys, publisherChecksOff: () => false, catalog: () => genieCatalog(), now: () => 1000 });
-    server = new GAppServer({ book });
+    server = new GAppServer({ book, bridge: { handle: async () => ({ result: null }), onEvent: () => () => undefined } });
     port = await server.listen(0);
     await install(NOTES);
     await install(OTHER);
