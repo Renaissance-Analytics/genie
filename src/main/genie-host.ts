@@ -16,6 +16,7 @@ import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { readTynnPage } from './tynn-page-client.js';
+import type { TynnBoardPorts } from './tynn-board-client.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
@@ -916,6 +917,12 @@ async function main(): Promise<void> {
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
     });
     settings.onChange((key, _value, workspaceId) => { if (key === 'remote_access' && workspaceId === undefined) void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`)); });
+    // Opening has its own deadline; never mistake a pairing still opening for a signed-out owner.
+    const hostTynnBoard = async (): Promise<TynnBoardPorts> => {
+        const account = await tynnOpening;
+        return { signedIn: () => account.status().signedIn === true, projectFor: workspaceTynnProject, request: (path, init) => account.request(path, init) };
+    };
+    const readHostTynnPage = async (workspaceId: string, page: unknown, query: unknown) => readTynnPage(await hostTynnBoard(), workspaceId, page, query);
     const engine = new SessionEngineServer({
         token,
         build,
@@ -1022,17 +1029,7 @@ async function main(): Promise<void> {
         tynnBoard,
         tynnIssues,
         tynnFeatures,
-        tynnPages: {
-            read: async (workspaceId, page, query) => {
-                // Opening has its own deadline; never mistake a pairing still opening for a signed-out owner.
-                const account = await tynnOpening;
-                return readTynnPage({
-                    signedIn: () => account.status().signedIn === true,
-                    projectFor: workspaceTynnProject,
-                    request: (path, init) => account.request(path, init),
-                }, workspaceId, page, query);
-            },
-        },
+        tynnPages: { read: readHostTynnPage },
         files: {
             subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
             unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
@@ -1204,6 +1201,7 @@ async function main(): Promise<void> {
             stagingDirectory: () => hostScratch.directory(),
         },
         colors: workspaceColors,
+        tynnTab: { board: hostTynnBoard, readPage: readHostTynnPage },
         terminals: terminalHost,
         takeOver: (id) => takeOverHost.probe(id),
         headroom: headroomFeed,
