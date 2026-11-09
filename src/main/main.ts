@@ -213,7 +213,8 @@ import { fileExporter } from './file-export.js';
 import type { EditorBytesDeps } from './plugin-editor-bytes.js';
 import { removeSavedScrollback } from './saved-scrollback.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf } from './repo-ops-host.js';
-import { repoOpsPorts, workspaceSettingsOps } from './workspace-reads-api.js';
+import { workspaceSettingsOps } from './workspace-reads-api.js';
+import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
@@ -2216,127 +2217,28 @@ async function boot(): Promise<void> {
      * supervisor and filesystem. Add is preview-then-confirm: the picker and the classification
      * write nothing; `confirmAdd` does the writes the plan showed.
      */
-    const workspaceOps: WorkspaceOpsPorts = {
-        reverifyTrustBeforeRedock: async (id) => {
+    const lifecycleWiring: WorkspaceLifecycleWiring = {
+        registry: () => registry,
+        engine: () => host,
+        finished: () => services?.attention.finished() ?? [],
+        terminals: () => terminals,
+        supervisor: () => services?.supervisor ?? null,
+        engines: () => services?.hibernationEngines ?? null,
+        reverifyTrust: async (id) => {
             const view = await services?.workspaceTrust.refresh(id, 'redock');
             if (!view) throw new Error('workspace trust is not available yet');
         },
-        fs: {
-            // The same functions the first-commit test drives against a real folder and git (workspace-fs.ts).
-            ...nodeWorkspaceFs(),
-            // The clone's own stderr is the reason a person reads; a bare exit code is not — see git-ports.ts, measured against a real git.
-            // Signed in to GitHub, a repository of an account the app is installed on (with Contents) clones with that sign-in
-            // (core/github.ts cloneAuthFor); anything else with the person's own git credentials, as before.
-            gitClone: (url, into, branch) => (githubAccount ? githubAccount.gitClone(url, into, branch) : gitClone(url, into, undefined, branch)),
-            // A Tynn project's repositories as submodules of the envelope Genie makes for it, with the same credential.
-            // The envelope wizard's Local sources (a folder on disk) need protocol.file.allow, carried the same way (git-ports.ts).
-            gitAddSubmodule: (envelope, url, at, branch, local) => (githubAccount ? githubAccount.gitAddSubmodule(envelope, url, at, branch, local) : gitAddSubmodule(envelope, url, at, branch, undefined, local)),
-        },
-        registry: {
-            workspace: (id) => registry?.workspace(id) ?? null,
-            list: () => registry?.listWorkspaces() ?? [],
-            addWorkspace: (w) => registry!.addWorkspace(w),
-            agentsOf: (id) => registry?.agentsOf(id) ?? [],
-            setAsleep: (id, asleep) => registry!.setAsleep(id, asleep),
-            forgetWorkspace: (id) => registry!.forgetWorkspace(id),
-        },
-        host: {
-            probe: (id) => host?.probe(id) ?? null,
-            prompt: (id, text) => host?.prompt(id, text) ?? false,
-            stop: (id) => host?.stop(id) ?? false,
-        },
-        attention: { finished: () => services?.attention.finished() ?? [] },
-        terminals: { list: () => terminals?.list() ?? [], close: (id) => terminals?.close(id) ?? false },
-        supervisor: { list: () => services?.supervisor.list() ?? [], stop: (id) => services?.supervisor.stop(id) ?? false },
-        // Hibernate releases the workspace's engines, wake resumes them (parity audit #12; Genie 1 hibernation.ts step 3).
-        engines: {
-            toRelease: (id) => services?.hibernationEngines.toRelease(id) ?? [],
-            toResume: (id) => services?.hibernationEngines.toResume(id) ?? [],
-            stop: async (id) => { await services?.hibernationEngines.stop(id); },
-            start: async (id) => { await services?.hibernationEngines.start(id); },
-        },
-        now: Date.now,
-        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-        // TYNN (§6.1 add from Tynn): the host and token from settings, read at call time; the client is one fetch.
-        tynn: {
-            // The account's own host (settings, trimmed): the project.json link names the Tynn the projects came from.
-            get host() { return tynnAccount?.host() ?? 'https://tynn.ai'; },
-            // The signed-in person's projects (main/tynn-account.ts) — signed out is refused before any request.
-            projects() {
-                if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
-                return tynnAccount.projects();
-            },
-            // Creating a project from the optional link (Add workspace parity item 5; Genie 1's tynn:owner-options / tynn:create-project).
-            ownerOptions() {
-                if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
-                return tynnAccount.ownerOptions();
-            },
-            createProject(body) {
-                if (!tynnAccount) return Promise.reject(new Error('this Genie has no Tynn account'));
-                return tynnAccount.createProject(body);
-            },
-        },
+        github: () => githubAccount,
+        tynn: () => tynnAccount,
         // Settings → General "Env file name", read at each add (Add workspace parity 2b); before the services exist, `.env`.
         defaultEnvFile: () => {
             const v = services?.settings.get('default_env_file');
             return typeof v === 'string' ? v : '';
         },
-        remote: {
-            git: {
-                setOrigin: (path, url) => gitSetOrigin(path, url),
-                pushMain: (path, url) => (githubAccount ? githubAccount.gitPushMain(path, url) : gitPushMain(path, undefined)),
-            },
-            github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null),
-            // Read at call time: the Tynn account exists once main has opened it.
-            get tynn() { return tynnAccount ?? undefined; },
-            readJson: async (p) => { try { return JSON.parse(await readFileText(p, 'utf8')) as unknown; } catch { return null; } },
-        },
+        stagingDirectory: () => scratch.directory(),
     };
-    /*
-     * A NEW ENVELOPE'S REMOTE (Add workspace parity 10 + 11; agi-remote-host.ts): the window's None / GitHub / Paste URL,
-     * parsed here — never trusted. GitHub creates with the sign-in's writer; the push carries the sign-in only where the
-     * App may write (core/github.ts pushAuthFor), else the person's own credentials answer; a workspace linked to a Tynn
-     * project records the URL with declare-envelope over the signed-in Tynn session. No choice = None (an older window).
-     */
-    const remoteFromWindow = (raw: unknown): RemoteChoice | null | undefined => (raw === undefined || raw === null ? undefined : parseRemoteChoice(raw));
-    const NOT_A_REMOTE = { ok: false as const, reason: 'that is not a remote Genie understands; choose None, GitHub or Paste URL' };
-    const createFromWindow = (name: string, parent: string, raw: unknown, tynnProjectId?: string) => {
-        const remote = remoteFromWindow(raw);
-        return remote === null ? Promise.resolve(NOT_A_REMOTE) : createWorkspaceOp(workspaceOps, name, parent, remote, tynnProjectId);
-    };
-    const buildFromWindow = (raw: unknown, rawRemote: unknown) => {
-        const plan = parseEnvelopePlan(raw);
-        if (!plan) return Promise.resolve({ ok: false as const, reason: 'that is not a plan Genie can build' });
-        const remote = remoteFromWindow(rawRemote);
-        return remote === null ? Promise.resolve(NOT_A_REMOTE) : buildEnvelope(workspaceOps, envelopePorts, plan, remote);
-    };
-    // THE ENVELOPE WIZARD'S DISK (envelope-fs.ts): the same functions test/envelope-build.test.ts drives. Its git goes through
-    // workspaceOps.fs above (gitAddSubmodule, gitCommit), so a submodule from a GitHub remote clones with the sign-in, as the clone does.
-    // Fork rows (Add workspace parity item 12) fork with the GitHub sign-in, only while it is signed in.
-    const envelopePorts: EnvelopePorts = { ...nodeEnvelopePorts({ stagingBase: () => scratch.directory() }), github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null) };
-    // Import from Git's browser (item 8): what the sign-in reaches; signed out says so.
-    const githubRepos = (): Promise<RepoListing> => (githubAccount ? githubAccount.repoListing() : Promise.resolve({ status: 'signed-out' }));
-    // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
-    const repoOps = repoOpsPorts((id) => registry?.workspace(id) ?? null);
-    // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
-    // The parent is picked in the window over the host's disk (Tynn #835).
-    const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
-    // "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt): the `.agents/*` a workspace
-    // brought and has not registered, and adopting one — read from its AGENT.md, never rewritten. The sacred grant is the
-    // linked Tynn project's `sacred_agent_name`; signed out or unlinked grants nothing.
-    const adoptionPorts: AgentAdoptionPorts = {
-        workspace: (id) => registry?.workspace(id) ?? null,
-        agentsOf: (id) => registry?.agentsOf(id) ?? [],
-        listDirs: async (dir) => (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name),
-        readText: async (path) => { try { return await readFileText(path, 'utf8'); } catch { return null; } },
-        register: async (input) => { const record = await registry!.register(input); return { id: record.id, name: record.name }; },
-        sacredName: async (workspaceId) => {
-            const projectId = tynnProjectFor(workspaceId);
-            if (projectId === null || !tynnAccount) return null;
-            return sacredNameOf(await tynnAccount.projects(), projectId);
-        },
-    };
-
+    const lifecycle = workspaceLifecyclePorts(lifecycleWiring);
+    const { workspaceOps } = lifecycle;
     // The person's own answer to a provider hidden behind a batch wrapper (Tynn #577): an .exe, kept per provider.
     ipcMain.handle('genie:provider-choose-program', async (_event, raw: unknown) => {
         if (!window || typeof raw !== 'string' || !isAcpProvider(raw)) return { ok: false, reason: 'No provider named.' };
@@ -2704,9 +2606,7 @@ async function boot(): Promise<void> {
             uploads: uploadSender({ resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
-                previewAdd: (path) => previewAddWorkspace(workspaceOps, path),
-                previewAddFromGit: (url, parent) => previewGit(url, parent),
-                tynnProjects: () => listTynnProjects(workspaceOps),
+                ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry?.touch(), (id, color) => setWorkspaceColor(id, color)),
                 tynnBoard: (id, scope) => readTynnBoard(tynnBoardPorts(), id, (scope ?? {}) as BoardScope),
                 tynnPage: (id, page, query) => readWorkspaceTynnPage(id, page, query),
                 tynnBoardAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnBoardAction(tynnBoardPorts(), id, input as { action: string; ids: BoardIds; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
@@ -2716,36 +2616,8 @@ async function boot(): Promise<void> {
                 // The live tab's reads (P4 family 12): what changed since a cursor, never the whole board or queue.
                 tynnBoardChanges: (id, scope, cursor, ids) => readTynnBoardChanges(tynnBoardPorts(), id, (scope ?? {}) as BoardScope, cursor, ids),
                 tynnIssueChanges: (id, filters, cursor, ids) => readTynnIssueChanges(tynnBoardPorts(), id, filters ?? {}, cursor, ids),
-                tynnOwnerOptions: () => listTynnOwners(workspaceOps),
-                createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },
-                importedAgents: (id) => readImportedAgents(adoptionPorts, id),
-                adoptAgent: (id, name) => adoptAgent(adoptionPorts, id, name),
-                previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
-                locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
-                confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
-                create: (name, parent, remote, tynnProjectId) => createFromWindow(name, parent, remote, tynnProjectId),
-                confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
-                readSource: (path) => readSource(workspaceOps, envelopePorts, path),
-                stageFromGit: (url) => stageFromGit(workspaceOps, envelopePorts, url),
-                registerExisting: (path) => registerExisting(workspaceOps, path),
-                buildEnvelope: (raw, remote) => buildFromWindow(raw, remote),
-                discardStaged: (path) => discardStaged(envelopePorts, path),
-                githubRepos: () => githubRepos(),
-                confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
-                // The rail redraws the sleeping workspace (the IPC handler's touch, kept when it moved: P4 family 10).
-                hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()),
-                wake: (id) => wakeWorkspace(workspaceOps, id),
-                remove: (id) => removeWorkspace(workspaceOps, id),
-                listRepos: (id) => listReposOf(repoOps, id),
-                addRepo: (id, input) => addRepoTo(repoOps, id, input),
-                removeRepo: (id, slug) => removeRepoFrom(repoOps, id, slug),
-                removeRepoLock: (id, slug) => removeRepoLockOf(repoOps, id, slug),
-                commitsSince: (id, since) => commitsSinceIn(repoOps, id, since),
                 ...workspaceSettingsOps(() => services!.settings),
                 onSettingsChanged: (listener) => services!.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
-                setGoverns: (id, children) => registry!.setGoverns(id, children),
-                setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),
-                setColor: (id, color) => setWorkspaceColor(id, color),
             },
             agentOps: agentOpsApi(agentOps, () => registry?.touch(), () => host),
             features: {

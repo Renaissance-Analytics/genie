@@ -45,6 +45,9 @@ import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { TakeOverHost } from './take-over-host.js';
+import { WorkspaceColors } from './workspace-color-host.js';
+import { nodeEnvelopeFs } from './envelope-sites-host.js';
+import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
@@ -1125,6 +1128,9 @@ async function main(): Promise<void> {
      * the workspaces' files. The remote host uses it for the phone's methods only while no window is connected.
      */
     // Its writes go the way a window's do (AgentStoresService), so genie-host's own model and every window follow them.
+    let githubNow: GithubAccount | null = null;
+    void githubOpening.then((account) => { githubNow = account; }, () => {});
+    const hostScratch = scratchArea(home);
     const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
@@ -1133,6 +1139,8 @@ async function main(): Promise<void> {
     phoneRegistry.setSafeMode(() => safeMode.view());
     phoneRegistry.setHangNotice(() => crashState.view().notice);
     phoneRegistry.setObservedProbe((id) => takeOverHost.probe(id));
+    const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
+    phoneRegistry.setWorkspaceColorer((path) => workspaceColors.colorOf(path));
     const phoneAgents = () => Object.fromEntries(hostRegistry.listAgents().map((a) => [a.id as string, { name: a.name, workspaceId: a.workspaceId }]));
     phoneRegistry.setDeckSource(() => assembleDeckItems({
         workspaces: hostRegistry.listWorkspaces(),
@@ -1181,6 +1189,20 @@ async function main(): Promise<void> {
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
         windowConnected: () => engine.newestLocalWindow() !== null,
+        workspaceLifecycle: {
+            terminals: () => terminalHost,
+            supervisor: () => processSupervisor,
+            engines: () => hostingStack?.hibernationEngines ?? null,
+            reverifyTrust: async (id) => {
+                if (!hostingStack) throw new Error('workspace trust is not available yet');
+                await hostingStack.trust.refresh(id, 'redock');
+            },
+            github: () => githubNow,
+            tynn: () => tynnAccountNow,
+            defaultEnvFile: () => { const v = settings.snapshot().default_env_file; return typeof v === 'string' ? v : ''; },
+            stagingDirectory: () => hostScratch.directory(),
+        },
+        colors: workspaceColors,
         settings,
         terminals: terminalHost,
         takeOver: (id) => takeOverHost.probe(id),

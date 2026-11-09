@@ -8,8 +8,8 @@ import { restartAgent, SettingApplier } from './agent-ops-host.js';
 import { agentShells } from '../core/agent-shells.js';
 import type { Finished } from './attention-store.js';
 import { answerDeck, type DeckAnswerPorts } from './deck-answer.js';
-import { commitsSinceIn, listReposOf } from './repo-ops-host.js';
-import { repoOpsPorts, workspaceSettingsOps } from './workspace-reads-api.js';
+import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycleWiring } from './workspace-lifecycle-api.js';
+import { workspaceSettingsOps } from './workspace-reads-api.js';
 import { buildHostApi, type HostApiDeps } from './host-api.js';
 import type { InboxMessage } from './inbox-store.js';
 import type { Registry } from './registry.js';
@@ -53,8 +53,17 @@ export const HOST_TERMINAL_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMe
 /** A workspace's settings and repositories, read (Tynn #553, P5d.5d). Changing the repositories stays the window's. */
 export const HOST_WORKSPACE_READ_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>(['workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.listRepos', 'workspaces.commitsSince']);
 
+/** Adding, sleeping and changing a workspace (Tynn #553, P5d.5e). The Tynn tab stays the window's for now. */
+export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
+    'workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource',
+    'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects',
+    'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn',
+    'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.locateRepo',
+    'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor',
+]);
+
 /** Every method genie-host answers itself while no window is connected. */
-export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_WORKSPACE_READ_METHODS]);
+export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([...PHONE_METHODS, ...PILOT_AGENT_METHODS, ...HOST_FEED_METHODS, ...HOST_TERMINAL_METHODS, ...HOST_WORKSPACE_READ_METHODS, ...HOST_WORKSPACE_LIFECYCLE_METHODS]);
 
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
@@ -89,6 +98,10 @@ export interface HostAlonePorts {
     readonly takeOver: NonNullable<Parameters<typeof agentDetailFor>[0]['takeOver']>;
     /** genie-host's own settings store. */
     readonly settings: Parameters<typeof workspaceSettingsOps>[0] extends () => infer S ? S : never;
+    /** What genie-host holds for a workspace's lifecycle: its supervisor, engines, trust, accounts. */
+    readonly workspaceLifecycle: Omit<WorkspaceLifecycleWiring, 'registry' | 'engine' | 'finished'>;
+    /** A workspace's colour, written to its project.json. */
+    readonly colors: { set(path: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }> };
     readonly updates?: HostApiDeps['updates'];
     readonly schedule?: HostApiDeps['schedule'];
 }
@@ -126,7 +139,12 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         },
         ...(ports.schedule ? { schedule: (fn: () => void, ms: number) => { ports.schedule!(ms, fn); } } : {}),
     });
-    const repoOps = repoOpsPorts((id) => registry.workspace(id));
+    const lifecycleWiring: WorkspaceLifecycleWiring = { ...ports.workspaceLifecycle, registry: () => registry, engine: ports.engine, finished: () => ports.attention.finished() };
+    const lifecycle = workspaceLifecyclePorts(lifecycleWiring);
+    const setColor = async (id: string, color: string) => {
+        const workspace = registry.workspace(id);
+        return workspace ? ports.colors.set(workspace.path, color) : { ok: false as const, reason: 'name a workspace' };
+    };
     const startOnDemand = (record: Parameters<HostApiDeps['cwdFor']>[0]) => startForWork({
         probe: (id) => ports.engine()?.probe(id) ?? null,
         start: (r, cwd) => engine().start(r, cwd),
@@ -169,8 +187,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         workspaceOps: windowOnly<HostApiDeps['workspaceOps']>('workspaces', {
             onSettingsChanged: () => () => {},
             ...workspaceSettingsOps(() => ports.settings),
-            listRepos: (id) => listReposOf(repoOps, id),
-            commitsSince: (id, since) => commitsSinceIn(repoOps, id, since),
+            ...workspaceLifecycleApi(lifecycle, lifecycleWiring, () => registry.touch(), setColor),
         }),
         agentOps: agentOpsApi(agentOps, () => registry.touch(), () => ports.engine()),
         features: windowOnly<HostApiDeps['features']>('features', {
