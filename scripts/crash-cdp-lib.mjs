@@ -202,7 +202,7 @@ export async function ticksOf(cdp, agentId) {
     return { running: detail.running === true, max: ticks.size === 0 ? 0 : Math.max(...ticks.keys()), pids, last: ticks.size === 0 ? null : ticks.get(Math.max(...ticks.keys())) };
 }
 /** Why an agent is or is not running, as the host says: its session, a start's refusal, the provider's last stderr. */
-export const whyOf = (cdp, agentId) => cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ session: d?.session ? { running: d.session.running, turnState: d.session.turnState, failure: d.session.failure ?? null } : null, refusal: d?.refusal ?? null, log: (d?.log ?? []).slice(-4) }))`, 15_000).catch((e) => `(unread: ${e?.message ?? e})`);
+export const whyOf = (cdp, agentId) => cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ session: d?.session ? { running: d.session.running, starting: d.session.starting ?? null, inTurn: d.session.inTurn ?? null, turnState: d.session.turnState, failure: d.session.failure ?? null } : null, refusal: d?.refusal ?? null, log: (d?.log ?? []).slice(-4) }))`, 15_000).catch((e) => `(unread: ${e?.message ?? e})`);
 export const running = (cdp, agentId) => cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => d?.session?.running === true)`, 15_000);
 /** Two codex agents, each started and prompted, streaming ticks (mid-turn). */
 export async function twoStreamingAgents(cdp, tag) {
@@ -218,7 +218,11 @@ export async function twoStreamingAgents(cdp, tag) {
     }
     for (const a of agents) {
         await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(a.id)}, "graceful"); true`, 15_000);
-        check(await until(() => running(cdp, a.id), 30_000) === true, `${a.name}'s session is running (the host says so)`);
+        // PER SECOND, what the window hears of this session (Tynn #558); said only if it does not come up, beside the host's `agent start` lines.
+        const timeline = [];
+        const startedAt = Date.now();
+        const up = await until(async () => { timeline.push(`${String(Math.round((Date.now() - startedAt) / 1000)).padStart(3)}s ${await whyOf(cdp, a.id)}`); return running(cdp, a.id); }, 30_000, 1_000);
+        if (!check(up === true, `${a.name}'s session is running (the host says so)`)) console.log(`  ${a.name}, each second:\n    ${timeline.map((l) => l.slice(0, 300)).join('\n    ')}`);
         await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(a.id)}, 'Stream ticks until stopped.')`, 15_000);
     }
     for (const a of agents) {

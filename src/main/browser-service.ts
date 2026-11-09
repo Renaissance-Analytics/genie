@@ -29,12 +29,31 @@ export interface BrowserPage {
 
 export type BrowserActivation = 'user-gesture' | 'background';
 
+/** Another workstation's browser window: its door here, and which sites it may show (one window and session per key). */
+export interface BrowserRemote {
+    readonly key: string;
+    readonly title: string;
+    readonly port: number;
+    readonly ca: string | null;
+    readonly hosts: readonly string[];
+}
+
+function browserRemote(raw: unknown): BrowserRemote {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<Record<keyof BrowserRemote, unknown>>;
+    const fine = typeof r.key === 'string' && r.key.startsWith('relay:') && typeof r.title === 'string' && typeof r.port === 'number'
+        && (typeof r.ca === 'string' || r.ca === null) && Array.isArray(r.hosts) && r.hosts.every((h) => typeof h === 'string');
+    if (!fine) throw new Error('that is not another workstation to browse');
+    return { key: r.key as string, title: r.title as string, port: r.port as number, ca: r.ca as string | null, hosts: r.hosts as string[] };
+}
+
 export type BrowserEvent =
     | { readonly kind: 'facts'; readonly facts: BrowserFacts }
     /** Whether a window holds the front door. With none, `.gen` pages cannot load until P5 moves the door to the host. */
     | { readonly kind: 'door'; readonly up: boolean }
     /** `url` null: the browser with its first site. */
-    | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation }
+    | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation; readonly remote?: BrowserRemote }
+    /** Another workstation's door moved, or learned that host's CA: its window's session reads it live. */
+    | { readonly kind: 'remoteVia'; readonly key: string; readonly port: number; readonly ca: string | null }
     | { readonly kind: 'pages'; readonly pages: readonly BrowserPage[] }
     /** A panel's site, alone in its own window (the owner: "a single site ux"). */
     | { readonly kind: 'openSingle'; readonly panelKey: string; readonly url: string }
@@ -118,7 +137,8 @@ export class BrowserService {
             case 'open': {
                 if (this.#ports.unavailable !== undefined) throw new Error(this.#ports.unavailable);
                 if (typeof args[0] !== 'string' && args[0] !== null && args[0] !== undefined) throw new Error('an address to open has to be text');
-                const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const };
+                const remote = args[2] === undefined ? undefined : browserRemote(args[2]);
+                const event = { kind: 'open' as const, url: args[0] ?? null, activation: args[1] === 'user-gesture' ? 'user-gesture' as const : 'background' as const, ...(remote ? { remote } : {}) };
                 if (this.#browser === null) {
                     this.#held.push(event);
                     if (this.#held.length > HELD_LIMIT) this.#held.shift();
@@ -127,6 +147,13 @@ export class BrowserService {
                 }
                 this.#emit(event);
                 return { browserUp: true };
+            }
+            case 'remoteVia': {
+                const [key, port, ca] = args;
+                if (typeof key !== 'string' || typeof port !== 'number' || (typeof ca !== 'string' && ca !== null)) throw new Error('that is not a door to another workstation');
+                if (this.#browser === null) this.#held = this.#held.map((e) => (e.kind === 'open' && e.remote?.key === key ? { ...e, remote: { ...e.remote, port, ca } } : e));
+                else this.#emit({ kind: 'remoteVia', key, port, ca });
+                return null;
             }
             case 'register': {
                 if (this.#browser === null) this.#emit({ kind: 'browserUp', up: true });

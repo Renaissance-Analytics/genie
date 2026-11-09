@@ -7,6 +7,12 @@ export interface LocalDoorIpc {
     removeListener(channel: string, listener: (event: IpcMainEvent, ...args: unknown[]) => void): unknown;
 }
 export type LocalDoorContents = Pick<WebContents, 'id' | 'mainFrame' | 'isDestroyed' | 'on' | 'removeListener'>;
+export interface LocalDoorOptions {
+    /** Every connection that ends, and why. The renderer is told too, but nothing there outlives the window. */
+    readonly onClosed?: (reason: string) => void;
+    /** Which window a connection is decides what it may do (Tynn #578): main's own record, read when the page connects. */
+    readonly windowKind?: (contents: LocalDoorContents) => 'main' | 'remote';
+}
 export interface LocalProtocolDoor extends ServerTransport {
     admit(contents: LocalDoorContents): void;
     dispose(): void;
@@ -20,11 +26,13 @@ interface WindowConnection {
 interface AdmittedWindow {
     readonly contents: LocalDoorContents;
     connection: WindowConnection | null;
+    /** The connection live when a top-level navigation started: it ends only if that navigation lands. */
+    navigating: WindowConnection | null;
     detach(): void;
 }
 
 /** Main owns admission and the local proof. The handle routes frames within one window; it grants no access. */
-export function localProtocolDoor(ipcMain: LocalDoorIpc, options: { windowKind?: (contents: LocalDoorContents) => 'main' | 'remote' } = {}): LocalProtocolDoor {
+export function localProtocolDoor(ipcMain: LocalDoorIpc, options: LocalDoorOptions = {}): LocalProtocolDoor {
     const admitted = new Map<LocalDoorContents, AdmittedWindow>();
     const listeners = new Set<(connection: ServerConnection) => void>();
     let disposed = false;
@@ -52,6 +60,7 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc, options: { windowKind?:
                 if (closed) return;
                 closed = true;
                 if (entry.connection === current) entry.connection = null;
+                options.onClosed?.(reason);
                 if (refused) reply(frame, 'frame', handle, JSON.stringify({ kind: 'refused', reason }));
                 reply(frame, 'closed', handle, reason);
                 for (const listener of closes) listener();
@@ -112,21 +121,31 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc, options: { windowKind?:
         onConnection: (listener) => { if (!disposed) listeners.add(listener); return () => { listeners.delete(listener); }; },
         admit: (contents) => {
             if (disposed || contents.isDestroyed() || admitted.has(contents)) return;
-            const entry: AdmittedWindow = { contents, connection: null, detach: () => {} };
+            const entry: AdmittedWindow = { contents, connection: null, navigating: null, detach: () => {} };
             const gone = () => { entry.connection?.end('the local window renderer ended'); };
             const navigate = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
-                if (details.isMainFrame && !details.isSameDocument) entry.connection?.end('the local window reloaded or navigated');
+                // STARTED IS NOT LANDED (Tynn #590). This fires before the window's link guard refuses a navigation, so a click
+                // on an ordinary web link, which opens in the browser and leaves this page where it is, ended a live connection.
+                if (details.isMainFrame && !details.isSameDocument) entry.navigating = entry.connection;
+            };
+            const landed = () => {
+                const started = entry.navigating;
+                entry.navigating = null;
+                // A connection opened since the navigation started is the new page's.
+                if (started && started === entry.connection) started.end('the local window reloaded or navigated');
             };
             const destroyed = () => { gone(); entry.detach(); admitted.delete(contents); };
             entry.detach = () => {
                 contents.removeListener('destroyed', destroyed);
                 contents.removeListener('render-process-gone', gone);
                 contents.removeListener('did-start-navigation', navigate);
+                contents.removeListener('did-navigate', landed);
             };
             admitted.set(contents, entry);
             contents.on('destroyed', destroyed);
             contents.on('render-process-gone', gone);
             contents.on('did-start-navigation', navigate);
+            contents.on('did-navigate', landed);
         },
         dispose: () => {
             if (disposed) return;

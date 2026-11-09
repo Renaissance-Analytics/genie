@@ -605,6 +605,20 @@ try {
             return `app connection ${w.connectionId}; actual menu check; forbidden frames=0; permitted ${JSON.stringify(observed)}`;
         } finally { await main.evaluate('window.__doorUpdateOff?.(); delete window.__doorUpdateOff; delete window.__doorUpdateStates; true'); }
     });
+    await row(12, 'a link the window refuses to follow costs the window nothing (Tynn #590)', async () => {
+        // A plain anchor, as a link in rendered Markdown is: the window's guard refuses the navigation and the page stays.
+        const w = await welcome(main), url = await main.evaluate('location.href');
+        demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app owns its ready connection before the click');
+        const start = await main.evaluate('window.__doorCdp.total');
+        await main.evaluate(`(()=>{const a=document.createElement('a');a.href='https://blocked.invalid/refused-by-genie';a.textContent='link';document.body.append(a);a.click();a.remove();return true})()`);
+        await sleep(1_500);
+        demand(await main.evaluate('location.href') === url, 'the page stayed where it was');
+        const closed = await main.evaluate(`window.__doorCdp.frames.filter(f=>f.seq>${start}&&f.action==='closed').map(f=>f.reason)`);
+        demand(closed.length === 0, `the door closed this window's connection: ${JSON.stringify(closed)}`);
+        demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'the app connection stayed ready');
+        demand((await welcome(main)).connectionId === w.connectionId, 'the same connection answers');
+        return `app connection ${w.connectionId} unchanged after a refused navigation`;
+    });
 } catch (error) {
     if (!reports.some((r) => r.status === 'FAIL')) result(Number.parseInt(phase) || 1, error instanceof Unmeasured ? 'UNMEASURED' : 'FAIL', error.message);
 }

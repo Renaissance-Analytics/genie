@@ -12,8 +12,7 @@ export type IssueWatchQueue = Pick<IssueWatchDelivery, 'onQueued' | 'due' | 'set
  * `push` starts a stopped agent through the caller's wake, under the refusals a person's start has; `next-turn` waits
  * for it to be running. Not `cumulative`: each notice names only what is new.
  *
- * genie-host wires it inside its mail wake (host-mail-wake.ts), with that wake; the window only on the emergency no-host
- * path (issue-watch-emergency.ts) until P6.
+ * genie-host wires it inside its mail wake (host-mail-wake.ts), with that wake.
  */
 export function wireIssueWatchPush(p: {
     readonly delivery: IssueWatchQueue;

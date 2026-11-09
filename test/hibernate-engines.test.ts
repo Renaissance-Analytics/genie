@@ -92,8 +92,10 @@ describe('Genie wires it', () => {
         expect(hosting).toMatch(/reconcileEngines\(\s*\{[\s\S]{0,1500}?asleepOnly: \(i\) => asleepOnlyEngine\(i,/);
     });
     it('the workspace ops get the engines port from the composition (main.ts)', () => {
-        const ops = main.slice(main.indexOf('const workspaceOps: WorkspaceOpsPorts = {'));
-        expect(ops).toMatch(/^\s*engines: \{[\s\S]{0,800}?services\?\.hibernationEngines\.toRelease\([\s\S]{0,800}?services\?\.hibernationEngines\.toResume\(/m);
+        expect(main).toMatch(/engines: \(\) => services\?\.hibernationEngines \?\? null/);
+        const wiring = readFileSync(new URL('../src/main/workspace-lifecycle-api.ts', import.meta.url), 'utf8');
+        expect(wiring).toMatch(/toRelease: \(id\) => w\.engines\(\)\?\.toRelease\(id\)/);
+        expect(wiring).toMatch(/toResume: \(id\) => w\.engines\(\)\?\.toResume\(id\)/);
         expect(hosting).toMatch(/hibernationEngines: \{[\s\S]{0,1500}?enginesToRelease\([\s\S]{0,1500}?enginesToResume\(/);
     });
 });
