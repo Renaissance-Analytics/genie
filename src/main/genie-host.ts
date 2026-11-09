@@ -21,7 +21,9 @@ import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
 import { crashHeader, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
-import { SessionHost } from './session-host.js';
+import { providerBinary, realListModels, SessionHost } from './session-host.js';
+import { HostRegistryStore } from './agent-stores-replica.js';
+import { ProviderModelCache } from '../core/provider-models.js';
 import { TrustVerdicts } from './trust-verdict.js';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
@@ -1088,7 +1090,8 @@ async function main(): Promise<void> {
      * over a registry on this host's own registry store, this session host, its attention, inbox and approval stores, and
      * the workspaces' files. The remote host uses it for the phone's methods only while no window is connected.
      */
-    const phoneRegistry = new Registry(registryStore);
+    // Its writes go the way a window's do (AgentStoresService), so genie-host's own model and every window follow them.
+    const phoneRegistry = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     phoneRegistry.setProbe((id) => host.probe(id));
@@ -1141,6 +1144,8 @@ async function main(): Promise<void> {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
+        models: new ProviderModelCache(realListModels),
+        providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
         attention: own.attention,
         approvals,
         inbox: own.inbox,
