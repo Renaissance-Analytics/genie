@@ -24,8 +24,8 @@ const onWindows = <T>(run: () => Promise<T>): Promise<T> => {
 };
 
 describe('prism-acp 0.41, shipped and signed', () => {
-    it('pins 0.41.0', () => {
-        expect((JSON.parse(read('package.json')) as { dependencies: Record<string, string> }).dependencies['@particle-academy/prism-acp']).toBe('0.41.0');
+    it('pins 0.41.1, signed by Renaissance Analytics', () => {
+        expect((JSON.parse(read('package.json')) as { dependencies: Record<string, string> }).dependencies['@particle-academy/prism-acp']).toBe('0.41.1');
     });
 
     it('unpacks the prebuilt supervisors from the asar (the package picks by the machine, so an x64 Genie on ARM64 needs both)', () => {
