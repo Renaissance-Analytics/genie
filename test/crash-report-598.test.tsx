@@ -49,7 +49,7 @@ describe('a note redaction changes', () => {
         const posted: Array<Record<string, unknown>> = [];
         const reports = host(posted);
         const text = reports.draft().text;
-        const first = await reports.send(text, NOTE) as { cleanedNotes: string };
+        const first = await reports.send(text, NOTE) as unknown as { cleanedNotes: string };
         expect(await reports.send(text, first.cleanedNotes)).toEqual({ ok: true, issueUrl: 'https://github.test/1' });
         expect(posted).toHaveLength(1);
     });
