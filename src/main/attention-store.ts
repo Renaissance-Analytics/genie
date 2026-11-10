@@ -497,7 +497,7 @@ export class AttentionStore {
         // How it left is known the moment it leaves the queue — before the write — so nothing can look in between.
         this.#keep(q, 'answered', answer.selections, answer.notes ?? [], answer.note.trim());
         this.#left(questionId, { kind: 'answered', answer });
-        // BREAK PROBE (Tynn #600): the decision is not written. Reversed in the next commit.
+        await this.#flush();
 
         // Each question, what was chosen, and — right under it — that question's own note. "(no option chosen)" says a
         // note answered it instead; the overall Note line is only there when an overall note was given.
@@ -530,7 +530,7 @@ export class AttentionStore {
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
         this.#keep(q, 'dismissed', [], notes, '');
         this.#left(questionId, { kind: 'dismissed', notes });
-        // BREAK PROBE (Tynn #600): the decision is not written. Reversed in the next commit.
+        await this.#flush();
         await this.#mailDismissed(q, notes);
     }
 

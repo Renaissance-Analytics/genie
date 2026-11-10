@@ -60,6 +60,8 @@ function ports(e: HostAloneEngine, over: Partial<HostAlonePorts> = {}): HostAlon
             finished: () => [{ id: 'fin_1', agentId: atlas.id, agentName: 'atlas', handoff: 'shipped the fix; next, the docs', at: '2026-11-08T20:00:00Z', seen: false }],
             markSeen: (id) => { calls.push(`markSeen ${id}`); },
             answer: async (id, answer) => { calls.push(`answer ${id} ${JSON.stringify(answer.selections)}`); return true as never; },
+            // The question the Deck answers is still waiting (deck-answer.ts checks, Tynn #600).
+            pending: () => [{ id: 'q_1' }] as never,
             lists: { done: async () => true },
         },
         approvals: { resolve: () => true },

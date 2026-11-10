@@ -61,6 +61,7 @@ import { agentShells } from '../core/agent-shells.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
+import { deckRefusalLine } from '../core/deck-refusal.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation, type ActivationRequest } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
@@ -3200,7 +3201,13 @@ async function boot(): Promise<void> {
      * a host path. A window's action also moves the window's own state and its browser pane; another device's never did.
      */
     async function runFeatureAction(action: FeatureAction, context: CallContext | undefined): Promise<FeatureData> {
-        const data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOriginOf(context, hostPicks));
+        let data: FeatureData;
+        try {
+            data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOriginOf(context, hostPicks));
+        } catch (error) {
+            if (action.kind.startsWith('deck.')) lifecycleLog(deckRefusalLine(action, error));
+            throw error;
+        }
         if (!isWindowCaller(context)) return data;
         if (action.kind.startsWith('integrations.tynn')) featureState = { ...featureState, tynnSignInUrl: data.integrations?.tynn.signInUrl ?? null, tynnMessage: data.integrations?.tynn.message ?? null };
         if (action.kind.startsWith('toolchain.')) featureState = { ...featureState, ...toolchainStateFrom(data.toolchain), toolchainBusy: null };
