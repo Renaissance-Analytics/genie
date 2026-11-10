@@ -155,7 +155,8 @@ describe('the release feed says which host it carries', () => {
 
     it('both release jobs write it before their feed is uploaded', () => {
         const wf = readFileSync('.github/workflows/release.yml', 'utf8');
-        expect(wf).toMatch(/node scripts\/feed-host-identity\.mjs release\/latest\.yml[\s\S]*gh release upload[^\n]*release\/latest\.yml/);
+        // The Windows upload's file list continues on its next line (a `\` continuation): to the end of that command.
+        expect(wf).toMatch(/node scripts\/feed-host-identity\.mjs release\/latest\.yml[\s\S]*gh release upload[\s\S]*?release\/latest\.yml --clobber/);
         expect(wf).toMatch(/node scripts\/feed-host-identity\.mjs release\/latest-linux\.yml[\s\S]*gh release upload[^\n]*release\/latest-linux\.yml/);
     });
 
