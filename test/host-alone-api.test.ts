@@ -7,6 +7,26 @@ import { hostAloneApi, PHONE_METHODS, type HostAloneEngine, type HostAlonePorts 
 import { hostRemoteApi } from '../src/main/remote-access-host.js';
 import { Registry } from '../src/main/registry.js';
 import { Store } from '../src/main/store.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
+import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
+import { DeviceStore } from '../src/main/remote-devices.js';
+import { RemoteHost } from '../src/main/remote-host.js';
+import { connectRemote } from '../src/renderer/remote-bridge.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
+
+/** genie-host's terminals are a CLASS with private state (main/terminal-host.ts), never a plain object of functions. */
+class PrivateTerminals {
+    readonly #data = new Set<(id: string, data: string) => void>();
+    readonly #exit = new Set<(id: string, code: number) => void>();
+    attach() { return null; }
+    write() { return true; }
+    resize() { return true; }
+    close() { return true; }
+    list() { return []; }
+    onData(listener: (id: string, data: string) => void) { this.#data.add(listener); return () => { this.#data.delete(listener); }; }
+    onExit(listener: (id: string, code: number) => void) { this.#exit.add(listener); return () => { this.#exit.delete(listener); }; }
+    emit(id: string, data: string) { for (const l of this.#data) l(id, data); }
+}
 
 /*
  * THE PHONE'S METHODS, ANSWERED BY GENIE-HOST WITH EVERY WINDOW CLOSED (Tynn #551, host split P5d.2). genie-host runs the
@@ -180,5 +200,37 @@ describe('the remote host uses it only while no window is connected', () => {
         windowOpen = false;
         emitAlone('snapshot', { n: 2 });
         expect(seen).toEqual(['snapshot']);
+    });
+});
+
+describe('a Pilot connecting to a Drone with no window open (beta.61 blocker, Azure pair gp-11102138)', () => {
+    it('genie-host\'s own terminals are listened to without losing their class: no "private member" throw', () => {
+        const api = hostAloneApi(ports(engine(true), { terminals: new PrivateTerminals() as never }));
+        const off = api.onEvent(() => {});
+        off();
+    });
+
+    it('a Pilot pairs over the wire, as its window does, and hears the Drone\'s events', async () => {
+        const terminals = new PrivateTerminals();
+        const devices = await DeviceStore.open(dir, { now: Date.now, random: () => 'pilot-token' });
+        let accept!: (c: ServerConnection) => void;
+        const drone = new RemoteHost({
+            api: hostRemoteApi({ hostName: 'drone', own: {}, window: { connected: () => false, invoke: async () => null }, alone: hostAloneApi(ports(engine(true), { terminals: terminals as never })) }),
+            hostName: 'drone', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now, random: () => 0.482913 }), confirm: allowEveryPairing,
+            transport: { onConnection: (l) => { accept = l; return () => {}; } },
+        });
+        drone.issuePin();
+        const pair = inMemoryPair();
+        accept(pair.server);
+        const pilot = connectRemote(pair.client, { kind: 'pin', code: '482913', label: 'pilot' }, 'pilot', { drive: true });
+        expect(await pilot.ready).toEqual({ ok: true });
+        expect(pilot.state()).toMatchObject({ connected: true, host: 'drone' });
+        const heard: unknown[] = [];
+        const off = pilot.bridge.terminals.onData((id: string, data: string) => { heard.push([id, data]); });
+        terminals.emit('term_1', 'hello');
+        await vi.waitFor(() => expect(heard.length).toBeGreaterThan(0));
+        off();
+        pilot.close();
+        await devices.flushed();
     });
 });

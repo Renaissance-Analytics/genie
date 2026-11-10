@@ -117,7 +117,13 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
     const needsWindow = (what: string) => `${hostName} answers ${what} only while a Genie window is open there: open Genie on ${hostName}`;
     /** A dependency only a window has: every member refuses, except the subscriptions given (which the events wire up). */
     const windowOnly = <T extends object>(what: string, given: Partial<T> = {}): T => new Proxy(given, {
-        get: (target, key) => (key in target ? (target as Record<string | symbol, unknown>)[key] : typeof key === 'string' ? () => { throw new Error(needsWindow(`${what}.${key}`)); } : undefined),
+        // A given method keeps its object (beta.61 blocker): genie-host's terminals are a class with private state, and a
+        // method called on the proxy instead read `#dataListeners` from it and threw, so a Pilot's hello heard nothing.
+        get: (target, key) => {
+            if (!(key in target)) return typeof key === 'string' ? () => { throw new Error(needsWindow(`${what}.${key}`)); } : undefined;
+            const value = (target as Record<string | symbol, unknown>)[key];
+            return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+        },
     }) as T;
     const engine = (): HostAloneEngine => {
         const e = ports.engine();
