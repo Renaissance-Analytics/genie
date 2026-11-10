@@ -21,13 +21,25 @@ export function remoteAccess(input: { listener: RemoteAccessListener; enabled: (
         }
         onChange();
     };
+    const restart = async (): Promise<void> => {
+        if (!enabled()) { await apply(); return; }
+        await listener.stop();
+        await listener.start();
+        onChange();
+    };
+    /*
+     * ONE AT A TIME (Azure pair gp-11102138, beta.61): the window's apply and genie-host's own setting watcher came together
+     * while a start was still asking Tailscale for its cert, both saw no listener yet, and the second bound the same port
+     * (`listen EADDRINUSE`). Each waits for the one before; the second then sees the listener up and starts nothing.
+     */
+    let queue: Promise<void> = Promise.resolve();
+    const inTurn = (step: () => Promise<void>): Promise<void> => {
+        const run = queue.then(step);
+        queue = run.catch(() => {});
+        return run;
+    };
     return {
-        apply,
-        restart: async (): Promise<void> => {
-            if (!enabled()) { await apply(); return; }
-            await listener.stop();
-            await listener.start();
-            onChange();
-        },
+        apply: () => inTurn(apply),
+        restart: () => inTurn(restart),
     };
 }

@@ -455,7 +455,7 @@ export const AGENTINBOX_TOOL: BuiltinTool = declareBuiltinTool(
 );
 export const LISTS_TOOL: BuiltinTool = declareBuiltinTool(
     'lists',
-    'Two lists per workspace: your own checklist (max 10, filed under your name, rides every imDone) and things only a PERSON can do (max 5, shared, shows who asked). A person item appears in the person’s Deck: write it as the whole instruction — every step in order, with the exact names, values, URLs and where to click; never a pointer to a file, a doc or a script to go and read; include full instructions to the user, don’t leave any step details out. Both refuse when full. A QUESTION is never a list item — use ForceTheQuestion.',
+    'Two lists per workspace: your own checklist (max 10, filed under your name, rides every imDone) and things only a PERSON can do (max 5, shared, shows who asked). A person item appears in the person’s Deck: its first line is a short title (what to do, in a few words), then each step on its own numbered line (1., 2., 3.); write it as the whole instruction — every step in order, with the exact names, values, URLs and where to click; never a pointer to a file, a doc or a script to go and read; include full instructions to the user, don’t leave any step details out. Both refuse when full. A QUESTION is never a list item — use ForceTheQuestion.',
     {
         type: 'object',
         properties: {

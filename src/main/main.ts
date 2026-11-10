@@ -61,6 +61,7 @@ import { agentShells } from '../core/agent-shells.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
+import { deckRefusalLine } from '../core/deck-refusal.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation, type ActivationRequest } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
@@ -1292,9 +1293,22 @@ const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); retur
 let browserPane: BrowserPane | null = null;
 /** Installed apps' windows (Tynn #595): this process opens them, on sessions the host mints. */
 let gappWindowsNow: ReturnType<typeof gappWindowsElectron> | null = null;
+/** Who to tell when the host's GApp book changes (Tynn #596): this window's pages, through whichever link is up. */
+const gappsChangedListeners = new Set<() => void>();
+let offGappsChanged: (() => void) | null = null;
+function followGappsChanged(client: { onGappsChanged(listener: () => void): () => void }): void {
+    const tell = () => { for (const listener of [...gappsChangedListeners]) listener(); };
+    offGappsChanged?.();
+    offGappsChanged = client.onGappsChanged(tell);
+    tell(); // A new link may have missed changes.
+}
 function withGappWindows(client: { gapps(): GAppBookApi } | undefined): GAppsApi | null {
     if (!client) return null;
-    return { ...client.gapps(), open: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id); } };
+    return {
+        ...client.gapps(),
+        open: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id); },
+        onChanged: (listener) => { gappsChangedListeners.add(listener); return () => { gappsChangedListeners.delete(listener); }; },
+    };
 }
 /**
  * THE GENIE BROWSER IS ITS OWN PROCESS (the host split, P2b), asked through the host, which starts it. This window builds no
@@ -1536,6 +1550,7 @@ async function boot(): Promise<void> {
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
+                followGappsChanged(client);
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
@@ -2318,6 +2333,7 @@ async function boot(): Promise<void> {
         remoteApi: (remoteApiNow = buildHostApi({
             marketplace: () => agentEngineLink?.client.marketplace() ?? null,
             gapps: () => withGappWindows(agentEngineLink?.client),
+            gappsChanged: { subscribe: (listener) => { gappsChangedListeners.add(listener); return () => { gappsChangedListeners.delete(listener); }; } },
             // Following the Tynn tab, by subscription (P4 family 12, Tynn #561).
             tynnWatch: tynnWatchPort,
             localTerminals: createNativeTerminalPort({
@@ -3200,7 +3216,13 @@ async function boot(): Promise<void> {
      * a host path. A window's action also moves the window's own state and its browser pane; another device's never did.
      */
     async function runFeatureAction(action: FeatureAction, context: CallContext | undefined): Promise<FeatureData> {
-        const data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOriginOf(context, hostPicks));
+        let data: FeatureData;
+        try {
+            data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOriginOf(context, hostPicks));
+        } catch (error) {
+            if (action.kind.startsWith('deck.')) lifecycleLog(deckRefusalLine(action, error));
+            throw error;
+        }
         if (!isWindowCaller(context)) return data;
         if (action.kind.startsWith('integrations.tynn')) featureState = { ...featureState, tynnSignInUrl: data.integrations?.tynn.signInUrl ?? null, tynnMessage: data.integrations?.tynn.message ?? null };
         if (action.kind.startsWith('toolchain.')) featureState = { ...featureState, ...toolchainStateFrom(data.toolchain), toolchainBusy: null };

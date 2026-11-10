@@ -434,6 +434,12 @@ export function Shell({
     const updateState = useUpdateState(updates);
     // RESTART TO INSTALL (genie#1201): the click shows the restart screen at once, before main has answered; main's
     // `installing` progress fills it in. A refused or failed install brings the window back.
+    // A DECK ACTION IS NEVER A SILENT NO-OP (Tynn #600): a refused dismiss is said on its item, "Dismiss all" under the header.
+    const [deckRefusal, setDeckRefusal] = useState<{ itemId: string; reason: string } | null>(null);
+    const deckAct = (itemId: string, action: FeatureAction): void => {
+        setDeckRefusal(null);
+        void Promise.resolve(onFeature(action)).then((outcome) => { if (outcome && !outcome.ok) setDeckRefusal({ itemId, reason: outcome.reason }); });
+    };
     const [installAsked, setInstallAsked] = useState(false);
     const askInstall = (): void => {
         setInstallAsked(true);
@@ -532,6 +538,8 @@ export function Shell({
         // A list the host could not give leaves what was shown, or shows none rather than loading for ever.
         try { setGappList(await gapps.list()); } catch { setGappList((shown) => shown ?? []); }
     }, [gapps]);
+    // Live across windows (Tynn #596): the book changed, here or in another window, so read it again.
+    useEffect(() => (gapps ? gapps.onChanged(() => { void refreshGapps(); }) : undefined), [gapps, refreshGapps]);
     const onScreenId = onScreen?.id ?? null;
     const onScreenName = onScreen ? (onScreen.name ?? folderName(onScreen.path)) : null;
     const gappStore = useMemo(() => (gapps && pickGappFolder ? {
@@ -746,12 +754,12 @@ export function Shell({
                             answering={answeringApproval}
                             onAnswer={(item, optionId, note) => onAnswerDeckItem(item, optionId, note)}
                             onAnswerForm={onAnswerDeckForm}
-                            formRefusal={deckFormRefusal ?? null}
+                            formRefusal={deckRefusal ?? deckFormRefusal ?? null}
                             // Dismiss without an answer — one (with the notes written in its form), every stale one shown, or
                             // every question older than a day; the agents are told (main).
-                            onDismiss={(item, notes) => onFeature({ kind: 'deck.dismiss', item, notes })}
-                            onDismissStale={(ids) => onFeature({ kind: 'deck.dismissStale', ids })}
-                            onDismissOlder={(olderThanMs) => onFeature({ kind: 'deck.dismissOlder', olderThanMs })}
+                            onDismiss={(item, notes) => deckAct(item.id, { kind: 'deck.dismiss', item, notes })}
+                            onDismissStale={(ids) => deckAct('deck:stale', { kind: 'deck.dismissStale', ids })}
+                            onDismissOlder={(olderThanMs) => deckAct('deck:older', { kind: 'deck.dismissOlder', olderThanMs })}
                             onOpenItem={(item) => { if (item.agentId) onNavigate(`genie://agent/${item.agentId}?tab=stream`); }}
                             onNavigate={onNavigate}
                             onSignalAction={(action) => {

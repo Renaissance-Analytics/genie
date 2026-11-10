@@ -183,6 +183,8 @@ export interface EngineServerOptions {
     readonly gapps?: GAppBookApi | undefined;
     /** One window of one app (Tynn #595), for the window process to open; never asked for by a page. */
     readonly gappSessions?: GAppSessionsApi | undefined;
+    /** The GApp book changed: every local window reads its list again (Tynn #596). */
+    readonly gappsChanged?: ((listener: () => void) => () => void) | undefined;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -311,6 +313,9 @@ export class SessionEngineServer {
         });
         options.catalog?.onEvent((change) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'catalog.changed', change);
+        });
+        options.gappsChanged?.(() => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'gapps.changed', null);
         });
         options.plugins?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'plugins.event', dump);

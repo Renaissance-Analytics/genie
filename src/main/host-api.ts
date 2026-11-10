@@ -78,6 +78,8 @@ export interface HostApiDeps {
     rosterChanged?(): void;
     marketplace?: () => MarketplaceApi | null;
     gapps?: () => GAppsApi | null;
+    /** The GApp book changed: a signal; the window reads the list (Tynn #596). */
+    gappsChanged?: { subscribe(listener: () => void): () => void };
     localTerminals?: NativeTerminalPort;
     artboard?: LocalArtboardPort;
     chatDrafts?: LocalDraftsStore;
@@ -746,6 +748,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
                 deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
                 deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
+                deps.gappsChanged?.subscribe(() => listener(LOCAL_EVENTS.gapps, null)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };

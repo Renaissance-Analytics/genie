@@ -1,8 +1,9 @@
-import type { GAppBookApi, GAppListing, GAppSessionInfo, GAppSessionsApi, GAppsApi } from '../core/gapps.js';
+import { gappInstallDetail, type GAppBookApi, type GAppListing, type GAppReview, type GAppSessionInfo, type GAppSessionsApi, type GAppsApi } from '../core/gapps.js';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import type { GrantScope, ReviewItem } from '../core/gapp-grants.js';
 import type { GAppServer } from './gapp-server.js';
 import type { GAppBook, GAppEntry } from './gapps-host.js';
+import type { Caller } from './mcp-tools.js';
 
 /**
  * WHAT A WINDOW ASKS OF THE GAPP BOOK (GApps v2, V7, Tynn #572). The store acts on the book V3 built, from a local window
@@ -10,8 +11,19 @@ import type { GAppBook, GAppEntry } from './gapps-host.js';
  */
 const listing = (entry: GAppEntry): GAppListing => ({ id: entry.packageId, name: entry.name, version: entry.version, state: entry.state, dev: false });
 
+export type AskPerson = (review: GAppReview, scope: GrantScope) => Promise<'allowed' | 'denied'>;
+
+/**
+ * CONSENT IS THE PERSON'S, ON THE DECK (Tynn #596): a blocking item carrying the review, in Genie's own section. The host
+ * asks, so the install waits for the answer wherever it is given. `workspaceName` says a workspace as a person knows it.
+ */
+export function askOnDeck(approvals: { gate(caller: Caller, action: string, detail: string): Promise<'allowed' | 'denied'> }, workspaceName: (id: string) => string): AskPerson {
+    const store = { agentId: 'gapp-store' as Caller['agentId'], agentName: 'GApp Store', workspaceId: '', workspacePath: '' };
+    return (review, scope) => approvals.gate(store, 'gapps.install', gappInstallDetail(review, scope === 'workstation' ? 'every workspace' : scope.map(workspaceName).join(', ')));
+}
+
 /** The book as the store uses it: what it refuses is thrown in its own words. */
-export function gappsApi(book: GAppBook): GAppBookApi {
+export function gappsApi(book: GAppBook, ask: AskPerson): GAppBookApi {
     return {
         list: async () => book.list().map(listing),
         review: async (folder) => {
@@ -20,6 +32,11 @@ export function gappsApi(book: GAppBook): GAppBookApi {
             return checked.review;
         },
         install: async (folder, options) => {
+            // What the person reviewed must still be this package; if not, the book refuses it below and nobody is asked.
+            const checked = await book.reviewInstall(folder);
+            if (checked.ok && checked.review.consent && options.consent?.digest === checked.review.digest) {
+                if ((await ask(checked.review, options.scope)) !== 'allowed') throw new Error(`${checked.review.name} was not installed: it was denied on the Deck.`);
+            }
             const done = await book.install(folder, options);
             if (!done.ok) throw new Error(done.reason);
             return listing(done.entry);

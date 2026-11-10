@@ -100,12 +100,23 @@ describe('the list', () => {
             expect((await local({ allow: [rule] })).approvals).toEqual([rule]);
         });
 
-        it.each([['defaultMode', { defaultMode: 'bypassPermissions' }], ['additionalDirectories', { additionalDirectories: ['/'] }], ['deny', { deny: ['Bash'] }], ['ask', { ask: ['Bash'] }]])('untracked: %s still counts', async (_key, permissions) => {
-            expect(trustHash(await local(permissions))).not.toBe(trustHash(await local({})));
+        // THE OWNER (2026-11-10, Tynn #599): "Once I trust a workspace I should not have to approve anything else." Claude Code
+        // writes every "always allow" into this untracked file; each one untrusted the workspace and put agents back on
+        // approvals, and stopped its sites. Permissions run nothing, and a trusted workspace runs its agents unattended anyway.
+        it.each([['defaultMode', { defaultMode: 'bypassPermissions' }], ['additionalDirectories', { additionalDirectories: ['/'] }], ['deny', { deny: ['Bash'] }], ['ask', { ask: ['Bash'] }]])('untracked: %s is this machine\'s own choice and never untrusts', async (_key, permissions) => {
+            expect(trustHash(await local(permissions))).toBe(trustHash(await local({})));
         });
 
-        it.each(['Bash', 'Bash(*)', 'Bash(:*)', 'PowerShell(*)', '*', 'mcp__x', 'Write', 'Edit(**)', 'Bash(*:*)', 'Bash(sh *)', 'Bash(bash *)', 'Bash(zsh:*)', 'Bash(node *)', 'Bash(python *)', 'Bash(python3 *)', 'Bash(perl *)', 'Bash(ruby *)', 'Bash(php *)', 'Bash(curl *)', 'Bash(wget *)', 'Bash(env *)', 'Bash(sudo *)', 'Bash(cmd *)', 'Bash(powershell *)', 'Bash(pwsh *)', 'Bash(npx *)', 'Bash(./tool *)', 'Bash(/bin/sh *)', 'Bash(npm run * && other)', 'Bash(npm; other *)', 'Bash(a b c *)'])('untracked: an allow as wide as %s is no person approving one command: it counts', async (rule) => {
-            expect(trustHash(await local({ allow: [rule] }))).not.toBe(trustHash(await local({})));
+        it.each(['Bash', 'Bash(*)', 'mcp__x', 'Write', 'Bash(curl *)', 'Bash(npm run * && other)', 'WebFetch(domain:pestphp.com)', 'mcp__plugin_playwright_playwright__browser_click', 'Bash(for f in app/Livewire/Ui/*.php)', 'Bash(gh repo list:*)'])('untracked: %s, as Claude Code writes on "always allow", never untrusts (Tynn #599)', async (rule) => {
+            expect(trustHash(await local({ allow: [rule] }))).toBe(trustHash(await local({})));
+            expect((await local({ allow: [rule] })).approvals).toEqual([rule]);
+        });
+
+        it('untracked: the rest of the file still counts: a hook added beside the approvals untrusts', async () => {
+            const read = (settings: Record<string, unknown>) => readTrustList(W, { ...ports({ [at('.claude', 'settings.local.json')]: JSON.stringify(settings) }), isTracked: async () => false });
+            const approvals = { permissions: { allow: ['WebFetch(domain:x.dev)'] } };
+            expect(trustHash(await read({ ...approvals, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'curl evil' }] }] } }))).not.toBe(trustHash(await read(approvals)));
+            expect(trustHash(await read({ ...approvals, env: { NODE_OPTIONS: '--require x' } }))).not.toBe(trustHash(await read(approvals)));
         });
 
         it('a tracked check that cannot answer counts as tracked', async () => {
