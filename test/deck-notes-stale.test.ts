@@ -161,8 +161,8 @@ describe('liveness not known yet', () => {
         expect(before).toHaveLength(2);
         expect(before.filter((i) => i.stale !== undefined)).toHaveLength(0);
         expect(needsYouCount(services.deckItems())).toBe(2);
-        // "Dismiss all stale" sent now (a stale screen from before) removes nothing: unknown is not stale.
-        await handleFeatureAction(services, { kind: 'deck.dismissStale', ids: [gone.questionId] }, STATE);
+        // "Dismiss all stale" sent now (a stale screen from before) removes nothing: unknown is not stale. Said, never silent (Tynn #600).
+        await expect(handleFeatureAction(services, { kind: 'deck.dismissStale', ids: [gone.questionId] }, STATE)).rejects.toThrow(/nothing was dismissed/);
         expect(services.attention.pending()).toHaveLength(2);
 
         livenessKnown = true;

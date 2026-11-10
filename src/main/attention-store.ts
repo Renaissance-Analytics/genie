@@ -571,11 +571,11 @@ export class AttentionStore {
      * or one from another workspace, is refused with no change (and is not distinguished from a missing one).
      */
     async withdraw(owner: QuestionOwner, questionId: string): Promise<{ ok: true; questionId: string; withdrawn: true }> {
-        this.#owned(owner, questionId);
-        this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
-        this.#left(questionId, { kind: 'withdrawn' });
+        const { id } = this.#owned(owner, questionId);
+        this.#data.questions = this.#data.questions.filter((x) => x.id !== id);
+        this.#left(id, { kind: 'withdrawn' });
         await this.#flush();
-        return { ok: true, questionId, withdrawn: true };
+        return { ok: true, questionId: id, withdrawn: true };
     }
 
     /**
@@ -600,7 +600,11 @@ export class AttentionStore {
     }
 
     #owned(owner: QuestionOwner, questionId: string): PendingQuestion {
-        const q = this.#data.questions.find((x) => x.id === questionId);
+        // The id as the agent was shown it may be short (Tynn #600: prism withdrew `q_dd6bedde` and was refused): a unique
+        // prefix of at least 8 characters after `q_`, among this agent's OWN pending questions in this workspace, is that one.
+        const mine = this.#data.questions.filter((x) => x.agentId === owner.agentId && x.workspaceId === owner.workspaceId);
+        const prefixed = questionId.startsWith('q_') && questionId.length >= 10 ? mine.filter((x) => x.id.startsWith(questionId)) : [];
+        const q = this.#data.questions.find((x) => x.id === questionId) ?? (prefixed.length === 1 ? prefixed[0] : undefined);
         // One refusal for "missing" and "not yours": an agent learns nothing about another agent's questions from it.
         if (!q || q.agentId !== owner.agentId || q.workspaceId !== owner.workspaceId) {
             throw new Error(`no pending question ${questionId} asked by you in this workspace`);

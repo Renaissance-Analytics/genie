@@ -128,13 +128,90 @@ export const PREVIEW_CHARS = 140;
  * anything the line does not show — then the row opens on click. A short, one-line item is whole, with nothing to open.
  */
 export function deckPreview(text: string): { preview: string; more: boolean } {
-    const trimmed = text.trim();
-    const newline = trimmed.indexOf('\n');
-    const first = (newline === -1 ? trimmed : trimmed.slice(0, newline)).trim();
-    if (first.length <= PREVIEW_CHARS) return { preview: first, more: newline !== -1 };
+    const body = deckBody(text);
+    const first = body.title;
+    const rest = body.steps.length > 0 || body.text.length > 0;
+    if (first.length <= PREVIEW_CHARS) return { preview: first, more: rest };
     const cut = first.slice(0, PREVIEW_CHARS);
     const space = cut.lastIndexOf(' ');
     return { preview: `${(space > PREVIEW_CHARS / 2 ? cut.slice(0, space) : cut).trimEnd()}…`, more: true };
+}
+
+/**
+ * A PERSON'S ITEM, READ (Tynn #602; the owner, 2026-11-10: "the deck is not easy to read at all"). Its title is its first
+ * line; written as one paragraph, it is what comes before step 1. Its steps are the lines numbered 1, 2, 3 in order (`1.`
+ * or `1)`), and in a run-on paragraph the same markers inside it, in order. Any other line is text. A number that is not
+ * the next step (a version, a port, "3)" out of order) stays where it is.
+ */
+export interface DeckBody {
+    readonly title: string;
+    readonly steps: readonly string[];
+    readonly text: readonly string[];
+}
+
+const LINE_STEP = /^(\d{1,2})[.)]\s+(.*)$/;
+
+/** Where step `n`'s marker starts in `s`, at or after `from` (after a space, or at the start), and where its words begin. */
+function stepMarker(s: string, n: number, from: number): { at: number; words: number } | null {
+    const marker = new RegExp(`(^|\\s)${n}[.)]\\s+`, 'g');
+    marker.lastIndex = from;
+    const m = marker.exec(s);
+    return m ? { at: m.index + m[1]!.length, words: m.index + m[0].length } : null;
+}
+
+/** A step's words, and any later steps written inside them: `Open the page 2) Click Add` is two steps. */
+function splitSteps(words: string, next: number): string[] {
+    const out: string[] = [];
+    let rest = words;
+    for (let n = next; ; n++) {
+        const marker = stepMarker(rest, n, 0);
+        if (!marker || marker.at === 0) break;
+        out.push(rest.slice(0, marker.at).trim());
+        rest = rest.slice(marker.words);
+    }
+    out.push(rest.trim());
+    return out;
+}
+
+export function deckBody(raw: string): DeckBody {
+    const lines = raw.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trim()).filter((l) => l !== '');
+    let title = lines[0] ?? '';
+    let rest = lines.slice(1);
+    if (rest.length === 0) {
+        // One paragraph: a title, then its steps run on. Only when step 1 AND step 2 are there, so "version 1. here" is not one.
+        const one = stepMarker(title, 1, 0);
+        if (!one || one.at === 0 || !stepMarker(title, 2, one.words)) return { title, steps: [], text: [] };
+        rest = [title.slice(one.at)];
+        title = title.slice(0, one.at).trim();
+    }
+    const steps: string[] = [];
+    const text: string[] = [];
+    for (const line of rest) {
+        const m = LINE_STEP.exec(line);
+        if (m && Number(m[1]) === steps.length + 1) steps.push(...splitSteps(m[2]!, steps.length + 2));
+        else text.push(line);
+    }
+    return { title, steps, text };
+}
+
+/** Text with its web addresses taken out as links (http and https only); the punctuation after an address is not part of it. */
+export function linkParts(text: string): Array<string | { url: string }> {
+    const out: Array<string | { url: string }> = [];
+    let last = 0;
+    for (const m of text.matchAll(/https?:\/\/[^\s<>"'`]+/g)) {
+        let url = m[0];
+        for (;;) {
+            const end = url.at(-1)!;
+            const unbalanced = end === ')' && (url.match(/\(/g) ?? []).length < (url.match(/\)/g) ?? []).length;
+            if ('.,;:!?\'"]}'.includes(end) || unbalanced) url = url.slice(0, -1);
+            else break;
+        }
+        if (m.index > last) out.push(text.slice(last, m.index));
+        out.push({ url });
+        last = m.index + url.length;
+    }
+    if (last < text.length) out.push(text.slice(last));
+    return out;
 }
 
 /**

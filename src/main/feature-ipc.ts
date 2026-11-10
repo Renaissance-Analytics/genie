@@ -1481,6 +1481,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             // no longer pending, or no longer stale, stays. Each asker is mailed once (attention-store.ts).
             const seen = new Set(Array.isArray(action.ids) ? action.ids.filter((id): id is string => typeof id === 'string') : []);
             const still = dismissableStale(services.deckItems()).filter((i) => seen.has(i.id));
+            // Never a silent no-op (Tynn #600): when none of them is still a stale question here, the person is told.
+            if (still.length === 0) throw new Error('None of these questions is still waiting as a stale one here, so nothing was dismissed. Look at the Deck again.');
             await services.attention.dismissMany(still.map((i) => i.id));
             break;
         }
