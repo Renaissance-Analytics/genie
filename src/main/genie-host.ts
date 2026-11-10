@@ -5,7 +5,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
 import { hostname } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
 import { lineTransport } from '../core/line-transport.js';
@@ -70,7 +70,7 @@ import { FlowsReplica, FlowsService } from './flows-host.js';
 import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
-import { gappSessions, gappsApi } from './gapps-api.js';
+import { askOnDeck, gappSessions, gappsApi } from './gapps-api.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
@@ -951,7 +951,7 @@ async function main(): Promise<void> {
         processes: processesService,
         plugins: pluginsService,
         marketplace: marketplaceHost,
-        ...(gappBook ? { gapps: gappsApi(gappBook) } : {}),
+        ...(gappBook ? { gapps: gappsApi(gappBook, askOnDeck(approvals, (id) => { const path = hostRegistry.workspace(id)?.path; return path ? basename(path) : id; })), gappsChanged: (listener) => gappBook!.onChange(listener) } : {}),
         ...(gappBook && gappServer ? { gappSessions: gappSessions(gappBook, gappServer) } : {}),
         catalog: catalogService,
         flows: flowsService,
