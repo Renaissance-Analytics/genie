@@ -71,7 +71,8 @@ describe('the window carries the Details save, owner-only, like the Issues write
     it('main runs it through the person\'s pairing on the HostApi, the one way in (the IPC handler is gone)', () => {
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
         expect(main).not.toContain("'genie:workspace-tynn-page-action'");
-        expect(main).toMatch(/tynnPageAction: \(id, input\) => [^\n]*runTynnPageAction\(tynnBoardPorts\(\)/);
+        expect(main).toContain('...workspaceTynnApi(tynnBoardPorts, readWorkspaceTynnPage)');
+        expect(readFileSync(new URL('../src/main/workspace-tynn-api.ts', import.meta.url), 'utf8')).toMatch(/tynnPageAction: async \(id, input\) => [^\n]*runTynnPageAction\(await board\(\)/);
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
         expect(preload).not.toContain("'genie:workspace-tynn-page-action'");
     });

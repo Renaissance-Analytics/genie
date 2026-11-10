@@ -737,12 +737,19 @@ jobs:
           $log = "$h\.genie\runtime\lifecycle.log"
           $line = $null
           for ($i = 0; $i -lt 90 -and -not $line; $i++) { Start-Sleep -Seconds 1; if (Test-Path $log) { $line = Select-String -Path $log -Pattern "host spawn via=" | Select-Object -Last 1 } }
+          # A SPAWN IS NOT A HOST (Tynn #597): the window's own link to it says the host loaded and answered. Read before anything is killed.
+          $up = $null
+          for ($i = 0; $i -lt 90 -and $line -and -not $up; $i++) { Start-Sleep -Seconds 1; $up = Select-String -Path $log -Pattern "agent host (started|replaced|adopted) pid=" | Select-Object -Last 1 }
+          $hostLog = "$h\.genie\logs\genie-host.log"
+          if (-not $up) { Write-Output "--- lifecycle.log"; if (Test-Path $log) { Get-Content $log -Tail 30 }; Write-Output "--- genie-host.log"; if (Test-Path $hostLog) { Get-Content $hostLog -Tail 40 } }
           $hostJson = "$h\.genie\runtime\host.json"
           if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
           if (-not $app.HasExited) { taskkill /PID $app.Id /T /F *> $null }
           if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
           Write-Output "the packaged app: $($line.Line)"
           if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
+          if (-not $up) { throw "the packaged app's genie-host did not come up within 90 s of its spawn (see genie-host.log above)" }
+          Write-Output "the packaged app: $($up.Line)"
 
       # The artifacts, so somebody can actually install one and find out. A build that produced
       # a file nobody can reach proves only that the command exited zero.

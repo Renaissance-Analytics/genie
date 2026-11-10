@@ -160,7 +160,6 @@ describe('the window delegates the WIP door', () => {
     // P4 family 12 (Tynn #561): the HostApi is the one way in; the native IPC handler is gone.
     it('the HostApi uses the host-backed door, and no native IPC handler is left', () => {
         expect(main).not.toContain("'genie:workspace-tynn-page'");
-        const api = main.match(/tynnPage: ([^\n]+)/)?.[1];
-        expect(api).toContain('readWorkspaceTynnPage(');
+        expect(main).toContain('...workspaceTynnApi(tynnBoardPorts, readWorkspaceTynnPage)');
     });
 });
