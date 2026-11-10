@@ -7,7 +7,7 @@
 export interface InstallScreenInput {
     readonly phase: string;
     readonly version: string | null;
-    readonly installing?: { readonly step: 'agents' | 'processes' | 'restarting'; readonly agents: number; readonly left: number };
+    readonly installing?: { readonly step: 'turns' | 'agents' | 'processes' | 'restarting'; readonly agents: number; readonly left: number; readonly waitingOn?: readonly string[] | undefined };
 }
 
 export interface InstallScreen {
@@ -21,6 +21,11 @@ export function installScreen(state: InstallScreenInput | null, asked: boolean):
     const title = `Restarting to install Genie${state.version ? ` ${state.version}` : ''}…`;
     const p = state.phase === 'installing' ? state.installing : undefined;
     if (!p) return { title, detail: 'Getting ready…' };
+    if (p.step === 'turns') {
+        const names = p.waitingOn ?? [];
+        const who = names.length <= 1 ? (names[0] ?? 'an agent') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+        return { title, detail: `Waiting for ${who} to finish ${names.length > 1 ? 'their' : 'its'} turn` };
+    }
     if (p.step === 'agents') return { title, detail: p.agents > 0 ? `Stopping agents — ${p.left} of ${p.agents} still stopping` : 'Stopping agents' };
     if (p.step === 'processes') return { title, detail: 'Closing what runs from Genie’s install folder' };
     return { title, detail: 'Restarting…' };

@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { channelFrom, type UpdateChannel } from '../core/update-channel.js';
 import type { AgentId } from '../core/identity.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
@@ -55,6 +55,9 @@ export const UPDATER_HELPER_LABEL = 'genie updater';
 /** How long a started helper has to link before what needed it is told, in words. */
 export const HELPER_PATIENCE_MS = 30_000;
 
+/** How long a host update lets turns in flight reach a safe point before it drains anyway (Tynn #414). */
+export const HOST_UPDATE_SETTLE_MS = 60_000;
+
 /** How long the helper waits for every Genie process to be gone before it gives up the install (and says so). */
 export const INSTALL_WAIT_MS = 30_000;
 
@@ -87,6 +90,10 @@ export interface UpdatesServiceOptions {
     readonly handOverFailed?: (reason: string, launch: HelperLaunch) => void;
     /** Why this host has no updater (P10.1d: plain Node, its image updated by its deployment). Absent = it has one. */
     readonly unavailable?: string;
+    /** This host runs from its own copy, not from the install (host-runtime.ts), so an installer can replace the install under it (Tynn #414). */
+    readonly runsFromCopy?: boolean;
+    /** Where a failed install's details are, for the next window (Tynn #414). */
+    readonly failedLog?: string;
 }
 
 /** Why the last install did not happen, for the next window (`<home>/runtime/update-failed.json`). */
@@ -134,6 +141,15 @@ export function helperLaunch(launch: HelperLaunch): HelperLaunch {
  * electron-updater installs over the app it runs from. The window, which runs from the install, names its executable to the
  * host as GENIE_INSTALL_EXEC; with none (a host started in place, a dev run) the host's own executable, as before.
  */
+/**
+ * THE INSTALL'S DIRECTORY (Tynn #414): what the teardown scans and the installer replaces. A host running from its own copy
+ * (`<home>/host/`) is not in it: the window names the install's executable as GENIE_INSTALL_EXEC; without it, this one's.
+ */
+export function installDirOf(env: Readonly<Record<string, string | undefined>>, execPath: string): string {
+    const install = env.GENIE_INSTALL_EXEC;
+    return dirname(typeof install === 'string' && install.length > 0 ? install : execPath);
+}
+
 export function updaterDefaultLaunch(env: Readonly<Record<string, string | undefined>>, execPath: string): HelperLaunch {
     const install = env.GENIE_INSTALL_EXEC;
     return { file: typeof install === 'string' && install.length > 0 ? install : execPath, args: ['--updater'] };
@@ -359,19 +375,33 @@ export class UpdatesService {
     async #handOver(): Promise<void> {
         // A client-only update (Tynn #413): this host keeps running from its own copy, so the installer waits for the windows only.
         const clientOnly = this.#host.clientOnly();
+        // A HOST ON ITS OWN COPY STAYS (Tynn #414): the installer replaces the install under it, the new window replaces it
+        // and restores every agent once; a swap that fails leaves it running. Only a host ON the install has to go first.
+        const stays = clientOnly || this.#options.runsFromCopy === true;
         const wait: InstallWait = {
-            pids: clientOnly ? [...this.#windowPids] : [this.#options.host.ownPid, ...this.#windowPids],
+            pids: stays ? [...this.#windowPids] : [this.#options.host.ownPid, ...this.#windowPids],
             installDir: this.#options.host.installDir,
             boundMs: this.#options.installWaitMs ?? INSTALL_WAIT_MS,
         };
         try {
             await this.#request('install', undefined, wait);
-            this.#log(clientOnly ? 'updater: it has the install; only the window is updated, so this host stays' : 'updater: it has the install; this host exits');
-            if (clientOnly) return;
+            this.#log(clientOnly ? 'updater: it has the install; only the window is updated, so this host stays'
+                : stays ? 'updater: it has the install; this host stays until the new window replaces it' : 'updater: it has the install; this host exits');
+            if (stays) return;
         } catch (error) {
             const why = error instanceof Error ? error.message : String(error);
             // Everything this host ran is already stopped: it exits either way. A person who clicked Install is never left
             // with no Genie — a helper that refused records and relaunches itself; one that is gone cannot, so this host does.
+            if (stays) {
+                // THE SWAP FAILED (Tynn #414): this host keeps running, and the next window is told why.
+                this.#log(`updater: it did not take the install (${why}); this host keeps running`);
+                this.#failed = { at: Date.now(), reason: `Genie’s update was not installed: ${why}.`, log: this.#options.failedLog ?? 'logs/genie-updater.log' };
+                this.#host.installFailed(`Genie’s update was not installed: ${why}.`);
+                if (!(error instanceof HelperRefusal)) {
+                    try { this.#options.handOverFailed?.(`Genie’s updater could not be handed the install: ${why}.`, this.#launch); } catch { /* the host keeps running either way */ }
+                }
+                return;
+            }
             this.#log(`updater: it did not take the install (${why}); this host exits regardless`);
             if (!(error instanceof HelperRefusal)) {
                 try {
@@ -406,13 +436,34 @@ export function hostDrainAgents(input: {
     writeInterruptedAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     stopAll: (onLeft?: (left: number) => void) => Promise<void>;
     onRecordError?: (error: unknown) => void;
+    /** How long the drain waits for turns in flight (Tynn #414). */
+    settleMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
 }): DrainAgentsPort {
+    // Each agent once (Tynn #414): restored exactly once, however the roster names it.
+    const agents = (): readonly { id: string; name: string }[] => [...new Map(input.agents().map((a) => [a.id, a])).values()];
+    const live = () => agents().filter((a) => input.probe(a.id as AgentId)?.running === true);
+    const sleep = input.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const now = input.now ?? Date.now;
     return {
-        live: () => input.agents().filter((a) => input.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
+        live: () => live().map((a) => ({ id: a.id, name: a.name })),
+        // A SAFE POINT (Tynn #414): every turn in flight is let end, bounded; who is still mid-turn at the bound is recorded
+        // as interrupted and resumed after the swap, told to continue.
+        settle: async (onWaiting) => {
+            const until = now() + (input.settleMs ?? HOST_UPDATE_SETTLE_MS);
+            for (;;) {
+                const waiting = live().filter((a) => input.probe(a.id as AgentId)?.inTurn === true).map((a) => a.name);
+                if (waiting.length === 0) return;
+                onWaiting(waiting);
+                if (now() >= until) return;
+                await sleep(Math.min(1_000, Math.max(0, until - now())));
+            }
+        },
         stopAll: recordThenStopAll({
             markRecorded: () => {},
             record: () => recordShutdown({
-                agents: input.agents,
+                agents,
                 probe: input.probe,
                 markRunningAtQuit: input.writeRunningAtQuit,
                 markInterruptedAtQuit: input.writeInterruptedAtQuit,

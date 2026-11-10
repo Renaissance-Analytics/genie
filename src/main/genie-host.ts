@@ -5,7 +5,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
 import { hostname, uptime } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
 import { lineTransport } from '../core/line-transport.js';
@@ -53,7 +53,7 @@ import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
-import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { clearUpdateFailed, helperLaunch, hostDrainAgents, installDirOf, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
 import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
 import { windowReleased } from './window-release.js';
 import { channelFrom } from '../core/update-channel.js';
@@ -672,7 +672,8 @@ async function main(): Promise<void> {
     const updatesService = new UpdatesService({
         ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
         host: {
-            installDir: dirname(process.execPath),
+            // The install, not this host's copy (Tynn #414): what the teardown scans and the installer replaces.
+            installDir: installDirOf(process.env, process.execPath),
             ownPid: process.pid,
             processes: listProcessesAsync,
             kill: killProcessAsync,
@@ -699,6 +700,9 @@ async function main(): Promise<void> {
             // P5a.3's order: the browser told to end, then sites, the front door and kept processes stopped; containers stay up.
             stopHosted: async () => { browserService.quit(); await stopHostedOnce(); },
         },
+        // On its own copy (host-runtime.ts): an installer replaces the install under it, and it stays until the new window replaces it.
+        runsFromCopy: ((rel) => rel.startsWith('..') || isAbsolute(rel))(relative(installDirOf(process.env, process.execPath), process.execPath)),
+        failedLog: join(home, 'logs', 'genie-updater.log'),
         startHelper: (launch) => { startOwnDetached('updater', helperLaunch(launch), updaterHelperEnv(process.env, home), 'genie-updater.log', true, () => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); }); },
         defaultLaunch: updaterDefaultLaunch(process.env, process.execPath),
         windowConnected: () => engineRef?.windowConnected() ?? false,

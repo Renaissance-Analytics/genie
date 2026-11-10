@@ -65,9 +65,11 @@ export interface UpdateState {
 }
 
 export interface InstallProgress {
-    step: 'agents' | 'processes' | 'restarting';
+    step: 'turns' | 'agents' | 'processes' | 'restarting';
     agents: number;
     left: number;
+    /** In the `turns` step: the agents whose turn is still in flight (Tynn #414). */
+    waitingOn?: readonly string[];
 }
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
@@ -100,6 +102,8 @@ export interface UpdaterPort {
  */
 export interface DrainAgentsPort {
     live(): ReadonlyArray<{ id: string; name: string }>;
+    /** Wait, bounded, for turns in flight to reach a safe point, saying who it waits on (Tynn #414). Absent = no wait. */
+    settle?(onWaiting: (names: readonly string[]) => void): Promise<void>;
     /** End every session; resolves once each stop has ended, reporting how many are still stopping as they do. */
     stopAll(onLeft?: (left: number) => void): Promise<void> | void;
 }
@@ -340,6 +344,12 @@ export class UpdateHost {
         return this.finishInstall(live);
     }
 
+    /** The installer was not handed the install (Tynn #414): said, with the reason; this host keeps running. */
+    installFailed(reason: string): void {
+        const { installing: _dropped, ...rest } = this.current;
+        this.set({ ...rest, phase: 'error', error: reason });
+    }
+
     /** The update on offer changes only the window (Tynn #413): installing it keeps genie-host and its agents running. */
     clientOnly(): boolean {
         return this.current.scope?.kind === 'client-only';
@@ -369,6 +379,10 @@ export class UpdateHost {
         // Not a client-only one (Tynn #413): the host keeps its agents, and what it hosts, through it.
         const clientOnly = this.clientOnly();
         let stillStopping = 0;
+        // TURNS FIRST (Tynn #414): an agent mid-turn is let reach a safe point, bounded, and the screen says who it waits on.
+        if (this.options.agents?.settle && !clientOnly && live.length > 0) {
+            await this.options.agents.settle((names) => { progress({ step: 'turns', agents: live.length, left: names.length, waitingOn: [...names] }); }).catch(() => undefined);
+        }
         if (this.options.agents && !clientOnly) {
             let left = live.length;
             const stopped = Promise.resolve(this.options.agents.stopAll((n) => { left = n; progress({ step: 'agents', agents: live.length, left: n }); })).then(() => true, () => true);
