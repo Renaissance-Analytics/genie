@@ -34,8 +34,24 @@ function rig() {
 }
 
 describe("a turn's rows reach the thread together", () => {
-    it('120 turns of an 8 KB reply settle in a few appends, in order, and within a bound', async () => {
-        const appends = vi.spyOn(ThreadStore.prototype, 'appendLog');
+    // Six runs (#682): a miss one run in a few is seen with its figures, and so are the runs that do not miss.
+    it.each([1, 2, 3, 4, 5, 6])('120 turns of an 8 KB reply settle in a few appends, in order, and within a bound (run %i)', async () => {
+        // WHERE THE TIME GOES (#682): each lock's wait before its callback runs, the time it is held, and each append.
+        const timing = { lockWaitMs: 0, worstLockWaitMs: 0, lockHeldMs: 0, appendMs: 0, worstAppendMs: 0, locks: 0 };
+        const realLock = ThreadStore.prototype.withLock;
+        vi.spyOn(ThreadStore.prototype, 'withLock').mockImplementation(function (this: ThreadStore, key, callback, ttl, wait) {
+            const asked = performance.now();
+            return realLock.call(this, key, async () => {
+                const got = performance.now();
+                timing.locks += 1; timing.lockWaitMs += got - asked; timing.worstLockWaitMs = Math.max(timing.worstLockWaitMs, got - asked);
+                try { return await callback(); } finally { timing.lockHeldMs += performance.now() - got; }
+            }, ttl, wait);
+        } as typeof realLock);
+        const realAppend = ThreadStore.prototype.appendLog;
+        const appends = vi.spyOn(ThreadStore.prototype, 'appendLog').mockImplementation(async function (this: ThreadStore, key, entries) {
+            const started = performance.now();
+            try { return await realAppend.call(this, key, entries); } finally { const ms = performance.now() - started; timing.appendMs += ms; timing.worstAppendMs = Math.max(timing.worstAppendMs, ms); }
+        } as typeof realAppend);
         const r = rig();
         const record = agentRecord({ id: mintAgentId(), workspaceId: 'w', provider: 'claude', name: 'atlas' });
         r.host.start(record, dir);
@@ -53,7 +69,10 @@ describe("a turn's rows reach the thread together", () => {
         expect(texts).toEqual(Array.from({ length: 120 }, (_, i) => [`question ${i + 1}`, `answer ${i + 1}`]).flat());
         expect(history.rows.map((row) => row.position)).toEqual(Array.from({ length: history.rows.length }, (_, i) => i + 1));
         expect(history.rows.length).toBeGreaterThan(360);
-        expect({ appends: appends.mock.calls.length <= 20, settledUnder2s: ms < 2000 }).toEqual({ appends: true, settledUnder2s: true });
+        const measured = { settleMs: Math.round(ms), appends: appends.mock.calls.length, ...Object.fromEntries(Object.entries(timing).map(([k, v]) => [k, Math.round(v)])) };
+        console.log(`[#682] ${process.platform} ${JSON.stringify(measured)}`);
+        // The figure itself is in the failure, so a miss says where the time went.
+        expect({ appends: appends.mock.calls.length <= 20, settledUnder2s: ms < 2000, measured }).toEqual({ appends: true, settledUnder2s: true, measured: expect.objectContaining({ settleMs: expect.any(Number), lockWaitMs: expect.any(Number) }) });
     }, 60_000);
 
     it('CONTROL: one row emitted alone is written alone, at once', async () => {
