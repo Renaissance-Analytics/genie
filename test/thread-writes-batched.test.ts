@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileLockIdentityStatus } from '@particle-academy/prism-harness';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
@@ -52,6 +53,10 @@ describe("a turn's rows reach the thread together", () => {
             const started = performance.now();
             try { return await realAppend.call(this, key, entries); } finally { const ms = performance.now() - started; timing.appendMs += ms; timing.worstAppendMs = Math.max(timing.worstAppendMs, ms); }
         } as typeof realAppend);
+        // #682: the first lock in a process reads its identity (on Windows a PowerShell CIM query, 0.4-2 s+ on a busy runner).
+        // genie-host reads it at boot, before its session host takes work (prism-harness-0103.test.ts); this settle must not
+        // be charged for it either, or the bound measures PowerShell instead of the thread.
+        expect(fileLockIdentityStatus().sampled, 'the lock identity is read before the timed settle, as genie-host reads it at boot').toBe(true);
         const r = rig();
         const record = agentRecord({ id: mintAgentId(), workspaceId: 'w', provider: 'claude', name: 'atlas' });
         r.host.start(record, dir);
@@ -69,7 +74,7 @@ describe("a turn's rows reach the thread together", () => {
         expect(texts).toEqual(Array.from({ length: 120 }, (_, i) => [`question ${i + 1}`, `answer ${i + 1}`]).flat());
         expect(history.rows.map((row) => row.position)).toEqual(Array.from({ length: history.rows.length }, (_, i) => i + 1));
         expect(history.rows.length).toBeGreaterThan(360);
-        const measured = { settleMs: Math.round(ms), appends: appends.mock.calls.length, ...Object.fromEntries(Object.entries(timing).map(([k, v]) => [k, Math.round(v)])) };
+        const measured = { identityReadMs: Math.round(fileLockIdentityStatus().sample_duration_ms), settleMs: Math.round(ms), appends: appends.mock.calls.length, ...Object.fromEntries(Object.entries(timing).map(([k, v]) => [k, Math.round(v)])) };
         console.log(`[#682] ${process.platform} ${JSON.stringify(measured)}`);
         // The figure itself is in the failure, so a miss says where the time went.
         expect({ appends: appends.mock.calls.length <= 20, settledUnder2s: ms < 2000, measured }).toEqual({ appends: true, settledUnder2s: true, measured: expect.objectContaining({ settleMs: expect.any(Number), lockWaitMs: expect.any(Number) }) });
