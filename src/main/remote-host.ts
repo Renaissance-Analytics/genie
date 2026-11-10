@@ -412,6 +412,9 @@ export class RemoteHost {
      * and by whom (`by`; `null` when it was released or lost). The window that did it learns from its own answer.
      */
     #batonChanged(except: string | null, by: string | null): void {
+        // Who drives is part of the connections (beta.61): genie-host pushes its status on a change, and a status kept from
+        // hello said nobody drove while the Pilot did.
+        this.#changed();
         const holder = this.#baton.holder();
         // Every ticket, and every Take Over window, of a window that no longer drives stops here (Tynn #529 part A).
         const parents = new Set([...this.#tickets.values()].map((t) => t.parentId));

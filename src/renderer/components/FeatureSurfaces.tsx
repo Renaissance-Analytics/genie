@@ -2490,7 +2490,9 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                 <>
                     {/* DRIVE ANOTHER MACHINE FIRST (genie#1278 C1): this page is where the title bar's Connect lands, so the way to
                         another machine is the first thing on it. Never on a drone (W5): Tynn refuses it every connect-grant. */}
-                    {connect && browse ? (
+                    {/* A window connected to another machine keeps its Disconnect and its remembered hosts whatever THAT machine
+                        is: a drone's role is the host's, not this window's (Azure pair gp-11102252, beta.61). */}
+                    {connect && (browse || connect.state?.connected === true) ? (
                         <div data-drive-another="">
                             <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
                             <ConnectRemote {...connect} />
