@@ -122,6 +122,23 @@ describe('Settings → Remote access', () => {
     const base: RemoteSection = { host: 'alphar', url: 'wss://alphar.tail.ts.net:7421/genie', unavailable: null, locked: false, pin: null, devices: [], connections: [], enabled: true, firewall: true };
     const render = (remote: RemoteSection) => renderToStaticMarkup(<RemoteAccess remote={remote} workspaces={[]} onAction={() => {}} />);
 
+    /*
+     * CONNECTED TO A DRONE (Azure pair gp-11102252): the window draws the Drone's Remote access, whose role is `drone`, and
+     * "Drive another machine" was hidden by THAT role, so the Pilot had no Disconnect and no remembered hosts.
+     */
+    it('connected to a drone: Disconnect and the remembered hosts are still there', () => {
+        const connect = { state: { connected: true, host: 'drone', isOwner: true, workspaceId: null, driver: 'pilot', driving: true, locked: false, lastRefusal: null, needsBaton: false } as never, remembered: [], onConnect: () => {}, onDisconnect: () => {}, known: [{ url: 'wss://drone:7421/genie', name: 'drone', lastConnectedAt: 1 }] as never };
+        const html = renderToStaticMarkup(<RemoteAccess remote={{ ...base, tynnWorkstation: { role: 'drone' } as never }} workspaces={[]} onAction={() => {}} connect={connect as never} />);
+        expect(html).toContain('data-remote-connected');
+        expect(html).toMatch(/>Disconnect</);
+    });
+
+    it('CONTROL: not connected, a drone is still offered no way out', () => {
+        const connect = { state: null, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
+        const html = renderToStaticMarkup(<RemoteAccess remote={{ ...base, tynnWorkstation: { role: 'drone' } as never }} workspaces={[]} onAction={() => {}} connect={connect as never} />);
+        expect(html).not.toContain('data-drive-another');
+    });
+
     it('OFF: the switch says so, nothing is offered to pair, and it says no device can reach this Genie', () => {
         const html = render({ ...base, enabled: false, url: null, unavailable: 'stopped' });
         expect(html).toMatch(/data-remote-enabled="false"/);
