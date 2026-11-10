@@ -750,6 +750,9 @@ jobs:
           if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
           if (-not $up) { throw "the packaged app's genie-host did not come up within 90 s of its spawn (see genie-host.log above)" }
           Write-Output "the packaged app: $($up.Line)"
+          # taskkill above sets $LASTEXITCODE (part of the tree already gone), and the step's result is the last exit code:
+          # 3 of ~20 runs failed after both checks printed. Every failure above has thrown, so reaching here is a pass.
+          exit 0
 
       # The artifacts, so somebody can actually install one and find out. A build that produced
       # a file nobody can reach proves only that the command exited zero.
