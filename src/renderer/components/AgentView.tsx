@@ -14,7 +14,7 @@ import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { ProviderProgramChoice, ProviderStartRefusal, type ProviderProgramChosen } from './ProviderProgramChoice.js';
-import { Breadcrumbs, Button, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
+import { Breadcrumbs, Button, Checkbox, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
 import { IW_DELIVERIES, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
@@ -151,7 +151,7 @@ export interface AgentOpsProps {
     readonly onSetDrivePages?: (on: boolean) => void;
     /** What it hears from IssueWatch (Tynn #806): how, and which kinds. Absent setter = no section (a window that cannot set it). */
     readonly issueWatch?: IssueWatchPrefs;
-    readonly onSetIssueWatch?: (setting: IssueWatchSetting) => void;
+    readonly onSetIssueWatch?: (setting: IssueWatchSetting) => Promise<IssueWatchSaved>;
     /** A Claude agent's tools: all, ask before shell commands, or edits only (shell refused). Absent = no control (a window that cannot set it). */
     readonly permissions?: AgentPermissions;
     readonly onSetPermissions?: (permissions: AgentPermissions) => void;
@@ -1389,7 +1389,7 @@ function AgentViewBody({
 
                                             {/* ── ISSUEWATCH: delivery, then the kinds in three groups. */}
                                             {ops?.onSetIssueWatch && ops.issueWatch && has.has('issuewatch') ? (
-                                                <IssueWatchSettings name={agent.name} prefs={ops.issueWatch} onSet={(s) => { touch('issuewatch'); ops.onSetIssueWatch?.(s); }} outcome={outcomeFor('issuewatch')} />
+                                                <IssueWatchSettings name={agent.name} prefs={ops.issueWatch} onSet={ops.onSetIssueWatch} />
                                             ) : null}
 
                                             {/* ── PERSONA: read-only here (editing is a later item). */}
@@ -1630,39 +1630,65 @@ function AgentViewBody({
  * How it hears — pushed as a turn, on its next turn, only the count on imDone, or not at all — and a box per kind. Never
  * set, it says so: the workspace's first agent hears the default kinds, every other agent nothing.
  */
-function IssueWatchSettings({ name, prefs, onSet, outcome }: { name: string; prefs: IssueWatchPrefs; onSet: (setting: IssueWatchSetting) => void; outcome?: ReactNode }) {
+export type IssueWatchSaved = { ok: true } | { ok: false; reason: string };
+
+export function IssueWatchSettings({ name, prefs, onSet }: { name: string; prefs: IssueWatchPrefs; onSet: (setting: IssueWatchSetting) => Promise<IssueWatchSaved> }) {
+    // What was last asked for, shown until the save answers: a second quick change builds on the first, never on the old value.
+    const [asked, setAsked] = useState<IssueWatchSetting | null>(null);
+    const [save, setSave] = useState<{ phase: 'saving' } | { phase: 'saved' } | { phase: 'failed'; reason: string; setting: IssueWatchSetting } | null>(null);
+    const latest = useRef(0);
+    const shown: IssueWatchSetting = asked ?? prefs;
+    const send = (setting: IssueWatchSetting) => {
+        const mine = ++latest.current;
+        setAsked(setting);
+        setSave({ phase: 'saving' });
+        const settle = (answer: IssueWatchSaved) => {
+            if (mine !== latest.current) return;
+            setAsked(answer.ok ? setting : null);
+            setSave(answer.ok ? { phase: 'saved' } : { phase: 'failed', reason: answer.reason, setting });
+        };
+        void onSet(setting).then(settle, (error: unknown) => settle({ ok: false, reason: error instanceof Error ? error.message : String(error) }));
+    };
+    // The saved value has arrived from the record: the record speaks again.
+    useEffect(() => {
+        if (asked && asked.delivery === prefs.delivery && asked.kinds.length === prefs.kinds.length && asked.kinds.every((k) => prefs.kinds.includes(k))) setAsked(null);
+    }, [prefs, asked]);
+    const off = shown.delivery === 'off';
     return (
         <div data-issue-watch="" className="text-[11px] text-[var(--fg-3)]">
-            <label className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span className="text-[var(--fg-2)]">GitHub, through IssueWatch: {name} hears it</span>
-                <select data-issue-watch-delivery={prefs.delivery} value={prefs.delivery} onChange={(e) => onSet({ delivery: e.target.value as IwDelivery, kinds: prefs.kinds })} className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                    {IW_DELIVERIES.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
-                </select>
-                {outcome}
-            </label>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-[var(--fg-2)]">{name} hears GitHub</span>
+                <span data-issue-watch-delivery={shown.delivery}>
+                    <Select size="xs" list={IW_DELIVERIES.map((d) => ({ value: d.value, label: d.label }))} value={shown.delivery} onValueChange={(v) => send({ delivery: v as IwDelivery, kinds: shown.kinds })} aria-label={`How ${name} hears GitHub`} />
+                </span>
+                {save === null ? null : (
+                    <span data-iw-save={save.phase} className="inline-flex min-w-0 items-center gap-2 text-[var(--fg-2)]">
+                        {save.phase === 'saving' ? 'Saving…' : save.phase === 'saved' ? 'Saved' : <>{save.reason}<Button size="xs" variant="ghost" onClick={() => send(save.setting)}>Retry</Button></>}
+                    </span>
+                )}
+            </div>
             {prefs.chosen ? null : (
                 <span data-issue-watch-default="" className="mt-1 block text-[var(--fg-4)]">
-                    {prefs.delivery === 'off' ? 'Never set: the workspace’s first agent hears GitHub, so this one does not.' : 'Never set: as the workspace’s first agent, it hears new issues, pull requests, security alerts and feedback.'}
+                    {prefs.delivery === 'off' ? 'Default: another agent here hears it.' : 'Default: the first agent here.'}
                 </span>
             )}
-            {/* The kinds in three short groups side by side (agent-management parity item 3), each kind's default marked. */}
+            {/* The kinds in three short groups side by side (agent-management parity item 3). */}
             <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-3">
                 {issueWatchGroups().map((g) => (
                     <fieldset key={g.label} data-iw-group={g.label} className="min-w-0">
                         <legend className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">{g.label}</legend>
-                        <div className="grid gap-1">
+                        <div className="grid min-w-0 gap-1">
                             {g.kinds.map((k) => (
-                                <label key={k.kind} title={k.label} className={`flex items-center gap-2 ${prefs.delivery === 'off' ? 'opacity-60' : ''}`}>
-                                    <input
-                                        type="checkbox"
-                                        data-issue-watch-kind={k.kind}
-                                        checked={prefs.kinds.includes(k.kind)}
-                                        disabled={prefs.delivery === 'off'}
-                                        onChange={(e) => onSet({ delivery: prefs.delivery, kinds: e.target.checked ? [...prefs.kinds, k.kind] : prefs.kinds.filter((x) => x !== k.kind) })}
-                                    />
-                                    <span className="truncate">{k.label}</span>
-                                    {k.default ? <span data-iw-default={k.kind} className="shrink-0 text-[var(--fg-4)]">· default</span> : null}
-                                </label>
+                                <Checkbox
+                                    key={k.kind}
+                                    data-issue-watch-kind={k.kind}
+                                    size="xs"
+                                    className={`min-w-0 ${off ? 'opacity-60' : ''}`}
+                                    label={k.label}
+                                    checked={shown.kinds.includes(k.kind)}
+                                    disabled={off}
+                                    onCheckedChange={(on) => send({ delivery: shown.delivery, kinds: on ? [...shown.kinds, k.kind] : shown.kinds.filter((x) => x !== k.kind) })}
+                                />
                             ))}
                         </div>
                     </fieldset>

@@ -120,8 +120,8 @@ describe('IssueWatch — grouped', () => {
         const html = panel(render('issuewatch'));
         expect(html.indexOf('data-issue-watch-delivery')).toBeLessThan(html.indexOf('data-iw-group'));
         expect([...html.matchAll(/data-iw-group="([A-Za-z]+)"/g)].map((m) => m[1])).toEqual(['Opened', 'Changed', 'Activity']);
-        expect(html).toMatch(/data-issue-watch-kind="issue.new"[^>]*checked=""/);
-        expect(html).not.toMatch(/data-issue-watch-kind="comment"[^>]*checked=""/);
+        expect(html.match(/data-issue-watch-kind="issue.new"[^>]*>.*?<input[^>]*>/)?.[0]).toContain('checked=""');
+        expect(html.match(/data-issue-watch-kind="comment"[^>]*>.*?<input[^>]*>/)?.[0]).not.toContain('checked=""');
     });
 });
 
