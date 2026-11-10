@@ -49,12 +49,9 @@ describe('offline is known as offline', () => {
     it('main says which step failed, and tells the window when Tynn gave the way in', () => {
         const handler = /ipcMain\.handle\('genie:relay-open'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
         expect(handler).toMatch(/stage: 'tynn'/);
-        expect(handler).toMatch(/stage: 'relay'/);
         expect(handler).toContain("'genie:relay-open-step'");
-        // Linked, genie-host mints and says the step (test/relay-member-link.test.ts); on the emergency path, here, in that order.
-        const own = handler.slice(handler.indexOf('PopKeypair.generate('));
-        expect(own.indexOf('mintConnectGrant(')).toBeGreaterThan(-1);
-        expect(own.indexOf('mintConnectGrant(')).toBeLessThan(own.indexOf("'genie:relay-open-step'"));
+        // genie-host mints and says the step (test/relay-member-link.test.ts).
+        expect(handler).not.toMatch(/mintConnectGrant\(/);
     });
 });
 

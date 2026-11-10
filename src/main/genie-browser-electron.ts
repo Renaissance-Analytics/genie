@@ -51,7 +51,7 @@ export interface GenieBrowserWindowOptions {
 }
 
 /** A Genie browser session's rules: a `.gen` certificate trusted only on `caPem()`'s say, every request secure-only. */
-function guardSession(ses: Session, caPem: () => string | null): void {
+export function guardSession(ses: Session, caPem: () => string | null): void {
     let last: { pem: string | null; verify: (presented: PresentedCertificate) => number } | null = null;
     ses.setCertificateVerifyProc((request, callback) => {
         const pem = caPem();
@@ -66,7 +66,7 @@ function guardSession(ses: Session, caPem: () => string | null): void {
 }
 
 /** `.gen` to the front door at `port` (the PAC from core); resolves once Chromium has it. */
-function routeSession(ses: Session, port: number, log: (line: string) => void): Promise<void> {
+export function routeSession(ses: Session, port: number, log: (line: string) => void): Promise<void> {
     return ses.setProxy(genProxyConfig(port)).then(async () => {
         const gen = await ses.resolveProxy('https://example.gen/');
         if (gen !== `PROXY 127.0.0.1:${port}`) log(`[browser-window] .gen sites are NOT routed to the front door (Chromium answered ${JSON.stringify(gen)})`);

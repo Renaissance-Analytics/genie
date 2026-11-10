@@ -16,6 +16,7 @@ import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { readTynnPage } from './tynn-page-client.js';
+import type { TynnBoardPorts } from './tynn-board-client.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
@@ -69,7 +70,7 @@ import { FlowsReplica, FlowsService } from './flows-host.js';
 import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
-import { gappsApi } from './gapps-api.js';
+import { gappSessions, gappsApi } from './gapps-api.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
@@ -916,6 +917,12 @@ async function main(): Promise<void> {
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
     });
     settings.onChange((key, _value, workspaceId) => { if (key === 'remote_access' && workspaceId === undefined) void remoteSwitch.apply().catch((error: unknown) => say(`remote: ${error instanceof Error ? error.message : String(error)}`)); });
+    // Opening has its own deadline; never mistake a pairing still opening for a signed-out owner.
+    const hostTynnBoard = async (): Promise<TynnBoardPorts> => {
+        const account = await tynnOpening;
+        return { signedIn: () => account.status().signedIn === true, projectFor: workspaceTynnProject, request: (path, init) => account.request(path, init) };
+    };
+    const readHostTynnPage = async (workspaceId: string, page: unknown, query: unknown) => readTynnPage(await hostTynnBoard(), workspaceId, page, query);
     const engine = new SessionEngineServer({
         token,
         build,
@@ -945,6 +952,7 @@ async function main(): Promise<void> {
         plugins: pluginsService,
         marketplace: marketplaceHost,
         ...(gappBook ? { gapps: gappsApi(gappBook) } : {}),
+        ...(gappBook && gappServer ? { gappSessions: gappSessions(gappBook, gappServer) } : {}),
         catalog: catalogService,
         flows: flowsService,
         browser: browserService,
@@ -1022,17 +1030,7 @@ async function main(): Promise<void> {
         tynnBoard,
         tynnIssues,
         tynnFeatures,
-        tynnPages: {
-            read: async (workspaceId, page, query) => {
-                // Opening has its own deadline; never mistake a pairing still opening for a signed-out owner.
-                const account = await tynnOpening;
-                return readTynnPage({
-                    signedIn: () => account.status().signedIn === true,
-                    projectFor: workspaceTynnProject,
-                    request: (path, init) => account.request(path, init),
-                }, workspaceId, page, query);
-            },
-        },
+        tynnPages: { read: readHostTynnPage },
         files: {
             subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
             unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
@@ -1075,6 +1073,7 @@ async function main(): Promise<void> {
                 spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
                 lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
             },
+            phase: (agentId, run, phase) => { lifecycleLog(`agent start owner=${agentId} run=${run} phase=${phase}`); },
             ended: (agentId, run, verdict) => {
                 if (verdict.verified) {
                     spawnLedger.forget('agent', agentId, run);
@@ -1204,6 +1203,7 @@ async function main(): Promise<void> {
             stagingDirectory: () => hostScratch.directory(),
         },
         colors: workspaceColors,
+        tynnTab: { board: hostTynnBoard, readPage: readHostTynnPage },
         terminals: terminalHost,
         takeOver: (id) => takeOverHost.probe(id),
         headroom: headroomFeed,

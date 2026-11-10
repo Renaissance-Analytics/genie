@@ -58,7 +58,7 @@ import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { PluginsDump } from './plugins-host.js';
 import { PluginsReplica } from './plugins-replica.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
-import type { GAppsApi } from '../core/gapps.js';
+import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
 import { CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../core/catalog-sync.js';
 import type { CatalogKind, ElementDefinition } from '../core/catalog.js';
 import type { BrowserEvent } from './browser-service.js';
@@ -189,7 +189,7 @@ export class SessionEngineClient {
     #processBook: ProcessBookReplica | null = null;
     #plugins: PluginsReplica | null = null;
     #marketplace: MarketplaceApi | null = null;
-    #gapps: GAppsApi | null = null;
+    #gapps: GAppBookApi | null = null;
     #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
@@ -856,20 +856,29 @@ export class SessionEngineClient {
     }
 
     /** The local window's GApp store actions (GApps v2 V7): the host's book. */
-    gapps(): GAppsApi {
-        const request = async <T>(operation: keyof GAppsApi, args: unknown[]): Promise<T> => {
-            const answer = await this.call('engine.gapps', [operation, args]);
-            if (!answer.ok) throw new Error(answer.reason);
-            return answer.value as T;
-        };
+    gapps(): GAppBookApi {
         this.#gapps ??= {
-            list: () => request('list', []),
-            review: (folder) => request('review', [folder]),
-            install: (folder, options) => request('install', [folder, options]),
-            setOn: async (id, on) => { await request('setOn', [id, on]); },
-            uninstall: async (id) => { await request('uninstall', [id]); },
+            list: () => this.#gappsRequest('list', []),
+            review: (folder) => this.#gappsRequest('review', [folder]),
+            install: (folder, options) => this.#gappsRequest('install', [folder, options]),
+            setOn: async (id, on) => { await this.#gappsRequest('setOn', [id, on]); },
+            uninstall: async (id) => { await this.#gappsRequest('uninstall', [id]); },
         };
         return this.#gapps;
+    }
+
+    /** One window of one app (Tynn #595): this process opens it, and the token stays here. */
+    gappSessions(): GAppSessionsApi {
+        return {
+            open: (packageId) => this.#gappsRequest('openSession', [packageId]),
+            close: (token) => { void this.#gappsRequest('closeSession', [token]).catch(() => undefined); },
+        };
+    }
+
+    async #gappsRequest<T>(operation: string, args: unknown[]): Promise<T> {
+        const answer = await this.call('engine.gapps', [operation, args]);
+        if (!answer.ok) throw new Error(answer.reason);
+        return answer.value as T;
     }
 
     /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */

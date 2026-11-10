@@ -151,7 +151,7 @@ describe('where it is wired', () => {
     const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('with a host, main shows the host’s card; only its own engine reads Chromium’s store for it', () => {
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        expect(main).toMatch(/agentEngineLink\s*\?\s*agentEngineLink\.client\.keyring\(\)/);
+        expect(main).toMatch(/keyring = agentEngineLink\.client\.keyring\(\)/);
         const host = strip(readFileSync('src/main/genie-host.ts', 'utf8'));
         expect(host).toMatch(/new KeyringService\(/);
         expect(host).toMatch(/onReady:/);

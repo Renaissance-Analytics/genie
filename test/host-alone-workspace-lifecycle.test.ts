@@ -220,9 +220,9 @@ describe('the gate', () => {
         expect(registry.workspace('tynn')?.asleep).not.toBe(true);
     });
 
-    it('the Tynn tab is not part of this: still "open a window" (CONTROL)', async () => {
+    it('a family not moved yet still says to open a window (CONTROL)', async () => {
         const api = gate(hostAloneApi(ports()));
-        await expect(api.invoke('workspaces.tynnBoard', ['tynn', {}])).rejects.toThrow('open Genie on alphar');
+        await expect(api.invoke('workspaces.tynnBoardChanges', ['tynn', {}, null, []])).rejects.toThrow('open Genie on alphar');
     });
 });
 

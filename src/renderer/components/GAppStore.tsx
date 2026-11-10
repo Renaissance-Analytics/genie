@@ -10,7 +10,7 @@ import { gappRibbon, type GAppListing, type GAppReview, type GAppsApi } from '..
  * ITS ACTIONS (GApps v2, V7, Tynn #572), over the host's book, for a local window: install from a folder shows the review,
  * each element by Genie's catalog name and each network host, and installs what the person consented to; an update asks
  * only for what is new. Every action shows its progress, then success, or the failure in words with Retry. Uninstall asks
- * first. With no `actions` the store only lists.
+ * first. An installed app that is on can be opened in its own window (Tynn #595). With no `actions` the store only lists.
  */
 export interface GAppStoreActions {
     readonly api: GAppsApi;
@@ -86,6 +86,12 @@ export function GAppStoreFlyout({ open, onClose, apps, actions }: { open: boolea
             return `${app.name} is ${on ? 'on' : 'off'}.`;
         });
     }
+    function openApp(app: GAppListing): void {
+        void perform(`Opening ${app.name}…`, async () => {
+            await actions!.api.open(app.id);
+            return `${app.name} is open.`;
+        });
+    }
     function uninstall(app: GAppListing): void {
         setConfirming(null);
         void perform(`Uninstalling ${app.name}…`, async () => {
@@ -139,6 +145,7 @@ export function GAppStoreFlyout({ open, onClose, apps, actions }: { open: boolea
                                         {app.state === 'off' ? <span className="text-xs text-[var(--fg-3)]">Off</span> : null}
                                         {actions && !app.dev ? (
                                             <span className="ml-auto flex gap-1">
+                                                {app.state === 'off' ? null : <Button data-gapp-action="open" disabled={busy} onClick={() => openApp(app)}>Open</Button>}
                                                 <Button data-gapp-action={app.state === 'off' ? 'turn-on' : 'turn-off'} disabled={busy} onClick={() => setOn(app, app.state === 'off')}>{app.state === 'off' ? 'Turn on' : 'Turn off'}</Button>
                                                 <Button data-gapp-action="uninstall" disabled={busy} onClick={() => setConfirming(app)}>Uninstall</Button>
                                             </span>

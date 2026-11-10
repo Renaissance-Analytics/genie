@@ -284,9 +284,9 @@ describe('a stream never has more than one window of bytes in flight', () => {
 describe('the running host serves its sites over its relay link', () => {
     const src = (f: string) => readFileSync(join(import.meta.dirname, '..', f), 'utf8');
 
-    it('main hands startRelayHost a site dialer on the composed front door, and its CA (counted: exactly one)', () => {
-        const main = src('src/main/main.ts');
-        expect(main.match(/site: \{ dial: \(host\) => dialFrontDoor\(composed\.frontDoorPort, host\), ca: \(\) => composed\.browserTrust\(\)\.caPem \}/g) ?? []).toHaveLength(1);
+    it('genie-host hands the relay a site dialer on its front door, and its CA (counted: exactly one)', () => {
+        const main = src('src/main/genie-host.ts');
+        expect(main.match(/site: \{ dial: \(name: string\) => dialFrontDoor\(hostingStack\.frontDoorPort, name\), ca: \(\) => hostingStack\.browse/g) ?? []).toHaveLength(1);
     });
 
     it('startRelayHost passes it to the link (positive control: the reconnect option beside it is found the same way)', () => {

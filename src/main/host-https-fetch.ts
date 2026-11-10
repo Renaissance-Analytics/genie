@@ -49,7 +49,9 @@ export interface HostHttpsResponse {
     readonly body?: ReadableStream<Uint8Array>;
     text(): Promise<string>;
 }
-export type HostHttpsFetch = (url: string, init: Parameters<SessionFetch>[1]) => Promise<HostHttpsResponse>;
+/** Binary upload bodies stay bytes; account/session fetches retain their narrower string-only contract. */
+export type HostHttpsInit = Omit<Parameters<SessionFetch>[1], 'body'> & { readonly body?: string | Uint8Array };
+export type HostHttpsFetch = (url: string, init: HostHttpsInit) => Promise<HostHttpsResponse>;
 
 function binaryBody(res: IncomingMessage, limit: number | undefined): ReadableStream<Uint8Array> {
     // No flowing data listener: the socket stays backpressured until its owner reads or cancels it.
@@ -122,7 +124,7 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): HostHttpsFetch {
 
     /** Where a redirect points, when it may be followed, by the fetch standard's rules for the method. */
     const REDIRECT_LIMIT = options.followSameOrigin ?? 0;
-    const redirected = (target: URL, init: Parameters<SessionFetch>[1], status: number, location: string | undefined, hops: number): { target: URL; init: Parameters<SessionFetch>[1] } => {
+    const redirected = (target: URL, init: HostHttpsInit, status: number, location: string | undefined, hops: number): { target: URL; init: HostHttpsInit } => {
         if (REDIRECT_LIMIT === 0 || !location) throw new Error(`${target.host} answered with a redirect (${status}), which is refused.`);
         if (hops >= REDIRECT_LIMIT) throw new Error(`${target.host} sent too many redirects (${REDIRECT_LIMIT}).`);
         const next = new URL(location, target);
@@ -135,7 +137,7 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): HostHttpsFetch {
         return { target: next, init };
     };
 
-    const send = (target: URL, init: Parameters<SessionFetch>[1], agent: Agent, hops = 0): ReturnType<HostHttpsFetch> => new Promise((resolve, reject) => {
+    const send = (target: URL, init: HostHttpsInit, agent: Agent, hops = 0): ReturnType<HostHttpsFetch> => new Promise((resolve, reject) => {
         const ask = request(target, { method: init.method, headers: init.headers, agent, rejectUnauthorized: true, signal: init.signal }, (res) => {
             const status = res.statusCode ?? 0;
             if (status >= 300 && status < 400) {

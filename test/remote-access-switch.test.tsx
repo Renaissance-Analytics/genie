@@ -55,6 +55,55 @@ describe('remoteAccess — the listener follows the switch', () => {
         expect(f.calls).toEqual(['start']);
     });
 
+    /*
+     * TWO AT ONCE (Azure pair gp-11102138, beta.61): the window turned remote access on and genie-host's own setting watcher
+     * applied it too, while the first start was still asking Tailscale for its cert (engine.remoteAccess took 34.6 s). Both
+     * saw a listener not yet up and started one; the second bound the same port: `listen EADDRINUSE …:7421`.
+     */
+    function slowListener() {
+        const calls: string[] = [];
+        let listening = false, binding = false;
+        const release: Array<() => void> = [];
+        return {
+            calls, release: () => { for (const r of release.splice(0)) r(); },
+            listener: {
+                start: async () => {
+                    calls.push('start');
+                    if (listening || binding) throw new Error('listen EADDRINUSE: address already in use');
+                    binding = true;
+                    await new Promise<void>((r) => release.push(r));
+                    binding = false; listening = true;
+                },
+                stop: async () => { calls.push('stop'); listening = false; },
+                unavailable: () => (listening ? null : 'not started'),
+            },
+        };
+    }
+
+    it('two applies while the first start is still in flight start it once, and both end with it listening', async () => {
+        const f = slowListener();
+        const access = remoteAccess({ listener: f.listener, enabled: () => true, onChange: () => {} });
+        const first = access.apply(), second = access.apply();
+        await new Promise((r) => setTimeout(r, 10));
+        f.release();
+        await expect(Promise.all([first, second])).resolves.toBeDefined();
+        expect(f.calls).toEqual(['start']);
+        expect(f.listener.unavailable()).toBeNull();
+    });
+
+    it('a Restart while a start is in flight waits for it, then stops and starts once each', async () => {
+        const f = slowListener();
+        const access = remoteAccess({ listener: f.listener, enabled: () => true, onChange: () => {} });
+        const first = access.apply();
+        const restart = access.restart();
+        await new Promise((r) => setTimeout(r, 10));
+        f.release();
+        await new Promise((r) => setTimeout(r, 10));
+        f.release();
+        await Promise.all([first, restart]);
+        expect(f.calls).toEqual(['start', 'stop', 'start']);
+    });
+
     it('Restart stops and starts it while on; while off it starts nothing', async () => {
         const f = fakeListener();
         let enabled = true;
