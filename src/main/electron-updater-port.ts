@@ -42,8 +42,14 @@ export function realElectronUpdaterPort(): UpdaterPort {
             // `isUpdateAvailable` is the library's own verdict (version comparison included);
             // `result` is null when the updater is disabled (dev run without a feed).
             if (!result || !result.isUpdateAvailable) return null;
-            // The version only: its notes come from GitHub's releases API (core/update-notes.ts), not the feed's HTML.
-            return { version: result.updateInfo.version };
+            // The version, and which genie-host it carries (Tynn #413, scripts/feed-host-identity.mjs); its notes come from
+            // GitHub's releases API (core/update-notes.ts), not the feed's HTML.
+            const info = result.updateInfo as typeof result.updateInfo & { genieHostHash?: unknown; genieEngineProtocol?: unknown };
+            return {
+                version: result.updateInfo.version,
+                hostHash: typeof info.genieHostHash === 'string' ? info.genieHostHash : null,
+                engineProtocol: typeof info.genieEngineProtocol === 'number' ? info.genieEngineProtocol : null,
+            };
         },
 
         async download(onProgress) {
