@@ -459,7 +459,7 @@ describe('the app as a caller of Genie\'s tools', () => {
 describe('genie-host wires the bridge (source guard)', () => {
     const source = readFileSync('src/main/genie-host.ts', 'utf8');
     it('the server is given the bridge; the host resolves an app\'s session key; the tool is the MCP server\'s own', () => {
-        expect(source).toMatch(/new GAppServer\(\{ book: gappBook, bridge: gappBridge \}\)/);
+        expect(source).toMatch(/new GAppServer\(\{ book: gappBook, previews: gappPreviews, bridge: gappBridge \}\)/);
         expect(source).toMatch(/flowCallers\.callerFor\(key\) \?\? gappCallers\.callerFor\(key\)/);
         expect(source).toMatch(/createGAppToolRunner\(\{ registrations: \(\) => mcp\?\.registrations\(\) \?\? \[\], callers: gappCallers \}\)/);
     });

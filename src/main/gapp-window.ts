@@ -74,7 +74,7 @@ export class GAppWindows<S> {
         const running = this.#open.get(key);
         if (running) { this.#ports.bringUp(running); return; }
         if (this.#ports.caPem() === null) throw new Error('This Genie has no certificate for its .gen addresses yet, so the app cannot open safely.');
-        const info = await this.#ports.sessions.open(packageId, preview ? { preview: true } : undefined);
+        const info = preview ? await this.#ports.sessions.open(packageId, { preview: true }) : await this.#ports.sessions.open(packageId);
         let browserSession: S;
         try {
             browserSession = await this.#ports.prepareSession(key);

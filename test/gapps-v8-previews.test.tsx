@@ -165,8 +165,14 @@ describe('running a preview', () => {
     });
 
     it('a preview\'s token is not the installed app\'s, nor its origin', async () => {
+        const installed = join(root, 'installed');
+        await appFolder(installed);
+        const review = await book.reviewInstall(installed);
+        if (!review.ok) throw new Error(review.reason);
+        await book.install(installed, { scope: 'workstation', consent: { digest: review.review.digest, items: review.review.items } });
         const session = await sessions().open(ID, { preview: true });
-        expect(await call(session, appHost(ID), 'app.me')).toMatchObject({ ok: false });
+        expect(await call(session, previewHost(ID), 'app.me')).toMatchObject({ result: { preview: true } }); // Control: at its own origin.
+        expect(await call(session, appHost(ID), 'app.me')).toMatchObject({ ok: false, reason: expect.stringMatching(/not for this app/) });
     });
 });
 
