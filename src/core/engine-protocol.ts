@@ -1,3 +1,4 @@
+import { hostHashOf } from './update-kind.js';
 import type { RowsPatch } from './agent-push-wire.js';
 import type { GateView } from './rate-limit-gate.js';
 import type { LiveSession } from './roster.js';
@@ -314,7 +315,10 @@ export type HostDecision = { readonly kind: 'start' } | { readonly kind: 'adopt'
 export function hostDecision(record: HostRecord | null, alive: (pid: number) => boolean, want: { protocol: number; build: string }): HostDecision {
     if (record === null || !alive(record.pid)) return { kind: 'start' };
     if (record.protocol !== want.protocol) return { kind: 'replace', record, why: `protocol ${record.protocol}, this window speaks ${want.protocol}` };
-    if (record.build !== want.build) return { kind: 'replace', record, why: `build ${record.build}, this window is ${want.build}` };
+    // The same host by its hash, whatever the version (Tynn #413): a client-only update's window adopts the host that kept running.
+    if (record.build !== want.build && !(hostHashOf(record.build) !== null && hostHashOf(record.build) === hostHashOf(want.build))) {
+        return { kind: 'replace', record, why: `build ${record.build}, this window is ${want.build}` };
+    }
     return { kind: 'adopt', record };
 }
 

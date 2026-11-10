@@ -137,10 +137,18 @@ jobs:
           # electron-publish reads EP_DRAFT before anything else: whatever it creates is a draft. It never un-drafts
           # the draft it finds. test/release-draft.test.ts refuses EP_PRE_RELEASE and any public releaseType here.
           EP_DRAFT: 'true'
+        # Built without publishing, its feed told which host it carries (Tynn #413), then uploaded into the guard's draft
+        # with gh, exactly as Windows is: electron-builder writes latest-linux.yml only as it builds.
         run: |
           tag="${GITHUB_REF_NAME#v}"
+          npx electron-builder --publish never
+          node scripts/feed-host-identity.mjs release/latest-linux.yml
+          if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != true ]; then
+            echo "::error::Linux upload requires an existing draft release"
+            exit 1
+          fi
           echo "uploading v$tag into its draft"
-          npx electron-builder --publish always
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" release/*.AppImage release/latest-linux.yml --clobber
 
   # Separate job: environment and id-token permission are job-scoped, so putting them on
   # the old matrix would grant Linux the Windows signing identity as well.
@@ -188,6 +196,9 @@ jobs:
         run: gh release view v2.0.0-beta.59 --repo "$GITHUB_REPOSITORY" --json tagName,assets --jq '{tagName,assets:[.assets[]|{name,size}]}' > release/signature-evidence/beta59-release-assets.json
       - name: prove the signed installer's updater metadata and asset names
         run: node scripts/verify-windows-update.cjs release release/signature-evidence/beta59-release-assets.json
+      # Which genie-host this release carries (Tynn #413): an update whose host is the one running is client-only.
+      - name: name the host in the feed
+        run: node scripts/feed-host-identity.mjs release/latest.yml
       - name: publish
         shell: bash
         env:

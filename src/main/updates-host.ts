@@ -357,14 +357,17 @@ export class UpdatesService {
 
     /** The install's last steps: the helper is handed it, then this host exits (it maps the executable the installer replaces). */
     async #handOver(): Promise<void> {
+        // A client-only update (Tynn #413): this host keeps running from its own copy, so the installer waits for the windows only.
+        const clientOnly = this.#host.clientOnly();
         const wait: InstallWait = {
-            pids: [this.#options.host.ownPid, ...this.#windowPids],
+            pids: clientOnly ? [...this.#windowPids] : [this.#options.host.ownPid, ...this.#windowPids],
             installDir: this.#options.host.installDir,
             boundMs: this.#options.installWaitMs ?? INSTALL_WAIT_MS,
         };
         try {
             await this.#request('install', undefined, wait);
-            this.#log('updater: it has the install; this host exits');
+            this.#log(clientOnly ? 'updater: it has the install; only the window is updated, so this host stays' : 'updater: it has the install; this host exits');
+            if (clientOnly) return;
         } catch (error) {
             const why = error instanceof Error ? error.message : String(error);
             // Everything this host ran is already stopped: it exits either way. A person who clicked Install is never left

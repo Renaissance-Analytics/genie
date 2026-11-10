@@ -1,6 +1,7 @@
 import { orphanReport, orphansUnder, type RunningProcess } from './upgrade.js';
 import { changelogBetween, type ReleaseLike, type UpdateChangelog } from '../core/update-notes.js';
 import { DEFAULT_UPDATE_CHANNEL, updaterConfigFor, type UpdateChannel } from '../core/update-channel.js';
+import { classifyUpdate } from '../core/update-kind.js';
 
 /**
  * THE UPDATE HOST — §7, wired.
@@ -283,7 +284,9 @@ export class UpdateHost {
                 const checkedAt = this.clock();
                 if (found) {
                     const fetching = this.options.releases && this.options.runningVersion ? { changelog: null } : {};
-                    this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, ...fetching });
+                    // What it changes (Tynn #413): the window alone, or genie-host too. Said with the offer, kept until it is installed.
+                    const scope = classifyUpdate(found, this.options.running);
+                    this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, scope, ...fetching });
                     if ('changelog' in fetching) void this.#fetchChangelog(found.version);
                 }
                 else this.set({ phase: 'none', version: null, percent: null, error: null, checkedAt });
@@ -312,7 +315,7 @@ export class UpdateHost {
             this.set({ ...this.current, phase: 'error', error: message });
             return false;
         }
-        this.set({ phase: 'downloaded', version, percent: 100, error: null, checkedAt: this.current.checkedAt, ...(this.current.changelog !== undefined ? { changelog: this.current.changelog } : {}) });
+        this.set({ phase: 'downloaded', version, percent: 100, error: null, checkedAt: this.current.checkedAt, ...(this.current.scope ? { scope: this.current.scope } : {}), ...(this.current.changelog !== undefined ? { changelog: this.current.changelog } : {}) });
         return true;
     }
 
@@ -325,7 +328,8 @@ export class UpdateHost {
     install(): Promise<InstallResult> | null {
         if (this.current.phase !== 'downloaded') return null;
         // No agent is asked for a handoff (the owner): the sessions end, and each resumes its own thread when started.
-        const live = this.options.agents?.live() ?? [];
+        // A CLIENT-ONLY UPDATE (Tynn #413) ends none: genie-host and its agents keep running through it.
+        const live = this.clientOnly() ? [] : this.options.agents?.live() ?? [];
         /*
          * "INSTALLING" FIRST (genie#1201; the owner: "the whole Genie UI freezes, turns a pale white … We need a better UX
          * during that time"). This used to stop every agent, read every process and kill each inside the click's own
@@ -334,6 +338,11 @@ export class UpdateHost {
          */
         this.set({ ...this.current, phase: 'installing', installing: { step: 'agents', agents: live.length, left: live.length } });
         return this.finishInstall(live);
+    }
+
+    /** The update on offer changes only the window (Tynn #413): installing it keeps genie-host and its agents running. */
+    clientOnly(): boolean {
+        return this.current.scope?.kind === 'client-only';
     }
 
     /** The report of the install that ran last (the drain's words first, then §7.2's), for the UI that missed the return value. */
@@ -357,8 +366,10 @@ export class UpdateHost {
             }
         }
         // §7.4: an upgrade ends every agent session and does not revive them — waited for, bounded, never held on main.
+        // Not a client-only one (Tynn #413): the host keeps its agents, and what it hosts, through it.
+        const clientOnly = this.clientOnly();
         let stillStopping = 0;
-        if (this.options.agents) {
+        if (this.options.agents && !clientOnly) {
             let left = live.length;
             const stopped = Promise.resolve(this.options.agents.stopAll((n) => { left = n; progress({ step: 'agents', agents: live.length, left: n }); })).then(() => true, () => true);
             let bound: ReturnType<typeof setTimeout> | undefined;
@@ -369,7 +380,7 @@ export class UpdateHost {
         }
         progress({ step: 'processes', agents: live.length, left: stillStopping });
         // What else the install stops before the scan (P5b: genie-host's sites and front door, P5a.3's order; containers stay).
-        await this.options.stopHosted?.().catch(() => undefined);
+        if (!clientOnly) await this.options.stopHosted?.().catch(() => undefined);
         const orphans = orphansUnder(
             await this.options.processes(),
             this.options.installDir,
@@ -379,7 +390,7 @@ export class UpdateHost {
         await Promise.all(orphans.map((p) => Promise.resolve(this.options.kill(p.pid)).catch(() => false)));
         progress({ step: 'restarting', agents: live.length, left: stillStopping });
         (this.options.defer ?? ((fn, ms) => { setTimeout(fn, ms); }))(() => this.options.port.quitAndInstall(), QUIT_DELAY_MS);
-        const ended = this.options.agents ? `${endedReport(live)}${stillStopping > 0 ? ` (${stillStopping} still stopping when the installer started)` : ''}. ` : '';
+        const ended = clientOnly ? 'Only the window was updated; genie-host and every agent kept running. ' : this.options.agents ? `${endedReport(live)}${stillStopping > 0 ? ` (${stillStopping} still stopping when the installer started)` : ''}. ` : '';
         const result: InstallResult = { killed: orphans, report: `${ended}${orphanReport(orphans)}` };
         this.last = result;
         return result;

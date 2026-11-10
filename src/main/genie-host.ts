@@ -678,6 +678,8 @@ async function main(): Promise<void> {
             kill: killProcessAsync,
             channel: channelFrom(settings.snapshot().update_channel),
             runningVersion,
+            // Which host this is (Tynn #413): an update carrying this very host is client-only, and this host keeps running.
+            running: { build, protocol: ENGINE_PROTOCOL },
             releases: async () => {
                 const memory = await proxyMemory;
                 const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say });

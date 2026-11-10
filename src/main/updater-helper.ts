@@ -146,7 +146,7 @@ export function runUpdaterHelper(ports: UpdaterHelperPorts): { readonly done: Pr
         cancelIdle?.();
         cancelIdle = schedule(() => { if (busy === 0 && !installing) end(`nothing asked for ${Math.round(idleMs / 1000)} s; leaving`); }, idleMs);
     };
-    const check = async (): Promise<{ version: string } | null> => {
+    const check = async (): Promise<{ version: string; hostHash?: string | null; engineProtocol?: number | null } | null> => {
         const found = await ports.port.check();
         if ((found?.version ?? null) !== checked) downloaded = false;
         checked = found?.version ?? null;
