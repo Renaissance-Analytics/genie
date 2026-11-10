@@ -87,6 +87,8 @@ export interface UpdatesServiceOptions {
     readonly handOverFailed?: (reason: string, launch: HelperLaunch) => void;
     /** Why this host has no updater (P10.1d: plain Node, its image updated by its deployment). Absent = it has one. */
     readonly unavailable?: string;
+    /** This host runs from its own copy, not from the install (host-runtime.ts), so an installer can replace the install under it (Tynn #414). */
+    readonly runsFromCopy?: boolean;
 }
 
 /** Why the last install did not happen, for the next window (`<home>/runtime/update-failed.json`). */
@@ -134,6 +136,11 @@ export function helperLaunch(launch: HelperLaunch): HelperLaunch {
  * electron-updater installs over the app it runs from. The window, which runs from the install, names its executable to the
  * host as GENIE_INSTALL_EXEC; with none (a host started in place, a dev run) the host's own executable, as before.
  */
+/** The install's directory (Tynn #414): the window names its executable as GENIE_INSTALL_EXEC. Not built yet: the red's stand-in. */
+export function installDirOf(_env: Readonly<Record<string, string | undefined>>, _execPath: string): string {
+    return '';
+}
+
 export function updaterDefaultLaunch(env: Readonly<Record<string, string | undefined>>, execPath: string): HelperLaunch {
     const install = env.GENIE_INSTALL_EXEC;
     return { file: typeof install === 'string' && install.length > 0 ? install : execPath, args: ['--updater'] };
@@ -406,6 +413,10 @@ export function hostDrainAgents(input: {
     writeInterruptedAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     stopAll: (onLeft?: (left: number) => void) => Promise<void>;
     onRecordError?: (error: unknown) => void;
+    /** How long the drain waits for turns in flight (Tynn #414). */
+    settleMs?: number;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
 }): DrainAgentsPort {
     return {
         live: () => input.agents().filter((a) => input.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),

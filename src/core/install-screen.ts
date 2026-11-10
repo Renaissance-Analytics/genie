@@ -7,7 +7,7 @@
 export interface InstallScreenInput {
     readonly phase: string;
     readonly version: string | null;
-    readonly installing?: { readonly step: 'agents' | 'processes' | 'restarting'; readonly agents: number; readonly left: number };
+    readonly installing?: { readonly step: 'turns' | 'agents' | 'processes' | 'restarting'; readonly agents: number; readonly left: number; readonly waitingOn?: readonly string[] | undefined };
 }
 
 export interface InstallScreen {

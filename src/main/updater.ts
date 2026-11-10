@@ -65,9 +65,11 @@ export interface UpdateState {
 }
 
 export interface InstallProgress {
-    step: 'agents' | 'processes' | 'restarting';
+    step: 'turns' | 'agents' | 'processes' | 'restarting';
     agents: number;
     left: number;
+    /** In the `turns` step: the agents whose turn is still in flight (Tynn #414). */
+    waitingOn?: readonly string[];
 }
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
@@ -100,6 +102,8 @@ export interface UpdaterPort {
  */
 export interface DrainAgentsPort {
     live(): ReadonlyArray<{ id: string; name: string }>;
+    /** Wait, bounded, for turns in flight to reach a safe point, saying who it waits on (Tynn #414). Absent = no wait. */
+    settle?(onWaiting: (names: readonly string[]) => void): Promise<void>;
     /** End every session; resolves once each stop has ended, reporting how many are still stopping as they do. */
     stopAll(onLeft?: (left: number) => void): Promise<void> | void;
 }
