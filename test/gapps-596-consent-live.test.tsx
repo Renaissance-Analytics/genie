@@ -258,7 +258,7 @@ describe('the list is live across windows', () => {
         expect(engine).toMatch(/if \(conn\.authed && conn\.local\) this\.#event\(conn, 'gapps\.changed'/);
         expect(readFileSync(join('src', 'main', 'session-engine-client.ts'), 'utf8')).toMatch(/case 'gapps\.changed':/);
         const host = readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8');
-        expect(host).toMatch(/gappsChanged: \(listener\) => gappBook\.onChange\(listener\)/);
+        expect(host).toMatch(/gappsChanged: \(listener\) => gappBook!\.onChange\(listener\)/);
         expect(host).toMatch(/gappsApi\(gappBook, askOnDeck\(approvals,/);
         expect(readFileSync(join('src', 'main', 'main.ts'), 'utf8')).toMatch(/client\.onGappsChanged\(/);
         expect(readFileSync(join('src', 'renderer', 'Shell.tsx'), 'utf8')).toMatch(/gapps\.onChanged\(/);

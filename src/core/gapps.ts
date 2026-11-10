@@ -36,10 +36,19 @@ export interface GAppsApi {
     uninstall(id: string): Promise<void>;
     /** Open the app's own window, or bring it to the front. Rejects with why it could not. */
     open(id: string): Promise<void>;
+    /** The book changed, here or in another window: read the list again. Returns the function that stops listening. */
+    onChanged(listener: () => void): () => void;
 }
 
-/** What the host's book does; opening is the window process's own. */
-export type GAppBookApi = Omit<GAppsApi, 'open'>;
+/** What the host's book does; opening and listening are the window's own. */
+export type GAppBookApi = Omit<GAppsApi, 'open' | 'onChanged'>;
+
+/** The review, as the Deck says it: everything it asks for, in Genie's words, and where it would act. */
+export function gappInstallDetail(review: GAppReview, where: string): string {
+    const asks = review.items.map((item) => (item.kind === 'element' ? `${item.name} (${item.description})` : item.kind === 'network' ? `network access to ${item.host}` : `a new publisher, ${item.to}, was ${item.from}`));
+    const who = review.publisher === 'unverified' ? 'Unverified: no publisher has signed it' : `signed by ${review.publisher}`;
+    return `${review.name} ${review.version}, ${who}, to act in ${where}. It asks for: ${asks.length === 0 ? 'nothing' : asks.join('; ')}`;
+}
 
 /** One window of one app, from the host to the process that opens it. The token never reaches a Genie page. */
 export interface GAppSessionInfo {

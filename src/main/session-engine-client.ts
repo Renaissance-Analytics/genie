@@ -190,6 +190,7 @@ export class SessionEngineClient {
     #plugins: PluginsReplica | null = null;
     #marketplace: MarketplaceApi | null = null;
     #gapps: GAppBookApi | null = null;
+    readonly #gappsChanged = new Set<() => void>();
     #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
@@ -390,6 +391,9 @@ export class SessionEngineClient {
                 return;
             case 'catalog.changed':
                 void this.catalog().apply(payload as CatalogChange).catch(() => {});
+                return;
+            case 'gapps.changed':
+                for (const listener of [...this.#gappsChanged]) listener();
                 return;
             case 'plugins.event':
                 this.plugins().rebase(payload as PluginsDump);
@@ -865,6 +869,12 @@ export class SessionEngineClient {
             uninstall: async (id) => { await this.#gappsRequest('uninstall', [id]); },
         };
         return this.#gapps;
+    }
+
+    /** The host's GApp book changed (Tynn #596). */
+    onGappsChanged(listener: () => void): () => void {
+        this.#gappsChanged.add(listener);
+        return () => { this.#gappsChanged.delete(listener); };
     }
 
     /** One window of one app (Tynn #595): this process opens it, and the token stays here. */

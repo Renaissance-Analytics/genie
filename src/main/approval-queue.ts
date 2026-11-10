@@ -36,6 +36,7 @@ interface Pending {
 }
 
 const VERBS: Record<string, string> = {
+    'gapps.install': 'install an app',
     create: 'open a terminal',
     write: 'write to a terminal',
     // An agent's `services` / `sites` tools (mcp-tools-hosting.ts): the detail names the engine, version and image.
@@ -194,7 +195,8 @@ export class ApprovalQueue {
             source: 'agent-question',
             agentId: p.caller.agentId,
             agentName: p.caller.agentName,
-            workspaceId: p.caller.workspaceId,
+            // No workspace is Genie's own section of the Deck (a GApp install asks for the workstation).
+            workspaceId: p.caller.workspaceId === '' ? null : p.caller.workspaceId,
             title: `${p.caller.agentName} wants to ${VERBS[p.action] ?? p.action}: ${p.detail}`,
             blocking: true,
             priority: 'high',

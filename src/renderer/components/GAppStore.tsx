@@ -8,8 +8,8 @@ import { gappRibbon, type GAppListing, type GAppReview, type GAppsApi } from '..
  * launcher always wears its ribbon (core/gapps.ts `gappRibbon`). `apps: null` is still loading; `[]` is none yet.
  *
  * ITS ACTIONS (GApps v2, V7, Tynn #572), over the host's book, for a local window: install from a folder shows the review,
- * each element by Genie's catalog name and each network host, and installs what the person consented to; an update asks
- * only for what is new. Every action shows its progress, then success, or the failure in words with Retry. Uninstall asks
+ * each element by Genie's catalog name and each network host, then waits for the person's answer on the Deck (Tynn #596);
+ * an update asks only for what is new. Every action shows its progress, then success, or the failure in words with Retry. Uninstall asks
  * first. An installed app that is on can be opened in its own window (Tynn #595). With no `actions` the store only lists.
  */
 export interface GAppStoreActions {
@@ -73,7 +73,7 @@ export function GAppStoreFlyout({ open, onClose, apps, actions }: { open: boolea
         const here = actions!.workspace;
         const scope = !review.update && here !== null && !everywhere ? [here.id] : 'workstation' as const;
         setReviewing(null);
-        void perform(`Installing ${review.name}…`, async () => {
+        void perform(review.update ? `Waiting for your answer on the Deck to update ${review.name}…` : `Waiting for your answer on the Deck to install ${review.name}…`, async () => {
             await actions!.api.install(folder, { scope, consent: { digest: review.digest, items: review.items } });
             await reread();
             return `${review.name} ${review.version} is installed.`;
@@ -186,7 +186,7 @@ function Review({ review, workspace, everywhere, onEverywhere, onConsent, onCanc
                 </label>
             ) : null}
             <div className="flex gap-2">
-                <Button data-gapp-action="consent" onClick={onConsent}>{review.update ? 'Allow and update' : 'Allow and install'}</Button>
+                <Button data-gapp-action="request-install" onClick={onConsent}>{review.update ? 'Update' : 'Install'}</Button>
                 <Button data-gapp-action="cancel" onClick={onCancel}>Cancel</Button>
             </div>
         </div>

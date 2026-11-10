@@ -532,6 +532,8 @@ export function Shell({
         // A list the host could not give leaves what was shown, or shows none rather than loading for ever.
         try { setGappList(await gapps.list()); } catch { setGappList((shown) => shown ?? []); }
     }, [gapps]);
+    // Live across windows (Tynn #596): the book changed, here or in another window, so read it again.
+    useEffect(() => (gapps ? gapps.onChanged(() => { void refreshGapps(); }) : undefined), [gapps, refreshGapps]);
     const onScreenId = onScreen?.id ?? null;
     const onScreenName = onScreen ? (onScreen.name ?? folderName(onScreen.path)) : null;
     const gappStore = useMemo(() => (gapps && pickGappFolder ? {
