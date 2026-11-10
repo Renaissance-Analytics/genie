@@ -27,6 +27,8 @@ const itemOf = (text: string, id = 'li_1'): DeckItem => deckItemsFrom({
 } as unknown as Parameters<typeof deckItemsFrom>[0])[0]!;
 const render = (items: readonly DeckItem[]) =>
     renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} />);
+/** Text as a person reads it: the markup's entities (`&#x27;` for an apostrophe) turned back into their characters. */
+const decoded = (text: string) => text.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 /** The row's first line: everything up to the end of its header. */
 const header = (html: string, id: string) => html.slice(html.indexOf(`data-deck-item="${id}"`), html.indexOf(`data-deck-body="${id}"`) > 0 ? html.indexOf(`data-deck-body="${id}"`) : undefined);
 
@@ -80,7 +82,7 @@ describe('the row', () => {
             const html = render([itemOf(text)]);
             const title = control(html, 'data-deck-preview="li_1"');
             expect(title, text.slice(0, 30)).toMatchObject({ tag: 'button', fancy: true });
-            expect(title!.text).toBe(body.title);
+            expect(decoded(title!.text)).toBe(body.title);
             expect(title!.open).toMatch(/font-semibold/);
             expect(html).not.toContain('portal.azure.com');
             expect(html).not.toContain(body.steps[1]!);
