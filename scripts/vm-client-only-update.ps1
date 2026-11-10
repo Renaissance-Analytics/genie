@@ -1,6 +1,11 @@
-﻿# vm-client-only-update.ps1 — A CLIENT-ONLY UPDATE, PROVEN (Tynn #413, host split P6): runs INSIDE genie-test-windows (PowerShell 5.1).
+﻿# vm-client-only-update.ps1 — A CLIENT-ONLY UPDATE, PROVEN (Tynn #413, host split P6).
 #
-#   scripts/vm-run.sh genie-test-windows repos/genie 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\vm-client-only-update.ps1'
+# Needs only Windows PowerShell 5.1, a logged-on Windows desktop session (the host's keychain, the window) and this
+# repository checked out with `npm ci` run. It assumes no particular machine: from the checkout's root, in that session,
+#
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\vm-client-only-update.ps1
+#
+# It installs into the session user's %LOCALAPPDATA%\Programs\Genie, serves its feed on 127.0.0.1:8099, and uninstalls at the end.
 #
 # As vm-windows-update.ps1 (a LOCAL release: electron-builder's own latest.yml + installer, served by serve-feed.mjs), but the
 # update carries THE SAME genie-host: $Next differs from $Base in its version only. Its latest.yml names that host
