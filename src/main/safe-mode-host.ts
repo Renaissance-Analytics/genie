@@ -2,6 +2,7 @@ import { renameOver, renameOverSync } from '../core/atomic-rename.js';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { crashCause } from '../core/crash-record.js';
 import {
     ALIVE_FILE, ALIVE_PREV_FILE, CLEAN_EXIT_FILE, NOT_SAFE, SAFE_MODE_FILE, UNKNOWN_CAUSE,
     bootDecision, parseAlive, parseCleanExit, parseRecord,
@@ -38,24 +39,35 @@ export class SafeMode {
         this.#view = view;
     }
 
-    static open(runtimeDir: string, options: { readonly now?: () => number; readonly pid?: number; readonly log?: (line: string) => void; readonly cause?: () => string; readonly asyncBeat?: boolean } = {}): SafeMode {
+    static open(runtimeDir: string, options: { readonly now?: () => number; readonly pid?: number; readonly log?: (line: string) => void; readonly cause?: () => string; readonly asyncBeat?: boolean; readonly machineBootedAt?: () => number } = {}): SafeMode {
         const now = options.now ?? Date.now;
         const log = options.log ?? (() => {});
         mkdirSync(runtimeDir, { recursive: true });
         const read = (name: string): string | null => { try { return readFileSync(join(runtimeDir, name), 'utf8'); } catch { return null; } };
         const cleanExit = parseCleanExit(read(CLEAN_EXIT_FILE));
+        let causeRead: string | null = null;
+        const causeOf = (): string => {
+            if (causeRead !== null) return causeRead;
+            try { causeRead = options.cause ? options.cause() : UNKNOWN_CAUSE; } catch { causeRead = UNKNOWN_CAUSE; }
+            return causeRead;
+        };
+        let bootedAt: number | undefined;
+        try { bootedAt = options.machineBootedAt?.(); } catch { bootedAt = undefined; }
         const decision = bootDecision({
             cleanExit,
             record: parseRecord(read(SAFE_MODE_FILE)),
             alive: parseAlive(read(ALIVE_FILE)) ?? parseAlive(read(ALIVE_PREV_FILE)),
             now: now(),
+            ...(bootedAt !== undefined ? { machineBootedAt: bootedAt } : {}),
+            // Only a run that ended with no record of its own: a hang or an exit code is a crash whatever followed it.
+            ...(options.cause ? { leftATrace: () => { const c = causeOf(); return c !== crashCause(null) && c !== UNKNOWN_CAUSE; } } : {}),
         });
         // REMOVED AT BOOT: from here on, only this run's own clean end can write it again.
         rmSync(join(runtimeDir, CLEAN_EXIT_FILE), { force: true });
         // THE CAUSE (cut 3: crash-records.ts `previousRunCause`), read only for a run that did not end cleanly: a kept crash
         // loop after a clean end has no record of its own to read. Never fatal: an unreadable cause is the unknown one.
         let cause = UNKNOWN_CAUSE;
-        if (decision.active && cleanExit === null && options.cause) { try { cause = options.cause(); } catch { cause = UNKNOWN_CAUSE; } }
+        if (decision.active && cleanExit === null && options.cause) cause = causeOf();
         const view: SafeModeView = decision.active
             ? { active: true, at: decision.at, cause, crashLoop: decision.crashLoop, agents: [...decision.agents], processes: [], sites: [] }
             : NOT_SAFE;

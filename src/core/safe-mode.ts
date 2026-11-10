@@ -114,7 +114,13 @@ export interface BootDecision {
 }
 
 /** What this boot is: from the marker, the record and the last run's last sign of life. */
-export function bootDecision(input: { readonly cleanExit: CleanExit | null; readonly record: SafeModeRecord | 'absent' | 'unreadable'; readonly alive: Alive | null; readonly now: number }): BootDecision {
+export function bootDecision(input: {
+    readonly cleanExit: CleanExit | null; readonly record: SafeModeRecord | 'absent' | 'unreadable'; readonly alive: Alive | null; readonly now: number;
+    /** When this machine booted; absent = not known. */
+    readonly machineBootedAt?: number;
+    /** Whether the last run left a crash record of its own (a hang, an exit code): asked only when it matters. */
+    readonly leftATrace?: () => boolean;
+}): BootDecision {
     const { cleanExit, alive, now } = input;
     if (input.record === 'absent' && cleanExit === null) {
         return { active: false, at: null, crashLoop: false, agents: [], record: { uncleanEnds: [], kept: false } };
@@ -122,6 +128,11 @@ export function bootDecision(input: { readonly cleanExit: CleanExit | null; read
     const record: SafeModeRecord = input.record === 'absent' || input.record === 'unreadable' ? { uncleanEnds: [], kept: false } : input.record;
     if (cleanExit !== null) {
         // A clean end. Only a crash loop the person has not left keeps safe mode on.
+        return { active: record.kept, at: record.kept ? (record.uncleanEnds.at(-1) ?? null) : null, crashLoop: record.kept, agents: [], record };
+    }
+    // THE MACHINE WENT DOWN, NOT GENIE (Tynn #598): the last run's last sign of life is from before this machine booted, and
+    // it left no crash record of its own. A restart, a shutdown or a power cut ended it, as it ended everything else.
+    if (alive !== null && input.machineBootedAt !== undefined && alive.at < input.machineBootedAt && input.leftATrace?.() === false) {
         return { active: record.kept, at: record.kept ? (record.uncleanEnds.at(-1) ?? null) : null, crashLoop: record.kept, agents: [], record };
     }
     const end = alive?.at ?? now;

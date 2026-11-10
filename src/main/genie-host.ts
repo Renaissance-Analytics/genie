@@ -4,7 +4,7 @@ import './close-inherited-fds.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
-import { hostname } from 'node:os';
+import { hostname, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
@@ -267,7 +267,7 @@ async function main(): Promise<void> {
      */
     // Its cause (cut 3): the newest crash record since the previous host started — its host.json is still here until this one writes its own.
     // Its beat written off this host's thread (Tynn #538): a synchronous one held it 233 ms under a build's disk load.
-    const safeMode = SafeMode.open(runtime, { asyncBeat: true, log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
+    const safeMode = SafeMode.open(runtime, { asyncBeat: true, machineBootedAt: () => Date.now() - uptime() * 1000, log: (line) => { say(line); lifecycleLog(line); }, cause: () => previousRunCause(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null) });
     const safeNow = () => safeMode.active();
     // THE CRASH STATE (Tynn #386): the previous run's newest record (its host.json is still the old one here) and, after a
     // hang, the reopened window's notice; local windows are told both (crash-state-host.ts).
