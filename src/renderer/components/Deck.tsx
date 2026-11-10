@@ -1,12 +1,14 @@
 import { Badge, Button, Icon } from '@particle-academy/react-fancy';
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { QuestionForm } from './QuestionForm.js';
 import { answeringFor, type ApprovalAnswering } from '../../core/approval-answering.js';
 import {
     ageLabel,
     DAY_MS,
     deckBand,
+    deckBody,
     deckPreview,
+    linkParts,
     deckSections,
     dismissableOlderThan,
     earlierRuns,
@@ -99,13 +101,15 @@ export interface DeckProps {
     onDismissOlder?: ((olderThanMs: number) => void) | undefined;
     /** "Dismiss all stale" — exactly the ids shown marked stale. Absent = not offered. */
     onDismissStale?: ((ids: string[]) => void) | undefined;
+    /** Items drawn opened (a test of the opened row; the Deck itself opens one on a click). */
+    initiallyExpanded?: readonly string[] | undefined;
     /** The clock the ages are read against; now by default (tests pass a fixed one). */
     now?: number | undefined;
 }
 
 const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 
-export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, focusId = null, onDismiss, onDismissOlder, onDismissStale, now = Date.now() }: DeckProps) {
+export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, focusId = null, onDismiss, onDismissOlder, onDismissStale, now = Date.now(), initiallyExpanded }: DeckProps) {
     const band = deckBand(items);
     // The workspace sections hold what waits; the stale questions have their own band below (2026-11-08).
     const sections = deckSections(items.filter((i) => !isStale(i)));
@@ -227,6 +231,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             focusRef={focusRef}
                             onDismiss={onDismiss}
                             now={now}
+                            initiallyExpanded={initiallyExpanded}
                         />
                     ))}
                 </div>
@@ -282,6 +287,7 @@ interface RowProps {
     focusRef: RefObject<HTMLDivElement | null>;
     onDismiss?: ((item: DeckItem, notes: string[]) => void) | undefined;
     now: number;
+    initiallyExpanded?: readonly string[] | undefined;
 }
 
 /** One workspace's section: the Dashboard's group header (name, then how many wait and how many are stale), then its rows. */
@@ -299,11 +305,11 @@ function DeckSectionView({ section, ...row }: RowProps & { section: DeckSection 
     );
 }
 
-function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now }: RowProps & { item: DeckItem }) {
+function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now, initiallyExpanded }: RowProps & { item: DeckItem }) {
     // A stale question's form is folded away until the person chooses to answer it anyway — its agent is not waiting.
     const [opened, setOpened] = useState(false);
     // A long to-do or message shows its first line; a click opens the whole text (the owner, 2026-10-18).
-    const [expanded, setExpanded] = useState(false);
+    const [expanded, setExpanded] = useState(initiallyExpanded?.includes(item.id) === true);
     const stale = item.stale;
     const questions = item.answer.kind === 'form' ? (item.answer.questions ?? null) : null;
     const dismissable = onDismiss !== undefined && isDismissable(item);
@@ -338,12 +344,13 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                 {questions ? (
                     <span data-deck-title={item.id} className="min-w-0 flex-1 truncate font-semibold text-[var(--fg-1)]">{item.title}</span>
                 ) : (() => {
+                    // A short bold title (Tynn #602): the item's first line, and all the closed row shows.
                     const { preview, more } = deckPreview(item.title);
-                    if (!more) return <span data-deck-title={item.id} className="min-w-0 flex-1 break-words text-[var(--fg-2)]">{item.title}</span>;
+                    if (!more) return <span data-deck-title={item.id} className="min-w-0 flex-1 break-words font-semibold text-[var(--fg-1)]">{preview}</span>;
                     return (
                         <span data-deck-title={item.id} className="flex min-w-0 flex-1 items-baseline gap-2">
-                            {expanded ? null : (
-                                <Button size="xs" type="button" data-deck-preview={item.id} onClick={() => setExpanded(true)} className="min-w-0 truncate text-left text-[var(--fg-2)] hover:text-[var(--fg-1)] justify-start">{preview}</Button>
+                            {expanded ? <span className="min-w-0 break-words font-semibold text-[var(--fg-1)]">{deckBody(item.title).title}</span> : (
+                                <Button size="xs" type="button" data-deck-preview={item.id} onClick={() => setExpanded(true)} className="min-w-0 truncate text-left font-semibold text-[var(--fg-1)] justify-start">{preview}</Button>
                             )}
                             <Button size="xs" type="button" data-action="deck-expand" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)} className="shrink-0 text-[12px] text-[var(--accent)]">{expanded ? 'Show less' : 'Show all'}</Button>
                         </span>
@@ -365,6 +372,10 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                         Open
                     </Button>
                 ) : null}
+                {/* Done (a to-do's answer, a message's) ends the row, beside Open (Tynn #602): not a row of its own. */}
+                {item.answer.kind === 'inline' && item.source !== 'agent-question' ? (
+                    <InlineOptions options={item.answer.options} answering={answeringHere} onAnswer={(optionId) => onAnswer(item, optionId)} inRow />
+                ) : null}
                 {/* A stale question goes in one click (its form is folded; once opened, its own Dismiss carries the notes). */}
                 {stale && dismissable && !showForm ? (
                     <Button size="xs" type="button" data-action="question-dismiss" data-deck-dismiss={item.id} onClick={() => onDismiss?.(item, [])} title="Put this question aside; the agent is told" className="shrink-0 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
@@ -374,9 +385,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
             </div>
 
             {/* The whole text, opened (its line breaks kept): instructions read step by step, not as one run-on line. */}
-            {expanded && !questions ? (
-                <p data-deck-full={item.id} className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-[var(--fg-2)]">{item.title}</p>
-            ) : null}
+            {expanded && !questions ? <DeckItemBody item={item} /> : null}
 
             {/* Answered WHERE IT IS READ. Navigating away is what the acceptance test forbids. */}
             {/*
@@ -386,9 +395,6 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
              */}
             {item.answer.kind === 'inline' && item.source === 'agent-question' ? (
                 <ApprovalCard approval={{ question: item.title, options: item.answer.options, why: item.why ?? null }} answering={answeringHere} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
-            ) : null}
-            {item.answer.kind === 'inline' && item.source !== 'agent-question' ? (
-                <InlineOptions options={item.answer.options} answering={answeringHere} onAnswer={(optionId) => onAnswer(item, optionId)} />
             ) : null}
 
             {/*
@@ -449,9 +455,34 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
 }
 
 /** A to-do's, a message's or a finished agent's doors — the buttons alone; the text is the row's. */
-function InlineOptions({ options, answering, onAnswer }: { options: readonly { id: string; label: string }[]; answering: string | null; onAnswer: (optionId: string) => void }) {
+/**
+ * An item opened (Tynn #602): its text, then its steps as a numbered list, each web address a link that opens in the
+ * browser (the window sends every new-window link out, main/external-links.ts). One long line with no steps is shown whole.
+ */
+function DeckItemBody({ item }: { item: DeckItem }) {
+    const body = deckBody(item.title);
+    const paragraphs = body.steps.length === 0 && body.text.length === 0 ? [item.title.trim()] : body.text;
     return (
-        <div className="mt-2 flex flex-wrap gap-2">
+        <div data-deck-body={item.id} data-deck-full={item.id} className="mt-2 flex max-w-[72ch] flex-col gap-2 break-words text-[13px] leading-relaxed text-[var(--fg-2)]">
+            {paragraphs.map((p, i) => <p key={i}>{linked(p)}</p>)}
+            {body.steps.length > 0 ? (
+                <ol data-deck-steps={item.id} className="flex list-decimal flex-col gap-1 pl-5">
+                    {body.steps.map((step, i) => <li key={i} data-deck-step={i + 1}>{linked(step)}</li>)}
+                </ol>
+            ) : null}
+        </div>
+    );
+}
+
+function linked(text: string): ReactNode[] {
+    return linkParts(text).map((part, i) => (typeof part === 'string' ? part : (
+        <Button key={i} variant="ghost" size="xs" href={part.url} target="_blank" rel="noreferrer" data-deck-link="" className="inline h-auto break-all p-0 align-baseline text-[13px] text-[var(--accent)] underline">{part.url}</Button>
+    )));
+}
+
+function InlineOptions({ options, answering, onAnswer, inRow = false }: { options: readonly { id: string; label: string }[]; answering: string | null; onAnswer: (optionId: string) => void; inRow?: boolean }) {
+    return (
+        <div className={inRow ? 'flex shrink-0 gap-1' : 'mt-2 flex flex-wrap gap-2'}>
             {options.map((option) => (
                 <Button size="xs"
                     key={option.id}
