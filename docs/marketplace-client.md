@@ -47,3 +47,56 @@ body cap RED before implementation. Tests use injected REST responses, actual
 B4 package signing and the real B5 plugin host, including withdrawn-key refusal
 with checks on/off and stale tool references. All Genie tests run on CI under
 the owner's C3 instruction; no test launches the owner's desktop application.
+
+## Publishing a package (C5)
+
+From the Genie source checkout, run:
+
+```sh
+npm run publish:plugin -- /path/to/package --key-file /private/publisher.pem --token-file /private/publisher.token
+```
+
+Use a local Ed25519 private key in PEM format whose public key is registered
+with your verified Tynn publisher. The signed manifest's `publisher.keyId`
+must equal that public key's `sha256:` SPKI fingerprint. In Tynn's
+**Account → Publishers**, mint a named, expiring publish-only token and save
+the one-time value in the token file. Revoke it there when no longer needed.
+Alternatively, supply the token in `GENIE_PUBLISH_TOKEN`; an explicit token
+file takes precedence. The CLI does not read account sessions, project keys
+or Genie pairing credentials. Encrypted private keys requiring an interactive
+passphrase are not supported.
+
+The root manifest is `genie-package.json`, following Genie's forward-only
+package contract. An old-name-only folder is refused. The detached signature
+keeps its `genie-plugin.sig` filename.
+
+Keep credential files outside the package directory. The publisher refuses
+credential files within it and snapshots containing the supplied key/token or
+PEM private-key material. Never pass secret contents in command-line arguments
+or paste them into logs; command runners may echo arguments before the CLI runs.
+
+The command uses B4's existing file reader, limits, digest and signing bytes.
+It signs every regular file, including dotfiles, and creates the root detached
+signature in the upload snapshot. It replaces an old signature in that snapshot
+without writing to your source directory. Links, invalid manifests, mismatched
+keys and packages over B4 limits are refused before network upload.
+
+Uploads use stateless HTTPS REST at `/api/v1/marketplace/publish`, with only the
+dedicated publisher bearer and an `archive` ZIP. OS/bundled certificate trust and
+explicit TLS verification are preserved; cookies and redirects are refused.
+The upload deadline is two minutes; confirmations are limited to 64 KiB and must
+match the package id, version, digest and key. New versions and identical retries
+succeed; a changed immutable version, unregistered/revoked key or unusable token
+fails with its HTTP status and guidance. Recognized Tynn key/signature refusals
+receive fixed safe wording. Raw response bodies and crypto/file exceptions are
+never printed. A failed confirmation can be retried with the same
+unchanged package; Tynn keeps an identical retry idempotent.
+
+For a development registry, explicitly set `--origin https://tynn-c5.gen`.
+An origin must use HTTPS without embedded credentials, path, query or fragment.
+The opt-in `test/live/publish-plugin.live.ts` fixture refuses production and
+checks the actual npm command, retry, registry trust and the Marketplace session's
+search/review/consent/install path using a disposable publisher. It requires the
+owner-approved isolated Tynn setup and `tynn_test` lock; it never opens Electron
+or a browser. UI rendering is covered separately by the existing Marketplace
+tests; this Node proof is not a visual check of the tab.
