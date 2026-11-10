@@ -145,6 +145,20 @@ describe('Settings → Remote access', () => {
         expect(html).toMatch(/>Disconnect</);
     });
 
+    it('connected and the host has sent no Remote access: it says so, in words, naming the host, never an endless skeleton', () => {
+        const connect = { state: { connected: true, host: 'drone', isOwner: true, workspaceId: null, driver: 'pilot', driving: true, locked: false, lastRefusal: null, needsBaton: false } as never, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
+        const html = renderToStaticMarkup(<RemoteAccess remote={null} workspaces={[]} onAction={() => {}} connect={connect as never} />);
+        expect(html).toContain('Open Genie on drone to see its settings');
+        expect(html).not.toContain('data-skeleton');
+    });
+
+    it('once the host\'s Remote access arrives, the words go', () => {
+        const connect = { state: { connected: true, host: 'drone', isOwner: true, workspaceId: null, driver: 'pilot', driving: true, locked: false, lastRefusal: null, needsBaton: false } as never, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
+        const html = renderToStaticMarkup(<RemoteAccess remote={base} workspaces={[]} onAction={() => {}} connect={connect as never} />);
+        expect(html).not.toContain('to see its settings');
+        expect(html).toContain('data-remote-connected');
+    });
+
     it('CONTROL: not connected and nothing read yet, there is only the skeleton', () => {
         const connect = { state: null, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
         const html = renderToStaticMarkup(<RemoteAccess remote={null} workspaces={[]} onAction={() => {}} connect={connect as never} />);
