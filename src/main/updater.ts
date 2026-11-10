@@ -59,6 +59,8 @@ export interface UpdateState {
      * then what runs from the install directory being closed, then the restart. The window's restart screen says it.
      */
     installing?: InstallProgress;
+    /** What the update on offer changes (Tynn #413): only the window (`client-only`), or genie-host too. Absent = nothing on offer. */
+    scope?: import('../core/update-kind.js').UpdateScope;
 }
 
 export interface InstallProgress {
@@ -74,8 +76,11 @@ export interface UpdaterPort {
      * update channel CHANGES (`UpdateHost.setChannel`). Each call replaces the last.
      */
     configure(channel: { allowPrerelease: boolean; autoDownload: boolean }): void;
-    /** Resolves the offered version, or `null` when there is none. Rejects on a library error. */
-    check(): Promise<{ version: string } | null>;
+    /**
+     * Resolves the offered version, or `null` when there is none. Rejects on a library error. `hostHash` and
+     * `engineProtocol` are what the release feed says of the offered genie-host (Tynn #413); absent = not said.
+     */
+    check(): Promise<{ version: string; hostHash?: string | null; engineProtocol?: number | null } | null>;
     /** Downloads the update found by the last check, reporting progress 0–100. */
     download(onProgress: (percent: number) => void): Promise<void>;
     /** Quits and runs the installer. Does not return in the real implementation. */
@@ -127,6 +132,8 @@ export interface UpdateHostOptions {
     stopHosted?: () => Promise<void>;
     /** Other pids whose trees the teardown scan leaves alone (P5b: the updater helper, the window that asked). */
     spare?: () => readonly number[];
+    /** The genie-host running now: what an offer is compared with to know whether it changes the host (Tynn #413). */
+    running?: import('../core/update-kind.js').RunningHost;
 }
 
 /**
