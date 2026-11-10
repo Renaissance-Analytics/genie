@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -129,5 +129,8 @@ describe('a computer that went down is not a crash', () => {
     it('a run that left a crash record before the machine went down is still a crash (CONTROL)', () => {
         const mode = SafeMode.open(lastRun(), { now: () => T + HOUR, machineBootedAt: () => T + 5 * 60_000, cause: () => 'it stopped responding' } as never);
         expect(mode.view()).toMatchObject({ active: true, cause: 'it stopped responding' });
+    });
+    it('genie-host tells safe mode when this machine booted', () => {
+        expect(readFileSync('src/main/genie-host.ts', 'utf8')).toMatch(/machineBootedAt: \(\) => Date\.now\(\) - uptime\(\) \* 1000/);
     });
 });

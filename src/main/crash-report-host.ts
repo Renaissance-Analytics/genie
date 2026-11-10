@@ -1,4 +1,4 @@
-import { checkBeforeSend, crashReportText, crashSignatures, factsFromRecord, redactCrashText, type CrashFacts, type RedactionContext } from '../core/crash-report.js';
+import { checkBeforeSend, crashReportText, crashSignatures, factsFromRecord, redactCrashText, redactionWords, type CrashFacts, type RedactionContext } from '../core/crash-report.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import { hangNoticeView, type HangNotice } from '../core/crash-record.js';
 
@@ -31,7 +31,8 @@ export interface CrashReportDeps {
     readonly fetch: (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<{ status: number; json(): Promise<unknown> }>;
 }
 
-export type CrashSendAnswer = { ok: true; issueUrl: string } | { ok: false; reason: string; signIn?: boolean; cleaned?: string };
+/** `cleaned` / `cleanedNotes`: what redaction left of the report / the note, to be looked at and sent again. */
+export type CrashSendAnswer = { ok: true; issueUrl: string } | { ok: false; reason: string; signIn?: boolean; cleaned?: string; cleanedNotes?: string };
 
 const NOT_SIGNED_IN = 'Sign in to Tynn to send this report';
 /** Tynn needs a stack: a crash record without one (before the hang watchdog's) says so. */
@@ -60,10 +61,19 @@ export function crashReportHost(deps: CrashReportDeps) {
         async send(text: string, notes: string): Promise<CrashSendAnswer> {
             const f = facts();
             if (!f) return { ok: false, reason: 'There is no crash to report.' };
+            // Each box that redaction changes comes back cleaned, with which words went (Tynn #598): the note used to come back
+            // as the report, so the note box never changed and every Send refused the same words.
             const checked = checkBeforeSend(text, ctx());
-            if (!checked.ok) return { ok: false, reason: checked.reason, cleaned: checked.text };
             const notesChecked = checkBeforeSend(notes, ctx());
-            if (!notesChecked.ok) return { ok: false, reason: 'Genie removed private details from what you were doing. Check it, then Send again.', cleaned: text };
+            if (!checked.ok || !notesChecked.ok) {
+                const where = [!checked.ok ? `the report: ${redactionWords(text, ctx())}` : null, !notesChecked.ok ? `what you were doing: ${redactionWords(notes, ctx())}` : null].filter(Boolean).join('; ');
+                return {
+                    ok: false,
+                    reason: `Genie took out ${where}. Check it, then Send.`,
+                    ...(checked.ok ? {} : { cleaned: checked.text }),
+                    ...(notesChecked.ok ? {} : { cleanedNotes: notesChecked.text }),
+                };
+            }
             const id = await deps.identity().catch(() => null);
             if (!id) return { ok: false, reason: NOT_SIGNED_IN, signIn: true };
             let res: { status: number; json(): Promise<unknown> };
