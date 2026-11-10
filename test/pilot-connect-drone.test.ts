@@ -95,6 +95,25 @@ describe('a Pilot connects to a Drone with no window open, as its window does', 
         await d.devices.flushed();
     });
 
+    /*
+     * WHAT THE DRONE SAYS (Azure pair gp-11102252): the Pilot's badge said "you are driving" while the Drone's own status said
+     * nobody was. genie-host's windows read the remote host's connections from its pushed status, which is pushed on a change;
+     * the baton changing was not one, so the status kept the connection as it was at hello: not driving.
+     */
+    it('the Drone announces that the Pilot now drives, so what its windows read says so', async () => {
+        const d = await drone();
+        const opened = await d.link.open('window', URL);
+        if (!opened.ok) throw new Error(opened.reason);
+        let status = d.host.connections();
+        d.host.onChange(() => { status = d.host.connections(); });
+        const client = connectRemote(channelTransport(d, opened.channel), { kind: 'pin', code: '482913', label: 'pilot' }, 'pilot', { drive: true });
+        expect(await client.ready).toEqual({ ok: true });
+        await vi.waitFor(() => expect(client.state()).toMatchObject({ driving: true }));
+        await vi.waitFor(() => expect(status).toEqual([expect.objectContaining({ label: 'pilot', driving: true })]));
+        client.close();
+        await d.devices.flushed();
+    });
+
     it('a keychain slow to keep the pairing still lets the welcome through, and the window drives', async () => {
         let release!: () => void;
         const held = new Promise<void>((r) => { release = r; });
