@@ -33,7 +33,12 @@ export function gappsApi(book: GAppBook, ask: AskPerson, previews?: GAppPreviews
                 id: `preview:${p.packageId}`, packageId: p.packageId, name: p.name, version: p.version, state: 'installed', dev: true,
                 workspace: p.workspaceName, unverified: p.unverified, networkAllowed: p.networkAllowed,
             }));
-            return [...book.list().map(listing), ...launchers];
+            // A second workspace holding the same package is told why it has none.
+            const turnedAway = (previews?.duplicates() ?? []).map((d): GAppListing => {
+                const offered = previews!.entry(d.packageId);
+                return { id: `preview-of:${d.workspaceId}`, name: offered?.name ?? d.packageId, version: offered?.version ?? null, state: 'installed', dev: true, workspace: d.workspaceName, reason: d.reason };
+            });
+            return [...book.list().map(listing), ...launchers, ...turnedAway];
         },
         allowPreviewNetwork: async (packageId, allowed) => {
             if (!previews) throw new Error('No workspace previews here.');

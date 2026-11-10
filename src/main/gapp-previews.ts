@@ -16,7 +16,7 @@ import { checkPackage, currentDigest } from './plugin-package.js';
  *    allows it (B5's rule for an unsigned package). A package signed as it is now has its publisher, and its granted hosts;
  *  - its own grant, asked like an install (V2's review, for its own workspace), kept in `<dir>/previews.json`;
  *  - its own store and its own origin (the bridge and the server, by `preview: true`).
- * One app per package id: a second workspace holding the same package is not offered, and says why.
+ * One app per package id: a second workspace holding the same package is not offered, and is told why (`duplicates`).
  */
 export interface GAppPreview {
     readonly packageId: string;
@@ -43,6 +43,14 @@ export interface GAppPreviewsPorts {
 }
 
 interface Kept { readonly grant: GAppGrant | null; readonly networkAllowed: boolean }
+
+/** A workspace whose package is already offered from another: why it has no launcher. */
+export interface GAppPreviewDuplicate {
+    readonly workspaceId: string;
+    readonly workspaceName: string;
+    readonly packageId: string;
+    readonly reason: string;
+}
 interface Found { readonly preview: Omit<GAppPreview, 'grant' | 'networkAllowed'>; readonly dir: string; readonly app: ElementDefinition; readonly request: GAppRequest }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -51,6 +59,7 @@ export class GAppPreviews {
     readonly #ports: GAppPreviewsPorts;
     #kept: Record<string, Kept>;
     #found = new Map<string, Found>();
+    #duplicates: GAppPreviewDuplicate[] = [];
     readonly #listeners = new Set<() => void>();
     #queue: Promise<unknown> = Promise.resolve();
 
@@ -73,15 +82,28 @@ export class GAppPreviews {
     /** Read every workspace's folder again: what it holds now is what its launcher offers. */
     async scan(): Promise<void> {
         const found = new Map<string, Found>();
+        const duplicates: GAppPreviewDuplicate[] = [];
         for (const workspace of this.#ports.workspaces()) {
             const one = await this.#read(workspace);
-            if (one && !found.has(one.preview.packageId)) found.set(one.preview.packageId, one);
+            if (!one) continue;
+            const first = found.get(one.preview.packageId);
+            if (!first) { found.set(one.preview.packageId, one); continue; }
+            duplicates.push({
+                workspaceId: workspace.id, workspaceName: workspace.name, packageId: one.preview.packageId,
+                reason: `${one.preview.name} (${one.preview.packageId}) is already offered from the workspace ${first.preview.workspaceName}: Genie runs one preview of a package at a time.`,
+            });
         }
         this.#found = found;
+        this.#duplicates = duplicates;
     }
 
     list(): readonly GAppPreview[] {
         return [...this.#found.values()].map((f) => this.#withKept(f));
+    }
+
+    /** The workspaces with no launcher because their package is offered from another, and why. */
+    duplicates(): readonly GAppPreviewDuplicate[] {
+        return this.#duplicates;
     }
 
     entry(packageId: string): GAppPreview | null {

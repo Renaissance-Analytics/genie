@@ -157,6 +157,7 @@ export function GAppStoreFlyout({ open, onClose, apps, actions }: { open: boolea
                                         {ribbon ? <Badge data-gapp-dev-ribbon variant="soft" size="sm" color="violet">{ribbon}</Badge> : null}
                                         {app.dev && app.workspace ? <span className="text-xs text-[var(--fg-3)]">from {app.workspace}</span> : null}
                                         {app.state === 'off' ? <span className="text-xs text-[var(--fg-3)]">Off</span> : null}
+                                        {app.reason ? <span data-gapp-reason className="text-xs text-[var(--fg-3)]">{app.reason}</span> : null}
                                         {app.dev && app.unverified ? <Badge data-gapp-unverified variant="soft" size="sm" color="amber">Unverified</Badge> : null}
                                         {actions && app.dev && app.packageId ? (
                                             <span className="ml-auto flex gap-1">

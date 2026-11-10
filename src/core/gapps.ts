@@ -84,6 +84,8 @@ export interface GAppListing {
     /** A dev launcher not signed as it is now: no network until the person allows it. */
     readonly unverified?: boolean;
     readonly networkAllowed?: boolean;
+    /** Why this workspace has no launcher (its package is offered from another): said in the row, with nothing to run. */
+    readonly reason?: string;
 }
 
 /**
