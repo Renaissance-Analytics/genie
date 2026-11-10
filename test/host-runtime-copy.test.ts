@@ -27,7 +27,8 @@ function install(platform: NodeJS.Platform = 'linux'): HostRuntimeInput {
     write(join(app, 'dist', 'main', 'chunk-1.js'), 'chunk');
     write(join(app, 'package.json'), '{"type":"module"}');
     write(join(app, 'node_modules', 'node-pty', 'index.js'), 'pty');
-    write(join(app, 'node_modules', 'unrelated', 'index.js'), 'not needed');
+    write(join(app, 'node_modules', 'some-dependency', 'index.js'), 'a runtime dependency');
+    write(join(app, 'node_modules', '@particle-academy', 'fancy-file-commons', 'index.js'), 'commons');
     write(join(app, 'node_modules', '@particle-academy', 'prism-acp', 'dist', 'index.js'), 'prism');
     write(join(app, 'node_modules', '@particle-academy', 'prism-acp', 'package.json'), '{"type":"module"}');
     const unpacked = join(dist, 'resources', 'app.unpacked');
@@ -83,19 +84,22 @@ describe('the copy', () => {
         for (const f of ['dist/index.js', 'package.json', 'native/win32-x64/prism-acp-supervisor.exe']) expect(existsSync(join(prism, f)), f).toBe(true);
     });
 
-    it('every package the main bundle leaves external and the host imports is in the copy (Tynn #597)', () => {
-        const config = readFileSync('vite.main.config.ts', 'utf8');
-        const external = /external: \[([^\]]*)\]/.exec(config)?.[1] ?? '';
-        const packages = [...external.matchAll(/'([^']+)'/g)].map((m) => m[1]!).filter((name) => name !== 'electron');
-        expect(packages, 'the pattern reads the real config').toContain('node-pty');
-        const copied = readFileSync('src/main/host-runtime.ts', 'utf8').match(/const HOST_PACKAGES[^\n]*/)?.[0] ?? '';
-        for (const name of packages) expect(copied, name).toContain(name.replace('/', '\\/'));
-    });
-
-    it('not what it doesn’t', async () => {
+    it('holds EVERY package the install ships: the main build is ssr, so all dependencies stay external (Tynn #597)', async () => {
+        // A hand list missed @particle-academy/fancy-file-commons on CI (a chunk of the host imports it), and the packaged
+        // host died with ERR_MODULE_NOT_FOUND. Whatever electron-builder ships is a runtime dependency of some bundle.
+        expect(readFileSync('vite.main.config.ts', 'utf8'), 'the main build externalizes its dependencies').toMatch(/ssr: true/);
         const input = install();
         await materializeHostRuntime(input);
-        expect(existsSync(join(input.genieHome, 'host', 'abc123', 'node_modules', 'unrelated'))).toBe(false);
+        const modules = join(input.genieHome, 'host', 'abc123', 'node_modules');
+        for (const name of ['some-dependency', '@particle-academy/fancy-file-commons', '@particle-academy/prism-acp', 'node-pty']) {
+            expect(existsSync(join(modules, name)), name).toBe(true);
+        }
+        expect(readFileSync('src/main/host-runtime.ts', 'utf8'), 'no hand list to fall behind').not.toMatch(/HOST_PACKAGES/);
+    });
+
+    it('not what it doesn’t: Electron files the runtime does not need', async () => {
+        const input = install();
+        await materializeHostRuntime(input);
         expect(existsSync(join(input.genieHome, 'host', 'runtime-45.2.2', 'locales'))).toBe(false);
     });
 
