@@ -1,8 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileLockIdentityStatus } from '@particle-academy/prism-harness';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fileLockIdentityStatus, warmLockIdentity } from '@particle-academy/prism-harness';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
@@ -18,6 +18,12 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
  * lock's 5 s wait. Rows queued together go to the thread together, in order, as one record.
  */
 let dir: string;
+// As genie-host's boot does (genie-host.ts awaits warmLockIdentity before its session host takes work): the one-time read
+// is paid here, and what it cost is said, so the settle below measures the thread and nothing else (#682).
+beforeAll(async () => {
+    await warmLockIdentity();
+    console.log(`[#682] ${process.platform} lock identity read once: ${Math.round(fileLockIdentityStatus().sample_duration_ms)} ms`);
+}, 30_000);
 const hosts: SessionHost[] = [];
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-batched-')); });
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(hosts.splice(0).map((h) => h.settled())); await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
