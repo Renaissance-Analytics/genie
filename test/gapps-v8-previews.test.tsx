@@ -127,6 +127,23 @@ describe('the launcher', () => {
     });
 });
 
+describe('two workspaces holding the same package', () => {
+    it('the first is offered; the second is told why it has no launcher, and has nothing to run', async () => {
+        await appFolder(workspaces[1]!.path, { sign: false });
+        await previews.scan();
+        expect(previews.list().map((p) => p.workspaceId)).toEqual(['w1']);
+        expect(previews.duplicates()).toEqual([{ workspaceId: 'w2', workspaceName: 'other', packageId: ID, reason: `Notes (${ID}) is already offered from the workspace notes: Genie runs one preview of a package at a time.` }]);
+        const api = gappsApi(book, async () => 'allowed', previews);
+        const listed = await api.list();
+        expect(listed).toContainEqual({ id: 'preview-of:w2', name: 'Notes', version: '0.1.0', state: 'installed', dev: true, workspace: 'other', reason: `Notes (${ID}) is already offered from the workspace notes: Genie runs one preview of a package at a time.` });
+        expect(listed.filter((l) => l.packageId === ID)).toHaveLength(1);
+    });
+
+    it('CONTROL: with only one, nobody is told anything', async () => {
+        expect(previews.duplicates()).toEqual([]);
+    });
+});
+
 describe('running a preview', () => {
     it('the first run asks like an install, for its own workspace, and nothing runs until it is answered', async () => {
         const opened = await sessions().open(ID, { preview: true });
@@ -263,6 +280,12 @@ describe('the store', () => {
         act(() => { q(`${row} [data-gapp-action="allow-network"]`)!.click(); });
         await settle();
         expect(api.allowPreviewNetwork).toHaveBeenCalledWith(ID, true);
+    });
+
+    it('a workspace whose package is already offered from another says why, and offers nothing to run', () => {
+        draw([{ id: 'preview-of:w2', name: 'Notes', version: '0.1.0', state: 'installed', dev: true, workspace: 'other', reason: 'Notes is already offered from the workspace notes.' }]);
+        expect(q('[data-gapp="preview-of:w2"] [data-gapp-reason]')!.textContent).toBe('Notes is already offered from the workspace notes.');
+        expect(q('[data-gapp="preview-of:w2"] [data-gapp-action]')).toBeNull();
     });
 
     it('a launcher whose network is allowed offers to block it again; a signed one has no Unverified', () => {
