@@ -867,6 +867,7 @@ export class SessionEngineClient {
             install: (folder, options) => this.#gappsRequest('install', [folder, options]),
             setOn: async (id, on) => { await this.#gappsRequest('setOn', [id, on]); },
             uninstall: async (id) => { await this.#gappsRequest('uninstall', [id]); },
+            allowPreviewNetwork: async (id, allowed) => { await this.#gappsRequest('allowPreviewNetwork', [id, allowed]); },
         };
         return this.#gapps;
     }
@@ -880,7 +881,7 @@ export class SessionEngineClient {
     /** One window of one app (Tynn #595): this process opens it, and the token stays here. */
     gappSessions(): GAppSessionsApi {
         return {
-            open: (packageId) => this.#gappsRequest('openSession', [packageId]),
+            open: (packageId, options) => this.#gappsRequest('openSession', [packageId, options ?? {}]),
             close: (token) => { void this.#gappsRequest('closeSession', [token]).catch(() => undefined); },
         };
     }

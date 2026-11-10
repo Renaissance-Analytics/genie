@@ -570,6 +570,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setOn: async (id, on) => { await read('gapps.setOn', id, on); },
             uninstall: async (id) => { await read('gapps.uninstall', id); },
             open: async (id) => { await read('gapps.open', id); },
+            preview: async (id) => { await read('gapps.preview', id); },
+            allowPreviewNetwork: async (id, allowed) => { await read('gapps.allowPreviewNetwork', id, allowed); },
             onChanged: (listener) => on(LOCAL_EVENTS.gapps, () => listener()),
         };
         bridge.marketplace = {

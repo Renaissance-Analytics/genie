@@ -71,6 +71,7 @@ import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
 import { askOnDeck, gappSessions, gappsApi } from './gapps-api.js';
+import { GAppPreviews } from './gapp-previews.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
@@ -784,6 +785,9 @@ async function main(): Promise<void> {
      * turned-on apps are in the catalog beside the plugins'; a change rebuilds it.
      */
     let gappBook: GAppBook | null = null;
+    let gappPreviews: GAppPreviews | null = null;
+    /** A GApp's consent, on the Deck (Tynn #596): an install's, and a preview's first run (V8). */
+    const gappAsk = askOnDeck(approvals, (id) => { const path = hostRegistry.workspace(id)?.path; return path ? basename(path) : id; });
     const catalogService = new CatalogService(() => hostCatalog(pluginsService.plugins(), gappBook ?? undefined));
     pluginsService.onEvent(() => catalogService.rebuild());
     // A package installed, updated, disabled or removed reaches agents now, not at the next restart (ADF A6).
@@ -799,13 +803,20 @@ async function main(): Promise<void> {
         gappBook.onChange(() => catalogService.rebuild());
         catalogService.rebuild();
         // GApps v2 V4: installed apps at their own origins, behind the front door.
+        // GApps v2 V8: each workspace's own app, run as a preview from its folder.
+        gappPreviews = await GAppPreviews.open({
+            dir: join(home, 'gapps'), keys: PUBLISHER_KEYS, catalog: () => hostCatalog(pluginsService.plugins(), gappBook ?? undefined),
+            workspaces: () => hostRegistry.listWorkspaces().map((w) => ({ id: w.id, name: basename(w.path), path: w.path })),
+        });
+        gappPreviews.onChange(() => { for (const listener of gappRouteListeners) listener(); });
         const gappBridge = new GAppBridge({
             book: gappBook,
+            previews: gappPreviews,
             catalog: (id) => catalogService.snapshot().definitions.find((d) => d.id === id) ?? null,
             run: createGAppToolRunner({ registrations: () => mcp?.registrations() ?? [], callers: gappCallers }),
             onCatalogChange: (listener) => catalogService.onEvent((change) => listener(change.revision)),
         });
-        gappServer = new GAppServer({ book: gappBook, bridge: gappBridge });
+        gappServer = new GAppServer({ book: gappBook, previews: gappPreviews, bridge: gappBridge });
         await gappServer.listen(0);
         gappBook.onChange(() => { for (const listener of gappRouteListeners) listener(); });
         for (const listener of gappRouteListeners) listener();
@@ -951,8 +962,8 @@ async function main(): Promise<void> {
         processes: processesService,
         plugins: pluginsService,
         marketplace: marketplaceHost,
-        ...(gappBook ? { gapps: gappsApi(gappBook, askOnDeck(approvals, (id) => { const path = hostRegistry.workspace(id)?.path; return path ? basename(path) : id; })), gappsChanged: (listener) => gappBook!.onChange(listener) } : {}),
-        ...(gappBook && gappServer ? { gappSessions: gappSessions(gappBook, gappServer) } : {}),
+        ...(gappBook ? { gapps: gappsApi(gappBook, gappAsk, gappPreviews ?? undefined), gappsChanged: (listener) => gappBook!.onChange(listener) } : {}),
+        ...(gappBook && gappServer ? { gappSessions: gappSessions(gappBook, gappServer, gappPreviews ? { previews: gappPreviews, ask: gappAsk } : undefined) } : {}),
         catalog: catalogService,
         flows: flowsService,
         browser: browserService,

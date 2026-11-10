@@ -64,6 +64,8 @@ async function install(id: string, options: { uses: string[]; storage?: string; 
 function bridgeOver(quotaBytes?: number): GAppBridge {
     return new GAppBridge({
         book,
+        // A preview of an installed app, with that app's grant: what is tested here is that its store is its own.
+        previews: { entry: (id) => { const e = book.list().find((x) => x.packageId === id); return e ? { ...e, workspaceId: 'w1', workspaceName: 'w1', publisher: e.grant.publisher, networkAllowed: false } : null; }, appElement: (id) => book.appElement(id) },
         catalog: (id) => (gone.has(id) ? null : catalog.get(id)),
         run,
         onCatalogChange: (fn) => { fireCatalog = fn; return () => undefined; },

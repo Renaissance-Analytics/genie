@@ -54,6 +54,8 @@ function fakeApi(): Fake {
         setOn: vi.fn<GAppsApi['setOn']>().mockResolvedValue(undefined),
         uninstall: vi.fn<GAppsApi['uninstall']>().mockResolvedValue(undefined),
         open: vi.fn<GAppsApi['open']>().mockResolvedValue(undefined),
+        preview: vi.fn<GAppsApi['preview']>().mockResolvedValue(undefined),
+        allowPreviewNetwork: vi.fn<GAppsApi['allowPreviewNetwork']>().mockResolvedValue(undefined),
         onChanged: vi.fn<GAppsApi['onChanged']>(() => () => undefined),
     };
 }
@@ -271,7 +273,8 @@ describe('what the store shows', () => {
 
     it('a launcher of a workspace\'s app has no install-book actions', () => {
         draw([launcher]);
-        expect(q('[data-gapp="ws-shop"] [data-gapp-action]')).toBeNull();
+        // A launcher runs a preview (V8); the book's own actions are an installed app's only.
+        for (const action of ['open', 'turn-off', 'turn-on', 'uninstall']) expect(q(`[data-gapp="ws-shop"] [data-gapp-action="${action}"]`), action).toBeNull();
     });
 
     it('a window with no actions only lists', () => {
@@ -428,7 +431,7 @@ describe('the actions cross to the host only from a local window', () => {
     it('the engine answers a local window only, and the host hands it the book (source guard)', () => {
         const server = readFileSync(join('src', 'main', 'session-engine-server.ts'), 'utf8');
         expect(server).toMatch(/if \(method === 'engine\.gapps'\) \{\s*if \(!conn\.local \|\| !conn\.window\) throw/);
-        expect(readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8')).toMatch(/gappBook \? \{ gapps: gappsApi\(gappBook, askOnDeck\(approvals,/);
+        expect(readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8')).toMatch(/gappBook \? \{ gapps: gappsApi\(gappBook, gappAsk, /);
         expect(readFileSync(join('src', 'main', 'main.ts'), 'utf8')).toMatch(/gapps: \(\) => withGappWindows\(agentEngineLink\?\.client\)/);
     });
 

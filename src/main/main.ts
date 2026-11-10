@@ -1307,6 +1307,7 @@ function withGappWindows(client: { gapps(): GAppBookApi } | undefined): GAppsApi
     return {
         ...client.gapps(),
         open: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id); },
+        preview: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id, { preview: true }); },
         onChanged: (listener) => { gappsChangedListeners.add(listener); return () => { gappsChangedListeners.delete(listener); }; },
     };
 }

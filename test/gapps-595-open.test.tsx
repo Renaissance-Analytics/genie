@@ -271,7 +271,7 @@ describe('the crossing', () => {
         expect(main).toMatch(/gapps: \(\) => withGappWindows\(agentEngineLink\?\.client\)/);
         expect(main).toMatch(/gapp-preload\.cjs/);
         const host = readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8');
-        expect(host).toMatch(/gappSessions: gappSessions\(gappBook, gappServer\)/);
+        expect(host).toMatch(/gappSessions: gappSessions\(gappBook, gappServer, /);
         const engine = readFileSync(join('src', 'main', 'session-engine-server.ts'), 'utf8');
         expect(engine).toMatch(/new GAppSessionOwner/);
         expect(engine).toMatch(/\.closeAll\(\)/);

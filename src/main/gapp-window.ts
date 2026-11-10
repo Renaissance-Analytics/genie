@@ -49,10 +49,10 @@ export function openGAppWindow(session: GAppSession, ports: { create: (options: 
  * With no certificate authority for `.gen` nothing could be trusted, so it says so before asking the host for anything.
  */
 export interface GAppWindowsPorts<S> {
-    readonly sessions: { open(packageId: string): Promise<GAppSessionInfo>; close(token: string): void };
+    readonly sessions: { open(packageId: string, options?: { preview?: boolean }): Promise<GAppSessionInfo>; close(token: string): void };
     readonly caPem: () => string | null;
-    /** The app's own browser session, routed. */
-    readonly prepareSession: (packageId: string) => Promise<S>;
+    /** The app's own browser session, routed: by its key (`<packageId>`, or `preview:<packageId>` for a preview's own). */
+    readonly prepareSession: (key: string) => Promise<S>;
     readonly create: (options: Record<string, unknown>, session: S) => AppWindow;
     readonly preload: string;
     /** An app already open comes to the front (core/window-activation.ts: the person's gesture). */
@@ -67,14 +67,17 @@ export class GAppWindows<S> {
         this.#ports = ports;
     }
 
-    async open(packageId: string): Promise<void> {
-        const running = this.#open.get(packageId);
+    /** A preview (V8) is a window and a browser session of its own, beside the installed app's. */
+    async open(packageId: string, options: { preview?: boolean } = {}): Promise<void> {
+        const preview = options.preview === true;
+        const key = preview ? `preview:${packageId}` : packageId;
+        const running = this.#open.get(key);
         if (running) { this.#ports.bringUp(running); return; }
         if (this.#ports.caPem() === null) throw new Error('This Genie has no certificate for its .gen addresses yet, so the app cannot open safely.');
-        const info = await this.#ports.sessions.open(packageId);
+        const info = await this.#ports.sessions.open(packageId, preview ? { preview: true } : undefined);
         let browserSession: S;
         try {
-            browserSession = await this.#ports.prepareSession(packageId);
+            browserSession = await this.#ports.prepareSession(key);
         } catch (error) {
             this.#ports.sessions.close(info.token);
             throw error;
@@ -83,8 +86,8 @@ export class GAppWindows<S> {
             create: (options) => this.#ports.create(options, browserSession),
             preload: this.#ports.preload,
         });
-        this.#open.set(packageId, window);
-        window.on('closed', () => { this.#open.delete(packageId); });
+        this.#open.set(key, window);
+        window.on('closed', () => { this.#open.delete(key); });
         await loaded;
     }
 }

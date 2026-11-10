@@ -92,6 +92,20 @@ export function GAppStoreFlyout({ open, onClose, apps, actions }: { open: boolea
             return `${app.name} is open.`;
         });
     }
+    /** A workspace's preview (V8): its first run waits for the answer on the Deck. */
+    function runPreview(app: GAppListing): void {
+        void perform(`Running the preview of ${app.name}…`, async () => {
+            await actions!.api.preview(app.packageId!);
+            return `The preview of ${app.name} is open.`;
+        });
+    }
+    function previewNetwork(app: GAppListing, allowed: boolean): void {
+        void perform(allowed ? `Allowing ${app.name}'s preview its network…` : `Blocking ${app.name}'s preview's network…`, async () => {
+            await actions!.api.allowPreviewNetwork(app.packageId!, allowed);
+            await reread();
+            return allowed ? `The preview of ${app.name} may reach its hosts.` : `The preview of ${app.name} reaches no network.`;
+        });
+    }
     function uninstall(app: GAppListing): void {
         setConfirming(null);
         void perform(`Uninstalling ${app.name}…`, async () => {
@@ -143,6 +157,15 @@ export function GAppStoreFlyout({ open, onClose, apps, actions }: { open: boolea
                                         {ribbon ? <Badge data-gapp-dev-ribbon variant="soft" size="sm" color="violet">{ribbon}</Badge> : null}
                                         {app.dev && app.workspace ? <span className="text-xs text-[var(--fg-3)]">from {app.workspace}</span> : null}
                                         {app.state === 'off' ? <span className="text-xs text-[var(--fg-3)]">Off</span> : null}
+                                        {app.dev && app.unverified ? <Badge data-gapp-unverified variant="soft" size="sm" color="amber">Unverified</Badge> : null}
+                                        {actions && app.dev && app.packageId ? (
+                                            <span className="ml-auto flex gap-1">
+                                                <Button data-gapp-action="run-preview" disabled={busy} onClick={() => runPreview(app)}>Run</Button>
+                                                {app.unverified ? (app.networkAllowed
+                                                    ? <Button data-gapp-action="block-network" disabled={busy} onClick={() => previewNetwork(app, false)}>Block network</Button>
+                                                    : <Button data-gapp-action="allow-network" disabled={busy} onClick={() => previewNetwork(app, true)}>Allow network</Button>) : null}
+                                            </span>
+                                        ) : null}
                                         {actions && !app.dev ? (
                                             <span className="ml-auto flex gap-1">
                                                 {app.state === 'off' ? null : <Button data-gapp-action="open" disabled={busy} onClick={() => openApp(app)}>Open</Button>}
