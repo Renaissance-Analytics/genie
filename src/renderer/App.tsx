@@ -1967,8 +1967,12 @@ function DesktopApp({ bridge }: AppProps) {
                         console.error('[genie] deck answer refused:', route.reason);
                         return;
                     case 'feature':
+                        setDeckFormRefusal(null);
                         void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answer', item, optionId, ...(note ? { note } : {}) }).then(setFeatures).catch((error: unknown) => {
-                            console.error('[genie] deck answer refused:', (error as Error).message);
+                            // Said on its item, never only in the console (Tynn #600).
+                            const reason = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+                            console.error('[genie] deck answer refused:', reason);
+                            setDeckFormRefusal({ itemId: item.id, reason });
                         });
                         return;
                     case 'navigate':

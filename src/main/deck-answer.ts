@@ -15,7 +15,7 @@ import type { InboxStore } from './inbox-store.js';
 export type DeckAnswerAction = Extract<FeatureAction, { kind: 'deck.answer' | 'deck.answerForm' }>;
 
 export interface DeckAnswerPorts {
-    readonly attention: Pick<AttentionStore, 'answer' | 'markSeen'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
+    readonly attention: Pick<AttentionStore, 'answer' | 'markSeen' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
     /** As the window's approvals API types it (a replica may answer later); read exactly as the feature action always did. */
     readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean> };
     readonly inbox: Pick<InboxStore, 'unread' | 'receive'>;
@@ -33,9 +33,18 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
     switch (command.kind) {
         case 'refused':
             throw new Error(command.reason);
-        case 'answer-question':
+        case 'answer-question': {
+            // THE COPY THE PERSON ANSWERED (Tynn #600): its agent may have rewritten the question since (`update`), or it may
+            // have left. An answer to an older copy would record labels the agent never offered; it is refused in words,
+            // and the Deck then shows the question as it is now.
+            const current = ports.attention.pending().find((q) => q.id === command.questionId);
+            if (!current) throw new Error('This question is no longer waiting: it was answered, dismissed or withdrawn. Nothing was sent.');
+            if ((current.revision ?? 0) !== (action.item.revision ?? 0)) {
+                throw new Error(`This question was changed since you opened it (it is on version ${(current.revision ?? 0) + 1} now). Nothing was sent: read it again and answer the current one.`);
+            }
             await ports.attention.answer(command.questionId, { selections: command.selections, notes: command.notes, note: command.note });
             break;
+        }
         case 'resolve-approval': {
             // THE NOTE REACHES THE AGENT (beta.33 item 16): the tool call gets its verdict; the note follows as your
             // message. Checked BEFORE the answer, so a note that could not be delivered never leaves a silent verdict.

@@ -168,6 +168,10 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                     ) : null}
                 </div>
             </div>
+            {/* "Dismiss all stale" or "Dismiss all older" refused: said under the header (Tynn #600). */}
+            {formRefusal && (formRefusal.itemId === 'deck:stale' || formRefusal.itemId === 'deck:older') ? (
+                <p data-deck-refusal={formRefusal.itemId} role="alert" className="px-7 pb-2 text-xs text-[var(--danger)]">{formRefusal.reason}</p>
+            ) : null}
 
             {/*
              * The signal strip — silent unless something is true, and every signal a door.
@@ -402,6 +406,10 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                         Answer
                     </Button>
                 </div>
+            ) : null}
+            {/* A refused action on this row is said here (Tynn #600); an open form says it beside its own buttons. */}
+            {formRefusal?.itemId === item.id && !showForm ? (
+                <p data-deck-refusal={item.id} role="alert" className="mt-2 text-xs text-[var(--danger)]">{formRefusal.reason}</p>
             ) : null}
             {showForm && questions ? (
                 <div className="mt-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-3">
