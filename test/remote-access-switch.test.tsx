@@ -133,6 +133,24 @@ describe('Settings → Remote access', () => {
         expect(html).toMatch(/>Disconnect</);
     });
 
+    /*
+     * A DRONE WITH NO WINDOW OPEN (Azure pair gp-11102335, beta.61): it answers no feature snapshot, so the page it draws has
+     * no Remote access section yet (`remote: null`, the skeleton). "Drive another machine" is this window's, not the
+     * host's: it was inside the skeleton's gate, so for 150 s the Pilot drove the Drone with no Disconnect.
+     */
+    it('connected to a host that has sent no Remote access yet: Disconnect is there, beside its skeleton', () => {
+        const connect = { state: { connected: true, host: 'drone', isOwner: true, workspaceId: null, driver: 'pilot', driving: true, locked: false, lastRefusal: null, needsBaton: false } as never, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
+        const html = renderToStaticMarkup(<RemoteAccess remote={null} workspaces={[]} onAction={() => {}} connect={connect as never} />);
+        expect(html).toContain('data-remote-connected');
+        expect(html).toMatch(/>Disconnect</);
+    });
+
+    it('CONTROL: not connected and nothing read yet, there is only the skeleton', () => {
+        const connect = { state: null, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
+        const html = renderToStaticMarkup(<RemoteAccess remote={null} workspaces={[]} onAction={() => {}} connect={connect as never} />);
+        expect(html).not.toContain('data-drive-another');
+    });
+
     it('CONTROL: not connected, a drone is still offered no way out', () => {
         const connect = { state: null, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
         const html = renderToStaticMarkup(<RemoteAccess remote={{ ...base, tynnWorkstation: { role: 'drone' } as never }} workspaces={[]} onAction={() => {}} connect={connect as never} />);
