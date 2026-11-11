@@ -11,7 +11,7 @@ export async function readWorkstationRole(request: TynnRequest): Promise<Worksta
 }
 
 /** The same read, with what happened in words for the log (beta.61.1): pilot, drone, no answer, or failed and why. */
-export async function readWorkstationRoleOutcome(request: TynnRequest): Promise<{ role: WorkstationRole | null; words: string }> {
+export async function readWorkstationRoleOutcome(request: TynnRequest): Promise<{ role: WorkstationRole | null; words: string; unbound?: boolean }> {
     try {
         const res = await request('/api/v1/workstations/me', { method: 'GET' });
         if (!res.ok) return { role: null, words: `no answer (HTTP ${res.status})` };
@@ -19,7 +19,7 @@ export async function readWorkstationRoleOutcome(request: TynnRequest): Promise<
         const role = parseMeRole(body);
         if (role) return { role, words: role };
         // Tynn's own null: this sign-in is not bound to a workstation (WorkstationController::self). Not "no answer".
-        if (body !== null && typeof body === 'object' && 'role' in body && body.role === null) return { role: null, words: 'null (this sign-in is not bound to a workstation)' };
+        if (body !== null && typeof body === 'object' && 'role' in body && body.role === null) return { role: null, words: 'null (this sign-in is not bound to a workstation)', unbound: true };
         return { role: null, words: `no answer (HTTP ${res.status}, no role in it)` };
     } catch (error) {
         return { role: null, words: `failed: ${error instanceof Error ? error.message : String(error)}` };

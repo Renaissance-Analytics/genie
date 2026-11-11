@@ -1172,6 +1172,8 @@ let thisMachineIds: () => Promise<ReadonlySet<string>> = () => Promise.resolve(n
 let workstationRoleNow: WorkstationRole | null = 'drone';
 /** What Tynn answered (`null` = not yet): tells a drone from "not known", which asks Tynn again before refusing. */
 let workstationSaidNow: WorkstationRole | null = null;
+/** Why the role is not known, when genie-host knows (not registered, a sign-in Tynn has not bound): the refusal's words. */
+let workstationWhyNow: string | null = null;
 /** Read this machine's role from Tynn again (set where the reader is built). */
 let readWorkstationRoleNow: (() => Promise<void>) | null = null;
 /** Tynn refused this caller: read the role again FIRST, then word the refusal from it (genie#1278, M0 finding 3). */
@@ -2067,7 +2069,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:device-open', async (event, url: unknown) => {
         const link = deviceLinkNow();
         if (link) hearDeviceLink(link);
-        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, said: () => workstationSaidNow, reread: async () => { await readWorkstationRoleNow?.(); }, link: () => link });
+        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, said: () => workstationSaidNow, why: () => workstationWhyNow, reread: async () => { await readWorkstationRoleNow?.(); }, link: () => link });
         if (!opened.ok) return opened;
         const sender = event.sender;
         deviceChannels.set(opened.channel, sender);
@@ -2594,7 +2596,7 @@ async function boot(): Promise<void> {
      */
     const linkedRelayHost = agentEngineLink.client.relayHost();
     {
-        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); workstationSaidNow = linkedRelayHost.said(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
+        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); workstationSaidNow = linkedRelayHost.said(); workstationWhyNow = linkedRelayHost.unknownWhy(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
         void linkedRelayHost.refresh().catch((error: unknown) => console.error(`[tynn relay] ${error instanceof Error ? error.message : String(error)}`));
     }
     // The host reads, then this window takes its answer, so a caller that awaited it decides on the new role.

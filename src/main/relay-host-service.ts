@@ -18,7 +18,8 @@ export interface RelayHostServicePorts {
     readonly workstation: Pick<WorkstationPort, 'identity' | 'ensure' | 'legacyDone'>;
     /** The `remote_access` setting. */
     readonly enabled: () => boolean;
-    readonly readRole: (request: TynnRequest) => Promise<WorkstationRole | null>;
+    /** Tynn's role for this sign-in. `unbound`: Tynn answered, and this sign-in is not bound to a workstation (its own null). */
+    readonly readRole: (request: TynnRequest) => Promise<WorkstationRole | null | { readonly role: WorkstationRole | null; readonly unbound?: boolean }>;
     /** Start the link on this identity (`startRelayHost`, wired in genie-host). */
     readonly start: (input: { host: string; workstationId: string; fingerprint: string; onStatus: (status: RelayHostStatus) => void }) => RelayHostHandle;
     readonly onChange: () => void;
@@ -34,6 +35,8 @@ export interface RelayHostView {
     readonly role: WorkstationRole | null;
     /** What Tynn answered, `null` = no answer yet: what a window shows, and what tells a drone from "not known". */
     readonly said?: WorkstationRole | null;
+    /** Why the role is not known, in words a person can act on, when genie-host knows; `null` = a read that got no answer. */
+    readonly unknownWhy?: string | null;
     readonly relay: RelayHostStatus;
 }
 
@@ -48,6 +51,7 @@ export class RelayHostService {
      * still reads `#role`).
      */
     #said: WorkstationRole | null = null;
+    #unbound = false;
     #retries = 0;
     #registerRetries = 0;
     #registerWaiting = false;
@@ -62,7 +66,15 @@ export class RelayHostService {
 
     constructor(ports: RelayHostServicePorts) { this.#ports = ports; }
 
-    status(): RelayHostView { return { workstation: this.#workstation, role: this.#role, said: this.#said, relay: this.#relay }; }
+    status(): RelayHostView { return { workstation: this.#workstation, role: this.#role, said: this.#said, unknownWhy: this.unknownWhy(), relay: this.#relay }; }
+
+    /** Why connecting out cannot be decided, when it is not "Tynn did not answer" (beta.61.1): true words, with what to do. */
+    unknownWhy(): string | null {
+        if (this.#said !== null || this.#role === null) return null;
+        if (this.#workstation && !this.#workstation.registered) return `This machine is not registered with Tynn, so it did not connect: ${this.#workstation.reason}`;
+        if (this.#unbound) return 'Tynn says this sign-in is not attached to this workstation yet, so Genie did not connect. Genie is attaching it again; try again in a moment. If this stays, sign out of Tynn in Genie and sign in again.';
+        return null;
+    }
     said(): WorkstationRole | null { return this.#said; }
     role(): WorkstationRole | null { return this.#role; }
 
@@ -101,14 +113,17 @@ export class RelayHostService {
         const account = this.#ports.account();
         const signedIn = account?.status().signedIn === true;
         // A read that fails is no answer: connecting out fails closed, and nothing is said in the window's name.
-        const role = signedIn && account ? await this.#ports.readRole(account.request).catch(() => null) : null;
+        const answer = signedIn && account ? await this.#ports.readRole(account.request).catch(() => null) : null;
+        const role = answer !== null && typeof answer === 'object' ? answer.role : answer;
+        const unbound = answer !== null && typeof answer === 'object' && answer.unbound === true && role === null;
         const next = signedIn ? effectiveRoleOf({ signedIn: true, role }) : effectiveRoleOf({ signedIn: false });
         // Signed in and unanswered: read again by itself, backing off, so a slow or failed first read is not the session's.
         if (signedIn && role === null) this.#readRoleLater();
         else { this.#retries = 0; this.#cancelRetry(); this.#cancelRetry = () => {}; this.#retryWaiting = false; }
-        if (next === this.#role && role === this.#said) return;
+        if (next === this.#role && role === this.#said && unbound === this.#unbound) return;
         this.#role = next;
         this.#said = role;
+        this.#unbound = unbound;
         if (this.#workstation) this.#workstation = { ...this.#workstation, role };
         this.#ports.onChange();
     }

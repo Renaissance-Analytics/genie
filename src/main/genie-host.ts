@@ -882,7 +882,7 @@ async function main(): Promise<void> {
         readRole: async (request) => {
             const outcome = await readWorkstationRoleOutcome(request);
             say(`tynn role read: ${outcome.words}`);
-            return outcome.role;
+            return { role: outcome.role, unbound: outcome.unbound === true };
         },
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         start: ({ host, workstationId, fingerprint, onStatus }) => startRelayHost({
@@ -1000,7 +1000,7 @@ async function main(): Promise<void> {
                 // Not known to be a drone: ask Tynn first (beta.61.1); only its own "drone" is refused as one.
                 refusal: async () => {
                     if (!mayBrowse(relayHostService.role()) && relayHostService.said() === null) await relayHostService.readRole().catch(() => {});
-                    return connectOutRefusal({ role: relayHostService.role(), said: relayHostService.said() });
+                    return connectOutRefusal({ role: relayHostService.role(), said: relayHostService.said(), why: relayHostService.unknownWhy() });
                 },
                 keypair: () => PopKeypair.generate(),
                 mint: (workstationId, jwk) => (tynnAccountNow

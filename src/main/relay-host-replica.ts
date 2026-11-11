@@ -19,6 +19,7 @@ export class RelayHostReplica {
     role(): WorkstationRole | null { return this.#view.role; }
     /** What Tynn answered; `null` until it has (and before genie-host has answered this window at all). */
     said(): WorkstationRole | null { return this.#view.said ?? null; }
+    unknownWhy(): string | null { return this.#view.unknownWhy ?? null; }
     relay(): RelayHostStatus { return this.#view.relay; }
 
     async refresh(): Promise<void> { this.deliver((await this.#call('status', [])) as RelayHostView); }

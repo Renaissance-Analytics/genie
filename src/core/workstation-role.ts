@@ -39,9 +39,12 @@ export function mayBrowse(role: WorkstationRole | null): boolean {
  * answered. Only Tynn's own "drone" is refused as a drone. Signed in with no answer, nothing is dialled either, but the
  * person is told Tynn was not reached, and trying again asks Tynn again.
  */
-export function connectOutRefusal(reading: { role: WorkstationRole | null; said: WorkstationRole | null }): string | null {
+export function connectOutRefusal(reading: { role: WorkstationRole | null; said: WorkstationRole | null; why?: string | null }): string | null {
     if (mayBrowse(reading.role)) return null;
     if (reading.said === 'drone') return droneRefusal('drone');
+    // Why the role is not known, when genie-host knows (not registered, a sign-in Tynn has not bound): those words are true
+    // and say what to do. "Could not reach Tynn" is only for a read that got no answer.
+    if (reading.why) return reading.why;
     return 'Genie could not reach Tynn to check this workstation’s role, so it did not connect. Try again.';
 }
 
