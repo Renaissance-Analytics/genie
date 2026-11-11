@@ -476,6 +476,8 @@ export type FeatureAction =
     | { kind: 'toolchain.update'; tool: string; version?: string; confirmed?: boolean; restart?: boolean }
     /** Install a missing tool (or the Windows VC++ runtime). `consent` is the person's click on the command shown. */
     | { kind: 'toolchain.install'; tool: string; consent: boolean }
+    /** An agent CLI's row says Not signed in (Tynn #698): open the provider's own login, the same one the Agent view's Log in opens. */
+    | { kind: 'toolchain.login'; tool: string }
     | { kind: 'toolchain.repair' }
     /** Install one managed PHP version (windows.php.net, checksum-verified). `consent` is the person's click. */
     | { kind: 'toolchain.installPhp'; version: string; consent: boolean }

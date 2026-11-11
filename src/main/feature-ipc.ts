@@ -130,6 +130,8 @@ export interface FeaturePorts {
         preview?(tool: string): Promise<InstallPreview>;
         /** T2: Check and repair. */
         repair?(): Promise<RepairReport>;
+        /** Open a provider's own login (LoginHost, the Agent view's Log in), for a row that says Not signed in (Tynn #698). */
+        login?(provider: string): { ok: true } | { ok: false; reason: string };
         /** T4: Genie-managed PHP versions. `pins` are the sites' PHP pins, which a removal is refused against. */
         php?: {
             list(pins: readonly SitePin[]): Promise<PhpVersionsView>;
@@ -1023,6 +1025,15 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             }
             // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
             await rescanToolchain(next, tc, sitePins(services));
+            break;
+        }
+        case 'toolchain.login': {
+            clearRefusal(next, action.tool);
+            // The row's tool is the provider's CLI: claude-code is Claude's, codex is Codex's (Tynn #698).
+            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
+            const login = ports.toolchain?.login;
+            const opened = login ? login(provider) : { ok: false as const, reason: 'no login is wired into this Genie' };
+            if (!opened.ok) refuse(next, action.tool, opened.reason);
             break;
         }
         case 'toolchain.install': {

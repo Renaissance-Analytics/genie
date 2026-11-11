@@ -192,14 +192,18 @@ export interface HeaderActions {
 }
 
 /** The board's header actions by state. An observed agent is not managed: nothing to stop or restart. */
-export function headerActions(session: LiveSession | null, fidelity: Fidelity): HeaderActions {
+/**
+ * `providerSignedOut` (Tynn #698): the health book says this agent's provider CLI is signed out. A stopped agent then offers
+ * Log in beside Start, never a refusal.
+ */
+export function headerActions(session: LiveSession | null, fidelity: Fidelity, providerSignedOut = false): HeaderActions {
     const managed = fidelity === 'declared' && session !== null;
     const broken = managed && (session.failure !== null || session.turnState === 'failed');
     const start = fidelity === 'declared' && !broken && (session === null || !session.running);
     // One of the two, never both: Restart while it has a session that is up or Broken, Start when it has none.
     const restart = fidelity === 'declared' && !start;
     const held = managed && session.limit !== undefined && session.limit.state !== 'open';
-    const login = managed && session.signedOut === true;
+    const login = (managed && session.signedOut === true) || (start && providerSignedOut);
     const retryAccount = managed && session.accountPaused != null;
     const designLogin = managed && session.designLogin === true;
     return { stop: managed && turnStopOffered(session), restart, openTerminal: broken, resumeLimit: held, login, retryAccount, designLogin, start, takeOver: true, chat: true };

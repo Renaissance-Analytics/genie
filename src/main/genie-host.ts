@@ -113,6 +113,7 @@ import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
+import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { statusCommandFor } from './login-host.js';
 import { accountIdentityFrom } from '../core/provider-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
@@ -947,6 +948,12 @@ async function main(): Promise<void> {
     const readHostTynnPage = async (workspaceId: string, page: unknown, query: unknown) => readTynnPage(await hostTynnBoard(), workspaceId, page, query);
     // ONE cache of each provider's models (core/provider-models.ts): a window's ask and a phone's read the same answer.
     const providerModels = new ProviderModelCache(realListModels);
+    // Tynn #698: each provider CLI MEASURED (the file the agent runs, its version, its own status call), when the host starts:
+    // what "installed" and "signed in" read. A CLI that cannot run is said in the log by name.
+    const providerHealth = new ProviderHealthBook((provider) => checkProviderHealth(provider, realProviderHealthPorts(execFileRunner)));
+    void providerHealth.refreshAll().then((all) => {
+        for (const health of all) if (health?.fault) console.warn(`[provider-health] ${health.provider}: ${health.fault}: ${health.words}`);
+    });
     const engine = new SessionEngineServer({
         providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
         token,
@@ -1249,7 +1256,8 @@ async function main(): Promise<void> {
         takeOver: (id) => takeOverHost.probe(id),
         headroom: headroomFeed,
         models: providerModels,
-        providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
+        providerInstalled: (provider) => providerHealth.installed(provider),
+        signedIn: (provider) => providerHealth.signedIn(provider),
         attention: own.attention,
         approvals,
         inbox: own.inbox,

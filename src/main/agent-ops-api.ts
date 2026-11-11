@@ -30,6 +30,8 @@ export interface AgentOpsWiring {
     /** The finished items in attention: how a handoff asked for before a delete is seen to have landed. */
     finished(): readonly Finished[];
     readonly providerInstalled: AgentOpsPorts['providerInstalled'];
+    /** What the provider's own status call last said (Tynn #698, the health book). */
+    readonly signedIn: AgentOpsPorts['signedIn'];
     readonly applyOnStart?: AgentOpsPorts['applyOnStart'];
 }
 
@@ -88,7 +90,7 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
         },
         linkedSystems: () => [],
         providerInstalled: wiring.providerInstalled,
-        signedIn: () => true,
+        signedIn: wiring.signedIn,
         ...(wiring.applyOnStart ? { applyOnStart: wiring.applyOnStart } : {}),
         startRefusal: wiring.startRefusal,
     };

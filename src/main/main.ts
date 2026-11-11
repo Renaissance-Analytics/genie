@@ -116,6 +116,7 @@ import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
 import { providerBinary } from './session-host.js';
+import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
 import { afterSignedIn } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
@@ -156,7 +157,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
-import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
+import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
 import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
@@ -1242,6 +1243,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         engine: host,
         cwdFor,
         takeOver: (id) => takeOvers?.probe(id) ?? null,
+        providerSignedIn: (provider) => providerHealth.signedIn(provider),
         ...(services ? { mail: (id: AgentId, limit: number) => services!.inbox.involving(id, limit) } : {}),
     }, agentId);
 }
@@ -1351,6 +1353,8 @@ let detectedPackageManager: Promise<PackageManager | null> | null = null;
 const packageManager = (): Promise<PackageManager | null> => (detectedPackageManager ??= detectPackageManager(process.platform as Platform, execFileRunner));
 /** Installs and updates take minutes (winget, a polkit prompt waiting on the person); the probe's 20 s would cut them off. */
 const longRunner: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) });
+/** Each provider CLI, measured (Tynn #698): what this process's "installed" and "signed in" read, and the Toolchain's agent rows. */
+const providerHealth = new ProviderHealthBook((provider) => checkProviderHealth(provider, realProviderHealthPorts(execFileRunner)));
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
 const toolchainDataDir = (): string => join(genieRoot(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
@@ -1856,6 +1860,8 @@ async function boot(): Promise<void> {
      * Tynn identity layer is wired — so a delete plan lists no external system, honestly.
      */
     const hostModels = agentEngineLink.client;
+    // Measured once as the agents come up, so a switch or a diagnosis here reads a check rather than claiming nothing.
+    void providerHealth.refreshAll();
     const agentOps = agentOpsPorts({
         registry: () => registry,
         engine: () => host,
@@ -1863,7 +1869,8 @@ async function boot(): Promise<void> {
         models: { get: (provider, options) => hostModels.providerModels(provider, options) },
         cwdFor,
         finished: () => services?.attention.finished() ?? [],
-        providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
+        providerInstalled: (provider) => providerHealth.installed(provider),
+        signedIn: (provider) => providerHealth.signedIn(provider),
         applyOnStart: (id) => settingApplier!.requested(id),
         // Start is the restart now (genie#1238): what Start always obeyed — an asleep workspace, the agent cap — it obeys.
         startRefusal: (record) => startRefusal(workspaceOps, record, {
@@ -1886,11 +1893,15 @@ async function boot(): Promise<void> {
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
         runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
-        onSignedIn: (provider) => afterSignedIn(provider, {
-            signedOutAgents: (p) => host?.signedOutAgents(p) ?? [],
-            restart: (id) => { void restartAgent(agentOps, id as AgentId, 'graceful').then((r) => { if (r.ok) host?.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch()); },
-            resumeLimit: (p) => { host?.resumeLimit(p); refreshTray(); },
-        }),
+        onSignedIn: (provider) => {
+            // Measured again, so its Toolchain row and its agents stop saying signed out (Tynn #698).
+            void providerHealth.refresh(provider);
+            afterSignedIn(provider, {
+                signedOutAgents: (p) => host?.signedOutAgents(p) ?? [],
+                restart: (id) => { void restartAgent(agentOps, id as AgentId, 'graceful').then((r) => { if (r.ok) host?.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch()); },
+                resumeLimit: (p) => { host?.resumeLimit(p); refreshTray(); },
+            });
+        },
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry; a retry that
         // is refused again raises the prompt again. They are not restarted: only a tool failed, never their session.
         onDesignLoginEnded: () => {
@@ -3107,7 +3118,10 @@ async function boot(): Promise<void> {
             openLog: () => shell.openPath(join(runtimeDir(genieRoot()), 'lifecycle.log')).then((failed) => failed || null),
         },
         toolchain: {
-            probe: () => probeToolsLive(latestFor),
+            // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
+            login: (provider) => { const started = loginHost?.start(provider) ?? { ok: false as const, reason: 'Genie’s login window is not ready yet; try again in a moment' }; return started.ok ? { ok: true } : started; },
+            // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).
+            probe: async () => withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll()),
             update: async (tool, version, progress) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),
             // The row's in-progress state, pushed: which update, and its step (genie#1306).
             updating: (row) => { featureState = { ...featureState, toolchainUpdating: row }; pushFeatures(); },

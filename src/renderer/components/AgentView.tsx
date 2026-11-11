@@ -303,6 +303,8 @@ export interface AgentViewProps {
     onStart?: ((agentId: string) => void) | undefined;
     /** Why this agent's last start was refused (`AgentDetail.refusal`). */
     startRefusal?: string | null | undefined;
+    /** Its provider's CLI says it is signed out (Tynn #698): Log in is offered beside Start. */
+    providerSignedOut?: boolean | undefined;
     /** The Settings tab's sub-tab — controlled, for tests that render server-side; otherwise the view keeps its own (General first). */
     settingsSection?: SettingsSection | undefined;
 }
@@ -364,7 +366,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    startRefusal, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
@@ -436,7 +438,7 @@ function AgentViewBody({
         return () => { live = false; off(); };
     }, [files, workspace, agent.name]);
     const pill = statePill(session, now ?? (() => Date.now()), { turns, takeOver: agent.fidelity === 'observed' ? takeOver : null });
-    const actions = headerActions(session, agent.fidelity);
+    const actions = headerActions(session, agent.fidelity, providerSignedOut === true);
     // "Stop agent" is offered while the session is up and there is something to end it with.
     const menu = ops ? agentOpsMenu(agent, undefined, { running: session?.running === true && onStop !== undefined }) : [];
     const act = (id: string) => {

@@ -130,6 +130,8 @@ export interface AgentDetail {
     cost: number | null;
     /** Why a start was refused, if one was. Reported, never swallowed. */
     refusal: string | null;
+    /** Its provider's CLI says it is signed out (Tynn #698): Log in is offered beside Start. Absent = not known to be. */
+    providerSignedOut?: boolean | undefined;
     /** The provider's recent stderr, oldest first — the process-ended block's log. Absent from an older host = nothing known. */
     log?: readonly string[] | undefined;
     /**

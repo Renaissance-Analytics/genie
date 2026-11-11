@@ -86,6 +86,8 @@ export interface HostAlonePorts {
     /** Each provider's model list, asked of its CLI once and kept. */
     readonly models: AgentOpsWiring['models'];
     readonly providerInstalled: AgentOpsWiring['providerInstalled'];
+    /** What the provider's status call last said (Tynn #698). Absent = not measured here, so nothing is claimed. */
+    readonly signedIn?: AgentOpsWiring['signedIn'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     readonly inbox: DeckAnswerPorts['inbox'] & { involving(id: AgentId, limit: number): readonly InboxMessage[] };
@@ -138,6 +140,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         startRefusal: ports.startRefusal,
         finished: () => ports.attention.finished(),
         providerInstalled: ports.providerInstalled,
+        signedIn: ports.signedIn ?? (() => true),
         applyOnStart: (id) => settingApplier.requested(id),
     });
     // A model change waiting for its agent to be free applies the moment it is, with or without a window.
@@ -169,7 +172,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         subscribeSnapshot: (listener) => registry.subscribe(listener),
         subscribeAgentRecords: (listener) => registry.subscribeAgentRecords(listener),
         find: (id) => registry.find(id as AgentId),
-        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit) }, id as AgentId),
+        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit), ...(ports.signedIn ? { providerSignedIn: ports.signedIn } : {}) }, id as AgentId),
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
         startForYourMessage: (record) => startForYourMessage({
