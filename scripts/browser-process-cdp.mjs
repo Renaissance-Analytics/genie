@@ -75,15 +75,19 @@ writeFileSync(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: WO
 
 const logFile = join(tmpdir(), 'browser-process-electron.log');
 const log = openSync(logFile, 'a');
-const xvfb = spawn('Xvfb', [DISPLAY, '-screen', '0', '1440x900x24'], { stdio: 'ignore', detached: true });
-xvfb.unref();
-await sleep(1000);
-const env = { ...process.env, DISPLAY, HOME: user, GENIE_HOME: home };
+// THE DISPLAY: the session's own when there is one (a Wayland session, as on an Omarchy machine: scripts/ci/linux.sh), and
+// a virtual X screen where there is none (a bare runner) or when CI_DISPLAY=xvfb asks for one. Nothing here needs X.
+const inSession = process.platform === 'linux' && process.env.CI_DISPLAY !== 'xvfb' && process.env.XDG_SESSION_TYPE === 'wayland' && !!process.env.WAYLAND_DISPLAY;
+// Its own Xvfb, not xvfb-run, where it needs one: under xvfb-run the display ends with the window. A session outlives it already.
+const xvfb = inSession ? null : spawn('Xvfb', [DISPLAY, '-screen', '0', '1440x900x24'], { stdio: 'ignore', detached: true });
+xvfb?.unref();
+if (xvfb) await sleep(1000);
+const env = { ...process.env, ...(inSession ? {} : { DISPLAY }), HOME: user, GENIE_HOME: home };
 const app = spawn('npx', ['electron', '.', '--no-sandbox', '--password-store=gnome-libsecret', `--remote-debugging-port=${PORT}`, `--genie-browser-debug-port=${BROWSER_PORT}`, `--user-data-dir=${data}`], { env, stdio: ['ignore', log, log], detached: true });
 const end = (code) => {
     for (const p of processes()) if (p.args.includes(data) || p.args.includes('--genie-browser') || p.args.includes(home)) { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } }
     try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ }
-    try { process.kill(xvfb.pid, 'SIGKILL'); } catch { /* gone */ }
+    if (xvfb) { try { process.kill(xvfb.pid, 'SIGKILL'); } catch { /* gone */ } }
     if (code !== 0) {
         try { console.log(readFileSync(logFile, 'utf8').slice(-2500)); } catch { /* none */ }
         try { console.log(readFileSync(join(home, 'logs', 'genie-browser.log'), 'utf8').slice(-2500)); } catch { console.log('(no genie-browser.log)'); }

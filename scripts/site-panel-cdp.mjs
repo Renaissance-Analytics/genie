@@ -75,7 +75,12 @@ mkdirSync(join(home, 'runtime'), { recursive: true });
 writeFileSync(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: WORKSPACE, path: ws }], null, 2));
 
 const log = openSync(join(tmpdir(), 'site-panel-electron.log'), 'a');
-const launcher = process.platform === 'linux' ? ['xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', 'npx', 'electron', '.', '--no-sandbox', STORE_ARG]] : ['npx', ['electron', '.']];
+// THE DISPLAY: the session's own when there is one (a Wayland session, as on an Omarchy machine: scripts/ci/linux.sh), and
+// a virtual X screen where there is none (a bare runner) or when CI_DISPLAY=xvfb asks for one. Nothing here needs X.
+const inSession = process.platform === 'linux' && process.env.CI_DISPLAY !== 'xvfb' && process.env.XDG_SESSION_TYPE === 'wayland' && !!process.env.WAYLAND_DISPLAY;
+const launcher = process.platform !== 'linux' ? ['npx', ['electron', '.']]
+    : inSession ? ['npx', ['electron', '.', '--no-sandbox', STORE_ARG]]
+    : ['xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', 'npx', 'electron', '.', '--no-sandbox', STORE_ARG]];
 const app = spawn(launcher[0], [...launcher[1], `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { env: { ...process.env, HOME: user, USERPROFILE: user, GENIE_HOME: home, GENIE_PAGE_PROBE: '1' }, stdio: ['ignore', log, log], detached: process.platform !== 'win32', shell: process.platform === 'win32' });
 const end = (code) => {
     try { if (process.platform !== 'win32') process.kill(-app.pid, 'SIGKILL'); else app.kill(); } catch { /* gone */ }
