@@ -15,8 +15,12 @@ export async function readWorkstationRoleOutcome(request: TynnRequest): Promise<
     try {
         const res = await request('/api/v1/workstations/me', { method: 'GET' });
         if (!res.ok) return { role: null, words: `no answer (HTTP ${res.status})` };
-        const role = parseMeRole(await res.json().catch(() => null));
-        return { role, words: role ?? `no answer (HTTP ${res.status}, no role in it)` };
+        const body = (await res.json().catch(() => null)) as { role?: unknown } | null;
+        const role = parseMeRole(body);
+        if (role) return { role, words: role };
+        // Tynn's own null: this sign-in is not bound to a workstation (WorkstationController::self). Not "no answer".
+        if (body !== null && typeof body === 'object' && 'role' in body && body.role === null) return { role: null, words: 'null (this sign-in is not bound to a workstation)' };
+        return { role: null, words: `no answer (HTTP ${res.status}, no role in it)` };
     } catch (error) {
         return { role: null, words: `failed: ${error instanceof Error ? error.message : String(error)}` };
     }

@@ -126,7 +126,12 @@ export class RelayHostService {
         this.#retryWaiting = true;
         const wait = ROLE_RETRY_MS[Math.min(this.#retries, ROLE_RETRY_MS.length - 1)]!;
         this.#retries += 1;
-        this.#cancelRetry = this.#ports.schedule(wait, () => { this.#retryWaiting = false; void this.readRole(); });
+        // With a workstation on record, no role may mean this sign-in is not bound to it: register again (its proof attaches
+        // it), which reads the role again. With none, only the read.
+        this.#cancelRetry = this.#ports.schedule(wait, () => {
+            this.#retryWaiting = false;
+            if (this.#workstation?.registered) void this.register().catch(() => {}); else void this.readRole();
+        });
     }
 
     /** The link follows the switch and the registration: on while `remote_access` is on and this machine is registered. */
