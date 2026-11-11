@@ -6,8 +6,10 @@ import { MarketplacePane } from './MarketplacePane.js';
 import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, Kbd, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
+import { DEFAULT_SEND_KEY, SEND_KEY_SETTING, keycaps, newlineKeyFor, sendKeyFrom, sendKeyProblem } from '../../core/send-key.js';
+import { HotkeyCapture } from './HotkeyCapture.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
@@ -1878,9 +1880,29 @@ function GenieHotkeys({ values, onAction }: { values: Readonly<Record<string, bo
         { name: 'commandWindow', label: 'Command Window', desc: 'Search, jump and run — prompts, actions, workspaces, agents.' },
         { name: 'ftqNudge', label: 'ForceTheQuestion nudge', desc: 'Tells the agent in front of you to ask its question through ForceTheQuestion, where you will see it.' },
     ];
+    // THE COMPOSER'S SEND KEY (Tynn issue #697): pressed, never typed; the new-line key follows from it.
+    const sendKey = sendKeyFrom(values);
+    const captureSendKey = (accelerator: string): string | null => {
+        const problem = sendKeyProblem(accelerator, bindings, prompts, platform);
+        if (problem !== null) return problem;
+        // Genie's default is stored as empty, so it follows Genie's default.
+        onAction({ kind: 'settings.set', key: SEND_KEY_SETTING, value: accelerator === DEFAULT_SEND_KEY ? '' : accelerator });
+        return null;
+    };
     return (
         <section data-genie-hotkeys className="border-b border-[var(--border-1)] px-5 py-3">
-            <div className="text-sm font-medium">Keyboard shortcuts</div>
+            <div className="text-sm font-medium">Writing to an agent</div>
+            <div data-send-key-setting="" className="flex items-start gap-4 py-2">
+                <div className="flex-1">
+                    <div className="text-sm">Send message</div>
+                    <div className="text-xs text-[var(--fg-3)]">
+                        New line: <span data-newline-key="" className="inline-flex items-center gap-1 align-middle">{keycaps(newlineKeyFor(sendKey), platform).map((cap, i) => <Fragment key={cap}>{i > 0 ? '+' : null}<Kbd>{cap}</Kbd></Fragment>)}</span>
+                    </div>
+                </div>
+                <HotkeyCapture value={sendKey} platform={platform} label="Send message" onCapture={captureSendKey}
+                    onReset={sendKey === DEFAULT_SEND_KEY ? undefined : () => onAction({ kind: 'settings.set', key: SEND_KEY_SETTING, value: '' })} />
+            </div>
+            <div className="mt-2 text-sm font-medium">Keyboard shortcuts</div>
             <ul className="mt-1 flex flex-col">
                 {rows.map(({ name, label, desc }) => {
                     const raw = values?.[BINDING_SETTING[name]];

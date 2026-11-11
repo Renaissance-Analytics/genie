@@ -200,8 +200,8 @@ describe('the capture control and the composer boundary', () => {
         act(() => { fn<(k: string) => void>(store, 'setSendKey')('Alt+S'); });
         press(c.editor, { key: 's', altKey: true });
         expect(c.sent).toHaveBeenCalledOnce();
-        // The editor's built-in Ctrl+Enter no longer sends: it is not the key.
-        expect(press(c.editor, { key: 'Enter', ctrlKey: true }).defaultPrevented).toBe(true);
+        // The editor's built-in Ctrl+Enter is still the editor's: its send button's tooltip names it.
+        expect(press(c.editor, { key: 'Enter', ctrlKey: true }).defaultPrevented).toBe(false);
         expect(c.sent).toHaveBeenCalledOnce();
     });
 });
