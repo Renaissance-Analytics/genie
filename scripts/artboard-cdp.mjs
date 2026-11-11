@@ -176,6 +176,23 @@ try {
     demand(handlers.every(present => present === BASELINE), 'native ArtBoard handler presence control'); reports.push({ label: 'path-control', baseline: BASELINE, handlers });
     await page.evaluate('(()=>{window.__artboardWire={maxBytes:0,forbidden:0,pages:0,items:0,invalidPages:0,oversizedEvents:0};window.genieLocalProtocol.onFrame((action,_handle,text)=>{if(action!=="frame")return;const m=JSON.parse(text),s=window.__artboardWire,n=new TextEncoder().encode(text).length;s.maxBytes=Math.max(s.maxBytes,n);if(m.kind==="result"&&Array.isArray(m.value?.items)&&m.value.items.some(item=>item.artifact)){s.pages++;s.items+=m.value.items.length;if(m.value.items.length>128||new TextEncoder().encode(JSON.stringify(m.value)).length>524288)s.invalidPages++;}if(m.kind==="event"){if(n>524288)s.oversizedEvents++;if(m.channel==="snapshot"||m.channel==="activity"||m.channel==="local-activity"||m.channel?.startsWith("agent:")||m.channel?.startsWith("terminal-"))s.forbidden++;}});return true;})()');
     const run = input => page.evaluate('(' + measureArtboardPage.toString() + ')(' + JSON.stringify({ workspaceId: 'tynn', ...input }) + ',(' + createWallGapGauge.toString() + '))');
+    // ON A MACHINE THAT DRAWS IN SOFTWARE, THE THREE CLOCKS ARE JUDGED AGAINST THIS RUN'S OWN IDLE (Tynn #692; the
+    // coordinator's ruling, 2026-11-11). Measured: GitHub's runner does a row in 174 to 198 ms with the page clock at 160 to
+    // 174 ms; omarchy-test (VirtualBox, no GPU) takes 816 to 4774 ms a row and its page clock read 263 and 353 ms, against
+    // 250. With GENIE_CI_RENDERING=software (set by scripts/ci/linux.sh) the same clocks run for 3 s with nothing asked of
+    // the app, and each 250 ms bound becomes that idle figure plus 250. The memory bound, the wire limits and every
+    // control stay as they are. Without the variable the absolute 250 ms stands.
+    const SOFTWARE = process.env.GENIE_CI_RENDERING === 'software', idle = { pageClockMs: 0, mainMs: 0 };
+    if (SOFTWARE) {
+        await main.evaluate('(()=>{const s=globalThis.__artboardMain;s.gap=0;s.worstGap=null;s.last=performance.now();return true;})()');
+        await page.evaluate('(()=>{const s=window.__artboardIdle={last:performance.now(),maxGapMs:0,ticks:0};s.timer=setInterval(()=>{const now=performance.now();s.maxGapMs=Math.max(s.maxGapMs,now-s.last);s.last=now;s.ticks++;},16);return true;})()');
+        await sleep(3000);
+        const pageIdle = await page.evaluate('(()=>{const s=window.__artboardIdle;clearInterval(s.timer);return {maxGapMs:Math.max(s.maxGapMs,performance.now()-s.last),ticks:s.ticks};})()');
+        idle.pageClockMs = Math.round(pageIdle.maxGapMs); idle.mainMs = Math.round(await main.evaluate('globalThis.__artboardMain.gap'));
+        demand(pageIdle.ticks > 0, 'the idle page clock ticked (the 250 ms bounds are judged against it)');
+        reports.push({ label: 'idle', ...idle, pageTicks: pageIdle.ticks });
+        console.log(`ARTBOARD MEASURED ON A SOFTWARE-RENDERED MACHINE: idle page clock worst gap ${idle.pageClockMs} ms over 3 s (${pageIdle.ticks} ticks), idle window main worst gap ${idle.mainMs} ms. The clocks are judged as this idle figure plus 250 ms: page ${250 + idle.pageClockMs} ms, window main ${250 + idle.mainMs} ms. This is NOT the absolute 250 ms budget.`);
+    }
     async function measure(label, input, beforeRead = async () => ({})) {
         await page.evaluate('Object.assign(window.__artboardWire,{maxBytes:0,forbidden:0,pages:0,items:0,invalidPages:0,oversizedEvents:0});true');
         await main.evaluate('(()=>{const s=globalThis.__artboardMain;s.methods={};s.gap=0;s.worstGap=null;s.lastMethod=null;s.startedMs=s.last=performance.now();s.startedWallMs=Date.now();s.rssBefore=s.rss=process.memoryUsage().rss;s.ticksBefore=s.ticks;s.maxCallBytes=0;s.oversizedCalls=0;s.handles=[];s.gauge.reset();globalThis.__artboardPhases={events:[],dropped:0};return true;})()');
@@ -192,7 +209,7 @@ try {
         if (!BASELINE) {
             demand(native.artboardPhases?.dropped === 0 && ['metadata-build', 'artifact-open', 'projection'].every(phase => native.artboardPhases.events.some(event => event.phase === phase)) && !native.artboardPhases.events.some(event => event.phase === 'native-build' || event.phase === 'resolve-board'), 'ArtBoard metadata/file-source timing positive controls');
             demand(native.methods['artboard.read'] === 1 && native.methods['blob.open'] > 0 && wire.pages >= 2 && wire.items === 100 && native.connections === 1, 'ArtBoard metadata pages and blobs use the app connection');
-            demand(native.maxGapMs < 250 && value.heartbeat.maxGapMs < 250 && rowClock.maxGapMs < 250 && native.rssPeak - native.rssBefore < 100 * 1024 * 1024, 'ArtBoard transfer blocked a clock or retained excessive main memory');
+            demand(native.maxGapMs < 250 + idle.mainMs && value.heartbeat.maxGapMs < 250 + idle.pageClockMs && rowClock.maxGapMs < 250 + idle.pageClockMs && native.rssPeak - native.rssBefore < 100 * 1024 * 1024, 'ArtBoard transfer blocked a clock or retained excessive main memory');
         }
         return row;
     }
