@@ -135,7 +135,8 @@ async function buildFrom(src: string, shape: (d: WizardDraft) => WizardDraft = (
     const analysis = (read as { analysis: SourceAnalysis }).analysis;
     const plan = buildPlan(shape(startDraft(analysis, { parent })));
     const built = await buildEnvelope(ops(), env(), plan);
-    expect(built).toMatchObject({ ok: true });
+    // A build that refuses says why in the failure (a bare `ok: false` in a CI log names nothing).
+    expect(built.ok ? 'built' : `refused: ${built.reason}`).toBe('built');
     expect(await treeHash(src)).toBe(before);
     // Positive control for the gauge: the hash does see a one-byte change in the source (then it is put back).
     await writeFile(join(src, 'probe.tmp'), 'x');
@@ -273,6 +274,12 @@ describe('a monorepo', () => {
         expect(manifest.primaryRepo).toBe('ui');
         expect(manifest.repos.map((r) => [r.name, r.role])).toEqual([['ui', 'host'], ['tools', 'package']]);
         expect(await git(ws, 'log', '-1', '--format=%s')).toBe('Convert: migrate 2 submodules');
+    }, 120_000);
+
+    it.each(Array.from({ length: 12 }, (_, i) => i + 1))('PROBE %i: WRAP again, to see why a build refuses', async () => {
+        const { src } = await monorepo();
+        const b = await buildFrom(src, (d) => renameWorkspaceTo(setMonorepoMode(d, 'wrap'), 'Mono'));
+        expect(await exists(join(b.path, 'repos', 'mono', '.gitmodules'))).toBe(true);
     }, 120_000);
 
     it('WRAP: the whole monorepo as one submodule, its own .gitmodules inside it', async () => {

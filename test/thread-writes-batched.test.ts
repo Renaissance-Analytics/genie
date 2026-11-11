@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
-import { ThreadStore, readWholeHistory, openDurableStore } from '../src/core/thread-store.js';
+import { ThreadStore, readWholeHistory, openDurableStore, setThreadStoreSlowLog } from '../src/core/thread-store.js';
 import { sessionsDir } from '../src/main/paths.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
@@ -44,15 +44,27 @@ describe("a turn's rows reach the thread together", () => {
     // Six runs (#682): a miss one run in a few is seen with its figures, and so are the runs that do not miss.
     it.each([1, 2, 3, 4, 5, 6])('120 turns of an 8 KB reply settle in a few appends, in order, and within a bound (run %i)', async () => {
         // WHERE THE TIME GOES (#682): each lock's wait before its callback runs, the time it is held, and each append.
-        const timing = { lockWaitMs: 0, worstLockWaitMs: 0, lockHeldMs: 0, appendMs: 0, worstAppendMs: 0, locks: 0 };
+        // The WHOLE settle is accounted for: before the first lock is asked for, each lock from asked to given back (its
+        // wait, its hold, and its RELEASE, which the first measurement left out), and after the last one is given back.
+        const timing = { lockWaitMs: 0, worstLockWaitMs: 0, lockHeldMs: 0, lockReleaseMs: 0, worstLockReleaseMs: 0, appendMs: 0, worstAppendMs: 0, locks: 0 };
+        const span = { firstAsked: null as number | null, lastBack: 0 };
+        // Each store step past 200 ms, by name (open, write, sync, close, repair, rotate).
+        const slowSteps: string[] = [];
+        setThreadStoreSlowLog((line) => { slowSteps.push(line.replace(/ log=\S+/, '')); });
         const realLock = ThreadStore.prototype.withLock;
         vi.spyOn(ThreadStore.prototype, 'withLock').mockImplementation(function (this: ThreadStore, key, callback, ttl, wait) {
             const asked = performance.now();
+            span.firstAsked ??= asked;
+            let left = asked;
             return realLock.call(this, key, async () => {
                 const got = performance.now();
                 timing.locks += 1; timing.lockWaitMs += got - asked; timing.worstLockWaitMs = Math.max(timing.worstLockWaitMs, got - asked);
-                try { return await callback(); } finally { timing.lockHeldMs += performance.now() - got; }
-            }, ttl, wait);
+                try { return await callback(); } finally { left = performance.now(); timing.lockHeldMs += left - got; }
+            }, ttl, wait).finally(() => {
+                const back = performance.now();
+                span.lastBack = back;
+                timing.lockReleaseMs += back - left; timing.worstLockReleaseMs = Math.max(timing.worstLockReleaseMs, back - left);
+            });
         } as typeof realLock);
         const realAppend = ThreadStore.prototype.appendLog;
         const appends = vi.spyOn(ThreadStore.prototype, 'appendLog').mockImplementation(async function (this: ThreadStore, key, entries) {
@@ -73,14 +85,20 @@ describe("a turn's rows reach the thread together", () => {
         }
         const started = performance.now();
         await r.host.settled();
-        const ms = performance.now() - started;
+        const ended = performance.now();
+        const ms = ended - started;
+        setThreadStoreSlowLog(null);
         const history = await readWholeHistory(openDurableStore(sessionsDir(dir)), record.id);
         const texts = history.rows.flatMap((row) => (row.event.kind === 'message' ? [String((row.event as { text: string }).text).split(' ').slice(0, 2).join(' ')] : []));
         // Every question and answer, in order.
         expect(texts).toEqual(Array.from({ length: 120 }, (_, i) => [`question ${i + 1}`, `answer ${i + 1}`]).flat());
         expect(history.rows.map((row) => row.position)).toEqual(Array.from({ length: history.rows.length }, (_, i) => i + 1));
         expect(history.rows.length).toBeGreaterThan(360);
-        const measured = { identityReadMs: Math.round(fileLockIdentityStatus().sample_duration_ms), settleMs: Math.round(ms), appends: appends.mock.calls.length, ...Object.fromEntries(Object.entries(timing).map(([k, v]) => [k, Math.round(v)])) };
+        const measured = {
+            identityReadMs: Math.round(fileLockIdentityStatus().sample_duration_ms), settleMs: Math.round(ms), appends: appends.mock.calls.length,
+            ...Object.fromEntries(Object.entries(timing).map(([k, v]) => [k, Math.round(v)])),
+            beforeFirstLockMs: Math.round((span.firstAsked ?? ended) - started), afterLastLockMs: Math.round(ended - span.lastBack), slowSteps,
+        };
         console.log(`[#682] ${process.platform} ${JSON.stringify(measured)}`);
         // The figure itself is in the failure, so a miss says where the time went.
         expect({ appends: appends.mock.calls.length <= 20, settledUnder2s: ms < 2000, measured }).toEqual({ appends: true, settledUnder2s: true, measured: expect.objectContaining({ settleMs: expect.any(Number), lockWaitMs: expect.any(Number) }) });
