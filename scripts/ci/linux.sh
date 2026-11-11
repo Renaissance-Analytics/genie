@@ -36,10 +36,9 @@ ROWS=(
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag
     trust-step site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
-    flows zip64
+    flows zip64 host-plain-node mailpit
+    package package-fuse
 )
-# Linux jobs of ci.yml this script does not run yet. Named in the last line, so a PASS never reads as all of CI.
-NOT_YET=(host-plain-node mailpit package)
 
 only=''
 from=''
@@ -393,6 +392,70 @@ row_renderer-crash() { need_build && need_display && on_display timeout 420 node
 row_flows() { need_install && npm run verify:flows; }
 row_zip64() { need_install && npm run verify:zip64; }
 
+# GENIE-HOST ON PLAIN NODE, as ci.yml's job runs it: Node 22.16.0 exactly (the oldest whose node:sqlite has FTS5) and NO
+# Electron binary, so anything in the host that reaches for Electron fails here instead of finding one. Its own copy of
+# the tree and its own `npm ci` with ELECTRON_SKIP_BINARY_DOWNLOAD: the run's node_modules has Electron in it. Node
+# 22.16.0 from mise, which Omarchy ships; a machine without mise cannot run this row and says so.
+row_host-plain-node() {
+    local dir="$OUT/plain-node" node_dir
+    if ! command -v mise >/dev/null 2>&1; then blocked='mise is not on this machine, so Node 22.16.0 cannot be had'; return 1; fi
+    mise install node@22.16.0 >"$OUT/plain-node-mise.log" 2>&1 || { tail -20 "$OUT/plain-node-mise.log"; blocked='mise could not install Node 22.16.0'; return 1; }
+    node_dir="$(mise where node@22.16.0)/bin"
+    rm -rf "$dir"
+    mkdir -p "$dir"
+    tar -C . --exclude=./node_modules --exclude=./dist --exclude=./ci-out --exclude=./release --exclude=./.git -cf - . | tar -C "$dir" -xf -
+    (
+        cd "$dir" || exit 1
+        export PATH="$node_dir:$PATH"
+        echo "node $(node --version), from $node_dir"
+        [ "$(node --version)" = v22.16.0 ] || { echo "not Node 22.16.0"; exit 1; }
+        ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --no-audit --no-fund >npm-ci.log 2>&1 || { tail -40 npm-ci.log; exit 1; }
+        npm run build:main || exit 1
+        timeout 300 node scripts/host-plain-node-boot.mjs
+    )
+}
+
+# THE MAILPIT MEASUREMENT: the Mailpit image Genie runs, from GHCR by digest, so Docker must answer for this user.
+row_mailpit() {
+    need_install || return 1
+    say_docker
+    case "$docker_state" in DOCKER\ server*) ;; *) blocked="$docker_state"; return 1 ;; esac
+    npm run verify:mailpit
+}
+
+# IT PACKAGES: ci.yml's Linux leg of `it packages` (on a push there): the pinned Caddy fetched, the AppImage built with
+# electron-builder, and the cookie fuse read from what was packaged. The Windows leg's checks run in windows.ps1.
+row_package() {
+    need_build || return 1
+    npx tsx scripts/fetch-caddy.ts || return 1
+    npx electron-builder --publish never
+}
+row_package-fuse() {
+    local app
+    app="$(ls -d release/linux-unpacked/[gG]enie* 2>/dev/null | head -1)"
+    if [ -z "$app" ]; then blocked='nothing was packaged (release/linux-unpacked has no Genie binary): see the package row'; return 1; fi
+    npx --yes @electron/fuses read --app "$app" | tee "$OUT/fuses.txt"
+    grep -q "EnableCookieEncryption is Enabled" "$OUT/fuses.txt"
+}
+
+# THE MACHINE BEFORE EACH ROW (Tynn #692, omarchy-test run 8): hang and renderer-crash failed where run 3 passed, with
+# genie-host's own clock jumping 9 to 12 s while it used 3 to 38 ms of CPU, and chat-drafts' 100 MiB read took 20.6 s
+# where it took 3.3 s. A process that is not scheduled for 10 s is starved by something: memory (swap), the disk, the
+# CPU, or the VM's own host. One line per row says which, from the kernel's pressure figures (the share of the last 10 s
+# some task was stalled on each), free memory and swap, and the Genie processes still alive from earlier rows.
+machine_line() {
+    local psi=''
+    for r in cpu memory io; do
+        [ -r "/proc/pressure/$r" ] && psi+=" ${r}=$(awk '/^some/ { split($2, a, "="); print a[2] "%" }' "/proc/pressure/$r")"
+    done
+    printf 'MACHINE before %s: load %s, available %s MB, swap used %s MB, stalled in the last 10 s:%s, still alive: %s electron, %s genie-host, %s node\n' \
+        "$1" "$(cut -d' ' -f1 /proc/loadavg)" \
+        "$(awk '/^MemAvailable/ { printf "%d", $2 / 1024 }' /proc/meminfo)" \
+        "$(awk '/^SwapTotal/ { t = $2 } /^SwapFree/ { f = $2 } END { printf "%d", (t - f) / 1024 }' /proc/meminfo)" \
+        "${psi:- (no pressure figures)}" \
+        "$(pgrep -c -x electron 2>/dev/null || true)" "$(pgrep -c -f 'genie-host|dist/main/host.js' 2>/dev/null || true)" "$(pgrep -c -x node 2>/dev/null || true)"
+}
+
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 mkdir -p "$OUT"
@@ -405,6 +468,7 @@ echo "CI LINUX rows: ${selected[*]}"
 for name in "${selected[@]}"; do
     started=$SECONDS
     echo "=== $name"
+    machine_line "$name"
     blocked=''
     blocked_here=''
     if "row_$name" >"$OUT/$name.log" 2>&1; then
@@ -442,7 +506,6 @@ while IFS= read -r line; do
     reason="${reason%)*}"
     echo "NOT RUN ON LINUX ${file} (${reason})"
 done < <(grep -rH '^// CI: WINDOWS ONLY (' test --include='*.test.ts' --include='*.test.tsx' | sort)
-echo "NOT RUN BY THIS SCRIPT YET (still only in ci.yml): ${NOT_YET[*]}"
 if [ "${#failed[@]}" -gt 0 ]; then
     echo "FAILED ROWS: ${failed[*]}"
     echo "CI LINUX FAIL"
