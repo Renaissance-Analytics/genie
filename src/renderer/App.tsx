@@ -1697,9 +1697,10 @@ function DesktopApp({ bridge }: AppProps) {
     // NOT ON EVERY ESTATE SNAPSHOT (genie#1340): the thread reads only the agents' ids, names and fidelity, and the
     // snapshot changes whenever any agent's status does — twenty times a second with eleven at work. Keyed on what it
     // reads, the list it is given changes only when one of those does.
-    const agentsKey = chatAgentsKey(snapshot.agents);
+    // Genie's own agent is not among the workspace agents, and it sends mail (Tynn #621): the chat names it too.
+    const agentsKey = chatAgentsKey(snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const chatAgents = useMemo(() => snapshot.agents, [agentsKey]);
+    const chatAgents = useMemo(() => (snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents), [agentsKey]);
     const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, chatAgents, Date.now, chatLines)), [chatDetail, chatSubject, chatAgents, chatLines]);
     const chatRunning = chatDetail !== null && chatBase !== null && chatDetail.agent.id === chatBase.agentId && chatDetail.session?.running === true;
     const inboxRecent = features.inbox?.recent ?? null;

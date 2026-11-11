@@ -77,11 +77,12 @@ describe('the other places a sender is named', () => {
 
     it('a Deck item from an agent the Deck cannot name carries words as its name', () => {
         const items = deckItemsFrom({
-            questions: [], userList: [], finished: [{ id: 'fin_1', agentId: GONE, agentName: GONE, handoff: 'done', at: new Date(T).toISOString(), seen: false }],
-            unreadDms: [], agents: {},
+            questions: [], userList: [], finished: [],
+            unreadDms: [{ seq: 1, id: 'msg_1', from: GONE, to: 'human', text: 'hello', sentAt: new Date(T).toISOString(), readAt: null, attachments: [] }], agents: {},
         } as never);
-        expect(items.length).toBeGreaterThan(0);
-        for (const item of items) expect(item.agentName).not.toMatch(ID);
+        expect(items).toHaveLength(1);
+        expect(items[0]!.agentName).toBe('an agent no longer in Genie');
+        expect(items[0]!.title).not.toMatch(ID);
     });
 });
 
