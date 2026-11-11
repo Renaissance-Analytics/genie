@@ -33,3 +33,6 @@ build/win-launcher/
 
 # What scripts/ci/linux.sh and windows.ps1 write on a run: each row's log, the suite's times (Tynn #692)
 ci-out/
+
+# What scripts/ci/windows.ps1 reads for its rows when In-Session cannot pass them (Tynn #692)
+ci-rows.txt
