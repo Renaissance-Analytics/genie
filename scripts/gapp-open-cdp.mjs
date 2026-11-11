@@ -89,7 +89,7 @@ function seedInstalledApp(home) {
 
 let app, root, log, code = 1;
 try {
-    demand(process.env.CI === 'true', 'refused: this runs the real app, so only on CI');
+    demand(process.env.CI === 'true' || process.env.GENIE_TEST_MACHINE === '1', 'refused: this runs the real app, so only on CI or a test machine (GENIE_TEST_MACHINE=1, set by scripts/ci/linux.sh)');
     demand(existsSync('dist/main/entry.js'), 'run from a built checkout');
     root = mkdtempSync(join(tmpdir(), 'genie-gapp-open-'));
     mkdirSync(OUT, { recursive: true });

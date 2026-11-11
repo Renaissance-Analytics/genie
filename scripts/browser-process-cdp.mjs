@@ -17,7 +17,7 @@ import { join } from 'node:path';
 // The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
 process.env.GENIE_PAGE_PROBE ??= '1';
 
-if (process.env.CI !== 'true' && process.env.BROWSER_PROCESS_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
+if (process.env.CI !== 'true' && process.env.GENIE_TEST_MACHINE !== '1' && process.env.BROWSER_PROCESS_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 if (process.platform !== 'linux') { console.error('Linux only'); process.exit(2); }
 
 const PORT = 9334;
