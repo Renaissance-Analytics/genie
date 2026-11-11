@@ -265,10 +265,33 @@ trap cleanup EXIT
 row_typecheck() { need_install && npm run typecheck; }
 # The suite, and every test's time beside it (ci.yml's Windows job does the same): ci-out/slow-tests.tsv is ms, status,
 # file, test, slowest first. The table is observe only; the row's result is the suite's.
+#
+# HOW MANY FILES AT ONCE (Tynn #692). Vitest runs one worker per core less one. On omarchy-test that starved the suite:
+# a different test fell over its 5 s limit in three of four runs (5.0 s, 5.8 s; its neighbours took 4 to 567 ms), with
+# 18 to 36 s tests running beside it, and the row took 340 s one run and 556 s another. A worker here is more than one
+# core's work: these tests start git by the hundred, real ptys, hosts on Electron's binary and 512 MB files of their own.
+# THE RULE: half the machine's cores, and never fewer than two. CI_UNIT_WORKERS=<n> overrides it for a measurement.
+# No test's time limit is touched. The row prints the machine, the count it used, and the load it saw (a 1-minute load
+# above the core count is a machine with more to run than cores to run it on), so the rule is checked by every run.
+unit_workers() {
+    local cores="$1"
+    if [ -n "${CI_UNIT_WORKERS:-}" ]; then echo "$CI_UNIT_WORKERS"; return; fi
+    local half=$((cores / 2))
+    [ "$half" -lt 2 ] && half=2
+    echo "$half"
+}
 row_unit() {
     need_install || return 1
-    local code=0
-    npm test -- --reporter=default --reporter=json "--outputFile.json=$OUT/vitest-results.json" || code=$?
+    local code=0 cores workers sampler
+    cores="$(nproc)"
+    workers="$(unit_workers "$cores")"
+    echo "UNIT machine: $cores cores, $(awk '/MemTotal/ { printf "%d MB", $2 / 1024 }' /proc/meminfo); vitest's own count would be $((cores > 1 ? cores - 1 : 1)) workers; running with $workers (${CI_UNIT_WORKERS:+CI_UNIT_WORKERS, }half the cores, at least 2)"
+    : >"$OUT/unit-load.tsv"
+    ( while :; do echo "$(date +%s) $(cut -d' ' -f1-4 /proc/loadavg)" >>"$OUT/unit-load.tsv"; sleep 5; done ) &
+    sampler=$!
+    npm test -- "--maxWorkers=$workers" --reporter=default --reporter=json "--outputFile.json=$OUT/vitest-results.json" || code=$?
+    kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
+    awk -v cores="$cores" '{ n += 1; sum += $2; if ($2 > max) max = $2; if ($2 > cores) over += 1 } END { if (n) printf "UNIT load: 1-minute load average %.1f, highest %.1f, above the %d cores in %d of %d samples (5 s apart)\n", sum / n, max, cores, over, n; else print "UNIT load: not sampled" }' "$OUT/unit-load.tsv"
     node scripts/ci/slow-tests.mjs "$OUT/vitest-results.json" "$OUT/slow-tests.tsv" || true
     return "$code"
 }
@@ -365,6 +388,7 @@ for name in "${selected[@]}"; do
     blocked=''
     blocked_here=''
     if "row_$name" >"$OUT/$name.log" 2>&1; then
+        grep -E '^(UNIT|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
         echo "ROW $name PASS $((SECONDS - started))"
     elif [ -n "$blocked" ]; then
         # It could not run: what it needed failed, and the words are that need's, said once in the first row that met it.
@@ -381,6 +405,7 @@ for name in "${selected[@]}"; do
             echo "--- the end of ci-out/electron.log"
             tail -30 "$OUT/electron.log"
         fi
+        grep -E '^(UNIT|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
         echo "ROW $name FAIL $((SECONDS - started))"
         failed+=("$name")
     fi
