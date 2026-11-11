@@ -189,20 +189,19 @@ describe('the verdict, as a workspace changes', () => {
         expect(host.isTrustedPath(at('repos', 'shop'))).toBe(true);
     });
 
-    it('then the list changes: it asks again, and says it changed', async () => {
+    it('then the list changes: still trusted, and it does not ask again (Tynn #618)', async () => {
         const { host, p } = trust(hooked('x'));
         await host.trust('acme');
         p.files.set(at('.claude', 'settings.json'), hooked('y')[at('.claude', 'settings.json')]!);
-        expect(await host.refresh('acme')).toMatchObject({ trusted: false, changed: true });
-        expect(host.isTrustedPath(W)).toBe(false);
+        expect(await host.refresh('acme')).toMatchObject({ trusted: true, changed: false });
+        expect(host.isTrustedPath(W)).toBe(true);
     });
 
-    it('carried over at the upgrade: trusted once, its list recorded, and a change after that asks', async () => {
-        const { host, p, record } = trust(hooked('x'), { carried: ['acme'] });
+    it('carried over at the upgrade: trusted, and a change after that does not ask', async () => {
+        const { host, p } = trust(hooked('x'), { carried: ['acme'] });
         expect(await host.refresh('acme')).toMatchObject({ trusted: true });
-        expect(record.workspaces['acme']).toBeDefined();
         p.files.set(at('.claude', 'settings.json'), hooked('y')[at('.claude', 'settings.json')]!);
-        expect(await host.refresh('acme')).toMatchObject({ trusted: false, changed: true });
+        expect(await host.refresh('acme')).toMatchObject({ trusted: true, changed: false });
     });
 
     it('nothing would run: trusted without asking, and nothing recorded', async () => {
