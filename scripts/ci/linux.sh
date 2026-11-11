@@ -173,7 +173,15 @@ trap cleanup EXIT
 # --- the rows: each prints nothing itself and returns ci.yml's step status --------------------------------------------
 
 row_typecheck() { need_install && npm run typecheck; }
-row_unit() { need_install && npm test; }
+# The suite, and every test's time beside it (ci.yml's Windows job does the same): ci-out/slow-tests.tsv is ms, status,
+# file, test, slowest first. The table is observe only; the row's result is the suite's.
+row_unit() {
+    need_install || return 1
+    local code=0
+    npm test -- --reporter=default --reporter=json "--outputFile.json=$OUT/vitest-results.json" || code=$?
+    node scripts/ci/slow-tests.mjs "$OUT/vitest-results.json" "$OUT/slow-tests.tsv" || true
+    return "$code"
+}
 row_build() { need_build; }
 
 # ci.yml's "the bundles exist, and are the right shape", command for command.
