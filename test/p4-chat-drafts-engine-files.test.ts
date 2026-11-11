@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ENGINE_METHODS, type EngineMethod } from '../src/core/engine-protocol.js';
 import { LOCAL_UPLOAD_TTL_MS } from '../src/core/local-content.js';
 import type { BlobSource } from '../src/core/local-blobs.js';
@@ -86,12 +86,17 @@ describe('7E host-owned bounded draft attachment reads', () => {
         expect(await c.call('engine.ping', [])).toMatchObject({ ok: true }); expect(f.legacyRead).not.toHaveBeenCalled();
     });
     it('reads exact bounded ranges, enforces the512KiB boundary and rejects unknown/released handles', async () => {
-        const f = await rig({ size: 512 * 1024 + 7 }), c = await f.connect(), info = (await f.open(c))!;
-        const first = await f.call(c, 'engine.drafts.fileRead', [info.handle, 0, 512 * 1024]); expect(first).toMatchObject({ ok: true });
-        if (!first.ok) throw new Error(first.reason); expect(Buffer.from((first.value as { base64: string }).base64, 'base64')).toEqual(Buffer.from(f.bytes.subarray(0, 512 * 1024)));
-        for (const range of [[0, 512 * 1024 + 1], [-1, 1], [0.5, 1], [info.size, 1]]) expect(await f.call(c, 'engine.drafts.fileRead', [info.handle, ...range])).toMatchObject({ ok: false });
-        expect(await f.call(c, 'engine.drafts.fileRead', [info.handle, info.size, 0])).toEqual({ ok: true, value: { base64: '' } });
-        expect(await f.call(c, 'engine.drafts.fileClose', [info.handle])).toMatchObject({ ok: true }); expect(f.closed).toHaveLength(1);
+        // WHERE ITS TIME GOES (Tynn #692): on omarchy-test it took 1.8 to 5.8 s in six runs and timed out twice, while the
+        // file's other tests took 116 to 552 ms, the 2 MiB read among them. Each step's ms since the test began, printed when
+        // the test took over a second (a timed-out test prints the steps it reached), so a passing run measures it too.
+        const t0 = performance.now(), marks: string[] = [], mark = (step: string) => { marks.push(`${step}=${Math.round(performance.now() - t0)}`); };
+        onTestFinished(() => { if (performance.now() - t0 > 1_000) console.log(`DRAFTS_BOUNDED_STEPS ${marks.join(' ')}`); });
+        const f = await rig({ size: 512 * 1024 + 7 }); mark('rig'); const c = await f.connect(); mark('connect'); const info = (await f.open(c))!; mark('open');
+        const first = await f.call(c, 'engine.drafts.fileRead', [info.handle, 0, 512 * 1024]); mark('read-512KiB'); expect(first).toMatchObject({ ok: true });
+        if (!first.ok) throw new Error(first.reason); expect(Buffer.from((first.value as { base64: string }).base64, 'base64')).toEqual(Buffer.from(f.bytes.subarray(0, 512 * 1024))); mark('compare');
+        for (const range of [[0, 512 * 1024 + 1], [-1, 1], [0.5, 1], [info.size, 1]]) { expect(await f.call(c, 'engine.drafts.fileRead', [info.handle, ...range])).toMatchObject({ ok: false }); mark(`refused-${range.join(',')}`); }
+        expect(await f.call(c, 'engine.drafts.fileRead', [info.handle, info.size, 0])).toEqual({ ok: true, value: { base64: '' } }); mark('read-empty');
+        expect(await f.call(c, 'engine.drafts.fileClose', [info.handle])).toMatchObject({ ok: true }); expect(f.closed).toHaveLength(1); mark('close');
         expect(await f.call(c, 'engine.drafts.fileRead', [info.handle, 0, 1])).toMatchObject({ ok: false }); expect(await f.call(c, 'engine.drafts.fileClose', [info.handle])).toMatchObject({ ok: false });
         expect(f.frames.every(text => Buffer.byteLength(text) <= 1024 * 1024)).toBe(true);
     });
