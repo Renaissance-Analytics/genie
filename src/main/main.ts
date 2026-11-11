@@ -116,6 +116,7 @@ import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
 import { providerBinary } from './session-host.js';
+import { afterSignedIn } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
@@ -1872,11 +1873,11 @@ async function boot(): Promise<void> {
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
         runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
-        onSignedIn: (provider) => {
-            for (const id of host?.signedOutAgents(provider) ?? []) {
-                void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
-            }
-        },
+        onSignedIn: (provider) => afterSignedIn(provider, {
+            signedOutAgents: (p) => host?.signedOutAgents(p) ?? [],
+            restart: (id) => { void restartAgent(agentOps, id as AgentId, 'graceful').then((r) => { if (r.ok) host?.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch()); },
+            resumeLimit: (p) => { host?.resumeLimit(p); refreshTray(); },
+        }),
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry; a retry that
         // is refused again raises the prompt again. They are not restarted: only a tool failed, never their session.
         onDesignLoginEnded: () => {

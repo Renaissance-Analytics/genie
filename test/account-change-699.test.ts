@@ -172,3 +172,13 @@ describe('a Log in through Genie', () => {
         expect(sent.get('moic')).toEqual(['are you there?']);
     });
 });
+
+describe('the status line a held login is read with', () => {
+    it("is the provider's own status, its first word the resolved CLI; none for an unknown provider or an unquotable path", async () => {
+        const { statusCommandFor } = await import('../src/main/login-host.js');
+        expect(statusCommandFor('claude', null)).toBe('claude auth status');
+        expect(statusCommandFor('claude', 'C:/Tools/claude.exe')).toBe('"C:/Tools/claude.exe" auth status');
+        expect(statusCommandFor('gemini', null)).toBeNull();
+        expect(statusCommandFor('claude', 'C:/a"b/claude.exe')).toBeNull();
+    });
+});
