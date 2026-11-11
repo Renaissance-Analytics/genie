@@ -934,10 +934,13 @@ function DesktopApp({ bridge }: AppProps) {
     const navigate = (next: string): void => { if (next === route) { arriveAt(next); return; } writeAddress(addressContext ? addressOf(next, addressContext) : next); };
     // An OLD address (genie://workspace/<id>?chat=…, a link, a host navigation) is rewritten in place to the new form.
     const shownAddress = addressContext ? addressOf(route, addressContext) : address;
+    // The workstation this window read until now: connecting in place, its page goes with it to the host (beta.61, step four).
+    const readBefore = useRef<string | null>(null);
     useEffect(() => {
-        const next = rewrittenAddress(address, addressContext);
+        const next = rewrittenAddress(address, addressContext, readBefore.current);
+        if (addressContext) readBefore.current = addressContext.workstation;
         if (next !== null) window.location.replace(`#${next}`);
-    }, [address, shownAddress, addressContext !== null]);
+    }, [address, shownAddress, addressContext !== null, addressContext?.workstation]);
     // LEAVING A REMOTE HOST (the two-VM proof, 2026-10-20): the address named that machine; once this window's own snapshot
     // names this one, the same page comes back here — Disconnect on the host's Remote access lands on this machine's Remote
     // access (the host it left is listed there), not the Dashboard. Not in a window BOUND to a host: it waits for its host.
