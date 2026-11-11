@@ -34,6 +34,17 @@ export function mayBrowse(role: WorkstationRole | null): boolean {
     return role !== 'drone';
 }
 
+/**
+ * MAY THIS MACHINE CONNECT OUT, and if not, why (beta.61.1). `role` is the effective one (fail closed); `said` is what Tynn
+ * answered. Only Tynn's own "drone" is refused as a drone. Signed in with no answer, nothing is dialled either, but the
+ * person is told Tynn was not reached, and trying again asks Tynn again.
+ */
+export function connectOutRefusal(reading: { role: WorkstationRole | null; said: WorkstationRole | null }): string | null {
+    if (mayBrowse(reading.role)) return null;
+    if (reading.said === 'drone') return droneRefusal('drone');
+    return 'Genie could not reach Tynn to check this workstation’s role, so it did not connect. Try again.';
+}
+
 /** The words a drone answers a browse with; null when browsing is allowed. */
 export function droneRefusal(role: WorkstationRole | null): string | null {
     return mayBrowse(role)

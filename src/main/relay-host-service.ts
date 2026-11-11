@@ -22,19 +22,35 @@ export interface RelayHostServicePorts {
     /** Start the link on this identity (`startRelayHost`, wired in genie-host). */
     readonly start: (input: { host: string; workstationId: string; fingerprint: string; onStatus: (status: RelayHostStatus) => void }) => RelayHostHandle;
     readonly onChange: () => void;
+    /** A timer, for reading the role again when Tynn did not answer. Absent = only the callers' own reads. */
+    readonly schedule?: (ms: number, fn: () => void) => () => void;
 }
+
+/** How long before the role is read again after no answer: 5 s, 15 s, 1 min, then every 5 min until Tynn answers. */
+const ROLE_RETRY_MS = [5_000, 15_000, 60_000, 300_000] as const;
 
 export interface RelayHostView {
     readonly workstation: TynnWorkstationState | null;
     readonly role: WorkstationRole | null;
+    /** What Tynn answered, `null` = no answer yet: what a window shows, and what tells a drone from "not known". */
+    readonly said?: WorkstationRole | null;
     readonly relay: RelayHostStatus;
 }
 
 export class RelayHostService {
     readonly #ports: RelayHostServicePorts;
     #workstation: TynnWorkstationState | null = null;
-    /** A drone until Tynn's first answer (fail closed). */
+    /** A drone until Tynn's first answer (fail closed): what connecting out is gated on. */
     #role: WorkstationRole | null = 'drone';
+    /**
+     * What Tynn SAID, and nothing else: what a window shows (beta.61.1). A Pilot whose read had not answered, or had failed,
+     * was shown as a drone and lost its host picker; showing is not the boundary (Tynn refuses a drone, and connecting out
+     * still reads `#role`).
+     */
+    #said: WorkstationRole | null = null;
+    #retries = 0;
+    #retryWaiting = false;
+    #cancelRetry: () => void = () => {};
     #relay: RelayHostStatus = { state: 'off' };
     #handle: RelayHostHandle | null = null;
     #relayFor: string | null = null;
@@ -44,7 +60,8 @@ export class RelayHostService {
 
     constructor(ports: RelayHostServicePorts) { this.#ports = ports; }
 
-    status(): RelayHostView { return { workstation: this.#workstation, role: this.#role, relay: this.#relay }; }
+    status(): RelayHostView { return { workstation: this.#workstation, role: this.#role, said: this.#said, relay: this.#relay }; }
+    said(): WorkstationRole | null { return this.#said; }
     role(): WorkstationRole | null { return this.#role; }
 
     /** Register with the Tynn in use, one at a time. Genie 1's record arriving during a run gets a run of its own. */
@@ -68,7 +85,7 @@ export class RelayHostService {
             const settled = legacy ? await this.#ports.workstation.legacyDone(host).catch(() => null) : null;
             const result = await this.#ports.workstation.ensure({ host, legacy: legacy && legacy.workstationId !== settled ? legacy : null })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
-            this.#workstation = result.ok ? { registered: true, host, workstationId: result.workstationId, role: this.#role } : { registered: false, reason: result.reason, role: this.#role };
+            this.#workstation = result.ok ? { registered: true, host, workstationId: result.workstationId, role: this.#said } : { registered: false, reason: result.reason, role: this.#said };
         }
         await this.readRole();
         await this.apply();
@@ -79,12 +96,25 @@ export class RelayHostService {
     async readRole(): Promise<void> {
         const account = this.#ports.account();
         const signedIn = account?.status().signedIn === true;
-        const role = signedIn && account ? await this.#ports.readRole(account.request) : null;
+        // A read that fails is no answer: connecting out fails closed, and nothing is said in the window's name.
+        const role = signedIn && account ? await this.#ports.readRole(account.request).catch(() => null) : null;
         const next = signedIn ? effectiveRoleOf({ signedIn: true, role }) : effectiveRoleOf({ signedIn: false });
-        if (next === this.#role) return;
+        // Signed in and unanswered: read again by itself, backing off, so a slow or failed first read is not the session's.
+        if (signedIn && role === null) this.#readRoleLater();
+        else { this.#retries = 0; this.#cancelRetry(); this.#cancelRetry = () => {}; this.#retryWaiting = false; }
+        if (next === this.#role && role === this.#said) return;
         this.#role = next;
-        if (this.#workstation) this.#workstation = { ...this.#workstation, role: next };
+        this.#said = role;
+        if (this.#workstation) this.#workstation = { ...this.#workstation, role };
         this.#ports.onChange();
+    }
+
+    #readRoleLater(): void {
+        if (!this.#ports.schedule || this.#retryWaiting) return;
+        this.#retryWaiting = true;
+        const wait = ROLE_RETRY_MS[Math.min(this.#retries, ROLE_RETRY_MS.length - 1)]!;
+        this.#retries += 1;
+        this.#cancelRetry = this.#ports.schedule(wait, () => { this.#retryWaiting = false; void this.readRole(); });
     }
 
     /** The link follows the switch and the registration: on while `remote_access` is on and this machine is registered. */
