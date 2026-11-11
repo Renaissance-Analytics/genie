@@ -144,10 +144,11 @@ describe('serving the installed copy', () => {
         const outside = join(root, 'outside');
         await mkdir(outside, { recursive: true });
         await writeFile(join(outside, 'secret.txt'), 'not the app\'s');
+        // Control first: the app's own files are served. (A link added to the copy changes it, so the page is checked before.)
+        expect((await get('/app/app.js')).status, 'the app\'s own file is served').toBe(200);
         const dir = book.installedDir(NOTES)!;
         await symlink(outside, join(dir, 'app', 'linked'), 'junction');
         expect((await get('/app/linked/secret.txt')).status).toBe(404);
-        expect((await get('/app/index.html')).status, 'the app itself is still served').toBe(200);
     });
 
     it('nothing outside the app\'s own files is served', async () => {
