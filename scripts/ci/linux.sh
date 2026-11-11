@@ -281,6 +281,15 @@ for name in "${selected[@]}"; do
 done
 
 for n in "${notes[@]}"; do echo "NOTE $n"; done
+# TEST FILES THE UNIT SUITE DID NOT RUN HERE, each with its own reason: a file that runs on Windows only carries
+# `// CI: WINDOWS ONLY (<reason>)` (test/ci-windows-only-files.test.ts holds that), and scripts/ci/windows.ps1 runs it.
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    file="${line%%:*}"
+    reason="${line#*WINDOWS ONLY (}"
+    reason="${reason%)*}"
+    echo "NOT RUN ON LINUX ${file} (${reason})"
+done < <(grep -rH '^// CI: WINDOWS ONLY (' test --include='*.test.ts' --include='*.test.tsx' | sort)
 echo "NOT RUN BY THIS SCRIPT YET (still only in ci.yml): ${NOT_YET[*]}"
 if [ "${#failed[@]}" -gt 0 ]; then
     echo "FAILED ROWS: ${failed[*]}"
