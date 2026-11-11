@@ -98,8 +98,8 @@ import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
 import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
 import { RelayHostService } from './relay-host-service.js';
-import { droneRefusal } from '../core/workstation-role.js';
-import { readWorkstationRole } from './workstation-role-reader.js';
+import { connectOutRefusal, mayBrowse } from '../core/workstation-role.js';
+import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
 import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
@@ -858,6 +858,7 @@ async function main(): Promise<void> {
     // THIS MACHINE'S KEY IS HERE (P3.4), and the relay that signs with it (Tynn #410).
     const workstationService = new WorkstationService({
         store: workstationKeyStore(join(home, 'workstation.json'), keychain),
+        log: (line) => say(line),
         request: async (path, init) => (await tynnOpening).request(path, init),
         host: () => TYNN_HOST,
         hostname,
@@ -879,7 +880,13 @@ async function main(): Promise<void> {
         account: () => tynnAccountNow,
         workstation: workstationService,
         enabled: () => settings.snapshot().remote_access === true,
-        readRole: (request) => readWorkstationRole(request),
+        // Each read says what Tynn answered, in the lifecycle log (beta.61.1).
+        readRole: async (request) => {
+            const outcome = await readWorkstationRoleOutcome(request);
+            say(`tynn role read: ${outcome.words}`);
+            return { role: outcome.role, unbound: outcome.unbound === true };
+        },
+        schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         start: ({ host, workstationId, fingerprint, onStatus }) => startRelayHost({
             ports: relayHostPorts({ tynnHost: host, workstationId, authHeader: () => workstationService.authHeader(host), fetch: relayFetch }),
             socket: (url) => deviceSocket(url),
@@ -995,7 +1002,11 @@ async function main(): Promise<void> {
              */
             relay: {
                 signedIn: () => tynnAccountNow?.status().signedIn === true,
-                refusal: () => droneRefusal(relayHostService.role()),
+                // Not known to be a drone: ask Tynn first (beta.61.1); only its own "drone" is refused as one.
+                refusal: async () => {
+                    if (!mayBrowse(relayHostService.role()) && relayHostService.said() === null) await relayHostService.readRole().catch(() => {});
+                    return connectOutRefusal({ role: relayHostService.role(), said: relayHostService.said(), why: relayHostService.unknownWhy() });
+                },
                 keypair: () => PopKeypair.generate(),
                 mint: (workstationId, jwk) => (tynnAccountNow
                     ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)

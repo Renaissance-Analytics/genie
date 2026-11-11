@@ -8,6 +8,7 @@ import { RelayHostReplica } from '../src/main/relay-host-replica.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import type { RelayHostStatus } from '../src/main/tynn-network.js';
+import { mayBrowse } from '../src/core/workstation-role.js';
 
 /*
  * THIS MACHINE ON THE TYNN RELAY, AS A HOST, IS GENIE-HOST'S (Tynn #410, host split P5d.3). Its registration with Tynn, the
@@ -172,5 +173,52 @@ describe('with genie-host linked, the window runs no relay host (source guards)'
         expect(main).not.toMatch(/linkedRemote\.bridge/);
         expect(host).toMatch(/attach: \(transport\) => remoteHub\.add\(transport\)/);
         expect(host).not.toMatch(/RelayBridgeHost/);
+    });
+});
+
+/*
+ * THE HOST PICKER WENT FROM A PILOT'S TITLE BAR (beta.61 as shipped, main 23354995). The title bar offers Connect unless
+ * `features.remote.tynnWorkstation.role` says drone (Shell.tsx `mayBrowse`). That role is genie-host's workstation view, and
+ * it was the FAIL-CLOSED role: `drone` until Tynn's first answer, and `drone` whenever the role read answered nothing or
+ * failed. A Pilot whose read had not answered, or had failed once, lost its host picker. What the window SHOWS is what Tynn
+ * said; connecting out from a machine Tynn has not called a pilot is still refused where it must be (main's device-open
+ * gate and Tynn itself read the effective role).
+ */
+describe('the role a window shows is Tynn\'s answer; failing closed stays where it must', () => {
+    it('Tynn said pilot: shown as a pilot, and it may connect out', async () => {
+        const r = rig({}, { role: 'pilot' });
+        await r.service.register();
+        expect(r.service.status().workstation?.role).toBe('pilot');
+        expect(mayBrowse(r.service.status().workstation?.role ?? null)).toBe(true);
+    });
+
+    it('the role read answered nothing: the window shows no role (the picker stays), while connecting out still fails closed', async () => {
+        const r = rig({}, { role: null });
+        await r.service.register();
+        expect(r.service.status().workstation?.role ?? null).toBeNull();
+        expect(mayBrowse(r.service.status().workstation?.role ?? null)).toBe(true);
+        expect(r.service.status().role).toBe('drone');
+    });
+
+    it('the role read failed: registered all the same, no role shown, connecting out fails closed', async () => {
+        const r = rig({ readRole: async () => { throw new Error('Tynn could not be reached'); } });
+        await expect(r.service.register()).resolves.toBeUndefined();
+        expect(r.service.status().workstation).toMatchObject({ registered: true, workstationId: 'ws_me' });
+        expect(r.service.status().workstation?.role ?? null).toBeNull();
+        expect(r.service.status().role).toBe('drone');
+    });
+
+    it('CONTROL: Tynn said drone: shown as a drone, and no picker', async () => {
+        const r = rig({}, { role: 'drone' });
+        await r.service.register();
+        expect(r.service.status().workstation?.role).toBe('drone');
+        expect(mayBrowse(r.service.status().workstation?.role ?? null)).toBe(false);
+    });
+
+    it('before genie-host has answered, the window\'s replica shows no role, so the picker is there from the start', () => {
+        const replica = new RelayHostReplica(async () => null);
+        expect(replica.workstation()?.role ?? null).toBeNull();
+        expect(mayBrowse(replica.workstation()?.role ?? null)).toBe(true);
+        expect(replica.role()).toBe('drone');
     });
 });
