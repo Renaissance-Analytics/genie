@@ -19,6 +19,7 @@ export interface AgentDetailPorts {
         find(id: AgentId): AgentRecord | null;
         listAgents(): readonly AgentRecord[];
         defaultAgentOf(workspaceId: string): string | null;
+        workspaceMcpOff?(workspaceId: string): readonly string[];
     };
     /** The session host: genie-host's own, or a window's link to it. */
     readonly engine: Pick<AgentEngine, 'probe' | 'ledgerFor' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'> | null;
@@ -54,6 +55,12 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
             autoApprove: record.autoApprove === true,
             manageTabs: record.manageTabs === true,
             drivePages: record.drivePages === true,
+            // Its MCP servers (Tynn #628): the ones switched off, and every one a session reported.
+            ...(record.mcpOff && record.mcpOff.length > 0 ? { mcpOff: record.mcpOff } : {}),
+            ...(record.mcpSeen && record.mcpSeen.length > 0 ? { mcpSeen: record.mcpSeen } : {}),
+            ...(record.mcpOn && record.mcpOn.length > 0 ? { mcpOn: record.mcpOn } : {}),
+            // What its workspace has off by default, which it inherits where it made no choice.
+            ...((ports.registry.workspaceMcpOff?.(record.workspaceId) ?? []).length > 0 ? { workspaceMcpOff: ports.registry.workspaceMcpOff!(record.workspaceId) } : {}),
             // What it hears from IssueWatch now: its own setting, or the default its place in the workspace gives it (Tynn #806).
             issueWatch: issueWatchPrefsFor(record, ports.registry.listAgents(), ports.registry.defaultAgentOf(record.workspaceId)),
             permissions: record.permissions ?? 'all',

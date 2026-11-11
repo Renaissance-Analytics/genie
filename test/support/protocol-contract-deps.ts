@@ -32,7 +32,7 @@ export function protocolContractDeps(root: string): HostApiDeps {
             hibernate: async () => ({ ok: true }), wake: async () => ({ ok: true }), remove: async () => ({ ok: true }),
             listRepos: async () => ({ ok: true, repos: [] }), addRepo: async () => ({ ok: true }), removeRepo: async () => ({ ok: true }),
             settings: () => null, setSetting: async () => null, resetSetting: async () => null,
-            setGoverns: async () => ({ ok: true }), setDefaultAgent: async () => ({ ok: true }),
+            setGoverns: async () => ({ ok: true }), setDefaultAgent: async () => ({ ok: true }), setMcpServer: async () => ({ ok: true }),
         },
         agentOps: {
             restart: async (_id, kind) => ({ ok: true, kind }),
@@ -41,7 +41,7 @@ export function protocolContractDeps(root: string): HostApiDeps {
             switchDriver: async () => ({ ok: false, reason: 'the driver is not installed' }),
             setBudget: async () => ({ ok: true, decision: { kind: 'proceed', remainingUsd: null } }),
             setMode: async () => ({ ok: true }), setAccessScope: async () => ({ ok: true }), setAccessAgents: async () => ({ ok: true }),
-            setAutoApprove: async () => ({ ok: true }), setManageTabs: async () => ({ ok: true }), setDrivePages: async () => ({ ok: true }),
+            setAutoApprove: async () => ({ ok: true }), setManageTabs: async () => ({ ok: true }), setDrivePages: async () => ({ ok: true }), setMcpServer: async () => ({ ok: true }),
             setIssueWatch: async () => ({ ok: true }), setPermissions: async () => ({ ok: true }), setModel: async () => ({ ok: true }),
             models: async () => ({ ok: true }),
             diagnose: async () => ({ ok: true, diagnosis: { state: 'healthy', fault: false, cause: null, repair: null } }),
