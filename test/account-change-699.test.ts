@@ -61,7 +61,7 @@ beforeEach(async () => {
     accountReads = 0;
 });
 afterEach(async () => {
-    host.stopAll();
+    host?.stopAll();
     await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
