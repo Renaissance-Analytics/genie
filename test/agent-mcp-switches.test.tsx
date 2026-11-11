@@ -82,7 +82,7 @@ describe('enforced where the session is launched', () => {
 
     it('both providers’ drivers are built with it, from the record being launched', () => {
         const host = src('src/main/session-host.ts');
-        expect(host.match(/\.\.\.mcpPolicyOptions\(record, extras\?\.mcpServers \?\? \[\]\)/g) ?? []).toHaveLength(2);
+        expect(host.match(/\.\.\.mcpPolicyOptions\(record, extras\?\.mcpServers \?\? \[\], extras\?\.workspaceMcpOff \?\? \[\]\)/g) ?? []).toHaveLength(2);
         expect(host).not.toMatch(/inheritedPolicy/);
     });
 });
