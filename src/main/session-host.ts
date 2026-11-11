@@ -452,6 +452,11 @@ export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(rec
     return untrusted === null ? record : { ...record, autoApprove: false };
 }
 
+/** RED stand-in (Tynn #628): today's rule alone. */
+export function mcpPolicyOptions(_record: { readonly mcpOff?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[]): { disabledMcpServers?: readonly string[] } {
+    return supplied.some((server) => server.name === 'tynn') ? {} : { disabledMcpServers: ['tynn'] };
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     // Said in Genie's words, naming the file, before the driver refuses in its own.
     const problem = providerStartProblem(record.provider);

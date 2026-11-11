@@ -501,6 +501,11 @@ export async function setManageTabs(ports: AgentOpsPorts, agentId: string, manag
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 
+/** RED stand-in (Tynn #628). */
+export async function setMcpServer(_ports: AgentOpsPorts, _agentId: string, _name: unknown, _on: unknown): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    return { ok: false, reason: '' };
+}
+
 /** May drive pages (browser rebuild step 7): the page tool is in or out of its next tools/list — nothing restarts. */
 export async function setDrivePages(ports: AgentOpsPorts, agentId: string, drivePages: boolean): Promise<{ ok: true; record: AgentRecord } | Refusal> {
     const record = ports.registry.find(agentId);

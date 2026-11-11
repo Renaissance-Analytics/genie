@@ -684,6 +684,11 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, drivePages }));
     }
 
+    /** RED stand-in (Tynn #628). */
+    async noteMcpSeen(_agentId: AgentId, _names: readonly string[]): Promise<AgentRecord | null> {
+        return null;
+    }
+
     /** What it hears from IssueWatch (Tynn #806); kept on the record like every other setting of the agent. */
     async setIssueWatch(agentId: AgentId, issueWatch: IssueWatchSetting): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, issueWatch }));

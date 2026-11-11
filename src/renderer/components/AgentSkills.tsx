@@ -1,6 +1,12 @@
 import { Button } from '@particle-academy/react-fancy';
 import { useState } from 'react';
+import type { McpRow } from '../../core/agent-mcp.js';
 import { commandGroups, type ProviderExtensions } from '../../core/provider-commands.js';
+
+/** RED stand-in (Tynn #628, the MCP server switches). */
+export function McpServerSwitches(_props: { rows: readonly McpRow[]; agentName: string; onSet?: ((name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined; initialBusy?: string | undefined; initialOutcome?: { name: string; ok: boolean; text: string } | undefined }) {
+    return null;
+}
 
 /**
  * AN AGENT'S SETTINGS → SKILLS (Tynn #628; the owner, beta.61: "the agent skills UX is still garbage"). Read-only: what
