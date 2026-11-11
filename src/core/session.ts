@@ -2646,7 +2646,7 @@ function promptRow(text: string, by: string | null, sent: { attachments: readonl
  */
 const WRITE_RETRY_MS: readonly number[] = [250, 1000, 2000];
 /** The most rows, and about the most bytes, one thread write takes at once (Tynn #550). */
-const WRITE_BATCH_ROWS = 256;
+const WRITE_BATCH_ROWS = 1; // BREAK PROBE, reverted next: was 256
 const WRITE_BATCH_BYTES = 2 * 1024 * 1024;
 
 /**
