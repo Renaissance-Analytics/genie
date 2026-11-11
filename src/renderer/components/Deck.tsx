@@ -113,7 +113,7 @@ export interface DeckProps {
 
 const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 
-export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, focusId = null, onDismiss, onDismissOlder, onDismissStale, now = Date.now(), initiallyExpanded, onTrustWorkspace }: DeckProps) {
+export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, focusId = null, onDismiss, onDismissOlder, onDismissStale, now = Date.now(), initiallyExpanded, busy = null, onTrustWorkspace }: DeckProps) {
     const band = deckBand(items);
     // The workspace sections hold what waits; the stale questions have their own band below (2026-11-08).
     const sections = deckSections(items.filter((i) => !isStale(i)));
@@ -240,6 +240,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             onDismiss={onDismiss}
                             now={now}
                             initiallyExpanded={initiallyExpanded}
+                            busy={busy}
                             onTrustWorkspace={onTrustWorkspace}
                         />
                     ))}
@@ -297,6 +298,7 @@ interface RowProps {
     onDismiss?: ((item: DeckItem, notes: string[]) => void) | undefined;
     now: number;
     initiallyExpanded?: readonly string[] | undefined;
+    busy?: { itemId: string; optionId: string } | null | undefined;
     onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
 }
 
@@ -315,7 +317,7 @@ function DeckSectionView({ section, ...row }: RowProps & { section: DeckSection 
     );
 }
 
-function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now, initiallyExpanded, onTrustWorkspace }: RowProps & { item: DeckItem }) {
+function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now, initiallyExpanded, busy, onTrustWorkspace }: RowProps & { item: DeckItem }) {
     // A stale question's form is folded away until the person chooses to answer it anyway — its agent is not waiting.
     const [opened, setOpened] = useState(false);
     // A long to-do or message shows its first line; a click opens the whole text (the owner, 2026-10-18).
@@ -355,7 +357,9 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                     <span data-deck-title={item.id} className="min-w-0 flex-1 truncate font-semibold text-[var(--fg-1)]">{item.title}</span>
                 ) : (() => {
                     // A short bold title (Tynn #602): the item's first line, and all the closed row shows.
-                    const { preview, more } = deckPreview(item.title);
+                    // The folded detail (Tynn #693) is something to open too, even under a title that fits.
+                    const { preview, more: longer } = deckPreview(item.title);
+                    const more = longer || Boolean(item.detail);
                     if (!more) return <span data-deck-title={item.id} className="min-w-0 flex-1 break-words font-semibold text-[var(--fg-1)]">{preview}</span>;
                     return (
                         <span data-deck-title={item.id} className="flex min-w-0 flex-1 items-baseline gap-2">
@@ -384,7 +388,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                 ) : null}
                 {/* Done (a to-do's answer, a message's) ends the row, beside Open (Tynn #602): not a row of its own. */}
                 {item.answer.kind === 'inline' && item.source !== 'agent-question' ? (
-                    <InlineOptions options={item.answer.options} answering={answeringHere} onAnswer={(optionId) => onAnswer(item, optionId)} inRow />
+                    <InlineOptions options={item.answer.options} answering={answeringHere} busy={busy?.itemId === item.id ? busy.optionId : null} onAnswer={(optionId) => onAnswer(item, optionId)} inRow />
                 ) : null}
                 {/* A stale question goes in one click (its form is folded; once opened, its own Dismiss carries the notes). */}
                 {stale && dismissable && !showForm ? (
@@ -475,7 +479,10 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
  */
 function DeckItemBody({ item }: { item: DeckItem }) {
     const body = deckBody(item.title);
-    const paragraphs = body.steps.length === 0 && body.text.length === 0 ? [item.title.trim()] : body.text;
+    // ONLY what the title does not already say (Tynn #693): an item that is one long line is whole in its opened title, and
+    // was drawn a second time here.
+    const paragraphs = body.text;
+    if (paragraphs.length === 0 && body.steps.length === 0 && !item.detail) return null;
     return (
         <div data-deck-body={item.id} data-deck-full={item.id} className="mt-2 flex max-w-[72ch] flex-col gap-2 break-words text-[13px] leading-relaxed text-[var(--fg-2)]">
             {paragraphs.map((p, i) => <p key={i}>{linked(p)}</p>)}
@@ -484,6 +491,8 @@ function DeckItemBody({ item }: { item: DeckItem }) {
                     {body.steps.map((step, i) => <li key={i} data-deck-step={i + 1}>{linked(step)}</li>)}
                 </ol>
             ) : null}
+            {/* The technical detail (an error, its paths): once, here, as it was written. */}
+            {item.detail ? <pre data-deck-detail={item.id} className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] p-2 font-mono text-[12px] text-[var(--fg-3)]">{item.detail}</pre> : null}
         </div>
     );
 }
@@ -494,16 +503,17 @@ function linked(text: string): ReactNode[] {
     )));
 }
 
-function InlineOptions({ options, answering, onAnswer, inRow = false }: { options: readonly { id: string; label: string }[]; answering: string | null; onAnswer: (optionId: string) => void; inRow?: boolean }) {
+function InlineOptions({ options, answering, busy = null, onAnswer, inRow = false }: { options: readonly { id: string; label: string }[]; answering: string | null; busy?: string | null; onAnswer: (optionId: string) => void; inRow?: boolean }) {
     return (
-        <div className={inRow ? 'flex shrink-0 gap-1' : 'mt-2 flex flex-wrap gap-2'}>
+        <div {...(busy ? { 'data-deck-busy': busy } : {})} className={inRow ? 'flex shrink-0 gap-1' : 'mt-2 flex flex-wrap gap-2'}>
             {options.map((option) => (
                 <Button size="xs"
                     key={option.id}
                     type="button"
                     data-approval-option={option.id}
-                    disabled={answering !== null}
-                    onClick={() => onAnswer(option.id)}
+                    loading={busy === option.id}
+                    disabled={answering !== null || busy !== null}
+                    onClick={() => (busy !== null ? undefined : onAnswer(option.id))}
                     className="rounded-md border border-[var(--border-2)] px-2.5 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-50"
                 >
                     {option.label}

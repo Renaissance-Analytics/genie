@@ -182,6 +182,8 @@ export interface ShellProps {
     onAnswerDeckForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     /** The last refused form answer, said beside that item's Answer button. */
     deckFormRefusal?: { itemId: string; reason: string } | null | undefined;
+    /** The action running on one of Genie's own Deck items (Tynn #693). */
+    deckBusy?: { itemId: string; optionId: string } | null | undefined;
     /** NOT USED since 2026-10-19: the chat cannot be closed. Removed with the pin model's cleanup row. */
     onCloseChat?: (() => void) | undefined;
     /** The chat's `Restart` (or `Send now`) on an undelivered draft (§4.4, genie#1238). */
@@ -401,6 +403,7 @@ export function Shell({
     onAnswerDeckItem,
     onAnswerDeckForm,
     deckFormRefusal,
+    deckBusy,
     remote,
     remoteConnect,
     onShareWorkstation,
@@ -761,6 +764,7 @@ export function Shell({
                             onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
                             onAnswerForm={onAnswerDeckForm}
                             formRefusal={deckRefusal ?? deckFormRefusal ?? null}
+                            busy={deckBusy}
                             // Dismiss without an answer — one (with the notes written in its form), every stale one shown, or
                             // every question older than a day; the agents are told (main).
                             onDismiss={(item, notes) => deckAct(item.id, { kind: 'deck.dismiss', item, notes })}

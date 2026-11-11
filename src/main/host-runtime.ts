@@ -170,8 +170,9 @@ export async function materializeHostRuntime(input: HostRuntimeInput): Promise<H
         }
         return { execPath: join(runtime, exe), hostScript: join(app, 'dist', 'main', 'host.js'), copied: copiedRuntime || copiedApp, error: null };
     } catch (error) {
-        const reason = `Genie runs its host from the install this session; the copy could not be made: ${error instanceof Error ? error.message : String(error)}`;
+        const cause = error instanceof Error ? error.message : String(error);
+        const reason = `Genie runs its host from the install this session; the copy could not be made: ${cause}`;
         input.log(reason);
-        return { ...inPlace, copied: false, error: reason };
+        return { ...inPlace, copied: false, error: reason, cause };
     }
 }
