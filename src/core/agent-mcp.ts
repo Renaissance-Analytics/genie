@@ -20,10 +20,13 @@ export interface McpRow {
     readonly name: string;
     readonly required: boolean;
     readonly on: boolean;
+    readonly inherited?: boolean;
+    readonly overrides?: boolean;
 }
 
 export interface McpChoices {
     readonly mcpOff?: readonly string[] | undefined;
+    readonly mcpOn?: readonly string[] | undefined;
     readonly mcpSeen?: readonly string[] | undefined;
 }
 
@@ -31,6 +34,10 @@ export const MCP_WORDS = {
     required: 'Required by Genie',
     note: (agent: string) => `This list is Genie’s own servers and every server one of ${agent}’s sessions reported when it started. A server that no session has reported yet is not listed, and cannot be switched off here until it is.`,
     saved: (agent: string) => `Saved. It applies the next time ${agent} starts a session.`,
+    workspaceNote: '',
+    workspaceSaved: '',
+    inherited: '',
+    overrides: '',
     stays: (name: string) => `${name} is Genie’s own server and stays on.`,
     name: 'Name the MCP server, and say on or off.',
 } as const;
@@ -44,12 +51,12 @@ function isName(value: unknown): value is string {
 const names = (list: readonly string[] | undefined): string[] => [...new Set((list ?? []).filter(isName))].sort((a, b) => a.localeCompare(b));
 
 /** The servers switched off for this agent: its record's, without Genie's own, each once, in order. */
-export function mcpOffFor(record: McpChoices): string[] {
+export function mcpOffFor(record: McpChoices, _workspaceOff: readonly string[] = []): string[] {
     return names(record.mcpOff).filter((name) => !REQUIRED_MCP.includes(name));
 }
 
 /** The page's rows: Genie's own first (required), then every server seen or switched off, by name. */
-export function mcpRows(record: McpChoices): McpRow[] {
+export function mcpRows(record: McpChoices, _workspaceOff: readonly string[] = []): McpRow[] {
     const off = new Set(mcpOffFor(record));
     const others = names([...(record.mcpSeen ?? []), ...off]).filter((name) => !REQUIRED_MCP.includes(name));
     return [
@@ -59,11 +66,19 @@ export function mcpRows(record: McpChoices): McpRow[] {
 }
 
 /** One server switched on or off. Genie's own is refused in words; so is anything that is not a name and an on or off. */
-export function withMcpServer<T extends McpChoices>(record: T, name: unknown, on: unknown): { ok: true; record: T } | { ok: false; reason: string } {
+export function withMcpServer<T extends McpChoices>(record: T, name: unknown, on: unknown, _workspaceOff: readonly string[] = []): { ok: true; record: T } | { ok: false; reason: string } {
     if (!isName(name) || typeof on !== 'boolean') return { ok: false, reason: MCP_WORDS.name };
     if (REQUIRED_MCP.includes(name)) return { ok: false, reason: MCP_WORDS.stays(name) };
     const off = mcpOffFor(record).filter((n) => n !== name);
     return { ok: true, record: { ...record, mcpOff: on ? off : names([...off, name]) } };
+}
+
+/** RED stand-ins (the workspace's default). */
+export function workspaceMcpRows(_workspace: { readonly mcpOff?: readonly string[] | undefined; readonly mcpSeen?: readonly string[] | undefined }): McpRow[] {
+    return [];
+}
+export function withWorkspaceMcpServer(_off: readonly string[] | undefined, _name: unknown, _on: unknown): { ok: true; mcpOff: string[] } | { ok: false; reason: string } {
+    return { ok: false, reason: '' };
 }
 
 /** What a session reported, added to what was seen. `null` when it adds nothing, so nothing is written. */

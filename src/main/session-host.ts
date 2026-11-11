@@ -159,7 +159,7 @@ import { sessionsDir } from './paths.js';
 
 /** Injected so a test can run this host without spawning a provider CLI. */
 /** `extras.mcpServers`: the MCP servers this session starts with (Genie's own, with the agent's caller key). */
-export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>> }) => SessionDriverFactory | null;
+export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>>; /** The MCP servers its workspace has off by default (Tynn #628). */ workspaceMcpOff?: readonly string[] }) => SessionDriverFactory | null;
 
 /**
  * THE AGENT'S SERVICE VARIABLES, AS PRISM-ACP TAKES THEM (the owner, 2026-10-16: "ONLY let through Genie-managed
@@ -463,7 +463,7 @@ export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(rec
  *
  * Genie's own servers are never in the first list, whatever the record holds.
  */
-export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[]): { disabledMcpServers?: readonly string[] } {
+export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] | undefined; readonly mcpOn?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[], _workspaceOff: readonly string[] = []): { disabledMcpServers?: readonly string[] } {
     const disabled = [...new Set([...mcpOffFor(record), ...(supplied.some((server) => server.name === 'tynn') ? [] : ['tynn'])])].sort((a, b) => a.localeCompare(b));
     return disabled.length > 0 ? { disabledMcpServers: disabled } : {};
 }

@@ -41,6 +41,8 @@ export interface WorkspaceRecord {
     governs?: string[];
     /** Its DEFAULT AGENT (Genie 1's): one of its own agents, the one an action uses when it names none. Absent = none. */
     defaultAgentId?: string;
+    /** MCP servers off by default for every agent here (Tynn #628); an agent's own switch wins. Absent = none. */
+    mcpOff?: string[];
     /**
      * Its ENV FILE (Genie 1's `env_file`): the file in each site folder Genie writes the service connection to. Stamped at
      * register from Settings → General "Env file name" (`default_env_file`), so changing the setting later changes new

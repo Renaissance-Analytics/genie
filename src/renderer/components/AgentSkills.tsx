@@ -8,7 +8,7 @@ import { commandGroups, type ProviderExtensions } from '../../core/provider-comm
  * switch. A change shows progress, then that it is saved and when it applies, or the failure in its words. `onSet` absent
  * (a window that cannot change them): the list alone.
  */
-export function McpServerSwitches({ rows, agentName, onSet, initialBusy, initialOutcome }: { rows: readonly McpRow[]; agentName: string; onSet?: ((name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined; initialBusy?: string | undefined; initialOutcome?: { name: string; ok: boolean; text: string } | undefined }) {
+export function McpServerSwitches({ rows, agentName, onSet, initialBusy, initialOutcome }: { rows: readonly McpRow[]; agentName: string; workspace?: boolean | undefined; onSet?: ((name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined; initialBusy?: string | undefined; initialOutcome?: { name: string; ok: boolean; text: string } | undefined }) {
     const [busy, setBusy] = useState<string | null>(initialBusy ?? null);
     const [outcome, setOutcome] = useState<{ name: string; ok: boolean; text: string } | null>(initialOutcome ?? null);
     const set = (name: string, on: boolean) => {

@@ -140,6 +140,8 @@ export interface AgentRecord {
      * start. Genie's own are never in it. Absent = none.
      */
     readonly mcpOff?: readonly string[];
+    /** Switched ON for this agent although its workspace has them off (the workspace's default, Tynn #628). Absent = none. */
+    readonly mcpOn?: readonly string[];
     /** Every MCP server one of its sessions reported, by name: what its Settings can list while it is not running. */
     readonly mcpSeen?: readonly string[];
     /**

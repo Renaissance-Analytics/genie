@@ -528,6 +528,14 @@ export class Registry {
         return { ok: true };
     }
 
+    /** RED stand-ins (the workspace's default for MCP servers, Tynn #628). */
+    workspaceMcpOff(_workspaceId: string): string[] {
+        return [];
+    }
+    async setWorkspaceMcpServer(_workspaceId: string, _name: unknown, _on: unknown): Promise<{ ok: true } | { ok: false; reason: string }> {
+        return { ok: false, reason: '' };
+    }
+
     /** Hibernate / wake (§6.1). On disk, so it survives restarts and upgrades. */
     async setAsleep(workspaceId: string, asleep: boolean): Promise<boolean> {
         const workspace = this.#workspaces.find((w) => w.id === workspaceId);
