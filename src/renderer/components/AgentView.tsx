@@ -228,6 +228,8 @@ export interface AgentViewProps {
     approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
+    /** Trust this agent's workspace, from its approval card (Tynn #618). Absent = not offered. */
+    onTrustWorkspace?: (() => Promise<unknown>) | undefined;
     onNavigate: (route: string) => void;
     /** The agents and workspaces a message's pills may name (genie#1263); absent = agent and workspace pills are words. */
     chatRefs?: { agents: ChatRefs['agents']; workspaces: ChatRefs['workspaces'] } | undefined;
@@ -356,7 +358,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
-    chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
+    chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     startRefusal, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
@@ -1061,6 +1063,7 @@ function AgentViewBody({
                                     refusal={approvalRefusal ?? null}
                                     onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                                     agentName={agent.name}
+                                    onTrustWorkspace={onTrustWorkspace}
                                 />
                             ) : null}
 

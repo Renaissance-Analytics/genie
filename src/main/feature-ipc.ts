@@ -1707,6 +1707,11 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'plugins.setNetworkAllowed':
             if (!(await services.plugins.setNetworkAllowed(action.id, action.allowed))) throw new Error(`${action.id}: its network can only be allowed or blocked while it is an Unverified plugin here`);
             break;
+        case 'workspace.untrust': {
+            // The person's Untrust: the only thing that ends a workspace's trust (Tynn #618).
+            if ((await services.workspaceTrust.untrust(action.workspaceId)) === null) throw new Error(`There is no workspace "${action.workspaceId}" to untrust.`);
+            break;
+        }
         case 'workspace.syncAgentFiles':
             // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.
             await services.syncAgentDocs(action.workspacePath, 'you');

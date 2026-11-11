@@ -159,6 +159,8 @@ export interface WorkspaceProps {
     /** This workspace is waiting for the person's yes. */
     trustStep?: TrustStepView | null | undefined;
     onTrust?: (() => Promise<unknown>) | undefined;
+    /** Untrust this workspace, from its Settings: the only thing that ends its trust (Tynn #618). Absent = not offered. */
+    onUntrust?: (() => Promise<unknown>) | undefined;
     /** Open this workspace's Background processes or Sites (Genie 1's modals) — the Settings page's Hosting card. Absent = no card. */
     onOpenRuntime?: ((kind: 'processes' | 'sites') => void) | undefined;
     /** The registry's workspace row. `name` is optional there, so the id stands in — never an invented label. */
@@ -240,7 +242,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
@@ -843,6 +845,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                     </form>
                 </section>
             ) : null}
+            {onScreen === 'settings' && onUntrust && !trustStep ? <UntrustCard workspaceId={workspace.id} onUntrust={onUntrust} /> : null}
             {onScreen === 'settings' && ops?.agentFiles ? (
                 <section data-ws-agent-files="" data-ws-card="agent-files" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div className="flex items-center gap-3">
@@ -1035,5 +1038,41 @@ function ScratchTerminalButton({ open }: { open: () => Promise<{ ok: true } | { 
                 <span className="truncate">Terminal</span>
             </Button>
         </span>
+    );
+}
+
+/**
+ * TRUSTED, AND THE WAY TO END IT (Tynn #618; the owner's ruling, 2026-11-11). A workspace stays trusted whatever it adds or
+ * changes; this is the one thing that ends it. Progress while it is asked, and why with Retry when it could not be done;
+ * success is this card going away and the trust step taking its place.
+ */
+function UntrustCard({ workspaceId, onUntrust }: { workspaceId: string; onUntrust: () => Promise<unknown> }) {
+    const [phase, setPhase] = useState<'idle' | 'pending' | { readonly failed: string }>('idle');
+    const press = (): void => {
+        if (phase === 'pending') return;
+        setPhase('pending');
+        void Promise.resolve().then(onUntrust).then(
+            (outcome) => {
+                const refused = typeof outcome === 'object' && outcome !== null && 'ok' in outcome && outcome.ok === false && 'reason' in outcome ? String(outcome.reason) : null;
+                setPhase(refused === null ? 'idle' : { failed: refused });
+            },
+            (error: unknown) => { setPhase({ failed: error instanceof Error ? error.message : String(error) }); },
+        );
+    };
+    return (
+        <section data-ws-trust={workspaceId} data-ws-card="trust" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
+            <div className="flex items-center gap-3">
+                <h2 className="text-sm font-semibold">Trusted</h2>
+                <span className="text-[var(--fg-4)]">Agents here run without asking, its sites and services start, and Genie’s tools load. It stays trusted, whatever it adds or changes, until you untrust it.</span>
+                <span className="ml-auto" />
+                <Button data-action="ws-untrust" size="sm" loading={phase === 'pending'} disabled={phase === 'pending'} onClick={press}>Untrust</Button>
+            </div>
+            {typeof phase === 'object' ? (
+                <p data-ws-untrust-failed="" role="alert" className="flex flex-wrap items-center gap-2 text-[var(--danger)]">
+                    <span>Couldn’t untrust it: {phase.failed}</span>
+                    <Button data-action="ws-untrust-retry" size="xs" icon="rotate-ccw" onClick={press}>Retry</Button>
+                </p>
+            ) : null}
+        </section>
     );
 }

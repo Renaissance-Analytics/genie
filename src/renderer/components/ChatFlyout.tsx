@@ -218,6 +218,8 @@ export interface ChatFlyoutProps {
     approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
+    /** Trust the chat agent's workspace, from its approval card (Tynn #618). Absent = not offered. */
+    onTrustWorkspace?: (() => Promise<unknown>) | undefined;
     /**
      * `agentId`: the chat the message was typed in (genie#1261) — each chat has its own composer, and reading the
      * attachments is async, so the chat on screen by the time it is sent may be another.
@@ -331,7 +333,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 
 function ChatFlyoutBody({
     onChooseProviderProgram,
-    thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
+    thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
     onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
@@ -808,6 +810,7 @@ function ChatFlyoutBody({
                         refusal={approvalRefusal ?? null}
                         onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                         agentName={thread?.name}
+                        onTrustWorkspace={onTrustWorkspace}
                     />
                 </div>
             ) : null}

@@ -576,6 +576,7 @@ export type FeatureAction =
     | { kind: 'workspace.syncAgentFiles'; workspaceId: string; workspacePath: string }
     /** The person's yes to what a workspace would run. */
     | { kind: 'workspace.trust'; workspaceId: string; workspacePath: string }
+    | { kind: 'workspace.untrust'; workspaceId: string }
     /** Enable or disable an installable plugin; refused (unchanged list) for one that is not. */
     | { kind: 'plugins.setEnabled'; id: string; enabled: boolean }
     | { kind: 'plugins.setNetworkAllowed'; id: string; allowed: boolean };

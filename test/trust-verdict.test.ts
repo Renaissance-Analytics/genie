@@ -552,13 +552,14 @@ describe('the verdict is announced when it moves', () => {
             workspaces: () => [{ id: 'acme', path: W }],
             record: () => record,
             recordWorkspace: async (id, hash) => { record.workspaces[id] = hash; },
+            forgetWorkspace: async (id) => { delete record.workspaces[id]; },
             approveSites: async () => {},
             verdictMoved: (id) => moved.push(id),
         });
         return { host, files, moved };
     }
 
-    it('first read, trust and a change that asks again: each. A read that says the same: none', async () => {
+    it('first read, trust and the person\'s Untrust: each. A read that says the same, or a change to the files: none (Tynn #618)', async () => {
         const t = trust();
         await t.host.refresh('acme');
         expect(t.moved).toEqual(['acme']);
@@ -570,6 +571,8 @@ describe('the verdict is announced when it moves', () => {
         expect(t.moved).toEqual(['acme', 'acme']);
         t.files.set(SETTINGS, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'two' }] }] } }));
         await t.host.refresh('acme');
+        expect(t.moved).toEqual(['acme', 'acme']);
+        await t.host.untrust('acme');
         expect(t.moved).toEqual(['acme', 'acme', 'acme']);
     });
 });

@@ -164,6 +164,7 @@ function trust(files: Record<string, string>, over: { carried?: string[]; worksp
         workspaces: () => [{ id: 'acme', path: W }],
         record: () => record,
         recordWorkspace: async (id, hash) => { record.workspaces[id] = hash; saved.push({ ...record.workspaces }); },
+        forgetWorkspace: async (id) => { delete record.workspaces[id]; },
         approveSites: async (id) => { approved.push(id); },
     });
     return { host, p, record, approved, saved };
@@ -224,7 +225,7 @@ describe('the verdict, as a workspace changes', () => {
 
     it('trust that fails to save says so, and leaves it untrusted', async () => {
         const { host } = trust(hooked('x'));
-        const failing = new WorkspaceTrust({ ...ports(hooked('x')), workspaces: () => [{ id: 'acme', path: W }], record: () => ({ carried: [], workspaces: {} }), recordWorkspace: async () => { throw new Error('EROFS'); }, approveSites: async () => {} });
+        const failing = new WorkspaceTrust({ ...ports(hooked('x')), workspaces: () => [{ id: 'acme', path: W }], record: () => ({ carried: [], workspaces: {} }), recordWorkspace: async () => { throw new Error('EROFS'); }, forgetWorkspace: async () => {}, approveSites: async () => {} });
         await expect(failing.trust('acme')).rejects.toThrow(/EROFS/);
         expect(failing.isTrustedPath(W)).toBe(false);
         expect(host.isTrustedPath(W)).toBe(false);
