@@ -91,6 +91,35 @@ describe('the cache: one CLI per provider, until refreshed', () => {
     });
 });
 
+describe('a new model appears with no Genie update (Tynn #608)', () => {
+    it('a kept list is asked for again once it is old, so what the provider adds since shows', async () => {
+        let now = 0;
+        let offered = ['opus'];
+        const cache = new ProviderModelCache(async () => state(offered), { now: () => now, maxAgeMs: 10 * 60_000 });
+        expect(await cache.get('claude')).toMatchObject({ models: [{ modelId: 'opus' }] });
+        offered = ['opus', 'fable-6'];
+        now = 9 * 60_000;
+        expect(await cache.get('claude')).toMatchObject({ models: [{ modelId: 'opus' }] }); // CONTROL: still fresh.
+        now = 11 * 60_000;
+        expect(await cache.get('claude')).toMatchObject({ models: [{ modelId: 'opus' }, { modelId: 'fable-6' }] });
+    });
+});
+
+describe('nothing in Genie names a model (Tynn #608)', () => {
+    it('no model id or alias is written into the source: every list is the provider\'s', async () => {
+        const { readdirSync, readFileSync, statSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const files: string[] = [];
+        const walk = (dir: string): void => { for (const name of readdirSync(dir)) { const p = join(dir, name); if (statSync(p).isDirectory()) walk(p); else if (/[.]tsx?$/.test(name)) files.push(p); } };
+        walk('src');
+        // A model's own id or alias, in quotes, as a list or a fallback would hold it.
+        const MODEL = /['"`](?:claude-(?:opus|sonnet|haiku|fable)[\w.-]*|opus|sonnet|haiku|fable|gpt-\d[\w.-]*|o[1-9](?:-mini)?|codex-mini[\w.-]*)['"`]/;
+        expect(MODEL.test("['sonnet', 'opus']")).toBe(true); // CONTROL: the pattern finds a list like the old one.
+        const named = files.filter((f) => MODEL.test(readFileSync(f, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n')));
+        expect(named.map((f) => f.split(/[\\/]/).join('/'))).toEqual([]);
+    });
+});
+
 describe('the label: the provider’s name, and what an alias resolves to when it differs', () => {
     it('Fable → claude-fable-5-1; no arrow when there is nothing to resolve (CONTROL)', () => {
         expect(modelLabel({ modelId: 'fable', name: 'Fable', resolvedModel: 'claude-fable-5-1' })).toBe('Fable → claude-fable-5-1');

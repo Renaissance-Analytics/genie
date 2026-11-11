@@ -17,6 +17,7 @@ import { Registry } from '../src/main/registry.js';
 import { SessionHost, claudeOptionsFor, codexOptionsFor, type DriverFor } from '../src/main/session-host.js';
 import { Store } from '../src/main/store.js';
 import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentView.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE AGENT'S MODEL, SHOWN AND CHOSEN ON ITS AGENT VIEW (the owner: "Show the agent's model and let me change it").
@@ -251,22 +252,24 @@ describe('the control', () => {
         expect(html).not.toContain('data-model-input');
     });
 
-    it('the provider would not say: "couldn’t get the list: <reason>", a retry, and a free-text field (CONTROL: a list has none)', () => {
+    it('the provider would not say: why, and Retry; never a field or a list Genie made up (Tynn #608)', () => {
         const html = render('claude', ops({ model: 'fable', models: { ok: false, provider: 'claude', reason: 'claude did not answer the model list within 30000 ms' } }));
         expect(html).toContain('data-model-list="failed"');
         expect(html).toMatch(/Couldn’t get claude’s list of models: claude did not answer the model list within 30000 ms/);
-        expect(html).toContain('data-action="models-refresh"');
-        expect(html).toContain('data-model-input="fable"');
-        expect(html).toContain('placeholder="provider default"');
+        expect(control(html, 'data-action="models-retry"')).toMatchObject({ tag: 'button', fancy: true, text: 'Retry' });
+        expect(html).not.toContain('data-model-input');
+        expect(html).not.toContain('<datalist');
         expect(html).not.toContain('data-model-select');
-        expect(render('claude', ops({ model: 'fable', models: claudeList() }))).not.toContain('data-model-input');
+        // What it starts with is still said, as the choice it is.
+        expect(html).toMatch(/data-model-chosen="fable"/);
     });
 
-    it('a host that cannot list models (older): the free-text field, suggesting only what the provider reported', () => {
+    it('a window that is given no way to ask: no list, no field, and it says so (Tynn #608)', () => {
         const html = render('claude', ops({ model: 'claude-fable-5-1' }), session('claude-opus-5-5'));
-        expect(html).toContain('data-model-input="claude-fable-5-1"');
-        expect(html).toMatch(/<datalist id="[^"]+"><option value="claude-opus-5-5"><\/option><\/datalist>/);
+        expect(html).not.toContain('data-model-input');
+        expect(html).not.toContain('<datalist');
         expect(html).not.toContain('data-model-select');
+        expect(html).toContain('data-model-list="unavailable"');
     });
 
     it('choosing: the default entry (or the empty one) clears the choice; anything else is that model', () => {
