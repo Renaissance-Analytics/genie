@@ -138,7 +138,7 @@ describe('Settings → Remote access', () => {
      * no Remote access section yet (`remote: null`, the skeleton). "Drive another machine" is this window's, not the
      * host's: it was inside the skeleton's gate, so for 150 s the Pilot drove the Drone with no Disconnect.
      */
-    it('connected to a host that has sent no Remote access yet: Disconnect is there, beside its skeleton', () => {
+    it('connected to a host that has sent no Remote access yet: Disconnect is there', () => {
         const connect = { state: { connected: true, host: 'drone', isOwner: true, workspaceId: null, driver: 'pilot', driving: true, locked: false, lastRefusal: null, needsBaton: false } as never, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
         const html = renderToStaticMarkup(<RemoteAccess remote={null} workspaces={[]} onAction={() => {}} connect={connect as never} />);
         expect(html).toContain('data-remote-connected');

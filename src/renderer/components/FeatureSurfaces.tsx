@@ -2484,20 +2484,23 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
     return (
         <section data-remote className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
             <h2 className="text-sm font-semibold">Remote access</h2>
-            {remote === null ? (
+            {/* DRIVE ANOTHER MACHINE FIRST (genie#1278 C1): this page is where the title bar's Connect lands, so the way to
+                another machine is the first thing on it. Never on a drone (W5): Tynn refuses it every connect-grant. It is THIS
+                window's, so it does not wait for the host's own section: a windowless Drone sends none (gp-11102335, beta.61),
+                and a connected window keeps its Disconnect whatever the host is (gp-11102252). */}
+            {connect && (connect.state?.connected === true || (remote !== null && browse)) ? (
+                <div data-drive-another="">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
+                    <ConnectRemote {...connect} />
+                </div>
+            ) : null}
+            {remote === null && connect?.state?.connected === true && connect.state.host ? (
+                // A host with no window open sends no Remote access of its own yet (#1231): said, never a skeleton for ever.
+                <p data-remote-host-settings="unavailable" className="text-xs text-[var(--fg-3)]">{`Open Genie on ${connect.state.host} to see its settings.`}</p>
+            ) : remote === null ? (
                 <Skeletons rows={3} />
             ) : (
                 <>
-                    {/* DRIVE ANOTHER MACHINE FIRST (genie#1278 C1): this page is where the title bar's Connect lands, so the way to
-                        another machine is the first thing on it. Never on a drone (W5): Tynn refuses it every connect-grant. */}
-                    {/* A window connected to another machine keeps its Disconnect and its remembered hosts whatever THAT machine
-                        is: a drone's role is the host's, not this window's (Azure pair gp-11102252, beta.61). */}
-                    {connect && (browse || connect.state?.connected === true) ? (
-                        <div data-drive-another="">
-                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
-                            <ConnectRemote {...connect} />
-                        </div>
-                    ) : null}
                     {/* THE SWITCH (Tynn #820; the owner: "Off by default", as Genie 1 had it): off, nothing listens. It is ALSO what
                         makes this machine reachable through the Tynn relay (main.ts relayAfterSwitch), so it says Tynn first. */}
                     <div data-remote-enabled={remote.enabled ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 text-sm">
