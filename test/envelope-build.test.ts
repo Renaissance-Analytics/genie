@@ -276,12 +276,6 @@ describe('a monorepo', () => {
         expect(await git(ws, 'log', '-1', '--format=%s')).toBe('Convert: migrate 2 submodules');
     }, 120_000);
 
-    it.each(Array.from({ length: 12 }, (_, i) => i + 1))('PROBE %i: WRAP again, to see why a build refuses', async () => {
-        const { src } = await monorepo();
-        const b = await buildFrom(src, (d) => renameWorkspaceTo(setMonorepoMode(d, 'wrap'), 'Mono'));
-        expect(await exists(join(b.path, 'repos', 'mono', '.gitmodules'))).toBe(true);
-    }, 120_000);
-
     it('WRAP: the whole monorepo as one submodule, its own .gitmodules inside it', async () => {
         const { src } = await monorepo();
         const b = await buildFrom(src, (d) => renameWorkspaceTo(setMonorepoMode(d, 'wrap'), 'Mono'));
