@@ -20,7 +20,7 @@ async function fixture() {
     const ports: WorkspaceTrustPorts = { workspaces: () => [workspace], record: () => book, recordWorkspace: record, approveSites: async () => {}, gitConfig: git,
         readText: async (path) => { reads.push(path); if (path === join(root, '.mcp.json')) { if (held) await held; if (failed) throw new Error('trust read refused'); } return files.get(path) ?? null; },
     };
-    book.workspaces.workspace = trustHash(await readTrustList(root, ports));
+    book.workspaces.workspace = `v2:${trustHash(await readTrustList(root, ports))}`;
     const trust = new WorkspaceTrust(ports);
     expect(await trust.refresh('workspace')).toMatchObject({ trusted: true, changed: false });
     reads.length = 0; git.mockClear();

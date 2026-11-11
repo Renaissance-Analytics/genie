@@ -44,7 +44,7 @@ describe('a carried workspace, read while its files are being written', () => {
             return files.get(p) ?? null;
         });
         expect(await r.trust.refresh('acme')).toMatchObject({ trusted: true, changed: false });
-        expect(r.recorded).toEqual([trustHash(await r.whole())]);
+        expect(r.recorded).toEqual([`v2:${trustHash(await r.whole())}`]);
         // The next read of the same files (syncConfig's, through mayWriteInto) agrees: trusted, nothing asked.
         expect(await r.trust.refresh('acme')).toMatchObject({ trusted: true, changed: false });
     });
@@ -61,7 +61,7 @@ describe('a carried workspace, read while its files are being written', () => {
     it('CONTROL: settled from the first read, it records at once with no wait', async () => {
         const r = rig((p, files) => files.get(p) ?? null);
         expect(await r.trust.refresh('acme')).toMatchObject({ trusted: true, changed: false });
-        expect(r.recorded).toEqual([trustHash(await r.whole())]);
+        expect(r.recorded).toEqual([`v2:${trustHash(await r.whole())}`]);
         expect(r.waits).toEqual([]);
     });
 
