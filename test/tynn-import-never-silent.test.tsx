@@ -131,6 +131,8 @@ describe('the window is wired to it', () => {
         expect(app).toMatch(/planTynn\(resolvedBridge\?\.workspaces\.previewAddFromTynn \? \(\) => resolvedBridge\.workspaces\.previewAddFromTynn\(projectId, parent\) : undefined, projectId, parent\)/);
         expect(app).toMatch(/tynnPlanning=\{tynnPlanning\?\.projectId \?\? null\}/);
         expect(app).toMatch(/onRetryAdd=\{tynnRetry \? \(\) => \{/);
+        // A project list that could not be read says so, instead of loading for good.
+        expect(app).toMatch(/tynnProjects\(\)\.then\(\(r\) => setTynnPick\(r\), \(e: unknown\) => setTynnPick\(\{ ok: false, reason: /);
         // The folder dialog failing is said too.
         expect(app).toMatch(/Where should the Tynn envelope be created\? Pick the parent folder', addStart\)\.then\([^\n]*, sayAddFailed\);/);
     });
