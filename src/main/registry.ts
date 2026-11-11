@@ -13,7 +13,7 @@ import { Store, type WorkspaceRecord } from './store.js';
  * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
  */
 export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
-import { withMcpSeen } from '../core/agent-mcp.js';
+import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
@@ -312,7 +312,7 @@ export class Registry {
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
                 // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
-                ? this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: false, ...(w.governs && w.governs.length > 0 ? { governs: w.governs.filter((id) => !this.#isHibernated(id)) } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...this.#colorOf(w.path) }))
+                ? this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: false, ...(w.governs && w.governs.length > 0 ? { governs: w.governs.filter((id) => !this.#isHibernated(id)) } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...(w.mcpOff && w.mcpOff.length > 0 ? { mcpOff: w.mcpOff } : {}), ...(this.#workspaceMcpSeen(w.id).length > 0 ? { mcpSeen: this.#workspaceMcpSeen(w.id) } : {}), ...this.#colorOf(w.path) }))
                 : null,
             ...(this.#loaded && this.#workspaces.some((workspace) => workspace.asleep) ? {
                 hibernatedWorkspaces: this.#workspaces.filter((workspace) => workspace.asleep).map((workspace) => ({ id: workspace.id, path: workspace.path, name: workspace.hibernatedName ?? folderName(workspace.path), asleep: true as const })),
@@ -528,12 +528,30 @@ export class Registry {
         return { ok: true };
     }
 
-    /** RED stand-ins (the workspace's default for MCP servers, Tynn #628). */
-    workspaceMcpOff(_workspaceId: string): string[] {
-        return [];
+    /** The MCP servers off by default for every agent of this workspace (Tynn #628); an agent's own switch wins. */
+    workspaceMcpOff(workspaceId: string): string[] {
+        return [...(this.#workspaces.find((w) => w.id === workspaceId)?.mcpOff ?? [])];
     }
-    async setWorkspaceMcpServer(_workspaceId: string, _name: unknown, _on: unknown): Promise<{ ok: true } | { ok: false; reason: string }> {
-        return { ok: false, reason: '' };
+
+    /** One server on or off as the workspace's default. Read when each of its agents next starts a session. */
+    async setWorkspaceMcpServer(workspaceId: string, name: unknown, on: unknown): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const workspace = this.#workspaces.find((w) => w.id === workspaceId);
+        if (!workspace) return { ok: false, reason: `no workspace ${workspaceId}` };
+        const changed = withWorkspaceMcpServer(workspace.mcpOff, name, on);
+        if (!changed.ok) return changed;
+        this.#workspaces = this.#workspaces.map((w) => {
+            if (w.id !== workspaceId) return w;
+            const { mcpOff: _previous, ...rest } = w;
+            return changed.mcpOff.length > 0 ? { ...rest, mcpOff: changed.mcpOff } : rest;
+        });
+        await this.#store.writeWorkspaces(this.#workspaces);
+        this.#emit();
+        return { ok: true };
+    }
+
+    /** Every MCP server a session of one of this workspace's agents reported: what its Settings can list. */
+    #workspaceMcpSeen(workspaceId: string): string[] {
+        return [...new Set(this.#agents.filter((a) => a.workspaceId === workspaceId).flatMap((a) => a.mcpSeen ?? []))].sort((a, b) => a.localeCompare(b));
     }
 
     /** Hibernate / wake (§6.1). On disk, so it survives restarts and upgrades. */
@@ -694,8 +712,8 @@ export class Registry {
     }
 
     /** The MCP servers switched off for this agent (Tynn #628); read when its next session starts. */
-    async setMcpOff(agentId: AgentId, mcpOff: readonly string[]): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, mcpOff: [...mcpOff] }));
+    async setMcpOff(agentId: AgentId, mcpOff: readonly string[], mcpOn: readonly string[] = []): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, mcpOff: [...mcpOff], mcpOn: [...mcpOn] }));
     }
 
     /** What one of its sessions reported, added to what its Settings can list. Writes only when it adds a name. */

@@ -41,7 +41,9 @@ export interface AgentOpsPorts {
         setAutoApprove(id: AgentRecord['id'], autoApprove: boolean): Promise<AgentRecord | null>;
         setManageTabs(id: AgentRecord['id'], manageTabs: boolean): Promise<AgentRecord | null>;
         setDrivePages(id: AgentRecord['id'], drivePages: boolean): Promise<AgentRecord | null>;
-        setMcpOff(id: AgentRecord['id'], mcpOff: readonly string[]): Promise<AgentRecord | null>;
+        setMcpOff(id: AgentRecord['id'], mcpOff: readonly string[], mcpOn?: readonly string[]): Promise<AgentRecord | null>;
+        /** What its workspace has off by default. Absent = a registry with no workspace defaults. */
+        workspaceMcpOff?(workspaceId: string): readonly string[];
         setIssueWatch(id: AgentRecord['id'], setting: IssueWatchSetting): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
@@ -510,9 +512,10 @@ export async function setManageTabs(ports: AgentOpsPorts, agentId: string, manag
 export async function setMcpServer(ports: AgentOpsPorts, agentId: string, name: unknown, on: unknown): Promise<{ ok: true; record: AgentRecord } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
-    const changed = withMcpServer(record, name, on);
+    // Against its workspace's default: a choice equal to it is not kept, so the agent inherits (core/agent-mcp.ts).
+    const changed = withMcpServer(record, name, on, ports.registry.workspaceMcpOff?.(record.workspaceId) ?? []);
     if (!changed.ok) return changed;
-    const updated = await ports.registry.setMcpOff(record.id, changed.record.mcpOff ?? []);
+    const updated = await ports.registry.setMcpOff(record.id, changed.record.mcpOff ?? [], changed.record.mcpOn ?? []);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

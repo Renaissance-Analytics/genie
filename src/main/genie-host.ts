@@ -1064,6 +1064,8 @@ async function main(): Promise<void> {
     const host = new SessionHost({
         userData: home,
         ...engineHostOptions,
+        // What the agent's workspace has off by default (Tynn #628), read from the registry at each launch.
+        workspaceMcpOffFor: (record) => hostRegistry.workspaceMcpOff(record.workspaceId),
         // A WORKSPACE NOT TRUSTED (genie#1519): its agent gets Genie's own words, never the folder's — and with no hosting
         // to read a verdict, no workspace is trusted.
         untrustedFilesFor: async (record) => {

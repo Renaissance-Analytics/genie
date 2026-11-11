@@ -32,7 +32,7 @@ export function protocolContractDeps(root: string): HostApiDeps {
             hibernate: async () => ({ ok: true }), wake: async () => ({ ok: true }), remove: async () => ({ ok: true }),
             listRepos: async () => ({ ok: true, repos: [] }), addRepo: async () => ({ ok: true }), removeRepo: async () => ({ ok: true }),
             settings: () => null, setSetting: async () => null, resetSetting: async () => null,
-            setGoverns: async () => ({ ok: true }), setDefaultAgent: async () => ({ ok: true }),
+            setGoverns: async () => ({ ok: true }), setDefaultAgent: async () => ({ ok: true }), setMcpServer: async () => ({ ok: true }),
         },
         agentOps: {
             restart: async (_id, kind) => ({ ok: true, kind }),

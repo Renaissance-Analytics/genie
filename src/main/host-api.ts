@@ -220,6 +220,8 @@ export interface HostApiDeps {
         onSettingsChanged?(listener: (workspaceId: string) => void): () => void;
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<unknown>;
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<unknown>;
+        /** One MCP server on or off as this workspace's default (Tynn #628); checked by the registry, which refuses in words. */
+        setMcpServer(workspaceId: string, name: unknown, on: unknown): Promise<unknown>;
         /** A workspace's colour (genie#1300). Optional: a host without it refuses. */
         setColor?(workspaceId: string, color: string): Promise<unknown>;
     };
@@ -620,6 +622,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.setGoverns(str(args[0]), Array.isArray(args[1]) ? args[1].map(str) : []);
             case 'workspaces.setDefaultAgent':
                 return deps.workspaceOps.setDefaultAgent(str(args[0]), typeof args[1] === 'string' && args[1] !== '' ? args[1] : null);
+            case 'workspaces.setMcpServer':
+                return deps.workspaceOps.setMcpServer(str(args[0]), args[1], args[2]);
             case 'workspaces.setColor':
                 return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
             case 'addWorkspace':

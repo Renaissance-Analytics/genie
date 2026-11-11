@@ -56,6 +56,7 @@ function fakes() {
             confirmAddFromTynn: async (parent, projectId) => { calls.push(`ws-add-tynn:${parent}:${projectId}`); return { ok: true }; },
             hibernate: async (id) => { calls.push(`ws-hibernate:${id}`); return { ok: true }; },
             setDefaultAgent: async (id, agentId) => { calls.push(`ws-default:${id}:${agentId}`); return { ok: true }; },
+            setMcpServer: async (id, name, on) => { calls.push(`ws-mcp:${id}:${String(name)}:${String(on)}`); return { ok: true }; },
             wake: async (id) => { calls.push(`ws-wake:${id}`); return { ok: true }; },
             remove: async (id) => { calls.push(`ws-remove:${id}`); return { ok: true }; },
             listRepos: async (id) => { calls.push(`ws-repos:${id}`); return { ok: true, repos: [] }; },

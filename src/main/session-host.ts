@@ -462,9 +462,12 @@ export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(rec
  *   project config.
  *
  * Genie's own servers are never in the first list, whatever the record holds.
+ *
+ * `workspaceOff`: what the agent's workspace has off by default. The agent inherits it where it made no choice of its own;
+ * a server it switched on is launched with it.
  */
-export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] | undefined; readonly mcpOn?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[], _workspaceOff: readonly string[] = []): { disabledMcpServers?: readonly string[] } {
-    const disabled = [...new Set([...mcpOffFor(record), ...(supplied.some((server) => server.name === 'tynn') ? [] : ['tynn'])])].sort((a, b) => a.localeCompare(b));
+export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] | undefined; readonly mcpOn?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[], workspaceOff: readonly string[] = []): { disabledMcpServers?: readonly string[] } {
+    const disabled = [...new Set([...mcpOffFor(record, workspaceOff), ...(supplied.some((server) => server.name === 'tynn') ? [] : ['tynn'])])].sort((a, b) => a.localeCompare(b));
     return disabled.length > 0 ? { disabledMcpServers: disabled } : {};
 }
 
@@ -480,10 +483,10 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? []) }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...mcpPolicyOptions(record, extras?.mcpServers ?? []) }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
 
         default:
             return null;
@@ -538,6 +541,7 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
+    readonly #workspaceMcpOffFor: ((record: AgentRecord) => readonly string[]) | undefined;
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
@@ -629,6 +633,8 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
+        /** The MCP servers this agent's workspace has off by default (Tynn #628). Asked before each launch. Absent = none. */
+        workspaceMcpOffFor?: (record: AgentRecord) => readonly string[];
         /** Genie's own words are in this agent's thread now (`AgentRecord.genieWordsInThread`). */
         markGenieWords?: (agentId: AgentId) => void;
         /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
@@ -691,6 +697,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
+        this.#workspaceMcpOffFor = options.workspaceMcpOffFor;
         this.#untrustedNow = options.untrustedNow;
         this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
@@ -950,7 +957,7 @@ export class SessionHost {
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, ...(untrusted ? { untrusted } : {}) });
+            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);
             if (current) {
@@ -966,7 +973,7 @@ export class SessionHost {
             waitingFor = 'the provider to answer';
             startPhase('handshake');
             return factory;
-        }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
+        }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [] });
         if (!driverFactory) {
             const reason = `Genie cannot run a "${record.provider}" agent. It stays registered and idle.`;
             this.refusals.set(record.id, reason);

@@ -133,7 +133,7 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
 
 type LifecycleKeys = 'previewAdd' | 'previewAddFromGit' | 'tynnProjects' | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'locateRepo' | 'confirmAdd' | 'create'
     | 'confirmAddFromGit' | 'readSource' | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'confirmAddFromTynn' | 'hibernate' | 'wake' | 'remove' | 'listRepos' | 'addRepo'
-    | 'removeRepo' | 'removeRepoLock' | 'commitsSince' | 'setGoverns' | 'setDefaultAgent' | 'setColor';
+    | 'removeRepo' | 'removeRepoLock' | 'commitsSince' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer';
 
 const NOT_A_REMOTE = { ok: false as const, reason: 'that is not a remote Genie understands; choose None, GitHub or Paste URL' };
 /** A new envelope's remote, parsed here, never trusted. No choice = None (an older window). */
@@ -185,6 +185,7 @@ export function workspaceLifecycleApi(
         commitsSince: (id, since) => commitsSinceIn(repoOps, id, since),
         setGoverns: (id, children) => wiring.registry()!.setGoverns(id, children),
         setDefaultAgent: (id, agentId) => wiring.registry()!.setDefaultAgent(id, agentId),
+        setMcpServer: (id, name, on) => wiring.registry()!.setWorkspaceMcpServer(id, name, on).finally(touch),
         setColor,
     };
 }

@@ -6,7 +6,7 @@ import { connectRemote, type RemoteClient } from './remote-bridge.js';
 import type { LocalFilesBridge } from './local-files-client.js';
 
 export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'commitsSince'
-    | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'onSettingsChanged'
+    | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer' | 'onSettingsChanged'
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
     | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn'
@@ -329,6 +329,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             resetSetting: (id, key) => request((ws) => ws.resetSetting(id, key)),
             setGoverns: (id, children) => request((ws) => ws.setGoverns(id, children)),
             setDefaultAgent: (id, agentId) => request((ws) => ws.setDefaultAgent(id, agentId)),
+            setMcpServer: (id, name, on) => request((ws) => ws.setMcpServer(id, name, on)),
             setColor: (id, color) => request((ws) => ws.setColor!(id, color)),
             onSettingsChanged: (listener) => { settingsListeners.add(listener); return () => { settingsListeners.delete(listener); }; },
             // The Tynn tab (P4 family 12): reads and actions reject on a failed connection, as the IPC calls did.

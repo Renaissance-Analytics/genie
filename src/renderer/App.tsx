@@ -91,7 +91,7 @@ import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import { addConfirmer } from './add-confirm.js';
-import { mcpRows } from '../core/agent-mcp.js';
+import { mcpRows, workspaceMcpRows } from '../core/agent-mcp.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
 import { applyOutcome, providerSwitchAfter, switchOutcome, type DeletePlan, type ProviderSwitchState } from '../core/agent-ops.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -1338,6 +1338,11 @@ function DesktopApp({ bridge }: AppProps) {
                         },
                     }
                   : {}),
+              // Its default for MCP servers (Tynn #628): its agents inherit it; the snapshot brings the change back.
+              mcp: {
+                  rows: workspaceMcpRows({ mcpOff: workspaceRow.mcpOff, mcpSeen: workspaceRow.mcpSeen }),
+                  onSet: (name: string, on: boolean) => resolvedBridge.workspaces.setMcpServer(workspaceId, name, on).then((r) => (r.ok ? { ok: true as const } : { ok: false as const, reason: r.reason }), (e: unknown) => ({ ok: false as const, reason: e instanceof Error ? e.message : String(e) })),
+              },
               // Its colour (genie#1300): written to its project.json by the host; the snapshot brings the new colour back.
               ...(resolvedBridge.workspaces.setColor
                   ? {
@@ -1441,7 +1446,7 @@ function DesktopApp({ bridge }: AppProps) {
               manageTabs: detail?.agent.manageTabs === true,
               drivePages: detail?.agent.drivePages === true,
               // Its MCP servers (Tynn #628): Genie's own, every one a session reported, and the ones switched off.
-              mcp: mcpRows({ mcpOff: detail?.agent.mcpOff, mcpSeen: detail?.agent.mcpSeen }),
+              mcp: mcpRows({ mcpOff: detail?.agent.mcpOff, mcpOn: detail?.agent.mcpOn, mcpSeen: detail?.agent.mcpSeen }, detail?.agent.workspaceMcpOff ?? []),
               onSetMcpServer: (name, on) => resolvedBridge.agents.setMcpServer(agentId, name, on).then((r) => (r.ok ? { ok: true as const } : { ok: false as const, reason: r.reason }), (e: unknown) => ({ ok: false as const, reason: e instanceof Error ? e.message : String(e) })),
               ...(detail?.agent.issueWatch ? { issueWatch: detail.agent.issueWatch } : {}),
               permissions: detail?.agent.permissions ?? 'all',

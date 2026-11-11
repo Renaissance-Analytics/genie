@@ -422,6 +422,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             ...(auth.kind === 'local' ? { onSettingsChanged: (listener: (id: string) => void) => on('workspace-settings-changed', (id) => listener(id as string)) } : {}),
             setGoverns: (workspaceId, childIds) => answer('workspaces.setGoverns', workspaceId, [...childIds]),
             setDefaultAgent: (workspaceId, agentId) => answer('workspaces.setDefaultAgent', workspaceId, agentId),
+            setMcpServer: (workspaceId, name, on) => answer('workspaces.setMcpServer', workspaceId, name, on),
             setColor: (workspaceId, color) => answer('workspaces.setColor', workspaceId, color),
         },
         agents: {
