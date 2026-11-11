@@ -116,7 +116,48 @@ export interface CommandGroup {
     readonly items: readonly ProviderCommand[];
 }
 
-/** RED stand-in (Tynn #628). */
-export function commandGroups(_extensions: ProviderExtensions, _options: { readonly provider: string; readonly query?: string }): CommandGroup[] {
-    return [];
+const PROVIDER_NAMES: Readonly<Record<string, string>> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', goose: 'Goose' };
+
+/**
+ * AN AGENT'S COMMANDS AND SKILLS, GROUPED BY WHERE EACH COMES FROM (Tynn #628), from what the report itself says:
+ *
+ * - `mcp__<server>__<prompt>`: a connector's (an MCP server's prompt), by server;
+ * - `<plugin>:<name>`: a plugin's, by plugin (with its version when the provider reported its plugins); `genie-own` is Genie's;
+ * - `genie` and `genie-…`: the skills Genie writes into a workspace (main/agent-skills.ts);
+ * - any other skill: the workspace's or the person's account. The report does not say which of the two;
+ * - any other command: the provider's own, and a custom command of the workspace or account (the report does not tell them apart);
+ * - no kind reported: said as that.
+ *
+ * In that order (Genie, skills, plugins by name, commands, connectors, the rest), names in order inside each. `query`
+ * keeps the items whose name or description holds it, any case; a group left empty is dropped.
+ */
+export function commandGroups(extensions: ProviderExtensions, options: { readonly provider: string; readonly query?: string }): CommandGroup[] {
+    const query = (options.query ?? '').trim().toLowerCase();
+    const provider = PROVIDER_NAMES[options.provider] ?? options.provider;
+    const versions = new Map((extensions.plugins ?? []).map((p) => [p.name, p.version] as const));
+    const groups = new Map<string, { kind: CommandGroupKind; label: string; items: ProviderCommand[] }>();
+    const put = (key: string, kind: CommandGroupKind, label: string, command: ProviderCommand) => {
+        const group = groups.get(key) ?? { kind, label, items: [] };
+        group.items.push(command);
+        groups.set(key, group);
+    };
+    for (const c of extensions.commands) {
+        if (query && !c.name.toLowerCase().includes(query) && !c.description.toLowerCase().includes(query)) continue;
+        const connector = /^mcp__(.+?)__/.exec(c.name);
+        const colon = c.name.indexOf(':');
+        if (connector) put(`connector:${connector[1]}`, 'connector', `Connector: ${connector[1]}`, c);
+        else if (colon > 0 && c.name.slice(0, colon) === 'genie-own') put('genie', 'genie', 'Genie', c);
+        else if (colon > 0) {
+            const plugin = c.name.slice(0, colon);
+            const version = versions.get(plugin);
+            put(`plugin:${plugin}`, 'plugin', `Plugin: ${plugin}${version ? ` ${version}` : ''}`, c);
+        } else if (c.name === 'genie' || c.name.startsWith('genie-')) put('genie', 'genie', 'Genie', c);
+        else if (c.source === 'skill') put('skills', 'skills', 'Skills in this workspace or your account', c);
+        else if (c.source === 'command') put('commands', 'commands', `${provider}’s commands`, c);
+        else put('other', 'other', 'Not said by the provider', c);
+    }
+    const ORDER: readonly CommandGroupKind[] = ['genie', 'skills', 'plugin', 'commands', 'connector', 'other'];
+    return [...groups.entries()]
+        .map(([key, g]) => ({ key, kind: g.kind, label: g.label, items: [...g.items].sort((a, b) => a.name.localeCompare(b.name)) }))
+        .sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind) || a.key.localeCompare(b.key));
 }
