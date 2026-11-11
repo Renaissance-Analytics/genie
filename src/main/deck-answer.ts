@@ -23,7 +23,7 @@ export interface DeckAnswerPorts {
     readonly trustCertificate?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly deferTrustCertificate?: () => void;
     readonly syncHosts?: () => Promise<HostsSyncResult>;
-    readonly mainErrors?: { dismiss(id: string): boolean };
+    readonly mainErrors?: { dismiss(id: string): boolean; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(): Promise<string | null> };
 }
 
 const NEEDS_WINDOW = (what: string): string => `${what} needs Genie’s window on this machine: open Genie there`;
@@ -93,6 +93,8 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
             if (!ports.mainErrors.dismiss(command.id)) throw new Error(`no recorded error ${command.id}`);
             break;
+        case 'retry-host-copy':
+        case 'open-lifecycle-log':
         case 'answer-provider-approval':
         case 'restart-with-handoff':
         case 'navigate':

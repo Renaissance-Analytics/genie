@@ -105,6 +105,8 @@ export interface DeckProps {
     onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
     /** Items drawn opened (a test of the opened row; the Deck itself opens one on a click). */
     initiallyExpanded?: readonly string[] | undefined;
+    /** The action in flight on one of Genie's own items: that button shows progress, its row takes no second press (Tynn #693). */
+    busy?: { itemId: string; optionId: string } | null | undefined;
     /** The clock the ages are read against; now by default (tests pass a fixed one). */
     now?: number | undefined;
 }

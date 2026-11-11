@@ -46,7 +46,7 @@ import type { DeckItem } from './deck.js';
  * `stop-unverified`: an agent's stop could not be verified — a process of its run is still running, or the machine could
  * not be read (hosting plan 1.1/1.3). Not a crash: a Deck item, because "Stop" must never quietly mean "probably".
  */
-export type MainErrorKind = 'uncaught-exception' | 'unhandled-rejection' | 'stop-unverified' | 'containment-unready' | 'agent-host' | 'update-failed';
+export type MainErrorKind = 'uncaught-exception' | 'unhandled-rejection' | 'stop-unverified' | 'containment-unready' | 'agent-host' | 'update-failed' | 'host-copy';
 
 export const MAIN_ERROR_DECK_PREFIX = 'genie:main-error:';
 /** The Deck item that says how many distinct errors were replaced to keep the list bounded. */
@@ -82,6 +82,7 @@ const KIND_LABEL: Record<MainErrorKind, string> = {
     'containment-unready': 'uncontained start',
     'agent-host': 'agent host problem',
     'update-failed': 'update not installed',
+    'host-copy': 'host copy not made',
 };
 
 /** Whatever was thrown — an Error, a string, an object, `undefined` — as a message, its stack and the stack's top frame. */
@@ -186,6 +187,11 @@ export class MainErrorBook {
         return this.#errors;
     }
 
+    /** RED stand-in (Tynn #693). */
+    settle(_id: string): boolean {
+        return false;
+    }
+
     /** How many distinct errors were replaced to keep the list bounded, since the person last dismissed that count. */
     get replaced(): number {
         return this.#replaced;
@@ -250,6 +256,11 @@ export class MainErrorBook {
             try { l(); } catch { /* the Deck refreshes on the next change; the error itself is already recorded and logged */ }
         }
     }
+}
+
+/** RED stand-in (Tynn #693). */
+export async function retryHostCopy(_book: MainErrorBook, _id: string, _make: () => Promise<string | null>): Promise<{ ok: true } | { ok: false; reason: string }> {
+    return { ok: true };
 }
 
 /** What the policy needs of `process`: to listen. A stand-in in tests, `process` in main.ts. */

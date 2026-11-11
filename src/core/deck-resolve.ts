@@ -31,6 +31,8 @@ export type DeckCommand =
     | { kind: 'sync-hosts' }
     /** Genie's own record of an error the main process caught and survived (core/main-errors.ts): the person has read it. */
     | { kind: 'dismiss-main-error'; id: string }
+    | { kind: 'retry-host-copy'; id: string }
+    | { kind: 'open-lifecycle-log' }
     | { kind: 'refused'; reason: string };
 
 const refuse = (reason: string): DeckCommand => ({ kind: 'refused', reason });

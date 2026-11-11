@@ -45,6 +45,8 @@ export interface HostRuntime {
     readonly hostScript: string;
     readonly copied: boolean;
     readonly error: string | null;
+    /** The error itself, without Genie's sentence around it: the Deck item's folded detail (Tynn #693). */
+    readonly cause?: string | null;
 }
 
 const COMPLETE = '.complete';
