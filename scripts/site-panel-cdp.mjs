@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { codeLiteral } from './code-literal.mjs';
 
-if (process.env.CI !== 'true' && process.env.SITE_PANEL_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
+if (process.env.CI !== 'true' && process.env.GENIE_TEST_MACHINE !== '1' && process.env.SITE_PANEL_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 
 const PORT = Number(process.env.CDP_PORT ?? 9333);
 // With no key: nothing may open a store (core/browser-store.ts). A launch of its own, that a keyring can't help.

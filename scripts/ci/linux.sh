@@ -144,11 +144,26 @@ take_session_display() {
     done
 }
 
+# THIS IS A TEST MACHINE, SAID ONCE AND ONLY WHEN IT IS TRUE. The window rows open the real app, write to ~/.genie and
+# end processes, so each row script refuses anywhere else. GENIE_TEST_MACHINE=1 is that statement, for every row: set
+# here when the machine is one of ours by its own account (the test VMs' user is `genie`, which the row scripts already
+# go by), or by the person who starts the run on another test machine. It is never assumed, and `CI=true` is not set:
+# that was GitHub's word for itself.
+declare_test_machine() {
+    if [ "${GENIE_TEST_MACHINE:-}" = 1 ]; then echo "--- a test machine: GENIE_TEST_MACHINE=1 was given"; return 0; fi
+    if [ "$(id -un)" = genie ]; then export GENIE_TEST_MACHINE=1; echo "--- a test machine: its user is genie"; return 0; fi
+    return 1
+}
+
 display_ready=''
 display_why=''
 need_display() {
     if [ -n "$display_ready" ]; then [ "$display_ready" = ok ] && return 0; blocked="$display_why"; return 1; fi
     display_ready=failed
+    if ! declare_test_machine; then
+        display_why="not a test machine (user $(id -un)): the window rows run only on one; GENIE_TEST_MACHINE=1 says this machine is"
+        block "$display_why"; return 1
+    fi
     need_cmd pgrep procps-ng && need_cmd ss iproute2 && need_cmd curl curl || { display_why="$blocked"; return 1; }
     if [ "${CI_DISPLAY:-hyprland}" = xvfb ]; then
         need_cmd xvfb-run xorg-server-xvfb && need_cmd xauth xorg-xauth || { display_why="$blocked"; return 1; }

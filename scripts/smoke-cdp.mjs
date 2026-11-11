@@ -1048,6 +1048,20 @@ if (!approvalEnabled) {
     const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
     check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
     if (!typed) console.log(`  TERMINAL_AT_37 ${await terminalDump()}`);
+    // WHERE THE TYPING WENT (said only when 37 fails; Tynn #692, omarchy-test: the prompt drew at 1.2 s, as the token was
+    // typed, and the token never showed). Which of three it is: the page had no focus for the keys, the keys came before
+    // the shell could take them, or the terminal takes no keys at all. A SECOND token, typed 5 s after the first with the
+    // prompt long drawn, tells the last two apart; it is typed only on this failing path, where 38 has already failed.
+    if (!typed) {
+        const focus = await cdp.evaluate(`JSON.stringify({ hasFocus: document.hasFocus(), visibility: document.visibilityState, active: (document.activeElement?.tagName ?? '') + '.' + (document.activeElement?.className ?? ''), inPane: !!document.activeElement?.closest?.('[data-terminal-pane]') })`).catch((e) => `(unread: ${e?.message ?? e})`);
+        const again = `retype-${Math.random().toString(16).slice(2, 10)}`;
+        await new Promise((r) => setTimeout(r, 5000));
+        await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
+        await cdp.send('Input.insertText', { text: again });
+        await new Promise((r) => setTimeout(r, 2000));
+        const shown = await cdp.evaluate(`${rowsText}.includes('${again}')`).catch(() => null);
+        console.log(`  TERMINAL_RETYPE ${JSON.stringify({ focusAtFailure: focus, secondTokenShown: shown })} ${await terminalDump()}`);
+    }
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
