@@ -40,6 +40,8 @@ export interface EngineLaunchPorts {
     readonly log?: (line: string) => void;
     /** How long a started host has to write its record. Default 20 s (the first start builds the Windows supervisor). */
     readonly startTimeoutMs?: number;
+    /** How long it has waited for a host it started, about once a second (Tynn #700). */
+    readonly onWaiting?: (elapsedMs: number) => void;
 }
 
 export interface EngineLink {
