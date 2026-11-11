@@ -276,9 +276,9 @@ import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } fro
  * this: Genie did not start, and `boot().catch` at the bottom says so and quits.
  */
 const mainErrors = new MainErrorBook();
+installMainErrorPolicy(process, mainErrors);
 /** Make genie-host's copy again, for the Deck item's Try again (Tynn #693): its error, or `null` when it is made. Set at boot. */
 let remakeHostCopy: () => Promise<string | null> = async () => 'Genie has not finished starting; try again in a moment';
-installMainErrorPolicy(process, mainErrors);
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
