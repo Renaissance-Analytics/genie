@@ -1221,7 +1221,7 @@ function AgentViewBody({
                                                         const listed = choices !== undefined && choices !== 'loading' && choices.ok ? choices : null;
                                                         // IN USE: the running session's own answer (modelState) — a provider list asked before any session
                                                         // knows only the provider's default, which is not a reading of this agent.
-                                                        const inUseId = listed?.source === 'session' ? listed.current : null;
+                                                        const inUseId = listed?.inUse ?? (listed?.source === 'session' ? listed.current : null);
                                                         const inUse = inUseId === null ? null : listed?.models.find((m) => m.modelId === inUseId) ?? null;
                                                         const reading = inUse ? modelLabel(inUse) : inUseId ?? session?.model ?? null;
                                                         const defaultEntry = listed?.models.find((m) => m.isDefault === true) ?? null;
@@ -1296,6 +1296,8 @@ function AgentViewBody({
                                                                         ) : null}
                                                                     </>
                                                                 )}
+                                                                {/* The list is the running session's own, the provider not being reachable now: said, with why (Tynn #608). */}
+                                                                {listed?.note ? <p data-model-note className="mt-1 text-[var(--fg-4)]">{listed.note}</p> : null}
                                                                 {selectedEntry?.description || beside?.control === 'model' ? (
                                                                     <p className="mt-1 truncate text-[var(--fg-4)]">
                                                                         {selectedEntry?.description ? <span data-model-description={selectedEntry.modelId}>{selectedEntry.description}</span> : null}

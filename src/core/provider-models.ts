@@ -26,7 +26,13 @@ export type { AvailableModel, SessionModelState };
  * (`current` is only the provider's default). `ok: false` is the provider not saying, with its reason.
  */
 export type ModelChoices =
-    | { readonly ok: true; readonly provider: string; readonly source: 'session' | 'provider'; readonly models: readonly AvailableModel[]; readonly current: string | null }
+    | {
+        readonly ok: true; readonly provider: string; readonly source: 'session' | 'provider'; readonly models: readonly AvailableModel[]; readonly current: string | null;
+        /** The model a running agent's session is on, beside the provider's list (Tynn #608). */
+        readonly inUse?: string | null;
+        /** Why this is not the provider's list now: the running session's own, the provider could not be asked (Tynn #608). */
+        readonly note?: string;
+    }
     | { readonly ok: false; readonly provider: string; readonly reason: string };
 
 /** prism-acp's `listModels(provider, …)` with Genie's launch options already chosen (session-host `realListModels`). */
