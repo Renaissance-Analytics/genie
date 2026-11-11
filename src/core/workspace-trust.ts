@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 /**
- * WHAT A WORKSPACE WOULD RUN, AND WHETHER THE PERSON HAS SAID YES TO IT. One record on this machine, one verdict, and a hash of the list that asks again when it changes. The pure half.
+ * WHAT A WORKSPACE WOULD RUN, AND WHETHER THE PERSON HAS SAID YES TO IT. One record on this machine and one verdict. The yes is kept until the person takes it back; the list is what they are shown when they give it. The pure half.
  *
  * The hash covers what the list shows: each site's run fingerprint and the npm script its command names, the hooks and servers a workspace's own files declare, and the git keys that could run something, with their values.
  * It does not cover the code those run, or the instructions an agent reads.
@@ -69,12 +69,14 @@ export function trustHash(list: TrustList): string {
 }
 
 /**
- * Trusted when the person said yes to exactly this list, when nothing would run, or when it carried over at the upgrade and has no list recorded yet. A list recorded and then changed asks again, carried or not.
+ * TRUST IS GIVEN ONCE AND STAYS (Tynn #618; the owner's ruling, 2026-11-11: "once I trust a workspace, it should be trusted
+ * with everything in that workspace. I should not have to keep re-trusting it every time it adds a new service or site").
+ *
+ * Trusted when the person has said yes to the workspace (any record of it, whatever it holds: nothing is compared), when it
+ * carried over at the upgrade, or when nothing in it would run. Only the person's Untrust ends it. `hash` only says
+ * whether anything would run. `changed` is always false: nothing is ever "changed since you trusted it".
  */
 export function trustVerdict(record: TrustRecord, workspaceId: string, hash: string): { trusted: boolean; changed: boolean } {
-    if (hash === trustHash(NOTHING())) return { trusted: true, changed: false };
-    const recorded = record.workspaces[workspaceId];
-    if (recorded === hash) return { trusted: true, changed: false };
-    if (recorded !== undefined) return { trusted: false, changed: true };
-    return { trusted: record.carried.includes(workspaceId), changed: false };
+    if (record.workspaces[workspaceId] !== undefined || record.carried.includes(workspaceId)) return { trusted: true, changed: false };
+    return { trusted: hash === trustHash(NOTHING()), changed: false };
 }

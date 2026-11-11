@@ -532,6 +532,11 @@ export function Shell({
     const colorMap = useShared(useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]));
     // The workspace on screen — its own page, or the page of one of its agents — named with its colour in the title bar.
     const onScreen = workspaceFor(routeWorkspace(route, snapshot.agents) ?? '');
+    /** Trust a workspace from an approval card that asks only because it isn't trusted (Tynn #618): the trust step's own action. */
+    const trustFromCard = (workspaceId: string | null): (() => Promise<unknown>) | undefined => {
+        const workspace = workspaceId ? workspaceFor(workspaceId) : null;
+        return workspace ? () => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: workspace.id, workspacePath: workspace.path })) : undefined;
+    };
     const [gappList, setGappList] = useState<readonly GAppListing[] | null>(null);
     const refreshGapps = useCallback(async (): Promise<void> => {
         if (!gapps) return;
@@ -753,6 +758,7 @@ export function Shell({
                             signals={{ ...snapshot.signals, update: updateState }}
                             answering={answeringApproval}
                             onAnswer={(item, optionId, note) => onAnswerDeckItem(item, optionId, note)}
+                            onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
                             onAnswerForm={onAnswerDeckForm}
                             formRefusal={deckRefusal ?? deckFormRefusal ?? null}
                             // Dismiss without an answer — one (with the notes written in its form), every stale one shown, or
@@ -832,6 +838,7 @@ export function Shell({
                                 answeringApproval={answeringFor(answeringApproval, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 approvalRefusal={refusalFor(approvalRefusal, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 onAnswerApproval={(optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note, agentDetail.session?.pendingApproval ?? null)}
+                                onTrustWorkspace={trustFromCard(agentDetail.agent.workspaceId ?? null)}
                                 ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
                                 files={files}
                                 workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
@@ -862,6 +869,8 @@ export function Shell({
                             key={parsed.workspaceId}
                             trustStep={features.trust?.find((row) => row.workspaceId === parsed.workspaceId) ?? null}
                             onTrust={() => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: parsed.workspaceId, workspacePath: workspaceFor(parsed.workspaceId)!.path }))}
+                            // Offered once the trust steps are known (so a workspace not read yet is not offered an Untrust).
+                            onUntrust={features.trust ? () => Promise.resolve(onFeature({ kind: 'workspace.untrust', workspaceId: parsed.workspaceId })) : undefined}
                             // Settings → Hosting opens the same modals as the row's indicators.
                             onOpenRuntime={(kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}
@@ -1005,6 +1014,7 @@ export function Shell({
                         answeringApproval={chatThread ? answeringFor(answeringApproval, chatThread.agentId, chatApproval) : null}
                         approvalRefusal={chatThread ? refusalFor(approvalRefusal, chatThread.agentId, chatApproval) : null}
                         onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note, chatApproval); }}
+                        onTrustWorkspace={trustFromCard(chatWorkspaceId)}
                         scope={scope}
                         // The chat the message was TYPED in (genie#1261): each chat keeps its own composer.
                         onSend={(text, attachments, agentId) => (scope.kind !== 'blocked' ? onSend(agentId || chatThread?.agentId || '', text, attachments) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: scope.reason }))}

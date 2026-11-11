@@ -34,6 +34,8 @@ export interface TrustApi {
     refresh(workspaceId: string, purpose?: 'redock'): Promise<TrustView | null>;
     /** The person's yes to what the workspace says now. Recorded first: a save that fails leaves it untrusted. */
     trust(workspaceId: string): Promise<TrustView | null>;
+    /** The person takes the yes back: the only thing that ends a workspace's trust (Tynn #618). */
+    untrust(workspaceId: string): Promise<TrustView | null>;
     /** A registered workspace's folder takes Genie's files only once trusted. A folder that is no workspace is not this rule's. */
     mayWriteInto(folder: string): Promise<boolean>;
     /** A verdict moved. Fired after the record and the views are updated, so a reader then reads the new verdict. */
@@ -54,7 +56,7 @@ export function trustedPathIn(entries: readonly TrustEntry[], path: string): boo
 
 export interface OwnTrustInput {
     readonly workspaces: () => readonly WorkspaceRef[];
-    readonly envelopeSites: Pick<EnvelopeSites, 'trustRecord' | 'recordWorkspace' | 'approveSites'>;
+    readonly envelopeSites: Pick<EnvelopeSites, 'trustRecord' | 'recordWorkspace' | 'approveSites' | 'forgetWorkspaceTrust'>;
     readonly readText: (path: string) => Promise<string | null>;
     /** The slow pass over what a verdict reads. Absent = `TRUST_PASS_MS`. */
     readonly everyMs?: number | undefined;
@@ -87,6 +89,7 @@ export function ownTrust(input: OwnTrustInput): OwnTrust {
         workspaces: input.workspaces,
         record: () => input.envelopeSites.trustRecord(),
         recordWorkspace: (id, hash) => input.envelopeSites.recordWorkspace(id, hash),
+        forgetWorkspace: (id) => input.envelopeSites.forgetWorkspaceTrust(id),
         approveSites: (id) => input.envelopeSites.approveSites(id),
         // Fired from inside WorkspaceTrust once its view is kept: the record first, then whoever is told.
         verdictMoved: (id) => {
@@ -133,6 +136,7 @@ export function ownTrust(input: OwnTrustInput): OwnTrust {
         entries,
         refresh: (id, purpose) => workspaceTrust.refresh(id, purpose),
         trust: (id) => workspaceTrust.trust(id),
+        untrust: (id) => workspaceTrust.untrust(id),
         mayWriteInto: async (folder) => {
             const workspace = input.workspaces().find((w) => w.path === folder);
             if (!workspace) return true;

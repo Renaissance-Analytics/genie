@@ -101,6 +101,8 @@ export interface DeckProps {
     onDismissOlder?: ((olderThanMs: number) => void) | undefined;
     /** "Dismiss all stale" — exactly the ids shown marked stale. Absent = not offered. */
     onDismissStale?: ((ids: string[]) => void) | undefined;
+    /** Trust an item's workspace, from its approval card (Tynn #618). Absent = not offered. */
+    onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
     /** Items drawn opened (a test of the opened row; the Deck itself opens one on a click). */
     initiallyExpanded?: readonly string[] | undefined;
     /** The clock the ages are read against; now by default (tests pass a fixed one). */
@@ -109,7 +111,7 @@ export interface DeckProps {
 
 const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 
-export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, focusId = null, onDismiss, onDismissOlder, onDismissStale, now = Date.now(), initiallyExpanded }: DeckProps) {
+export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNavigate, onSignalAction, onAnswerForm, formRefusal = null, focusId = null, onDismiss, onDismissOlder, onDismissStale, now = Date.now(), initiallyExpanded, onTrustWorkspace }: DeckProps) {
     const band = deckBand(items);
     // The workspace sections hold what waits; the stale questions have their own band below (2026-11-08).
     const sections = deckSections(items.filter((i) => !isStale(i)));
@@ -236,6 +238,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             onDismiss={onDismiss}
                             now={now}
                             initiallyExpanded={initiallyExpanded}
+                            onTrustWorkspace={onTrustWorkspace}
                         />
                     ))}
                 </div>
@@ -292,6 +295,7 @@ interface RowProps {
     onDismiss?: ((item: DeckItem, notes: string[]) => void) | undefined;
     now: number;
     initiallyExpanded?: readonly string[] | undefined;
+    onTrustWorkspace?: ((workspaceId: string) => Promise<unknown>) | undefined;
 }
 
 /** One workspace's section: the Dashboard's group header (name, then how many wait and how many are stale), then its rows. */
@@ -309,7 +313,7 @@ function DeckSectionView({ section, ...row }: RowProps & { section: DeckSection 
     );
 }
 
-function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now, initiallyExpanded }: RowProps & { item: DeckItem }) {
+function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefusal, focusId, focusRef, onDismiss, now, initiallyExpanded, onTrustWorkspace }: RowProps & { item: DeckItem }) {
     // A stale question's form is folded away until the person chooses to answer it anyway — its agent is not waiting.
     const [opened, setOpened] = useState(false);
     // A long to-do or message shows its first line; a click opens the whole text (the owner, 2026-10-18).
@@ -398,7 +402,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
              * never its text again in a monospace box.
              */}
             {item.answer.kind === 'inline' && item.source === 'agent-question' ? (
-                <ApprovalCard approval={{ question: item.title, options: item.answer.options, why: item.why ?? null }} answering={answeringHere} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
+                <ApprovalCard approval={{ question: item.title, options: item.answer.options, why: item.why ?? null }} answering={answeringHere} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} onTrustWorkspace={onTrustWorkspace && item.workspaceId ? () => onTrustWorkspace(item.workspaceId!) : undefined} />
             ) : null}
 
             {/*
