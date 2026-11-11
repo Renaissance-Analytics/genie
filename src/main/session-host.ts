@@ -418,6 +418,9 @@ export const realListModels: ListProviderModels = (provider) => {
 export const LIMIT_REREAD_MS = 15 * 60_000;
 
 /** Genie's own instructions and skills, on this machine, for an agent whose workspace is not trusted. */
+/** What the chat shows when Genie's instructions go to an agent ahead of its work: the text itself is the agent's. */
+export const INSTRUCTIONS_SENT = 'Genie sent this agent its instructions.';
+
 export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string; readonly promptText: string; readonly codexPromptText?: string }
 
 /**
@@ -942,7 +945,7 @@ export class SessionHost {
                 // A prompt file does not reach a resumed thread (measured): one that began without Genie's words is given them with its next work, once.
                 if (untrusted) {
                     if (record.provider === 'claude' && record.threadId === null) this.#markGenieWords?.(record.id);
-                    else if ((this.#currentRecord?.(record.id) ?? record).genieWordsInThread !== true) current.session.holdForNextWork(record.provider === 'codex' ? untrusted.codexPromptText ?? untrusted.promptText : untrusted.promptText, () => this.#markGenieWords?.(record.id));
+                    else if ((this.#currentRecord?.(record.id) ?? record).genieWordsInThread !== true) current.session.holdForNextWork(record.provider === 'codex' ? untrusted.codexPromptText ?? untrusted.promptText : untrusted.promptText, () => this.#markGenieWords?.(record.id), INSTRUCTIONS_SENT);
                 }
                 this.#emit(record.id);
             }

@@ -439,6 +439,32 @@ describe("Genie's words, once in a thread", () => {
         expect(t.fakes[0]!.prompts[1]).toBe('more');
     });
 
+    // Tynn #615 (the owner, beta.61): the whole "Genie 2 — This file is written by Genie 2…" text showed in his chat as a
+    // message "genie → <agent>", after the upgrade's restart and again after a session restarted.
+    it('the instructions are never drawn in the chat as a message: one short line says they were sent, and the agent gets all of them', async () => {
+        const t = launch({ threadId: 'thread-1' });
+        t.host.start(t.record(), dir);
+        await flush();
+        await work(t, 'work');
+        const rows = t.host.rowsFor(t.record().id).map((r) => r.event);
+        const messages = rows.filter((e) => e.kind === 'message').map((e) => (e as { text: string }).text);
+        expect(messages).toEqual(['work']);
+        expect(JSON.stringify(rows)).not.toContain('genie words');
+        expect(rows.filter((e) => e.kind === 'notice').map((e) => (e as { message: string }).message)).toContain('Genie sent this agent its instructions.');
+        // The agent still receives every word.
+        expect(t.fakes[0]!.prompts).toEqual([`genie words\n\nwork`]);
+    });
+
+    it('a short word of Genie\'s own ahead of the work is still shown as Genie\'s message (CONTROL)', async () => {
+        const t = launch({ threadId: 'thread-1' }, { untrusted: false });
+        t.host.start(t.record(), dir);
+        await flush();
+        expect(t.host.holdForNextWork(t.record().id, NOW_TRUSTED)).toBe(true);
+        await work(t, 'work');
+        const messages = t.host.rowsFor(t.record().id).map((r) => r.event).filter((e) => e.kind === 'message').map((e) => (e as { text: string }).text);
+        expect(messages).toEqual([NOW_TRUSTED, 'work']);
+    });
+
     it('Codex has no file route: its first work carries them, even on a new thread, once', async () => {
         const t = launch({ threadId: null, provider: 'codex' } as Partial<AgentRecord>);
         t.host.start(t.record(), dir);

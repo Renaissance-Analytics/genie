@@ -1785,11 +1785,17 @@ export class AgentSession {
     /** A word from Genie held for the next turn this session opens (`holdForNextWork`); `null` = none. */
     #heldForNextWork: string | null = null;
     #heldSent: (() => void) | null = null;
+    #heldShownAs: string | null = null;
 
-    /** It goes ahead of the next prompt that opens a turn, and starts none of its own. Replaces one already held. */
-    holdForNextWork(text: string, sent: (() => void) | null = null): void {
+    /**
+     * It goes ahead of the next prompt that opens a turn, and starts none of its own. Replaces one already held.
+     * `shownAs`: the one line the chat shows in its place. Instruction text is for the agent; the person is told only that
+     * it was sent (Tynn #615: the whole of Genie's instructions was drawn in the chat as a message from genie).
+     */
+    holdForNextWork(text: string, sent: (() => void) | null = null, shownAs: string | null = null): void {
         this.#heldForNextWork = text;
         this.#heldSent = sent;
+        this.#heldShownAs = shownAs;
     }
 
     /** Work is held (`mayTakeWork`, a limit, a start). */
@@ -1808,6 +1814,7 @@ export class AgentSession {
         const was = this.#heldForNextWork !== null;
         this.#heldForNextWork = null;
         this.#heldSent = null;
+        this.#heldShownAs = null;
         return was;
     }
 
@@ -1828,6 +1835,7 @@ export class AgentSession {
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
         const held = this.#inTurn ? null : this.#heldForNextWork;
+        const heldShownAs = held === null ? null : this.#heldShownAs;
         const handed = held === null ? text : `${held}\n\n${text}`;
         const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
         this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
@@ -1841,6 +1849,7 @@ export class AgentSession {
             const sentNow = this.#heldSent;
             this.#heldForNextWork = null;
             this.#heldSent = null;
+            this.#heldShownAs = null;
             sentNow?.();
         }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
@@ -1861,7 +1870,8 @@ export class AgentSession {
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
         // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
-        if (held !== null) void this.#emitRow(promptRow(held, 'genie', null, {}));
+        // Instruction text is never drawn: one line says it was sent (Tynn #615).
+        if (held !== null) void this.#emitRow(heldShownAs !== null ? { kind: 'notice', level: 'info', message: heldShownAs } : promptRow(held, 'genie', null, {}));
         if (record) void this.#emitRow(promptRow(text, by, sent, context));
         // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
         this.#echo = `${above}${handed}`;
