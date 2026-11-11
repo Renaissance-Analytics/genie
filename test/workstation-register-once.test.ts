@@ -71,6 +71,13 @@ describe('each registration is said', () => {
         await (await r.make()).ensure({ host: HOST }).catch(() => {});
         expect(r.lines).toEqual([expect.stringMatching(/^tynn registration: proved \(ws_1\); Tynn refused it, HTTP 422$/)]);
     });
+    // tynn.ai#450: a proof that fails against a record the owner has is refused with 422 `proof_rejected` and a `reason`.
+    it('a rejected proof: the log carries Tynn\'s code and reason, and the caller still gets Tynn\'s words', async () => {
+        const r = rig(() => ({ status: 422, body: { message: 'This proof was not accepted.', code: 'proof_rejected', reason: 'replayed' } }));
+        const result = await (await r.make()).ensure({ host: HOST }).catch((e: unknown) => ({ ok: false, reason: String(e) }));
+        expect(r.lines).toEqual([expect.stringMatching(/^tynn registration: proved [(]ws_1[)]; Tynn refused it, HTTP 422 proof_rejected: replayed$/)]);
+        expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('This proof was not accepted.') });
+    });
     it('unproven: only a machine with nothing on record, and it says so', async () => {
         const r = rig(() => ({ status: 201, body: { workstation: { id: 'ws_new' }, enrollment: { workstation_id: 'ws_new', secret: 's' } } }), false);
         await (await r.make()).ensure({ host: HOST });
