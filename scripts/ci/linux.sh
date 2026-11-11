@@ -30,6 +30,8 @@ set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 OUT="$PWD/ci-out"
+# What the setup writes goes under ci-out/setup, never beside the rows' own logs (windows.ps1's build row failed on that).
+SETUP="$OUT/setup"
 
 # The rows, in ci.yml's order: `typecheck + unit`, then `a real window`, then the acceptance jobs.
 ROWS=(
@@ -95,8 +97,8 @@ need_cmd() {
     local cmd="$1" pkg="$2"
     command -v "$cmd" >/dev/null 2>&1 && return 0
     echo "--- $cmd is missing: installing $pkg with pacman"
-    sudo pacman -S --needed --noconfirm "$pkg" >"$OUT/pacman-$pkg.log" 2>&1 && return 0
-    tail -20 "$OUT/pacman-$pkg.log"
+    sudo pacman -S --needed --noconfirm "$pkg" >"$SETUP/pacman-$pkg.log" 2>&1 && return 0
+    tail -20 "$SETUP/pacman-$pkg.log"
     block "$cmd is missing and pacman could not install $pkg"
 }
 
@@ -110,7 +112,7 @@ need_install() {
     need_cmd git git || { installed_why="$blocked"; return 1; }
     # `npm ci`, with scripts: Electron's binary is the point of the window rows.
     echo "--- npm ci"
-    npm ci --no-audit --no-fund >"$OUT/npm-ci.log" 2>&1 || { tail -40 "$OUT/npm-ci.log"; block "$installed_why"; return 1; }
+    npm ci --no-audit --no-fund >"$SETUP/npm-ci.log" 2>&1 || { tail -40 "$SETUP/npm-ci.log"; block "$installed_why"; return 1; }
     installed=ok
 }
 
@@ -124,9 +126,9 @@ need_electron() {
     if [ -n "$electron_ok" ]; then [ "$electron_ok" = ok ] && return 0; blocked="$electron_why"; return 1; fi
     electron_ok=failed
     need_install || { electron_why="$blocked"; return 1; }
-    [ -x "$ELECTRON_BIN" ] || node node_modules/electron/install.js >"$OUT/electron-install.log" 2>&1 || tail -5 "$OUT/electron-install.log"
+    [ -x "$ELECTRON_BIN" ] || node node_modules/electron/install.js >"$SETUP/electron-install.log" 2>&1 || tail -5 "$SETUP/electron-install.log"
     if [ ! -x "$ELECTRON_BIN" ]; then
-        electron_why="$ELECTRON_BIN missing (node_modules/electron/install.js did not fetch it: see ci-out/electron-install.log)"
+        electron_why="$ELECTRON_BIN missing (node_modules/electron/install.js did not fetch it: see ci-out/setup/electron-install.log)"
         block "$electron_why"; return 1
     fi
     echo "--- Electron: $ELECTRON_BIN ($(du -m "$ELECTRON_BIN" | cut -f1) MB)"
@@ -142,7 +144,7 @@ need_build() {
     need_install || { built_why="$blocked"; return 1; }
     need_electron || { built_why="$blocked"; return 1; }
     echo "--- npm run build"
-    npm run build >"$OUT/build.log" 2>&1 || { tail -40 "$OUT/build.log"; block "$built_why"; return 1; }
+    npm run build >"$SETUP/build.log" 2>&1 || { tail -40 "$SETUP/build.log"; block "$built_why"; return 1; }
     built=ok
 }
 
@@ -256,9 +258,9 @@ need_app() {
     if [ -n "$app" ]; then [ "$app" = ok ] && return 0; blocked="$app_why"; return 1; fi
     app=failed
     need_build && need_display || { app_why="$blocked"; return 1; }
-    if [ ! -f "$OUT/seed.done" ]; then
-        node scripts/smoke-seed.mjs >"$OUT/seed.out" 2>&1 || { tail -20 "$OUT/seed.out"; app_why='the seed could not be written'; block "$app_why"; return 1; }
-        : >"$OUT/seed.done"
+    if [ ! -f "$SETUP/seed.done" ]; then
+        node scripts/smoke-seed.mjs >"$SETUP/seed.out" 2>&1 || { tail -20 "$SETUP/seed.out"; app_why='the seed could not be written'; block "$app_why"; return 1; }
+        : >"$SETUP/seed.done"
     fi
     chmod +x scripts/stub-codex.mjs
     # Ordinary provider configuration, exactly as ci.yml sets it for this launch: codex is the stub, so a REAL parked
@@ -435,7 +437,7 @@ row_zip64() { need_install && npm run verify:zip64; }
 row_host-plain-node() {
     local dir="$OUT/plain-node" node_dir
     if ! command -v mise >/dev/null 2>&1; then blocked='mise is not on this machine, so Node 22.16.0 cannot be had'; return 1; fi
-    mise install node@22.16.0 >"$OUT/plain-node-mise.log" 2>&1 || { tail -20 "$OUT/plain-node-mise.log"; blocked='mise could not install Node 22.16.0'; return 1; }
+    mise install node@22.16.0 >"$SETUP/plain-node-mise.log" 2>&1 || { tail -20 "$SETUP/plain-node-mise.log"; blocked='mise could not install Node 22.16.0'; return 1; }
     node_dir="$(mise where node@22.16.0)/bin"
     rm -rf "$dir"
     mkdir -p "$dir"
@@ -494,7 +496,7 @@ machine_line() {
 
 # --- run them ---------------------------------------------------------------------------------------------------------
 
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$SETUP"
 # THE MACHINE'S TWO CLOCKS, read before and after: a test VM restored from a snapshot has its wall clock corrected while
 # it runs, and a row that times something by the wall clock can then read a time that never passed. Said, not judged.
 clock_wall() { date +%s.%N; }
