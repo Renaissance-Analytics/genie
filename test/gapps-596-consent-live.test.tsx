@@ -35,10 +35,9 @@ const pair = generateKeyPairSync('ed25519');
 const KEY_ID = `sha256:${createHash('sha256').update(pair.publicKey.export({ type: 'spki', format: 'der' })).digest('hex')}`;
 const keys = { [KEY_ID]: pair.publicKey.export({ type: 'spki', format: 'pem' }).toString() };
 const ID = 'com.example.notes';
-const settleHost = () => new Promise((ok) => setTimeout(ok, 40));
 /**
  * The install has asked: its item is on the Deck. Waited for, not guessed at (Tynn #692): a fixed 40 ms was enough on
- * GitHub's runner and not on omarchy-test under load (`deckItems()[0]` was undefined once, with the machine's load at
+ * GitHub's runner and not on omarchy-test under load, in three tests of this file (`deckItems()[0]` was undefined once, with the machine's load at
  * 10.6 on 8 cores). Bounded at 5 s; the assertions after it are unchanged, so an item that never comes still fails there.
  */
 const onTheDeck = async (approvals: { deckItems(): readonly unknown[] }) => { for (let i = 0; i < 250 && approvals.deckItems().length === 0; i += 1) await new Promise((ok) => setTimeout(ok, 20)); };
@@ -122,7 +121,7 @@ describe('consent is a blocking Deck item', () => {
         const source = await folder('v1');
         const review = await gapps.review(source);
         const installing = gapps.install(source, { scope: 'workstation', consent: consentOf(review) });
-        await settleHost();
+        await onTheDeck(approvals);
         answer('allow');
         await installing;
     }
@@ -140,7 +139,7 @@ describe('consent is a blocking Deck item', () => {
         const source = await folder('v2', { version: '1.1.0', network: ['api.example.com', 'new.example.com'] });
         const review = await gapps.review(source);
         const installing = gapps.install(source, { scope: 'workstation', consent: consentOf(review) });
-        await settleHost();
+        await onTheDeck(approvals);
         const title = approvals.deckItems()[0]!.title;
         expect(title).toContain('new.example.com');
         expect(title).not.toContain('api.example.com');
