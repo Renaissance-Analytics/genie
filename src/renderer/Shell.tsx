@@ -814,6 +814,7 @@ export function Shell({
                                 agent={agentDetail.agent}
                                 session={agentDetail.session}
                                 startRefusal={agentDetail.refusal}
+                                providerSignedOut={agentDetail.providerSignedOut === true}
                                 rows={agentDetail.rows}
                                 tab={parsed.tab}
                                 lanes={parseLanes(parsed.lane)}

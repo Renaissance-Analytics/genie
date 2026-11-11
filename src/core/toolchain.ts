@@ -157,6 +157,8 @@ export interface ToolStatus {
     readonly upgrade?: string;
     /** `broken` only (Tynn #698): what the health check found, in words. */
     readonly problem?: string;
+    /** An agent CLI that runs and says it is signed out (Tynn #698): "Not signed in" and Log in, never Broken. */
+    readonly signedOut?: boolean;
 }
 
 /** The Toolchain row each agent provider's CLI is. */
@@ -165,12 +167,13 @@ const PROVIDER_TOOL: Readonly<Record<string, string>> = { claude: 'claude-code',
 /**
  * AN AGENT CLI'S ROW, FROM ITS HEALTH (Tynn #698): a CLI the health check found cannot run reads `broken`, with why, whatever
  * its version print said (an npm placeholder answers nothing; another copy on PATH answered 2.1.316). Signed out is a login
- * matter, not the tool's state: that row stays as measured.
+ * matter, not the tool's state: that row keeps its tone and is marked `signedOut` ("Not signed in", Log in).
  */
-export function withProviderHealth<T extends ToolStatus>(statuses: readonly T[], health: ReadonlyArray<{ readonly provider: string; readonly installed: boolean; readonly words: string | null } | null>): T[] {
+export function withProviderHealth<T extends ToolStatus>(statuses: readonly T[], health: ReadonlyArray<{ readonly provider: string; readonly installed: boolean; readonly signedIn: boolean | null; readonly words: string | null } | null>): T[] {
     return statuses.map((status) => {
         const found = health.find((h) => h !== null && PROVIDER_TOOL[h.provider] === status.tool) ?? null;
-        if (found === null || found.installed) return status;
+        if (found === null) return status;
+        if (found.installed) return found.signedIn === false ? { ...status, signedOut: true } : status;
         return { ...status, tone: 'broken', ...(found.words ? { problem: found.words } : {}) };
     });
 }

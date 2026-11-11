@@ -1236,6 +1236,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         engine: host,
         cwdFor,
         takeOver: (id) => takeOvers?.probe(id) ?? null,
+        providerSignedIn: (provider) => providerHealth.signedIn(provider),
         ...(services ? { mail: (id: AgentId, limit: number) => services!.inbox.involving(id, limit) } : {}),
     }, agentId);
 }
@@ -1879,6 +1880,8 @@ async function boot(): Promise<void> {
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
         runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
         onSignedIn: (provider) => {
+            // Measured again, so its Toolchain row and its agents stop saying signed out (Tynn #698).
+            void providerHealth.refresh(provider);
             for (const id of host?.signedOutAgents(provider) ?? []) {
                 void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
             }
@@ -3094,6 +3097,8 @@ async function boot(): Promise<void> {
         // The Deck's Dismiss on a recorded main-process error.
         mainErrors,
         toolchain: {
+            // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
+            login: (provider) => { const started = loginHost?.start(provider) ?? { ok: false as const, reason: 'Genie’s login window is not ready yet; try again in a moment' }; return started.ok ? { ok: true } : started; },
             // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).
             probe: async () => withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll()),
             update: async (tool, version, progress) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),

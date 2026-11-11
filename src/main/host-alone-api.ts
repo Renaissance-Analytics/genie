@@ -172,7 +172,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         subscribeSnapshot: (listener) => registry.subscribe(listener),
         subscribeAgentRecords: (listener) => registry.subscribeAgentRecords(listener),
         find: (id) => registry.find(id as AgentId),
-        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit) }, id as AgentId),
+        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit), ...(ports.signedIn ? { providerSignedIn: ports.signedIn } : {}) }, id as AgentId),
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
         startForYourMessage: (record) => startForYourMessage({
