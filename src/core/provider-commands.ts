@@ -105,3 +105,18 @@ export function unsupportedSlashCommand(text: string, extensions: ProviderExtens
         ? `/${command.name} was not sent: this agent does not offer it.`
         : `/${command.name} was not sent: this agent offers no slash commands.`;
 }
+
+/** Where a command or skill comes from, as far as its report says (Tynn #628). */
+export type CommandGroupKind = 'genie' | 'skills' | 'plugin' | 'commands' | 'connector' | 'other';
+
+export interface CommandGroup {
+    readonly key: string;
+    readonly kind: CommandGroupKind;
+    readonly label: string;
+    readonly items: readonly ProviderCommand[];
+}
+
+/** RED stand-in (Tynn #628). */
+export function commandGroups(_extensions: ProviderExtensions, _options: { readonly provider: string; readonly query?: string }): CommandGroup[] {
+    return [];
+}
