@@ -8,15 +8,26 @@ import type { TynnProject } from '../../core/tynn.js';
 export type TynnProjectsView = { ok: true; host: string; projects: readonly TynnProject[]; added?: Readonly<Record<string, string>> } | { ok: false; reason: string } | null;
 
 /**
+ * Brought into view when it appears (Tynn #688): these sections are drawn at the top of a page the person may have
+ * scrolled far down. One function for every mount, so React calls it when the element appears and not at each redraw.
+ */
+export function bringIntoView(el: HTMLElement | null): void {
+    el?.scrollIntoView?.({ block: 'nearest' });
+}
+
+/**
  * FROM TYNN, STEP ONE — PICK THE PROJECT (§6.1; Genie 1's "your Tynn projects"). The signed-in person's projects, each a
  * button that picks THAT one; then the host's folder picker and the plan. Loading, none, and Tynn's refusal each say so.
  * A project already added here stays in the list, marked "— already added" (Genie 1's AddWorkspaceModal), and opens its
  * workspace instead of starting a second clone.
+ *
+ * `planning` (Tynn #688): the project whose plan is being read after its folder was picked. Its row says so, and nothing
+ * else can be picked until the host has answered.
  */
-export function TynnProjectPicker({ state, onPick, onOpen, onCancel }: { state: TynnProjectsView; planning?: string | null | undefined; onPick: (projectId: string) => void; onOpen?: ((workspaceId: string) => void) | undefined; onCancel: () => void }) {
+export function TynnProjectPicker({ state, planning, onPick, onOpen, onCancel }: { state: TynnProjectsView; planning?: string | null | undefined; onPick: (projectId: string) => void; onOpen?: ((workspaceId: string) => void) | undefined; onCancel: () => void }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm';
     return (
-        <section data-tynn-picker="" className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-sm">
+        <section ref={bringIntoView} data-tynn-picker="" {...(planning ? { 'data-tynn-planning': planning } : {})} className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-sm">
             <p className="font-semibold">Add a workspace from Tynn</p>
             {state === null ? (
                 <div data-skeleton="true" className="flex flex-col gap-2">
@@ -33,17 +44,21 @@ export function TynnProjectPicker({ state, onPick, onOpen, onCancel }: { state: 
                     <ul data-tynn-projects={state.projects.length} className="flex flex-col gap-1">
                         {state.projects.map((p) => {
                             const added = state.added?.[p.id];
+                            const reading = planning === p.id;
                             return (
                                 <li key={p.id}>
                                     <Button size="xs" labelClassName="contents"
                                         type="button"
                                         data-tynn-project={p.id}
                                         {...(added ? { 'data-tynn-added': added } : {})}
+                                        loading={reading}
+                                        disabled={Boolean(planning)}
                                         className="flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--bg-2)] justify-start"
-                                        onClick={() => (added ? onOpen?.(added) : onPick(p.id))}
+                                        onClick={() => (planning ? undefined : added ? onOpen?.(added) : onPick(p.id))}
                                     >
                                         <span className="font-medium">{p.name}</span>
                                         <span className="font-mono text-xs text-[var(--fg-3)]">{p.slug}</span>
+                                        {reading ? <span role="status" className="ml-auto text-xs text-[var(--fg-2)]">Reading {p.name}’s plan…</span> : null}
                                         {added ? (
                                             <>
                                                 <span className="text-xs text-[var(--fg-3)]">— already added</span>

@@ -14,6 +14,9 @@ import { tynnPlanner } from '../src/renderer/tynn-plan.js';
  * showed nothing while it ran, a failure of it was dropped (`void … .then(…)` with no rejection handler), and its answer —
  * the plan or a refusal — was drawn at the top of a page the person had scrolled down to find their project in, with
  * nothing bringing it into view.
+ *
+ * The two "can be picked" checks read the button's `disabled` attribute. They first read the word anywhere in the tag,
+ * which the button's own class names contain, so the control failed in the red run for that reason and not a real one.
  */
 const flush = async () => { for (let i = 0; i < 5; i += 1) await Promise.resolve(); };
 
@@ -77,13 +80,13 @@ describe('what the person sees', () => {
         const html = renderToStaticMarkup(<TynnProjectPicker state={projects} planning="p1" onPick={() => {}} onCancel={() => {}} />);
         expect(html).toMatch(/data-tynn-planning="p1"/);
         expect(html).toContain('Reading Alpha’s plan');
-        expect(html.match(/<button[^>]*data-tynn-project="p2"[^>]*>/)?.[0]).toMatch(/disabled/);
+        expect(html.match(/<button[^>]*data-tynn-project="p2"[^>]*>/)?.[0]).toMatch(/ disabled=""/);
     });
 
     it('CONTROL: not reading a plan, nothing says so and every project can be picked', () => {
         const html = renderToStaticMarkup(<TynnProjectPicker state={projects} onPick={() => {}} onCancel={() => {}} />);
         expect(html).not.toContain('data-tynn-planning');
-        expect(html.match(/<button[^>]*data-tynn-project="p2"[^>]*>/)?.[0]).not.toMatch(/disabled/);
+        expect(html.match(/<button[^>]*data-tynn-project="p2"[^>]*>/)?.[0]).not.toMatch(/ disabled=""/);
     });
 
     it('a failure has Try again beside its words', () => {

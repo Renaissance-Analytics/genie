@@ -286,6 +286,10 @@ export interface ShellProps {
     tynnPick?: TynnProjectsView | undefined;
     onAddWorkspaceFromTynn?: (() => void) | undefined;
     onPickTynnProject?: ((projectId: string) => void) | undefined;
+    /** The project whose plan is being read after its folder was picked (Tynn #688); `null` = none. */
+    tynnPlanning?: string | null | undefined;
+    /** Try a failed import from Tynn again, same project and folder (Tynn #688); `undefined` = nothing to try again. */
+    onRetryAdd?: (() => void) | undefined;
     onCancelTynnPick?: (() => void) | undefined;
     onConfirmAddTynn?: ((parent: string, projectId: string) => void) | undefined;
     onCancelAddGit?: (() => void) | undefined;
@@ -419,6 +423,8 @@ export function Shell({
     onConfirmAddTynn,
     tynnPick,
     onPickTynnProject,
+    tynnPlanning,
+    onRetryAdd,
     onCancelTynnPick,
     onCancelAddGit,
     onConfirmAdd,
@@ -692,9 +698,9 @@ export function Shell({
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true || Boolean(tynnPlanning)} onRetry={onRetryAdd} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
                     {addFromGit && !addPreview ? <AddFromGitForm busy={addBusy === true} onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} repos={gitRepos} onReloadRepos={onReloadGitRepos} onGithub={onGitGithub} /> : null}
-                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
+                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} planning={tynnPlanning} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
                     {/*
                      * ONE first-run invitation. With no workspaces the Onboarding above IS the first run (§6.9's two
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
