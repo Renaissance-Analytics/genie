@@ -9,7 +9,7 @@ import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
-import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
+import { MainErrorBook, installMainErrorPolicy, retryHostCopy } from '../core/main-errors.js';
 import { forwardRendererConsole } from '../core/render-error.js';
 import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
@@ -274,6 +274,8 @@ import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } fro
  * this: Genie did not start, and `boot().catch` at the bottom says so and quits.
  */
 const mainErrors = new MainErrorBook();
+/** Make genie-host's copy again, for the Deck item's Try again (Tynn #693): its error, or `null` when it is made. Set at boot. */
+let remakeHostCopy: () => Promise<string | null> = async () => 'Genie has not finished starting; try again in a moment';
 installMainErrorPolicy(process, mainErrors);
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -1549,8 +1551,11 @@ async function boot(): Promise<void> {
         // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
         // Electron copies the runtime; every failure answers the install, with the reason.
         const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
-        const hostRuntime = await materializeHostRuntime({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog });
-        if (hostRuntime.error !== null) mainErrors.record('agent-host', new Error(hostRuntime.error));
+        const hostCopyInput = { packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog };
+        const hostRuntime = await materializeHostRuntime(hostCopyInput);
+        // Its own Deck item (Tynn #693): the error alone is the item's folded detail; the words are core/main-errors.ts's.
+        if (hostRuntime.error !== null) mainErrors.record('host-copy', new Error(hostRuntime.cause ?? hostRuntime.error));
+        remakeHostCopy = () => materializeHostRuntime(hostCopyInput).then((made) => (made.error === null ? null : made.cause ?? made.error));
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
@@ -3090,8 +3095,12 @@ async function boot(): Promise<void> {
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
         deliverToAgent: (agentId, text) => host?.deliver(agentId as AgentId, text, 'you') ?? false,
-        // The Deck's Dismiss on a recorded main-process error.
-        mainErrors,
+        // The Deck's actions on a recorded main-process error: Dismiss; the host's copy made now; the lifecycle log opened.
+        mainErrors: {
+            dismiss: (id) => mainErrors.dismiss(id),
+            retryHostCopy: (id) => retryHostCopy(mainErrors, id, () => remakeHostCopy()),
+            openLog: () => shell.openPath(join(runtimeDir(genieRoot()), 'lifecycle.log')).then((failed) => failed || null),
+        },
         toolchain: {
             probe: () => probeToolsLive(latestFor),
             update: async (tool, version, progress) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),

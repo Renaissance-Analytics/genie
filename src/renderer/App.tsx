@@ -1624,6 +1624,8 @@ function DesktopApp({ bridge }: AppProps) {
      * click the answer button but nothing happens" — a refusal that only reached the console was nothing happening).
      */
     const [deckFormRefusal, setDeckFormRefusal] = useState<{ itemId: string; reason: string } | null>(null);
+    // The action running on one of Genie's own Deck items (Tynn #693): its button shows progress until it ends either way.
+    const [deckBusy, setDeckBusy] = useState<{ itemId: string; optionId: string } | null>(null);
 
     /**
      * The chat subject comes from the ROUTE, so a link can open a conversation. Navigation carries it (`carryChat`):
@@ -1990,6 +1992,7 @@ function DesktopApp({ bridge }: AppProps) {
                 });
             }}
             deckFormRefusal={deckFormRefusal}
+            deckBusy={deckBusy}
             onAnswerDeckItem={(item, optionId, note) => {
                 // The Deck answers for an agent the route is NOT on, so the id comes from the
                 // item rather than from the URL — and the item's id says which channel it takes.
@@ -2000,12 +2003,13 @@ function DesktopApp({ bridge }: AppProps) {
                         return;
                     case 'feature':
                         setDeckFormRefusal(null);
+                        if (item.source === 'genie') setDeckBusy({ itemId: item.id, optionId });
                         void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answer', item, optionId, ...(note ? { note } : {}) }).then(setFeatures).catch((error: unknown) => {
                             // Said on its item, never only in the console (Tynn #600).
                             const reason = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
                             console.error('[genie] deck answer refused:', reason);
                             setDeckFormRefusal({ itemId: item.id, reason });
-                        });
+                        }).finally(() => setDeckBusy(null));
                         return;
                     case 'navigate':
                         // Open: the window goes there itself; the finish stays on the Deck until marked read.

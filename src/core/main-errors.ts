@@ -46,7 +46,7 @@ import type { DeckItem } from './deck.js';
  * `stop-unverified`: an agent's stop could not be verified — a process of its run is still running, or the machine could
  * not be read (hosting plan 1.1/1.3). Not a crash: a Deck item, because "Stop" must never quietly mean "probably".
  */
-export type MainErrorKind = 'uncaught-exception' | 'unhandled-rejection' | 'stop-unverified' | 'containment-unready' | 'agent-host' | 'update-failed';
+export type MainErrorKind = 'uncaught-exception' | 'unhandled-rejection' | 'stop-unverified' | 'containment-unready' | 'agent-host' | 'update-failed' | 'host-copy';
 
 export const MAIN_ERROR_DECK_PREFIX = 'genie:main-error:';
 /** The Deck item that says how many distinct errors were replaced to keep the list bounded. */
@@ -65,6 +65,8 @@ export interface MainError {
     /** Epoch ms. */
     readonly firstAt: number;
     readonly lastAt: number;
+    /** `host-copy` only: Try again made the copy. The item then says so and offers Dismiss alone. */
+    readonly settled?: boolean;
 }
 
 export interface Recorded {
@@ -82,6 +84,7 @@ const KIND_LABEL: Record<MainErrorKind, string> = {
     'containment-unready': 'uncontained start',
     'agent-host': 'agent host problem',
     'update-failed': 'update not installed',
+    'host-copy': 'host copy not made',
 };
 
 /** Whatever was thrown — an Error, a string, an object, `undefined` — as a message, its stack and the stack's top frame. */
@@ -132,6 +135,8 @@ export function mainErrorLogLine(recorded: Recorded): string {
 
 /** The Deck's title for one error: what happened, that Genie kept running, how many times. */
 export function mainErrorTitle(e: MainError): string {
+    // Its first line is the title; the lines after it are read when the row is opened (core/deck.ts deckBody).
+    if (e.kind === 'host-copy') return (e.settled ? [HOST_COPY_WORDS.madeTitle, ...HOST_COPY_WORDS.madeText] : [HOST_COPY_WORDS.title, ...HOST_COPY_WORDS.text]).join('\n');
     const times = e.count === 1 ? '' : ` — ${e.count} times`;
     // prism-acp 0.21's supervisor could not be built or verified: its drivers refuse to start rather than run uncontained.
     if (e.kind === 'containment-unready') return `Agents cannot start contained: ${e.message.replace(/\.$/, '')}${times}. Until this is fixed an agent will not start, so none is left running uncontained. Each step is in ~/.genie/runtime/lifecycle.log.`;
@@ -142,6 +147,29 @@ export function mainErrorTitle(e: MainError): string {
 }
 
 const DISMISS = [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' as const }];
+const OPEN_LOG = { id: 'open-log', label: 'Open the log', tone: 'neutral' as const };
+const RETRY = { id: 'retry', label: 'Try again', tone: 'neutral' as const };
+
+/**
+ * THE HOST'S COPY COULD NOT BE MADE, IN WORDS (Tynn #693; the owner, beta.61: "I have no idea what to do here"). The
+ * title is what happened and what it means; under it, what works, why, and what Try again does. The error itself is the
+ * item's `detail`, never its title. What is true (main/host-runtime.ts): Genie starts and runs as usual from the install,
+ * and an installer ends a process that holds a file of the install, so the next update stops what the host runs.
+ */
+export const HOST_COPY_WORDS = {
+    title: 'Genie could not copy its background host, so its next update will stop running agents, terminals and sites.',
+    text: [
+        'Everything works now. Genie runs your agents, terminals and sites in a background host, and keeps that host on its own copy of the program so that an update can install without ending it. This time the copy could not be made, so the host runs from the installed program.',
+        'Try again makes the copy now. The host uses it the next time it starts.',
+    ],
+    madeTitle: 'Genie’s copy of its background host is made.',
+    madeText: ['The host uses it the next time it starts. Until then, an update still stops running agents, terminals and sites.'],
+    still: 'Genie still could not make the copy. The error is in this item, under Show all.',
+    gone: 'This item is no longer on the Deck. Nothing was done.',
+} as const;
+
+/** The kinds whose words point at the lifecycle log: each has Open the log beside Dismiss. */
+const POINTS_AT_LIFECYCLE_LOG: readonly MainErrorKind[] = ['agent-host', 'containment-unready', 'stop-unverified'];
 
 export class MainErrorBook {
     readonly #now: () => number;
@@ -158,12 +186,13 @@ export class MainErrorBook {
 
     record(kind: MainErrorKind, thrown: unknown): Recorded {
         const { message, stack, topFrame } = describeThrown(thrown);
-        const id = mainErrorId(kind, message, topFrame);
+        // The host's copy is ONE item however it fails (Tynn #693): its error is its detail, so the latest replaces the last.
+        const id = kind === 'host-copy' ? mainErrorId(kind, '', '') : mainErrorId(kind, message, topFrame);
         const at = this.#now();
         const known = this.#errors.find((e) => e.id === id);
         let recorded: Recorded;
         if (known) {
-            const next: MainError = { ...known, count: known.count + 1, lastAt: at };
+            const next: MainError = { ...known, message, stack, topFrame, settled: false, count: known.count + 1, lastAt: at };
             this.#errors = this.#errors.map((e) => (e.id === id ? next : e));
             recorded = { error: next, first: false, log: isPowerOfTwo(next.count) };
         } else {
@@ -184,6 +213,15 @@ export class MainErrorBook {
 
     list(): readonly MainError[] {
         return this.#errors;
+    }
+
+    /** Try again made the host's copy: the item says so (Tynn #693). False when there is no such item. */
+    settle(id: string): boolean {
+        const known = this.#errors.find((e) => e.id === id && e.kind === 'host-copy');
+        if (!known) return false;
+        this.#errors = this.#errors.map((e) => (e === known ? { ...known, settled: true, lastAt: this.#now() } : e));
+        this.#changed();
+        return true;
     }
 
     /** How many distinct errors were replaced to keep the list bounded, since the person last dismissed that count. */
@@ -218,8 +256,10 @@ export class MainErrorBook {
             // Not blocking — nothing has stopped — but above a to-do: part of Genie may be in a state it did not expect.
             priority: 'high',
             at: e.firstAt,
-            answer: { kind: 'inline', options: DISMISS },
+            // Actions that do something (Tynn #693): the copy made now, the log opened; then Dismiss.
+            answer: { kind: 'inline', options: e.kind === 'host-copy' && !e.settled ? [RETRY, OPEN_LOG, ...DISMISS] : POINTS_AT_LIFECYCLE_LOG.includes(e.kind) ? [OPEN_LOG, ...DISMISS] : DISMISS },
             forwardedFrom: null,
+            ...(e.kind === 'host-copy' && !e.settled ? { detail: e.message } : {}),
         }));
         if (this.#replaced > 0) {
             items.push({
@@ -250,6 +290,23 @@ export class MainErrorBook {
             try { l(); } catch { /* the Deck refreshes on the next change; the error itself is already recorded and logged */ }
         }
     }
+}
+
+/**
+ * TRY AGAIN, ON THE HOST-COPY ITEM (Tynn #693). `make` makes the copy and answers its error, or `null` when it is made.
+ * Made: the item says so. Not made, or `make` threw: the new error is the item's detail and the answer is the failure in
+ * words. Never silent, and never throws.
+ */
+export async function retryHostCopy(book: MainErrorBook, id: string, make: () => Promise<string | null>): Promise<{ ok: true } | { ok: false; reason: string }> {
+    if (!book.list().some((e) => e.id === id && e.kind === 'host-copy')) return { ok: false, reason: HOST_COPY_WORDS.gone };
+    let error: string | null;
+    try { error = await make(); } catch (thrown) { error = describeThrown(thrown).message; }
+    if (error === null) {
+        book.settle(id);
+        return { ok: true };
+    }
+    book.record('host-copy', new Error(error));
+    return { ok: false, reason: HOST_COPY_WORDS.still };
 }
 
 /** What the policy needs of `process`: to listen. A stand-in in tests, `process` in main.ts. */
