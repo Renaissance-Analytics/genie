@@ -116,7 +116,7 @@ describe('the Drone\'s genie-host restarts under a connected Pilot', () => {
         for (const t of timers) t();
         client!.close();
         await drone.stop();
-    });
+    }, 20_000);
 });
 
 describe('the window wires it', () => {

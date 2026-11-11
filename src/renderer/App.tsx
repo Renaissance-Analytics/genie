@@ -53,6 +53,7 @@ import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
+import { redialer } from './remote-redial.js';
 import { pushed, useSnapshot } from './use-snapshot.js';
 import type { AuthRequest } from '../core/remote-protocol.js';
 import type { DeckItem } from '../core/deck.js';
@@ -454,6 +455,26 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         if (id === null || boundName !== null || !net) return;
         void net.workstations().then((list) => { const w = list.ok ? list.workstations.find((x) => x.id === id) : undefined; if (w) setBoundName(w.name); }, () => {});
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    /*
+     * A LINK THAT DROPPED, NOT BY DISCONNECT, DIALS AGAIN (beta.61 blocker, step five): the remote host is genie-host's, so
+     * a restart of the host's genie-host drops every link; this window dials the same host again, with the token it holds,
+     * and drives again (its dial asks for the baton). Not a Tynn workstation's window (it says the drop, with Retry), not a
+     * Take Over window (its ticket was used), and not after the host said this device is not paired.
+     */
+    const leaving = useRef(false);
+    const dialAgain = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
+    dialAgain.current = () => { const l = last.current ?? (bound ? { url: bound, label: '' } : null); return l ? connectTo(l.url, l.label) : Promise.resolve(false); };
+    const [redial] = useState(() => redialer({ dial: () => dialAgain.current(), schedule: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); }, delay: reconnectDelay }));
+    useEffect(() => () => redial.stop(), [redial]);
+    const linkUp = useRef(false);
+    useEffect(() => {
+        if (state?.connected) { linkUp.current = true; leaving.current = false; return; }
+        if (!linkUp.current) return;
+        linkUp.current = false;
+        if (leaving.current || companionTicket.current !== null || (bound !== null && relayWorkstationOf(bound) !== null)) return;
+        if (/not paired/i.test(state?.lastRefusal ?? '')) return;
+        redial.dropped();
+    }, [state?.connected]); // eslint-disable-line react-hooks/exhaustive-deps
     // A Tynn workstation's connection that DROPPED after it was up: said at its last step, with Retry.
     const wasConnected = useRef(false);
     useEffect(() => {
@@ -467,7 +488,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         state,
         remembered,
         connect: connectWith,
-        disconnect: () => { client?.close(); setClient(null); setState(null); },
+        disconnect: () => { leaving.current = true; client?.close(); setClient(null); setState(null); },
         known,
         bound,
         // The link dropped (Genie 1's remote.reconnect): the same host again, with the token this device holds.
