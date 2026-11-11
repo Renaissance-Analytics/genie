@@ -1310,17 +1310,24 @@ if (ch.overlay) {
         const settle = async (expected) => { for (let i = 0; i < 40; i += 1) { const cur = await window.genie.windowChrome.current(); if (cur && cur.color === expected) return cur.color; await new Promise((r) => setTimeout(r, 100)); } const cur = await window.genie.windowChrome.current(); return cur ? cur.color : null; };
         const html = document.documentElement;
         const startDark = html.classList.contains('dark');
+        // WHAT MAKES THE PAGE DARK, at each step (printed only when 59 fails; Tynn #692): on omarchy-test the page starts
+        // dark and toggling the class changed no colour, where GitHub's runner starts light and it does.
+        const how = () => ({ cls: html.className, dataTheme: html.getAttribute('data-theme'), body: document.body.className, bodyTheme: document.body.getAttribute('data-theme'), scheme: getComputedStyle(html).colorScheme, prefersDark: matchMedia('(prefers-color-scheme: dark)').matches });
+        const states = [how()];
         const first = { want: want(), got: await settle(want()) };
         html.classList.toggle('dark');
+        states.push(how());
         const flipped = { want: want(), got: await settle(want()) };
         html.classList.toggle('dark', startDark);
+        states.push(how());
         const back = { want: want(), got: await settle(want()) };
-        return JSON.stringify({ first, flipped, back });
+        return JSON.stringify({ first, flipped, back, states });
     })()`);
     const t = JSON.parse(themed);
     check(t.first.got === t.first.want && t.flipped.got === t.flipped.want && t.back.got === t.back.want && t.first.want !== t.flipped.want,
         '59. the native window buttons wear the theme\u2019s bar colour, and follow a theme change both ways',
         `first ${t.first.got}/${t.first.want} · flipped ${t.flipped.got}/${t.flipped.want} · back ${t.back.got}/${t.back.want}`);
+    if (t.first.want === t.flipped.want) console.log(`  THEME_AT_59 ${JSON.stringify(t.states)}`);
 } else {
     console.log('  (48–50 skipped: this window has no native button overlay — macOS)');
 }

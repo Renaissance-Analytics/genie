@@ -147,7 +147,7 @@ try {
     if (!WIN) args.push('--no-sandbox');
     if (process.platform === 'linux' && ['wayland', 'x11'].includes(process.env.XDG_SESSION_TYPE)) args.push('--ozone-platform=' + process.env.XDG_SESSION_TYPE);
     const xvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY, launchStarted = Date.now();
-    app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd); app.on('error', error => console.error(error.message));
+    app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd); app.on('error', error => console.error(error.message)); app.on('exit', (exitCode, signal) => console.log('ARTBOARD_APP_EXIT ' + JSON.stringify({ exitCode, signal, afterMs: Date.now() - launchStarted })));
     {
         main = await Cdp.connect((await until('owned paused main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
         const phase = name => console.log('ARTBOARD_TRACE_PHASE ' + JSON.stringify({ phase: name, elapsedMs: Date.now() - launchStarted }));
