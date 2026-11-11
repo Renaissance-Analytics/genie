@@ -273,6 +273,25 @@ row_typecheck() { need_install && npm run typecheck; }
 # THE RULE: half the machine's cores, and never fewer than two. CI_UNIT_WORKERS=<n> overrides it for a measurement.
 # No test's time limit is touched. The row prints the machine, the count it used, and the load it saw (a 1-minute load
 # above the core count is a machine with more to run than cores to run it on), so the rule is checked by every run.
+# DOCKER, AS GitHub'S RUNNER HAD IT: its daemon running and this user allowed to talk to it. Some unit tests read a real
+# `docker events` stream (test/host-owns-docker-events.test.ts), and the Mailpit measure runs a container. Said in the
+# run's output either way; started with systemctl when it is installed and not running. Nothing is installed here.
+docker_state=''
+say_docker() {
+    [ -n "$docker_state" ] && { echo "$docker_state"; return; }
+    local answer
+    if ! command -v docker >/dev/null 2>&1; then docker_state='DOCKER not installed on this machine'; echo "$docker_state"; return; fi
+    if ! answer="$(docker info --format '{{.ServerVersion}}' 2>&1)"; then
+        echo "--- docker does not answer ($(tail -1 <<<"$answer" | cut -c1-160)); starting its service"
+        sudo systemctl start docker >/dev/null 2>&1 || true
+        answer="$(docker info --format '{{.ServerVersion}}' 2>&1)" || { docker_state="DOCKER does not answer for user $(id -un) (service: $(systemctl is-active docker 2>&1)): $(tail -1 <<<"$answer" | cut -c1-160)"; echo "$docker_state"; return; }
+        docker_state="DOCKER server $answer, started by this run (service was not running)"
+    else
+        docker_state="DOCKER server $answer, already running"
+    fi
+    echo "$docker_state"
+}
+
 unit_workers() {
     local cores="$1"
     if [ -n "${CI_UNIT_WORKERS:-}" ]; then echo "$CI_UNIT_WORKERS"; return; fi
@@ -286,6 +305,7 @@ row_unit() {
     cores="$(nproc)"
     workers="$(unit_workers "$cores")"
     echo "UNIT machine: $cores cores, $(awk '/MemTotal/ { printf "%d MB", $2 / 1024 }' /proc/meminfo); vitest's own count would be $((cores > 1 ? cores - 1 : 1)) workers; running with $workers (${CI_UNIT_WORKERS:+CI_UNIT_WORKERS, }half the cores, at least 2)"
+    say_docker
     : >"$OUT/unit-load.tsv"
     ( while :; do echo "$(date +%s) $(cut -d' ' -f1-4 /proc/loadavg)" >>"$OUT/unit-load.tsv"; sleep 5; done ) &
     sampler=$!
@@ -388,7 +408,7 @@ for name in "${selected[@]}"; do
     blocked=''
     blocked_here=''
     if "row_$name" >"$OUT/$name.log" 2>&1; then
-        grep -E '^(UNIT|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
+        grep -E '^(UNIT|DOCKER|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
         echo "ROW $name PASS $((SECONDS - started))"
     elif [ -n "$blocked" ]; then
         # It could not run: what it needed failed, and the words are that need's, said once in the first row that met it.
@@ -405,7 +425,7 @@ for name in "${selected[@]}"; do
             echo "--- the end of ci-out/electron.log"
             tail -30 "$OUT/electron.log"
         fi
-        grep -E '^(UNIT|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
+        grep -E '^(UNIT|DOCKER|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
         echo "ROW $name FAIL $((SECONDS - started))"
         failed+=("$name")
     fi
