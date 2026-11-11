@@ -53,8 +53,8 @@ describe('a broken agent CLI on the Toolchain', () => {
         const { withProviderHealth, toneLabel } = await toolchain();
         const [claude, codex] = withProviderHealth([CLAUDE, CODEX], [broken, signedOut]);
         expect(claude).toMatchObject({ tool: 'claude-code', tone: 'broken', problem: broken.words });
-        // Signed out is a login matter, not the tool's state: the row stays as measured.
-        expect(codex).toEqual(CODEX);
+        // Signed out is a login matter, not the tool's state: the row keeps its tone and is marked for Log in, never Broken.
+        expect(codex).toEqual({ ...CODEX, signedOut: true });
         expect(toneLabel('broken')).toBe('Broken');
     });
 
