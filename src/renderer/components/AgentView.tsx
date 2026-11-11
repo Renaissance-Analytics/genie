@@ -1291,6 +1291,9 @@ function AgentViewBody({
                                                                         ) : (
                                                                             <p data-model-list="unavailable" className="mb-1 text-[var(--fg-4)]">This window can’t ask {agent.provider} for its models.</p>
                                                                         )}
+                                                                        {/* BREAK PROBE (Tynn #608): the old free-text fallback, back, to show the tests catch it. Reverted next. */}
+                                                                        <input data-model-input={ops.model ?? ''} type="text" defaultValue={ops.model ?? ''} placeholder="provider default" />
+                                                                        {session?.model ? <datalist id={`models-${agent.id}`}><option value={session.model} /></datalist> : null}
                                                                         {ops.model ? (
                                                                             <p className="text-[var(--fg-4)]">Starts with <span data-model-chosen={ops.model} className="font-mono text-[var(--fg-2)]">{ops.model}</span></p>
                                                                         ) : null}
