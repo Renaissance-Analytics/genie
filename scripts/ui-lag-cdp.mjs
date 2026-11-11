@@ -593,7 +593,23 @@ try {
 
     // Every gap of the unprofiled pass's build phases, not only each phase's worst few: `over` is the true count.
     const build = passes[0].phases.filter((ph) => ph.name.startsWith('build'));
-    const mainBudget = budgetVerdict(passes[0].mainState.gauge.gaps.filter((g) => build.some((ph) => g.endedMs >= ph.mainMs && g.startedMs <= ph.end.mainMs)), BUDGET_MS);
+    // ON A MACHINE THAT DRAWS IN SOFTWARE, THE ABSOLUTE BOUNDS ARE JUDGED AGAINST THIS RUN'S OWN IDLE PASS (Tynn #692; the
+    // coordinator's ruling, 2026-11-11). Measured: on omarchy-test (VirtualBox, no GPU) the idle pass alone reads window main
+    // 32 ms late and a 100 ms frame gap, where GitHub's runner reads 0 and 0; there an absolute bound measures the machine.
+    // GENIE_CI_RENDERING=software (set by scripts/ci/linux.sh) adds the idle pass's own worst figure to each ABSOLUTE bound:
+    // window main (50 ms), genie-host (100 ms) and the frame gap (100 ms). The build may not make the window worse than
+    // idle by more than the same margins. Nothing else moves: the within-run ratios, the counts and the byte budgets are
+    // comparisons of the run with itself already, and stay as they are. Without the variable, the absolute budgets stand.
+    const idleRow = passes[0].rows.find((r) => r.phase === 'idle');
+    const SOFTWARE = process.env.GENIE_CI_RENDERING === 'software';
+    const idle = { mainMs: idleRow?.main.worstMs ?? 0, hostMs: idleRow?.host.worstMs ?? 0, frameGapMs: Math.round(idleRow?.page.frameGaps[0]?.ms ?? 0), pageMs: idleRow?.page.worstMs ?? 0, mouseRttP95: idleRow?.input.mouseRtt?.p95 ?? null };
+    const over = SOFTWARE ? idle : { mainMs: 0, hostMs: 0, frameGapMs: 0 };
+    if (SOFTWARE) {
+        demand(!!idleRow, 'the idle pass was measured (the absolute bounds are judged against it)');
+        console.log(`UI_LAG MEASURED ON A SOFTWARE-RENDERED MACHINE: idle window main worst ${idle.mainMs} ms, idle genie-host worst ${idle.hostMs} ms, idle worst frame gap ${idle.frameGapMs} ms, idle page worst ${idle.pageMs} ms, idle mouse round trip p95 ${idle.mouseRttP95} ms. Absolute bounds are judged as this idle figure plus the usual margin: window main ${BUDGET_MS + over.mainMs} ms (${BUDGET_MS} on a machine with a GPU), genie-host ${HOST_BUDGET_MS + over.hostMs} ms (${HOST_BUDGET_MS}), frame gap ${100 + over.frameGapMs} ms (100). This is NOT the absolute budget.`);
+    }
+    result.rendering = { software: SOFTWARE, idle };
+    const mainBudget = budgetVerdict(passes[0].mainState.gauge.gaps.filter((g) => build.some((ph) => g.endedMs >= ph.mainMs && g.startedMs <= ph.end.mainMs)), BUDGET_MS + over.mainMs);
     // THE FILES STATE BUDGET (Tynn #522): pages per files.state with the Files panel open, bounded and not growing with the
     // session: the second pass's build runs after the first's, with twice the paths changed before it.
     const paging = pagingVerdict(passes.map((p) => { const r = p.rows.find((x) => x.phase === 'build-files'); return { pass: p.label, states: r?.calls['files.state'] ?? 0, pageNext: r?.calls['page.next'] ?? 0 }; }));
@@ -610,21 +626,21 @@ try {
     const spawnsOk = hostSpawns.every((h) => h.count === 0);
     // THE HOST BUDGET (Tynn #524): genie-host late by no more than 100 ms during the build. It runs the agents, the
     // terminals and the watcher: a stall there is every window's, even when window main is idle.
-    const hostBudget = budgetVerdict(passes[0].hostState.gauge.gaps.filter((g) => build.some((ph) => g.endedMs >= ph.hostMs && g.startedMs <= ph.end.hostMs)), HOST_BUDGET_MS);
+    const hostBudget = budgetVerdict(passes[0].hostState.gauge.gaps.filter((g) => build.some((ph) => g.endedMs >= ph.hostMs && g.startedMs <= ph.end.hostMs)), HOST_BUDGET_MS + over.hostMs);
     // THE PAGE WHILE A TERMINAL STREAMS (Tynn #525): the mouse's delay to a frame against this run's idle, and no long frame gap.
     // THE PAGE BUDGET (Tynn #525, from a distribution since #536): the terminal on screen against off, the same build.
     const termSlices = passes[0].rows.find((r) => r.phase === 'build-terminal')?.slices ?? [];
-    const pageBudget = sliceVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
+    const pageBudget = sliceVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') }, { maxFrameGapMs: 100 + over.frameGapMs });
     // THE THROUGHPUT BUDGET (Tynn #537): the input the page keeps up with, terminal on screen against off, the same slices.
     const throughput = throughputVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
     // PAST THE OUTPUT CAP (Tynn #542): the terminal on screen with its output trimmed every batch, against it on screen below.
-    const capBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: passes[0].rows.find((r) => r.phase === 'terminal-past-cap')?.slices ?? [] });
+    const capBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: passes[0].rows.find((r) => r.phase === 'terminal-past-cap')?.slices ?? [] }, { maxFrameGapMs: 100 + over.frameGapMs });
     // THE TAKE OVER WINDOW'S TERMINAL (Tynn #544): streaming past the cap there, against the workspace's terminal below it.
-    const takeoverBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: result.takeover?.slices ?? [] });
+    const takeoverBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: result.takeover?.slices ?? [] }, { maxFrameGapMs: 100 + over.frameGapMs });
     const heldBudget = result.takeoverHeld ?? { ok: false, reasons: ['the Take Over window was not measured'] };
     result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok && capBudget.ok && takeoverBudget.ok && heldBudget.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput, cap: capBudget, takeover: takeoverBudget, held: heldBudget };
     code = BUDGET && !result.budget.ok ? 1 : 0;
-    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${BUDGET_MS} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${HOST_BUDGET_MS} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...capBudget.reasons, ...takeoverBudget.reasons.map((r) => `Take Over window: ${r}`), ...heldBudget.reasons.map((r) => `Take Over window: ${r}`), ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread (${JSON.stringify(h.by)})`)].join('; ')}`;
+    if (code) failure = `BUDGET: ${[...(mainBudget.ok ? [] : [`window main was late ${mainBudget.worstMs} ms during the build (${mainBudget.over} gaps over ${mainBudget.budgetMs} ms)`]), ...(hostBudget.ok ? [] : [`genie-host was late ${hostBudget.worstMs} ms during the build (${hostBudget.over} gaps over ${hostBudget.budgetMs} ms)`]), ...pageBudget.reasons, ...throughput.reasons, ...capBudget.reasons, ...takeoverBudget.reasons.map((r) => `Take Over window: ${r}`), ...heldBudget.reasons.map((r) => `Take Over window: ${r}`), ...paging.reasons, ...pushes.reasons, ...hostSpawns.filter((h) => h.count > 0).map((h) => `${h.pass}: genie-host created ${h.count} processes on its own thread (${JSON.stringify(h.by)})`)].join('; ')}`;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); code = 1; }
 finally {
     try { await hostCdp?.evaluate('globalThis.__uiLagHost?.stop(); true'); } catch {}

@@ -1048,6 +1048,20 @@ if (!approvalEnabled) {
     const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
     check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
     if (!typed) console.log(`  TERMINAL_AT_37 ${await terminalDump()}`);
+    // WHERE THE TYPING WENT (said only when 37 fails; Tynn #692, omarchy-test: the prompt drew at 1.2 s, as the token was
+    // typed, and the token never showed). Which of three it is: the page had no focus for the keys, the keys came before
+    // the shell could take them, or the terminal takes no keys at all. A SECOND token, typed 5 s after the first with the
+    // prompt long drawn, tells the last two apart; it is typed only on this failing path, where 38 has already failed.
+    if (!typed) {
+        const focus = await cdp.evaluate(`JSON.stringify({ hasFocus: document.hasFocus(), visibility: document.visibilityState, active: (document.activeElement?.tagName ?? '') + '.' + (document.activeElement?.className ?? ''), inPane: !!document.activeElement?.closest?.('[data-terminal-pane]') })`).catch((e) => `(unread: ${e?.message ?? e})`);
+        const again = `retype-${Math.random().toString(16).slice(2, 10)}`;
+        await new Promise((r) => setTimeout(r, 5000));
+        await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
+        await cdp.send('Input.insertText', { text: again });
+        await new Promise((r) => setTimeout(r, 2000));
+        const shown = await cdp.evaluate(`${rowsText}.includes('${again}')`).catch(() => null);
+        console.log(`  TERMINAL_RETYPE ${JSON.stringify({ focusAtFailure: focus, secondTokenShown: shown })} ${await terminalDump()}`);
+    }
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
@@ -1295,18 +1309,33 @@ if (ch.overlay) {
         const want = () => hex(getComputedStyle(document.documentElement).getPropertyValue('--bg-1'));
         const settle = async (expected) => { for (let i = 0; i < 40; i += 1) { const cur = await window.genie.windowChrome.current(); if (cur && cur.color === expected) return cur.color; await new Promise((r) => setTimeout(r, 100)); } const cur = await window.genie.windowChrome.current(); return cur ? cur.color : null; };
         const html = document.documentElement;
-        const startDark = html.classList.contains('dark');
+        // THE THEME IS CHANGED THE WAY A PERSON CHANGES IT (Tynn #692): the theme setting (Settings, Appearance), which
+        // the page applies through react-fancy as BOTH the dark class and data-theme. This row used to toggle the class
+        // alone: from a light start that adds darkness, but from a dark start (omarchy-test, whose desktop prefers dark)
+        // data-theme="dark" stayed and no colour changed, so the row could only ever pass on a light desktop.
+        const isDark = () => html.classList.contains('dark') || html.getAttribute('data-theme') === 'dark';
+        const startDark = isDark();
+        const act = (action) => (window.genieTest ?? window.genie).features.act(action);
+        const pick = async (theme) => { await act({ kind: 'settings.set', key: 'theme', value: theme }); for (let i = 0; i < 50 && isDark() !== (theme === 'dark'); i += 1) await new Promise((r) => setTimeout(r, 100)); };
+        // What makes the page dark, at each step (printed only when 59 fails).
+        const how = () => ({ cls: html.className, dataTheme: html.getAttribute('data-theme'), body: document.body.className, bodyTheme: document.body.getAttribute('data-theme'), scheme: getComputedStyle(html).colorScheme, prefersDark: matchMedia('(prefers-color-scheme: dark)').matches });
+        const states = [how()];
         const first = { want: want(), got: await settle(want()) };
-        html.classList.toggle('dark');
+        await pick(startDark ? 'light' : 'dark');
+        states.push(how());
         const flipped = { want: want(), got: await settle(want()) };
-        html.classList.toggle('dark', startDark);
+        await pick(startDark ? 'dark' : 'light');
+        states.push(how());
         const back = { want: want(), got: await settle(want()) };
-        return JSON.stringify({ first, flipped, back });
+        // The setting goes back to its default (follow the system), which is what this window started with.
+        await act({ kind: 'settings.reset', key: 'theme' });
+        return JSON.stringify({ first, flipped, back, states });
     })()`);
     const t = JSON.parse(themed);
     check(t.first.got === t.first.want && t.flipped.got === t.flipped.want && t.back.got === t.back.want && t.first.want !== t.flipped.want,
         '59. the native window buttons wear the theme\u2019s bar colour, and follow a theme change both ways',
         `first ${t.first.got}/${t.first.want} · flipped ${t.flipped.got}/${t.flipped.want} · back ${t.back.got}/${t.back.want}`);
+    if (t.first.want === t.flipped.want) console.log(`  THEME_AT_59 ${JSON.stringify(t.states)}`);
 } else {
     console.log('  (48–50 skipped: this window has no native button overlay — macOS)');
 }

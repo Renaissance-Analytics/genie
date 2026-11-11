@@ -30,3 +30,6 @@ v1-installers/
 
 # genie-launch.exe, built from native/win-launcher by scripts/build-win-launcher.mjs (never checked in, #1628)
 build/win-launcher/
+
+# What scripts/ci/linux.sh and windows.ps1 write on a run: each row's log, the suite's times (Tynn #692)
+ci-out/

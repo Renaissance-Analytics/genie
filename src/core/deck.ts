@@ -94,6 +94,8 @@ export interface DeckItem {
     stale?: StaleReason | undefined;
     /** Why this was asked although its agent is Autonomous (Tynn #439), in words. Absent = nothing to explain. */
     why?: string | undefined;
+    /** The technical detail (an error, its paths): drawn once, folded with the rest of the item, never in its title (Tynn #693). */
+    detail?: string | undefined;
 }
 
 /** Why a question's agent no longer waits for it. */

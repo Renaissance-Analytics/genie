@@ -20,7 +20,7 @@ import { importFlowDocument } from './flow-kinds.js';
 import { flowToolDefinitions } from './flow-tools.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
-import { HUMAN } from '../core/inbox.js';
+import { HUMAN, UNNAMED_AGENT } from '../core/inbox.js';
 import { inboxThreads, pairOf, searchThread, threadKeyOfMessage, threadWindow, uncollected } from '../core/inbox-threads.js';
 import { answerDeck } from './deck-answer.js';
 import type { ToolStatus } from '../core/toolchain.js';
@@ -195,7 +195,7 @@ export interface FeaturePorts {
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
     /** The main process's record of errors it caught and survived (core/main-errors.ts): the Deck's Dismiss on one. */
-    readonly mainErrors?: { dismiss(id: string): boolean };
+    readonly mainErrors?: { dismiss(id: string): boolean; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(): Promise<string | null> };
     /** What's New for the running version, once (Tynn #762): `null` when seen or there are no notes for it. */
     readonly whatsNew?: (shown: boolean) => { version: string; notes: string } | null;
     /** The running version (Tynn #763: the header shows it). */
@@ -608,7 +608,7 @@ const USER = { kind: 'user' } as const;
 function participantNamer(roster: ReadonlyArray<{ agentId: string; name: string }>, mail: ReadonlyArray<{ from: string; app?: { label: string } }> = []): (participant: string) => string {
     const apps = new Map<string, string>();
     for (const m of mail) if (m.app) apps.set(m.from, m.app.label);
-    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? participant);
+    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? UNNAMED_AGENT);
 }
 
 /** An agent a flow would prompt must be one address on the roster NOW — the same rule the run resolves it by. */

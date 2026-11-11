@@ -162,7 +162,9 @@ export function parkedDivider(session: LiveSession | null, now: () => number): s
  */
 export function turnStopOffered(session: LiveSession | null | undefined): boolean {
     if (!session) return false;
-    return session.failure === null && session.running && session.turnState === 'working' && session.cancelTurn === true;
+    // A turn Genie records as open offers Stop whatever the state word reads (Tynn #699: a turn that went silent read idle
+    // with its messages queued behind it, and the chat had no Stop — only Restart got the agent back).
+    return session.failure === null && session.running && (session.turnState === 'working' || session.inTurn === true) && session.cancelTurn === true;
 }
 
 export interface HeaderActions {
