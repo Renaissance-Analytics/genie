@@ -127,12 +127,33 @@ function Need-Build {
     $script:Built = 'ok'
 }
 
+# HOW THIS MACHINE DRAWS, SAID ONCE (as scripts/ci/linux.sh does). ui-lag and artboard have absolute time bounds set
+# on a machine that keeps up at idle; a VM with no GPU does not (the first Azure run: artboard failed its 250 ms clock).
+# GENIE_CI_RENDERING=software makes both judge their absolute bounds against the same run's idle pass; their ratios,
+# counts and byte budgets are judged as everywhere. Software: a virtual machine whose only display adapters are a
+# virtual or basic one (Microsoft Hyper-V Video, Microsoft Basic Display Adapter, Basic Render). Given wins.
+function Declare-Rendering {
+    if ($env:GENIE_CI_RENDERING) { Write-Output "--- rendering: $env:GENIE_CI_RENDERING (given)"; return }
+    $model = "$((Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).Model)"
+    $adapters = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)" })
+    $real = @($adapters | Where-Object { $_ -notmatch 'Hyper-V Video|Basic Display|Basic Render|Remote Display' })
+    $vm = $model -match 'Virtual Machine|VirtualBox|VMware|KVM'
+    if ($vm -and $real.Count -eq 0) {
+        $env:GENIE_CI_RENDERING = 'software'
+        $script:Notes += "MEASURED ON A SOFTWARE-RENDERED MACHINE ($model; display: $($adapters -join ', ')): ui-lag and artboard judged their absolute time bounds against this run's idle pass, not the absolute budgets"
+    } else {
+        $env:GENIE_CI_RENDERING = 'hardware'
+    }
+    Write-Output "--- rendering: $env:GENIE_CI_RENDERING (model: $model; display: $($adapters -join ', '))"
+}
+
 $script:Machine = ''
 function Need-TestMachine {
     if ($script:Machine -eq 'ok') { return }
     if ($script:Machine) { Block $script:Machine }
     $script:Machine = 'not a test machine'
     Declare-TestMachine
+    Declare-Rendering
     $script:Machine = 'ok'
 }
 
@@ -166,19 +187,37 @@ function Need-App {
     $script:AppState = 'ok'
 }
 
+# The count of electron processes from this checkout left after the stop, in $script:AppLeft; what it saw on the way
+# is PRINTED with Write-Host. Not returned: a PowerShell function returns everything it writes to the pipeline, so a
+# `return $n` after Write-Output lines hands back an array, and `-gt 0` on an array filters it instead of comparing (the
+# first Azure run read "14 ... 9 ... 0 left" as a failure: the 0 was the count). The failure the gauge must be able to
+# find (processes left over) is a count of ONE or more: `@(...)`, then `.Count`, never `(pipeline).Count`.
+$script:AppLeft = 0
 function Stop-App {
-    if (-not $script:App) { return 0 }
+    $script:AppLeft = 0
+    if (-not $script:App) { return }
     $before = @(Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Repo*" })
-    Write-Output "electron processes from this checkout before stopping the app: $($before.Count)"
+    Write-Host "electron processes from this checkout before stopping the app: $($before.Count)"
     if (-not $script:App.HasExited) { taskkill /PID $script:App.Id /T /F *> $null }
     $ours = @(Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Repo*" })
-    Write-Output "electron processes from this checkout still running after the tree kill: $($ours.Count)"
+    Write-Host "electron processes from this checkout still running after the tree kill: $($ours.Count)"
+    if ($ours.Count -gt 0) {
+        # Which ones outlived the tree kill, and whose children they were: said, so a product finding has its evidence.
+        $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+        foreach ($p in $ours) {
+            $c = $all | Where-Object { $_.ProcessId -eq $p.Id } | Select-Object -First 1
+            $parent = $all | Where-Object { $_.ProcessId -eq $c.ParentProcessId } | Select-Object -First 1
+            $cmd = "$($c.CommandLine)"; if ($cmd.Length -gt 220) { $cmd = $cmd.Substring(0, 220) }
+            Write-Host "  outlived: pid $($p.Id) parent $($c.ParentProcessId) ($(if ($parent) { $parent.Name } else { 'gone' })): $cmd"
+        }
+    }
     $ours | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     $script:App = $null
     $script:AppState = 'the app was stopped (app-stopped); the rows that drive it run before that row'
     $left = @(Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Repo*" })
-    return $left.Count
+    $script:AppLeft = $left.Count
+    Write-Host "electron processes from this checkout left after the stop: $($script:AppLeft)"
 }
 
 # --- the rows: each throws on failure ---------------------------------------------------------------------------------
@@ -211,8 +250,8 @@ function Row-smoke { Need-App; Run 'smoke-cdp' { node scripts/smoke-cdp.mjs } }
 function Row-layout { Need-App; Run 'layout-sweep' { node scripts/layout-sweep.mjs } }
 function Row-app-stopped {
     if (-not $script:App) { Block 'the app was not opened in this run (no row before this one opened it)' }
-    $left = Stop-App
-    if ($left -gt 0) { throw "the app is still running after the row stopped it ($left electron processes)" }
+    Stop-App
+    if ($script:AppLeft -gt 0) { throw "the app is still running after the row stopped it ($($script:AppLeft) electron processes)" }
 }
 
 # THE ADMISSION BREAK CONTROL: the door's own check broken on purpose must fail row 1 with the refusal's words.
@@ -347,11 +386,16 @@ foreach ($name in $selected) {
     } else {
         Write-Output "--- the end of ci-out\$name.log"
         Get-Content $log -Tail 60
+        # What the row's own app wrote, under smoke-out, during this row: the cause of a window that never came is there.
+        Get-ChildItem (Join-Path $Repo 'smoke-out') -File -Filter '*.log' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $started } | ForEach-Object {
+            Write-Output "--- the end of smoke-out\$($_.Name)"
+            Get-Content $_.FullName -Tail 40
+        }
         Write-Output "ROW $name FAIL $secs"
         $script:Failed += $name
     }
 }
-if ($script:App) { Stop-App | Out-Null }
+if ($script:App) { Stop-App }
 
 foreach ($n in $script:Notes) { Write-Output "NOTE $n" }
 if ($script:Failed.Count -gt 0) {
