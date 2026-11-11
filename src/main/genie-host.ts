@@ -799,6 +799,8 @@ async function main(): Promise<void> {
         gappBook = await GAppBook.open({
             dir: join(home, 'gapps'), keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true,
             catalog: () => hostCatalog(pluginsService.plugins(), gappBook ?? undefined),
+            // V9: the marketplace's keys verify an app, and one it withdraws is refused at the app's next check.
+            registry: marketplacePlugins.registry,
         });
         gappBook.onChange(() => catalogService.rebuild());
         catalogService.rebuild();
