@@ -20,7 +20,9 @@ import { homedir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright-core';
-import { answerPairOnDesktop, genieWindow } from './genie-cdp.mjs';
+import { answerPairOnDesktop, genieWindow } from './genie-cdp.mjs';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 const OUT = join(process.cwd(), 'mobile-evidence');
 const WS_DIR = process.env.MOBILE_WS ?? '';
@@ -36,7 +38,7 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const act = (g, action) => g.call((a) => window.genie.features.act(a).then((d) => d.remote), action);
+const act = (g, action) => g.call((a) => (window.genieTest ?? window.genie).features.act(a).then((d) => d.remote), action);
 
 /** A photo-like JPEG made in a page: noisy gradients, so it does not compress to nothing. */
 async function makeJpeg(page, width, height, quality) {
@@ -64,7 +66,7 @@ const shot = async (page, name) => { await page.screenshot({ path: join(OUT, `${
 async function main() {
     const g = await genieWindow();
     let remote = await act(g, { kind: 'settings.set', key: 'remote_access', value: true });
-    for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await g.evaluate('window.genie.features.snapshot().then((d) => d.remote)'); }
+    for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote)'); }
     check('remote access listens on the tailnet name over HTTPS (wss), with the cert `tailscale cert` issued', remote.url === `wss://${DNS}:7421/genie`, `url=${remote.url} unavailable=${remote.unavailable}`);
     remote = await act(g, { kind: 'remote.issuePin' });
     const pin = remote.pin?.code;
@@ -251,7 +253,7 @@ async function main() {
     check('the chat resumed from its cursor (base "resume"), not a full replay', resumed.length >= 1, `${resumed.length} resume answers`);
 
     // 9. Removing the device in Settings ends the phone's session at once.
-    const devicesNow = (await g.evaluate('window.genie.features.snapshot().then((d) => d.remote.devices)'));
+    const devicesNow = (await g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote.devices)'));
     check('the paired phone is listed in Settings', devicesNow.length >= 1, devicesNow.map((d) => d.label).join(', '));
     await act(g, { kind: 'remote.revokeDevice', deviceId: devicesNow[0].id });
     await page.waitForSelector('[data-mobile="pair"]', { timeout: 30_000 });

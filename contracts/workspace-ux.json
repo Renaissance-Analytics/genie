@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Renaissance-Analytics/tynn.ai/main/contracts/workspace-ux/0.10.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Renaissance-Analytics/tynn.ai/main/contracts/workspace-ux/0.11.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.10.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Renaissance-Analytics/tynn.ai at contracts/workspace-ux/0.10.0/workspace-ux.json, published on main and never rewritten (genie#1295). Genie and genie-cloud carry a byte-identical copy beside a pin that records the version and sha256 of these bytes.",
+  "version": "0.11.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Renaissance-Analytics/tynn.ai at contracts/workspace-ux/0.11.0/workspace-ux.json, published on main and never rewritten (genie#1295). Genie and genie-cloud carry a byte-identical copy beside a pin that records the version and sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -1810,6 +1810,174 @@
             "method": "DELETE",
             "path": "/repositories/{repositoryId}"
           }
+        }
+      ]
+    },
+    {
+      "id": "vip",
+      "title": "VIP",
+      "tynn": {
+        "page": "v2/Project/Vip",
+        "route": "vip",
+        "pageAccess": "vip"
+      },
+      "data": {
+        "api": {
+          "method": "GET",
+          "path": "/vip"
+        },
+        "answer": [
+          "project_id",
+          "vip_version",
+          "stories",
+          "past_vips",
+          "can_start_vip"
+        ],
+        "fields": {
+          "version": [
+            "id",
+            "number",
+            "title",
+            "status"
+          ],
+          "story": [
+            "id",
+            "slug",
+            "story_number",
+            "title",
+            "status",
+            "description",
+            "task_count",
+            "tasks_done"
+          ],
+          "pastVip": [
+            "id",
+            "number",
+            "title",
+            "status",
+            "story_count",
+            "ended_at"
+          ]
+        },
+        "columns": [
+          "backlog",
+          "blocked",
+          "in_progress",
+          "qa",
+          "done"
+        ],
+        "flow": {
+          "backlog": "in_progress",
+          "blocked": "in_progress",
+          "in_progress": "qa",
+          "qa": "done",
+          "done": null
+        },
+        "release": {
+          "action": "version.release",
+          "when": "every story is done (and there is at least one)"
+        },
+        "start": {
+          "action": "vip.create",
+          "guard": "can_start_vip",
+          "body": [
+            "title",
+            "why"
+          ]
+        },
+        "live": {
+          "about": "The VIP lane follows Tynn as its version and stories change. An event is a doorbell: the client reads the VIP lane again, once per burst and one read at a time, as tynn.ai's page reloads its props.",
+          "channel": "private-project-board.{projectId}",
+          "web": "tynn.ai's VIP page goes live on project.{projectId}, where the board's events also ring; the app hears them on the board's own channel, signed at the board door (board.data.live.auth)",
+          "events": [
+            "version.created",
+            "version.updated",
+            "version.deleted",
+            "story.created",
+            "story.updated",
+            "story.deleted",
+            "task.created",
+            "task.updated",
+            "task.deleted"
+          ],
+          "refresh": "read"
+        }
+      },
+      "states": [
+        {
+          "id": "loading",
+          "what": "the VIP lane is being read"
+        },
+        {
+          "id": "idle",
+          "what": "no VIP in flight: the lane says what VIP is for"
+        },
+        {
+          "id": "start-form",
+          "what": "a person who may manage the project starts VIP work with a title and why it cannot wait; anyone else is told who can"
+        },
+        {
+          "id": "in-flight",
+          "what": "the VIP banner: its number, title and task progress, and the lane's columns with their stories"
+        },
+        {
+          "id": "advance",
+          "what": "each story's one-click move to its next column"
+        },
+        {
+          "id": "release-gated",
+          "what": "Release is offered only once every story is done, and says why otherwise"
+        },
+        {
+          "id": "past-vips",
+          "what": "VIP versions already dealt with, newest first"
+        },
+        {
+          "id": "transition-refused",
+          "what": "a refused step shows Tynn's reason"
+        },
+        {
+          "id": "live",
+          "what": "the lane follows Tynn as it changes, without a reload; a small live icon says so"
+        },
+        {
+          "id": "reconnecting",
+          "what": "the link to Tynn dropped: an icon says it is reconnecting, and the lane is read again once it is back"
+        },
+        {
+          "id": "not-linked",
+          "what": "the workspace has no Tynn project"
+        },
+        {
+          "id": "signed-out",
+          "what": "Genie is not paired with Tynn, or the pairing lacks the board scope"
+        }
+      ],
+      "actions": [
+        {
+          "id": "vip.create",
+          "web": "POST versions.store",
+          "api": {
+            "method": "POST",
+            "path": "/vip"
+          }
+        },
+        {
+          "id": "story.move",
+          "web": "POST stories.move",
+          "api": {
+            "method": "POST",
+            "path": "/stories/{storyId}/move"
+          }
+        },
+        {
+          "id": "version.release",
+          "web": "POST versions.release",
+          "api": {
+            "method": "POST",
+            "path": "/versions/{versionId}/release"
+          },
+          "to": "released"
         }
       ]
     }

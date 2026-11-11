@@ -18,6 +18,7 @@ import { join, relative } from 'node:path';
 const UNPACKED = 'resources/app.asar.unpacked/node_modules/';
 const NODE_PTY = `${UNPACKED}node-pty/`;
 const FANCY_PTY = `${UNPACKED}@particle-academy/fancy-pty/`;
+const PRISM_ACP = `${UNPACKED}@particle-academy/prism-acp/`;
 
 /** Script and build-leftover extensions: none of them is ever run by the installed app. */
 const LEFTOVER_EXT = /\.(ps1|bat|cmd|sh|py|pdb|tmp|bak|old|orig|gyp|gypi|h|c|cc|cpp|rs|ts)$/i;
@@ -59,6 +60,9 @@ export function required({ platform = 'win32', arch = 'x64' } = {}) {
         `${NODE_PTY}lib/conpty_console_list_agent.js`,
         `${FANCY_PTY}bin/${own}/fancy-pty-helper.exe`,
         `${UNPACKED}@napi-rs/keyring-${own}-msvc/keyring.${own}-msvc.node`,
+        // Both architectures whatever this build's (Tynn #575): prism-acp picks by the machine, so x64 Genie on ARM64 Windows runs the ARM64 one.
+        `${PRISM_ACP}native/win32-x64/prism-acp-supervisor.exe`,
+        `${PRISM_ACP}native/win32-arm64/prism-acp-supervisor.exe`,
     ];
 }
 

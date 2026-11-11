@@ -50,6 +50,18 @@ import {
     FEATURES_TABS,
 } from '../src/core/tynn-features.js';
 import {
+    VIP_ANSWER,
+    VIP_API,
+    VIP_COLUMNS,
+    VIP_DATA_API,
+    VIP_FIELDS,
+    VIP_FLOW,
+    VIP_LIVE,
+    VIP_RELEASE,
+    VIP_START,
+    VIP_STATES,
+} from '../src/core/tynn-pages.js';
+import {
     WIP_ACTIONS,
     WIP_ANSWER,
     WIP_COUNTS,
@@ -136,14 +148,14 @@ const publishedInSharedSchemas = (v: string) => compareVersions(v, LAST_SHARED_S
 const board = contract.surfaces.find((s) => s.id === 'board')!;
 
 describe('the contract file', () => {
-    it('pins Features, Home, Releases, Issues and WIP to the 0.10.0 contract published by tynn.ai #387', () => {
+    it('pins VIP, Features, Home, Releases, Issues and WIP to the 0.11.0 contract published by tynn.ai #386', () => {
         expect(pin).toEqual({
             repository: 'Renaissance-Analytics/tynn.ai',
             contract: 'workspace-ux',
-            version: '0.10.0',
-            commit: '9772e4e9f7d884f6b3dc066ffbcedeae4d7defa0',
-            path: 'contracts/workspace-ux/0.10.0/workspace-ux.json',
-            sha256: '8f9d773647761dd0f979e4212582cd1f2a988f0d769937a3f2716bec797da3df',
+            version: '0.11.0',
+            commit: 'feffcba864d438b38960778a33c25fcdf5207c8e',
+            path: 'contracts/workspace-ux/0.11.0/workspace-ux.json',
+            sha256: '2ec727c8f902feb07bd7ce2f883fc1770f1c92657ada84da9ee37d734250660c',
         });
     });
 
@@ -464,5 +476,45 @@ describe('the Tynn tab\'s Features, against the contract (0.10.0)', () => {
         const { about: _about, web: _web, ...shape } = features!.data.live;
         expect(FEATURES_LIVE).toEqual(shape);
         expect([...FEATURES_STATES].sort()).toEqual(features!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s VIP lane, against the contract (0.11.0)', () => {
+    type Vip = {
+        data: {
+            api: { method: string; path: string }; answer: string[]; fields: Record<string, string[]>; columns: string[];
+            flow: Record<string, string | null>; release: { action: string; when: string }; start: { action: string; guard: string; body: string[] };
+            live: Record<string, unknown>;
+        };
+        states: Array<{ id: string }>;
+        actions: Action[];
+    };
+    const vip = contract.surfaces.find((s) => s.id === 'vip') as unknown as Vip | undefined;
+
+    it('is in the contract', () => {
+        expect(vip).toBeDefined();
+    });
+
+    it('reads the lane where the contract says, with its answer, fields, columns and each column\'s next', () => {
+        expect(VIP_DATA_API).toEqual(vip!.data.api);
+        expect(VIP_ANSWER).toEqual(vip!.data.answer);
+        expect(VIP_FIELDS).toEqual(vip!.data.fields);
+        expect(VIP_COLUMNS).toEqual(vip!.data.columns);
+        expect(VIP_FLOW).toEqual(vip!.data.flow);
+        expect(VIP_RELEASE).toEqual(vip!.data.release);
+        expect(VIP_START).toEqual(vip!.data.start);
+    });
+
+    it('starts VIP work at the page\'s own door, and moves and releases through the board\'s exactly as the contract says', () => {
+        expect(Object.keys(VIP_API).sort()).toEqual(vip!.actions.map((a) => a.id).sort());
+        for (const action of vip!.actions) expect({ id: action.id, ...VIP_API[action.id] }).toEqual({ id: action.id, ...action.api });
+        // The board verbs are the board's: the very same doors (Genie offers no second copy of them).
+        for (const id of ['story.move', 'version.release']) expect(VIP_API[id]).toEqual(BOARD_API[id]);
+    });
+
+    it('goes live on the board\'s rings as the contract says, with a view for every state', () => {
+        const { about: _about, web: _web, ...shape } = vip!.data.live;
+        expect(VIP_LIVE).toEqual(shape);
+        expect([...VIP_STATES].sort()).toEqual(vip!.states.map((s) => s.id).sort());
     });
 });

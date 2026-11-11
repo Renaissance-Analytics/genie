@@ -6,6 +6,8 @@ import { fancyTermPort, NO_SNAPSHOTS } from './fancy-term-port.js';
 import { processChannel } from './spawn-host-protocol.js';
 import { serveSpawnHost } from './spawn-host-server.js';
 import { execInProcess, streamInProcess } from './spawn-exec.js';
+import { execFile } from 'node:child_process';
+import { spawnDetachedProcess } from './spawn-exec.js';
 
 /**
  * THE SPAWN HOST (genie#1397): the child process that creates every process Electron main used to create on its own
@@ -36,6 +38,10 @@ const served = serveSpawnHost(channel, {
     exec: execInProcess,
     stream: streamInProcess,
     pty: fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) }),
+    // genie-host's git (Tynn #532): created here, off genie-host's thread.
+    gitExec: (file, args, options, callback) => execFile(file, [...args], options, callback),
+    // The Genie browser (Tynn #535): created here, off genie-host's thread.
+    spawnDetached: spawnDetachedProcess,
 });
 
 let ending = false;

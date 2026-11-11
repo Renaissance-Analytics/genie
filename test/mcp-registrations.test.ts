@@ -32,14 +32,14 @@ describe('allGenieTools', () => {
     // `flows` added 2026-10-21: an agent makes the flows it needs (a watcher); the person arms them.
     it('is the fourteen Genie tools, unique, in a stable order — no submitFeedback, no runAgent sidecar', () => {
         const names = allGenieTools(deps()).map((r) => r.definition.name);
-        expect(names).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes', 'flows']);
+        expect(names).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes', 'flows', 'mail']);
         expect(new Set(names).size).toBe(names.length);
     });
 
     it('with the agents part (normal Genie, not doctor): createAgent after processes — the ONLY tool that is not for every caller', () => {
         const withAgents: AllToolsDeps = { ...deps(), agents: { resolveCaller: () => null, defaultAgentOf: () => null, roster: () => [], approve: async () => 'denied', register: (() => { throw new Error('x'); }) as never, addressOf: () => '' } };
         const regs = allGenieTools(withAgents);
-        expect(regs.map((r) => r.definition.name)).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes', 'flows', 'createAgent']);
+        expect(regs.map((r) => r.definition.name)).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes', 'flows', 'mail', 'createAgent']);
         expect(regs.filter((r) => r.visible !== undefined).map((r) => r.definition.name)).toEqual(['createAgent']);
     });
 
@@ -55,8 +55,8 @@ describe('allGenieTools', () => {
         const manifest = { id: 'acme.lint', name: 'Acme Lint', version: '1.0.0', publisher: { name: 'Acme', keyId: 'k' }, mcpTools: [], capabilities: { network: { hosts: [] }, genieApi: [] }, panels: [] };
         const tool = { name: 'lint', description: 'Lint', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess' as const, gated: false };
         const names = allGenieTools(deps(() => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }])).map((r) => r.definition.name);
-        expect(names).toHaveLength(15);
-        expect(names[14]).toBe('acme.lint.lint');
+        expect(names).toHaveLength(16);
+        expect(names[15]).toBe('acme.lint.lint');
     });
 });
 

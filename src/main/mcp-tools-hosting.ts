@@ -1,7 +1,8 @@
 import { OS_WORKSPACE } from '../core/os-agent.js';
 import { resolve as resolvePath } from 'node:path';
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
-import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
+import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
+import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { validateServiceForm, type ServiceForm, type SiteForm, type SiteMode } from '../core/forms.js';
 import { normalizeSiteName } from '../core/gen-name.js';
@@ -217,48 +218,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
     };
 
     const services: Registration = {
-        definition: new ToolDefinition(
-            'services',
-            'Your workspace’s service engines — Postgres, MySQL, MariaDB, Redis, MongoDB, Mailpit (SMTP + a web inbox), WebSockets (Sockudo, Pusher protocol; Laravel reads it through its reverb driver), Meilisearch, S3 (SeaweedFS), or a custom image. GENIE runs them: never run `docker` (or docker compose) yourself. '
-                + 'Genie pulls the image, creates, starts and stops the container, and gives every terminal and site in this workspace the connection variables (DB_*, DATABASE_URL, REDIS_URL, MAIL_*, REVERB_*, MEILISEARCH_*, AWS_*…). '
-                + 'Actions: `catalog` — the engines and versions Genie offers, with each image and variant (postgres: `pgvector`). '
-                + '`update` {id} — the person approves a fresh pull of this engine’s existing image tag and recreation in place. The approval names every affected workspace/site/process. Name, data volumes, ports and credentials stay; a stopped engine stays stopped. '
-                + '`list` — this workspace’s engines and the shared ones, with live status (Mailpit’s `inbox` is its web inbox); `inUse` marks the one of each kind the env comes from. '
-                + '`env` — the variables a process here gets: names and values, secrets masked. '
-                + '`logs` {id, tail?} — the last lines the engine wrote (default 500), credentials masked. '
-                + '`exec` {command, cwd? (a folder in this workspace; default its root)} — run ONE command line (a migration, a seed, a database client) through the shell WITH this workspace’s current service variables; the person approves the command first; answers its exit code and output, every credential masked. Use it rather than reading Genie’s files for a password. '
-                + '`add` {engine, version, variant?, scope: dedicated (default, this workspace only) | shared (one for the whole machine)} — the person approves it first and sees the image Genie will pull. A workspace’s own engine is the one its env comes from, before any shared one. '
-                + 'Postgres with pgvector: `add` {engine: "postgres", version: "17", variant: "pgvector"} — on a shared one Genie creates the `vector` extension in this workspace’s database (its role cannot). '
-                + '`createDatabase` {id, name} — on a SHARED Postgres this workspace uses, another database of its own (a test database, say): the person approves it, then Genie creates it as the engine’s superuser, owned by this workspace’s role (its role cannot create one), reachable by no other workspace; on pgvector, with `vector` in it. `name`: lower-case letters, digits and underscores, starting with a letter or underscore, at most 63; not ws_… or pg_…. Refused, with the reason, for a name that exists, an engine that is not a shared Postgres, or one this workspace does not use. The env still names the workspace’s own database: connect to the new one by its name. '
-                + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?, kind? (postgres | mysql | mariadb | redis | mongo: the env then carries that engine’s DB_*/REDIS_*… from the image’s own POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB…)} — always dedicated; the person sees the image before anything is pulled; re-added under the same name it keeps its port. '
-                + '`use` {id} — make this engine the one of its kind this workspace’s env comes from (attaches a detached shared one again); the person approves it. '
-                + '`detach` {id} — a SHARED engine stops giving this workspace its env; its database and data stay; the person approves it. '
-                + '`start` / `stop` {id} — this workspace’s own engines (a shared one is started, never stopped, by an agent). '
-                + '`remove` {id} — the person approves it; the data is ALWAYS kept (deleting data is the person’s alone, in the Services tab). On the shared WebSockets engine it removes only THIS workspace’s app.',
-            {
-                type: 'object',
-                properties: {
-                    terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'exec', 'add', 'createDatabase', 'use', 'detach', 'start', 'stop', 'update', 'remove'] },
-                    command: { type: 'string', description: 'exec: the command line to run, as you would type it (&&, pipes and quoting work).' },
-                    cwd: { type: 'string', description: 'exec: the folder to run it in, inside this workspace (default the workspace root).' },
-                    engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, websockets, meilisearch, seaweedfs, custom).' },
-                    version: { type: 'string', description: 'add: a version `catalog` lists for that engine (postgres: 14–17). Not for custom.' },
-                    variant: { type: 'string', description: 'add: a variant `catalog` lists for that engine — postgres: "pgvector" (pgvector/pgvector:pg<version>).' },
-                    kind: { type: 'string', enum: ['postgres', 'mysql', 'mariadb', 'redis', 'mongo'], description: 'add (custom): the engine the image IS, so this workspace gets that engine’s env (DB_*, PG*, DATABASE_URL…) from it with its live port.' },
-                    scope: { type: 'string', enum: ['dedicated', 'shared'], description: 'add: dedicated (this workspace only; the default) or shared (one engine for every workspace on this machine).' },
-                    image: { type: 'string', description: 'add (custom): the image to run, e.g. registry.example/team/app:1.' },
-                    port: { type: 'number', description: 'add (custom): the port the image listens on inside its container.' },
-                    env: { type: 'object', description: 'add (custom): NAME: value strings for the container — and this workspace’s processes.' },
-                    name: { type: 'string', description: `add (custom): a short name (lowercase, digits, hyphens); default "${DEFAULT_CUSTOM_NAME}". createDatabase: the new database’s name (lower-case letters, digits, underscores; not ws_… or pg_…).` },
-                    id: { type: 'string', description: 'logs / createDatabase / use / detach / start / stop / update / remove: the engine’s id, from `list`.' },
-                    tail: { type: 'number', description: 'logs: how many of the last lines (default 500, at most 5000).' },
-                    deleteData: { type: 'boolean', description: 'Never true: an agent cannot delete a service’s data.' },
-                },
-                required: ['action'],
-            },
-            'Services',
-        ),
+        definition: builtinToolDefinition(SERVICES_TOOL),
         handler: withServices(async (s, caller, args, context) => {
             const action = str(args.action) ?? '';
             const own = (id: string | undefined): ServiceInstance | string => {
@@ -344,7 +304,8 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const variant = str(args.variant);
                     const kind = str(args.kind);
                     const form: ServiceForm = {
-                        workspaceId: caller.workspaceId, engine, major: custom ? '' : version, scope: args.scope === 'shared' ? 'shared' : 'dedicated',
+                        // No scope named: dedicated, except an engine that is only ever shared (WebSockets, Mailpit, S3), which is.
+                        workspaceId: caller.workspaceId, engine, major: custom ? '' : version, scope: args.scope === 'shared' || (args.scope === undefined && SERVICE_CATALOG.find((d) => d.engine === engine)?.sharing === 'shared-only') ? 'shared' : 'dedicated',
                         ...(variant !== undefined ? { variant } : {}),
                         ...(custom ? { custom: { name: version, image: str(args.image) ?? '', port: typeof args.port === 'number' ? args.port : null, env, ...(kind !== undefined ? { kind } : {}) } } : {}),
                     };
@@ -535,39 +496,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
     const SITE_ACTIONS = 'list, status, detect, add, start, stop, restart, logs, open, update, remove';
 
     const sites: Registration = {
-        definition: new ToolDefinition(
-            'sites',
-            'Your workspace’s sites, served by Genie at https://<name>.gen — `<name>` one or more labels: `web`, or `web.acme` (Genie’s default is `<folder>.<workspace>`). GENIE runs them — the dev server (or the static / PHP server) and the front door — and gives every process the workspace’s service variables; never start a server with `docker`, or keep one running in a terminal, for this. '
-                + 'Actions: `list`. '
-                + '`status` {site} — the site and each of its processes as Genie sees them now. '
-                + '`detect` {repoPath?} — what Genie WOULD serve for a folder (mode, dev server, built directory, default name); nothing is started or written. '
-                + '`add` {name?, repoPath? (a folder in this workspace; default its root), mode? proxy | static | php, devCommand? (put {port} where the port goes — Genie picks it), stack? laravel | node | django | go, hostPort? (a server you already run), root? (static/php: the folder to serve), spa?, phpVersion? (php: a PHP version Genie manages, like 8.4 or 8.4.26; absent = the PHP on PATH)} — anything left out takes the defaults Genie detects from the folder, exactly as the Hosting tab’s form does, and it is kept in the workspace’s project.json. '
-                + '`start` / `stop` / `restart` {site} — by id, name or host. '
-                + '`logs` {site, lines?} — the end of each of its processes’ output (default 200 lines), still there after a crash. '
-                + '`open` {site} — opens it in Genie’s browser for the person, and answers its URL. '
-                + '`update` {site, and any of name, repoPath, mode, devCommand, stack, hostPort, root, spa, phpVersion ("" = back to the PHP on PATH)} — the Hosting tab’s Edit: the person approves it, then it is written to project.json and served as changed. '
-                + '`remove` {site} — the person approves it; the folder and its files are never touched.',
-            {
-                type: 'object',
-                properties: {
-                    terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['list', 'status', 'detect', 'add', 'start', 'stop', 'restart', 'logs', 'open', 'update', 'remove'] },
-                    site: { type: 'string', description: 'status / start / stop / restart / logs / open / update / remove: the site’s id, name or host, from `list`.' },
-                    name: { type: 'string', description: 'add / update: one or more hostname labels separated by dots (a-z, 0-9, hyphens); the site is https://<name>.gen.' },
-                    repoPath: { type: 'string', description: 'detect / add / update: the folder to serve, inside this workspace (relative to its root, or absolute).' },
-                    mode: { type: 'string', enum: ['proxy', 'static', 'php'] },
-                    devCommand: { type: 'string', description: 'add / update (proxy): the dev server Genie runs, with {port} where the port goes.' },
-                    stack: { type: 'string', enum: ['laravel', 'node', 'django', 'go'] },
-                    hostPort: { type: 'number', description: 'add / update (proxy): a port a server you already run listens on; Genie starts nothing. On update, a devCommand replaces it.' },
-                    root: { type: 'string', description: 'add / update (static / php): the folder to serve, relative to repoPath (dist, public…).' },
-                    spa: { type: 'boolean', description: 'add / update (static): serve index.html for unknown paths.' },
-                    phpVersion: { type: 'string', description: 'add / update (php): the PHP version the site runs — one Genie manages (8.4, or exactly 8.4.26); a version it does not manage is refused, nothing asked. Absent on add = the PHP on PATH; on update = kept; "" = back to the PHP on PATH.' },
-                    lines: { type: 'number', description: 'logs: how many lines from the end of each process’s output (default 200).' },
-                },
-                required: ['action'],
-            },
-            'Sites',
-        ),
+        definition: builtinToolDefinition(SITES_TOOL),
         handler: withServices(async (s, caller, args, context) => {
             const action = str(args.action) ?? '';
             const shape = shapeProblem(args);
@@ -675,3 +604,84 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
 
     return [services, sites];
 }
+
+
+// ---------------------------------------------------------------- compiled declarations (ADF A2, Tynn #446)
+// What these tools ARE, as data: the catalog registers them (main/genie-catalog.ts); the factory above binds handlers.
+export const SERVICES_TOOL: BuiltinTool = declareBuiltinTool(
+    'services',
+    'Your workspace’s service engines — Postgres, MySQL, MariaDB, Redis, MongoDB, Mailpit (SMTP + a web inbox), WebSockets (Sockudo, Pusher protocol; Laravel reads it through its reverb driver), Meilisearch, S3 (SeaweedFS), or a custom image. GENIE runs them: never run `docker` (or docker compose) yourself. '
+        + 'Genie pulls the image, creates, starts and stops the container, and gives every terminal and site in this workspace the connection variables (DB_*, DATABASE_URL, REDIS_URL, MAIL_*, REVERB_*, MEILISEARCH_*, AWS_*…). '
+        + 'Actions: `catalog` — the engines and versions Genie offers, with each image and variant (postgres: `pgvector`). '
+        + '`update` {id} — the person approves a fresh pull of this engine’s existing image tag and recreation in place. The approval names every affected workspace/site/process. Name, data volumes, ports and credentials stay; a stopped engine stays stopped. '
+        + '`list` — this workspace’s engines and the shared ones, with live status (Mailpit’s `inbox` is its web inbox); `inUse` marks the one of each kind the env comes from. '
+        + '`env` — the variables a process here gets: names and values, secrets masked. '
+        + '`logs` {id, tail?} — the last lines the engine wrote (default 500), credentials masked. '
+        + '`exec` {command, cwd? (a folder in this workspace; default its root)} — run ONE command line (a migration, a seed, a database client) through the shell WITH this workspace’s current service variables; the person approves the command first; answers its exit code and output, every credential masked. Use it rather than reading Genie’s files for a password. '
+        + '`add` {engine, version, variant?, scope: dedicated (default, this workspace only) | shared (one for the whole machine)} — the person approves it first and sees the image Genie will pull. A workspace’s own engine is the one its env comes from, before any shared one. '
+        + 'Postgres with pgvector: `add` {engine: "postgres", version: "17", variant: "pgvector"} — on a shared one Genie creates the `vector` extension in this workspace’s database (its role cannot). '
+        + '`createDatabase` {id, name} — on a SHARED Postgres this workspace uses, another database of its own (a test database, say): the person approves it, then Genie creates it as the engine’s superuser, owned by this workspace’s role (its role cannot create one), reachable by no other workspace; on pgvector, with `vector` in it. `name`: lower-case letters, digits and underscores, starting with a letter or underscore, at most 63; not ws_… or pg_…. Refused, with the reason, for a name that exists, an engine that is not a shared Postgres, or one this workspace does not use. The env still names the workspace’s own database: connect to the new one by its name. '
+        + 'A custom image: `add` {engine: "custom", image, port (the one it listens on inside), env?, name?, kind? (postgres | mysql | mariadb | redis | mongo: the env then carries that engine’s DB_*/REDIS_*… from the image’s own POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB…)} — always dedicated; the person sees the image before anything is pulled; re-added under the same name it keeps its port. '
+        + '`use` {id} — make this engine the one of its kind this workspace’s env comes from (attaches a detached shared one again); the person approves it. '
+        + '`detach` {id} — a SHARED engine stops giving this workspace its env; its database and data stay; the person approves it. '
+        + '`start` / `stop` {id} — this workspace’s own engines (a shared one is started, never stopped, by an agent). '
+        + '`remove` {id} — the person approves it; the data is ALWAYS kept (deleting data is the person’s alone, in the Services tab). On the shared WebSockets engine it removes only THIS workspace’s app.',
+    {
+        type: 'object',
+        properties: {
+            terminalId: MIRRORED_TERMINAL_ID,
+            action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'exec', 'add', 'createDatabase', 'use', 'detach', 'start', 'stop', 'update', 'remove'] },
+            command: { type: 'string', description: 'exec: the command line to run, as you would type it (&&, pipes and quoting work).' },
+            cwd: { type: 'string', description: 'exec: the folder to run it in, inside this workspace (default the workspace root).' },
+            engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, websockets, meilisearch, seaweedfs, custom).' },
+            version: { type: 'string', description: 'add: a version `catalog` lists for that engine (postgres: 14–17). Not for custom.' },
+            variant: { type: 'string', description: 'add: a variant `catalog` lists for that engine — postgres: "pgvector" (pgvector/pgvector:pg<version>).' },
+            kind: { type: 'string', enum: ['postgres', 'mysql', 'mariadb', 'redis', 'mongo'], description: 'add (custom): the engine the image IS, so this workspace gets that engine’s env (DB_*, PG*, DATABASE_URL…) from it with its live port.' },
+            scope: { type: 'string', enum: ['dedicated', 'shared'], description: 'add: dedicated (this workspace only; the default) or shared (one engine for every workspace on this machine). An engine `catalog` lists as shared only (WebSockets, Mailpit, S3) is always shared.' },
+            image: { type: 'string', description: 'add (custom): the image to run, e.g. registry.example/team/app:1.' },
+            port: { type: 'number', description: 'add (custom): the port the image listens on inside its container.' },
+            env: { type: 'object', description: 'add (custom): NAME: value strings for the container — and this workspace’s processes.' },
+            name: { type: 'string', description: `add (custom): a short name (lowercase, digits, hyphens); default "${DEFAULT_CUSTOM_NAME}". createDatabase: the new database’s name (lower-case letters, digits, underscores; not ws_… or pg_…).` },
+            id: { type: 'string', description: 'logs / createDatabase / use / detach / start / stop / update / remove: the engine’s id, from `list`.' },
+            tail: { type: 'number', description: 'logs: how many of the last lines (default 500, at most 5000).' },
+            deleteData: { type: 'boolean', description: 'Never true: an agent cannot delete a service’s data.' },
+        },
+        required: ['action'],
+    },
+    'Services'
+);
+export const SITES_TOOL: BuiltinTool = declareBuiltinTool(
+    'sites',
+    'Your workspace’s sites, served by Genie at https://<name>.gen — `<name>` one or more labels: `web`, or `web.acme` (Genie’s default is `<folder>.<workspace>`). GENIE runs them — the dev server (or the static / PHP server) and the front door — and gives every process the workspace’s service variables; never start a server with `docker`, or keep one running in a terminal, for this. '
+        + 'Actions: `list`. '
+        + '`status` {site} — the site and each of its processes as Genie sees them now. '
+        + '`detect` {repoPath?} — what Genie WOULD serve for a folder (mode, dev server, built directory, default name); nothing is started or written. '
+        + '`add` {name?, repoPath? (a folder in this workspace; default its root), mode? proxy | static | php, devCommand? (put {port} where the port goes — Genie picks it), stack? laravel | node | django | go, hostPort? (a server you already run), root? (static/php: the folder to serve), spa?, phpVersion? (php: a PHP version Genie manages, like 8.4 or 8.4.26; absent = the PHP on PATH)} — anything left out takes the defaults Genie detects from the folder, exactly as the Hosting tab’s form does, and it is kept in the workspace’s project.json. '
+        + '`start` / `stop` / `restart` {site} — by id, name or host. '
+        + '`logs` {site, lines?} — the end of each of its processes’ output (default 200 lines), still there after a crash. '
+        + '`open` {site} — opens it in Genie’s browser for the person, and answers its URL. '
+        + '`update` {site, and any of name, repoPath, mode, devCommand, stack, hostPort, root, spa, phpVersion ("" = back to the PHP on PATH)} — the Hosting tab’s Edit: the person approves it, then it is written to project.json and served as changed. '
+        + '`remove` {site} — the person approves it; the folder and its files are never touched.',
+    {
+        type: 'object',
+        properties: {
+            terminalId: MIRRORED_TERMINAL_ID,
+            action: { type: 'string', enum: ['list', 'status', 'detect', 'add', 'start', 'stop', 'restart', 'logs', 'open', 'update', 'remove'] },
+            site: { type: 'string', description: 'status / start / stop / restart / logs / open / update / remove: the site’s id, name or host, from `list`.' },
+            name: { type: 'string', description: 'add / update: one or more hostname labels separated by dots (a-z, 0-9, hyphens); the site is https://<name>.gen.' },
+            repoPath: { type: 'string', description: 'detect / add / update: the folder to serve, inside this workspace (relative to its root, or absolute).' },
+            mode: { type: 'string', enum: ['proxy', 'static', 'php'] },
+            devCommand: { type: 'string', description: 'add / update (proxy): the dev server Genie runs, with {port} where the port goes.' },
+            stack: { type: 'string', enum: ['laravel', 'node', 'django', 'go'] },
+            hostPort: { type: 'number', description: 'add / update (proxy): a port a server you already run listens on; Genie starts nothing. On update, a devCommand replaces it.' },
+            root: { type: 'string', description: 'add / update (static / php): the folder to serve, relative to repoPath (dist, public…).' },
+            spa: { type: 'boolean', description: 'add / update (static): serve index.html for unknown paths.' },
+            phpVersion: { type: 'string', description: 'add / update (php): the PHP version the site runs — one Genie manages (8.4, or exactly 8.4.26); a version it does not manage is refused, nothing asked. Absent on add = the PHP on PATH; on update = kept; "" = back to the PHP on PATH.' },
+            lines: { type: 'number', description: 'logs: how many lines from the end of each process’s output (default 200).' },
+        },
+        required: ['action'],
+    },
+    'Sites'
+);
+/** This module's tools, in the order its factory returns them. */
+export const HOSTING_TOOLS: readonly BuiltinTool[] = [SERVICES_TOOL, SITES_TOOL];

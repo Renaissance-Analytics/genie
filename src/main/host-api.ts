@@ -10,7 +10,7 @@ import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-o
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { cancelIntent, type CancelIntent, type CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
-import { LOCAL_EVENTS, type RemoteMethod } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { Finished } from './attention-store.js';
@@ -33,6 +33,8 @@ import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js'
 import { isLocalArtboardMethod } from '../core/local-artboard.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
+import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
+import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -72,10 +74,18 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    /** The roster should be read again: an agent was restarted (Tynn #563). */
+    rosterChanged?(): void;
+    marketplace?: () => MarketplaceApi | null;
+    gapps?: () => GAppsApi | null;
+    /** The GApp book changed: a signal; the window reads the list (Tynn #596). */
+    gappsChanged?: { subscribe(listener: () => void): () => void };
     localTerminals?: NativeTerminalPort;
     artboard?: LocalArtboardPort;
     chatDrafts?: LocalDraftsStore;
     filesWatch?: FilesWatchPort;
+    /** Following the Tynn tab (P4 family 12, Tynn #561): one view per watch; its signals, by kind and workspace. */
+    tynnWatch?: import('../core/local-tynn-watch.js').TynnWatchPort;
     localFiles?: LocalFilesDeps;
     localOwner?: LocalOwnerDeps;
     /** The timer and clock the agent events are coalesced on (core/coalesce.ts). Default: the real ones. */
@@ -115,6 +125,15 @@ export interface HostApiDeps {
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
     registerAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
     attention: { finished(): readonly Finished[]; markSeen(id: string): void };
+    /**
+     * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): the TUI started here with NO window here (main/take-over-host.ts
+     * `window: false`); the person's machine opens its own window on it. `ended`: that window closed. Absent = Take over
+     * is refused with where to do it, as before.
+     */
+    takeOver?: {
+        start(agentId: string): Promise<{ ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string }>;
+        ended(terminalId: string): void;
+    };
     terminals: {
         open(options: TerminalOptions): PtyOpened;
         /** `open`, answered once the pid and shell are known (a pty made under genie-host). Absent = `open`'s answer is it. */
@@ -186,6 +205,9 @@ export interface HostApiDeps {
         tynnIssueAction?(workspaceId: string, input: unknown): Promise<unknown>;
         /** One write on a page of the tab (the Home's Details save, genie#1295 H1). Optional: refused where absent. */
         tynnPageAction?(workspaceId: string, input: unknown): Promise<unknown>;
+        /** What changed on the board / the issue queue since a cursor (P4 family 12): the live tab's reads. */
+        tynnBoardChanges?(workspaceId: string, scope: unknown, cursor: string, ids: readonly string[]): Promise<unknown>;
+        tynnIssueChanges?(workspaceId: string, filters: unknown, cursor: string, ids: readonly string[]): Promise<unknown>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<unknown>;
         removeRepo(workspaceId: string, slug: string): Promise<unknown>;
         /** Optional: a host without it answers the call with a refusal rather than failing to build its deps. */
@@ -238,7 +260,11 @@ export interface HostApiDeps {
     retryPausedAccount?(provider: string): void;
     features: {
         snapshot(): Promise<FeatureData>;
-        act(action: FeatureAction): Promise<FeatureData>;
+        act(action: FeatureAction, context: CallContext): Promise<FeatureData>;
+        /** An alert's own sound as a data URL, by its setting key; `null` when it cannot be read (P4 family 11). */
+        soundData?(key: string): Promise<string | null>;
+        /** What the host's own file picker picked, from this machine's window: the only host paths a send may attach (genie#1354). */
+        picked?(paths: unknown[]): void;
         onChange(listener: (data: FeatureData) => void): () => void;
     };
     updates: {
@@ -252,6 +278,7 @@ export interface HostApiDeps {
     } | null;
 }
 
+const TYNN_NO_ACTION = { ok: false, state: 'error', reason: 'name a workspace and an action' } as const;
 const str = (v: unknown): string => (typeof v === 'string' ? v : String(v ?? ''));
 const num = (v: unknown): number | undefined => (typeof v === 'number' && v > 0 ? Math.floor(v) : undefined);
 const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
@@ -263,7 +290,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         return deps.localOwner;
     };
 
-    const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+    const invoke = async (method: RemoteMethod, args: unknown[], context: CallContext = RESTRICTED_CALL_CONTEXT): Promise<unknown> => {
+        if (isMarketplaceMethod(method)) throw new Error('Marketplace actions require their authenticated local window connection.');
+        if (isGappMethod(method)) throw new Error('GApp actions require their authenticated local window connection.');
         if (isLocalTerminalMethod(method)) {
             if (!deps.localTerminals) throw new Error('the local terminal service is not available');
             const name = method.slice('terminals.local'.length).toLowerCase();
@@ -374,6 +403,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                     const sent = await deps.host.promptWith(r.id, text, attachments, 'you');
                     return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
                 }
+                // Text alone goes the composer's way too when the host has it, so a refusal (a slash command the agent
+                // does not offer, Tynn #440) comes back with its reason rather than a bare `false`.
+                if (r !== null && text.length > 0 && deps.host.promptWith) {
+                    const sent = await deps.host.promptWith(r.id, text, [], 'you');
+                    return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
+                }
                 return { ok: r !== null && text.length > 0 && (await deps.host.prompt(r.id, text, 'you')) };
             }
             case 'resolvePrompt': {
@@ -384,10 +419,13 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'answerApproval': {
                 const r = agent(args[0]);
-                // The host's refusal, with its reason, goes back to the card that pressed (core/approval-answering.ts).
-                return r ? deps.host.answerApproval(r.id, str(args[1]), typeof args[2] === 'string' ? args[2] : '') : { ok: false, reason: 'unknown agent' };
+                // Every refusal names its reason: the card that pressed says it (core/approval-answering.ts).
+                if (!r) return { ok: false, reason: 'Genie does not know this agent' };
+                if (typeof args[1] !== 'string') return { ok: false, reason: 'no option was chosen' };
+                return deps.host.answerApproval(r.id, args[1], typeof args[2] === 'string' ? args[2] : '');
             }
             case 'addAgent': {
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'no workspace named' };
                 const raw = (typeof args[1] === 'object' && args[1] !== null ? args[1] : {}) as Record<string, unknown>;
                 const created = await deps.registerAgent(str(args[0]), { name: str(raw['name']), purpose: str(raw['purpose']), provider: str(raw['provider']) });
                 return created.ok ? { ok: true, id: created.id } : created;
@@ -396,7 +434,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const r = agent(args[0]);
                 if (!r) return { ok: false, reason: 'unknown agent' };
                 // The one restart (genie#1238), then the note.
-                return restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
+                const restarted = await restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
+                deps.rosterChanged?.();
+                return restarted;
             }
             case 'agents.restart':
                 if (typeof args[0] !== 'string' || (args[1] !== 'graceful' && args[1] !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
@@ -518,30 +558,41 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.confirmAdd':
                 if (typeof args[0] !== 'string') return { ok: false, reason: 'confirmAdd names a folder' };
                 return deps.workspaceOps.confirmAdd(args[0]);
+            // P4 family 10 (Tynn #559): the window's own calls now come this way; a call that names no workspace is
+            // refused in the words the IPC path used, never run on a made-up id.
             case 'workspaces.hibernate':
-                return deps.workspaceOps.hibernate(str(args[0]));
+                return typeof args[0] === 'string' ? deps.workspaceOps.hibernate(args[0]) : { ok: false, reason: 'hibernate names a workspace' };
             case 'workspaces.wake':
-                return deps.workspaceOps.wake(str(args[0]));
+                return typeof args[0] === 'string' ? deps.workspaceOps.wake(args[0]) : { ok: false, reason: 'wake names a workspace' };
             case 'workspaces.remove':
-                return deps.workspaceOps.remove(str(args[0]));
+                return typeof args[0] === 'string' ? deps.workspaceOps.remove(args[0]) : { ok: false, reason: 'remove names a workspace' };
+            // THE TYNN TAB (P4 family 12, Tynn #561): the window's own calls come this way now, with the IPC path's refusals.
             case 'workspaces.tynnBoard':
                 if (!deps.workspaceOps.tynnBoard) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnBoard(str(args[0]), args[1]);
+                return typeof args[0] === 'string' ? deps.workspaceOps.tynnBoard(args[0], args[1] ?? {}) : { ok: false, state: 'error', reason: 'name a workspace' };
             case 'workspaces.tynnPage':
                 if (!deps.workspaceOps.tynnPage) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnPage(str(args[0]), args[1], args[2]);
+                return deps.workspaceOps.tynnPage(args[0] as string, args[1], args[2]);
             case 'workspaces.tynnBoardAction':
                 if (!deps.workspaceOps.tynnBoardAction) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnBoardAction(str(args[0]), args[1]);
+                return typeof args[0] === 'string' && typeof args[1] === 'object' && args[1] !== null ? deps.workspaceOps.tynnBoardAction(args[0], args[1]) : TYNN_NO_ACTION;
             case 'workspaces.tynnIssues':
                 if (!deps.workspaceOps.tynnIssues) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnIssues(str(args[0]), args[1]);
+                return deps.workspaceOps.tynnIssues(args[0] as string, args[1] ?? {});
             case 'workspaces.tynnIssueAction':
                 if (!deps.workspaceOps.tynnIssueAction) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnIssueAction(str(args[0]), args[1]);
+                return typeof args[0] === 'string' && typeof args[1] === 'object' && args[1] !== null ? deps.workspaceOps.tynnIssueAction(args[0], args[1]) : TYNN_NO_ACTION;
             case 'workspaces.tynnPageAction':
                 if (!deps.workspaceOps.tynnPageAction) throw new Error('this host has no Tynn tab');
-                return deps.workspaceOps.tynnPageAction(str(args[0]), args[1]);
+                return typeof args[0] === 'string' && typeof args[1] === 'object' && args[1] !== null ? deps.workspaceOps.tynnPageAction(args[0], args[1]) : TYNN_NO_ACTION;
+            case 'workspaces.tynnBoardChanges':
+            case 'workspaces.tynnIssueChanges': {
+                const read = method === 'workspaces.tynnBoardChanges' ? deps.workspaceOps.tynnBoardChanges : deps.workspaceOps.tynnIssueChanges;
+                if (!read) throw new Error('this host has no live Tynn tab');
+                const [id, scope, cursor, ids] = args;
+                if (typeof id !== 'string' || typeof cursor !== 'string') return { ok: false, state: 'error', reason: 'name a workspace and a cursor' };
+                return read(id, scope ?? {}, cursor, Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : []);
+            }
             case 'workspaces.listRepos':
                 return deps.workspaceOps.listRepos(str(args[0]));
             case 'workspaces.addRepo': {
@@ -569,7 +620,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'addWorkspace':
                 throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':
-                throw new Error('takeOver opens a window on the host; do it there');
+                if (!deps.takeOver) throw new Error('takeOver opens a window on the host; do it there');
+                return deps.takeOver.start(str(args[0]));
             case 'providerLogin':
                 throw new Error('providerLogin opens the provider login in a window on the host; do it there');
             case 'features.setBrowserBounds':
@@ -604,12 +656,17 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'features.snapshot':
                 return deps.features.snapshot();
+            case 'features.soundData':
+                return typeof args[0] === 'string' && deps.features.soundData ? deps.features.soundData(args[0]) : null;
+            case 'features.picked':
+                if (context.origin === 'local-window' && Array.isArray(args[0])) deps.features.picked?.(args[0] as unknown[]);
+                return null;
             case 'features.act':
-                return deps.features.act(args[0] as FeatureAction);
+                return deps.features.act(args[0] as FeatureAction, context);
             case 'host.listDir':
-                return listHostDir(str(args[0]));
+                return listHostDir(typeof args[0] === 'string' ? args[0] : '/');
             case 'host.mkdir':
-                return makeHostDir(str(args[0]), str(args[1]));
+                return typeof args[0] === 'string' && typeof args[1] === 'string' ? makeHostDir(args[0], args[1]) : { ok: false, reason: 'name a folder and where to make it' };
             case 'host.home':
                 return homedir();
             case 'updates.state':
@@ -652,8 +709,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     const terminalWorkspaces = new Map<string, string>();
     return {
         invoke,
+        ...(deps.marketplace ? { marketplace: deps.marketplace } : {}),
+        ...(deps.gapps ? { gapps: deps.gapps } : {}),
         ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
+        ...(deps.tynnWatch ? { tynnWatch: deps.tynnWatch } : {}),
         ...(deps.localTerminals ? { localTerminals: deps.localTerminals } : {}),
+        ...(deps.takeOver ? { takeOverEnded: (terminalId: string) => deps.takeOver!.ended(terminalId) } : {}),
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
         // A terminal's workspace, remembered once seen: its exit is pushed after it has left the list.
         workspaceOfTerminal: (terminalId) => {
@@ -663,6 +724,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         },
         workspacePaths: () => Object.fromEntries((deps.snapshot().workspaces ?? []).map((w) => [w.id, w.path])),
         onEvent: (listener, options) => {
+            let featuresRevision = 0;
             /*
              * An agent's detail AT MOST every AGENT_PUSH_INTERVAL_MS, the latest state last (the owner, 2026-10-20: "severe
              * UI lag"): a busy agent changes many times a second and its detail carries its ledger; built and sent per
@@ -678,11 +740,15 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 () => agents.stop(),
                 deps.terminals.onData((id, data) => listener('terminal-data', { id, data })),
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
-                deps.features.onChange((data) => listener('features', data)),
+                // A remote window hears the snapshot; this machine's own hears that it changed, and re-reads (P4 family 11):
+                // no local event carries a whole snapshot, which has no bound and could end the door's connection.
+                deps.features.onChange((data) => { listener('features', data); listener(LOCAL_EVENTS.features, { revision: ++featuresRevision }); }),
                 deps.updates?.onChange((state) => { listener('updates', state); listener(LOCAL_EVENTS.updates, state); }) ?? (() => {}),
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
                 deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
+                deps.tynnWatch?.subscribe((event) => listener(LOCAL_EVENTS.tynn, event)) ?? (() => {}),
+                deps.gappsChanged?.subscribe(() => listener(LOCAL_EVENTS.gapps, null)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };

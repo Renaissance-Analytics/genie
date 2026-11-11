@@ -248,7 +248,7 @@ export function validateServiceForm(form: ServiceForm): Problem[] {
         problems.push({ field: 'variant', message: offered.length > 0 ? `${form.engine} has no variant "${form.variant}" (${offered.join(', ')}).` : `${form.engine} has no variants.` });
     }
     if (!def.majors.includes(form.major)) problems.push({ field: 'major', message: `${form.engine} ${form.major} is not a version Genie knows (${def.majors.join(', ')}).` });
-    if (def.sharing === 'shared-only' && form.scope === 'dedicated') problems.push({ field: 'scope', message: `${form.engine} is a shared service — one per workstation, never per workspace.` });
+    if (def.sharing === 'shared-only' && form.scope === 'dedicated') problems.push({ field: 'scope', message: `${form.engine} is a shared service — one per workstation, never per workspace.${def.sharedBecause ? ` ${def.sharedBecause}.` : ''}` });
     return problems;
 }
 

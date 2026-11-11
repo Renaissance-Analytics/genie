@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { AgentRecord } from '../src/core/identity.js';
 import { hostsFilePath } from '../src/core/front-door-caddy.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import type { HostsIo } from '../src/main/hosts-file.js';
 import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
 

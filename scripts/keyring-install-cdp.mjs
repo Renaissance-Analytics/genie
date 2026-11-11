@@ -18,7 +18,9 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { join } from 'node:path';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this removes a system package; test machines only'); process.exit(2); }
 process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
@@ -130,14 +132,14 @@ try {
     if (!page) throw new Error('no window on the debugger port');
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     await until('window.genie', 30_000, () => cdp.evaluate('typeof window.genie === "object"'));
-    const card = () => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.keyring ?? null)');
+    const card = () => cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.integrations?.keyring ?? null)');
     const shown = await until('the card', 45_000, card);
     check(shown?.state === 'not-installed', '4-the-card-says-not-installed', JSON.stringify(shown));
     const host = hostPid();
     const windowPid = window.pid;
 
     say('pressing the button');
-    await cdp.evaluate(`window.genie.features.act({ kind: 'keyring.fix' })`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'keyring.fix' })`);
     const installed = await until('the package to arrive', 180_000, () => existsSync(DAEMON));
     check(Boolean(installed), '5-the-button-installed-it', output('pacman', '-Q', 'gnome-keyring') || 'not installed');
     const answered = await until('the keychain to answer', 60_000, keychainAnswers);

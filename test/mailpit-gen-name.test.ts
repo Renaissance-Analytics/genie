@@ -83,6 +83,6 @@ describe('the connection info and Open inbox use the name', () => {
 
     it('the front door routes them (hosting-compose), beside the sites and the WebSockets server', () => {
         const hosting = readFileSync(new URL('../src/main/hosting-compose.ts', import.meta.url), 'utf8');
-        expect(hosting).toMatch(/const routes = \(\) => \[\.\.\.sites\.routes\(\), \.\.\.websocketRoutes\(engines\.list\(\)\), \.\.\.mailpitRoutes\(engines\.list\(\)\)\];/);
+        expect(hosting).toMatch(/const routes = \(\) => \[\.\.\.sites\.routes\(\), \.\.\.websocketRoutes\(engines\.list\(\)\), \.\.\.mailpitRoutes\(engines\.list\(\)\), \.\.\.\(input\.gappRoutes\?\.\(\) \?\? \[\]\)\];/);
     });
 });

@@ -12,15 +12,15 @@ const code = (path: string) => readFileSync(path, 'utf8').split(/\r?\n/).filter(
 describe('the window', () => {
     const main = code('src/main/main.ts');
 
-    it('builds its own MCP server ONLY when there is no genie-host (the emergency path)', () => {
-        expect(main).toMatch(/if \(!engineLink\) mcp = genieMcpServer\(/);
-        expect(main.match(/genieMcpServer\(/g)).toHaveLength(1);
+    it('builds no MCP server of its own: genie-host serves it (Tynn #415)', () => {
+        expect(main).not.toMatch(/genieMcpServer\(/);
+        expect(main).toMatch(/hostMcpEndpoint = status\?\.endpoint \?\? null/);
     });
 
     it('never reaches the stores agents write to when genie-host owns them: its tools get hostOnly stand-ins', () => {
-        expect(main).toMatch(/inbox: own\?\.inbox \?\? hostOnly</);
-        expect(main).toMatch(/attention: own\?\.attention \?\? hostOnly</);
-        expect(main).toMatch(/knowledge: own\?\.knowledge \?\? hostOnly</);
+        expect(main).toMatch(/inbox: hostOnly</);
+        expect(main).toMatch(/attention: hostOnly</);
+        expect(main).toMatch(/knowledge: hostOnly</);
     });
 
     it('composes against genie-host\'s stores (replicas) when it runs', () => {
@@ -31,18 +31,18 @@ describe('the window', () => {
 describe('compose', () => {
     it('opens the stores only when it was given none', () => {
         const compose = code('src/main/compose.ts');
-        expect(compose).toMatch(/if \(!input\.agentStores\) \{\s*ownStores = await openAgentStores\(/);
+        expect(compose).toMatch(/if \(!input\.agentStores\) \{\s*ownStores = await input\.alone!\.openStores\(/);
         expect(compose).not.toMatch(/InboxStore\.open\(/);
     });
 });
 
 describe('the settings and the chat drafts are genie-host\'s (P3.2)', () => {
     it('compose opens the settings only when it was given none; genie-host opens them and the drafts; the window\'s drafts are the host\'s', () => {
-        expect(code('src/main/compose.ts')).toMatch(/if \(!input\.agentStores\?\.settings\) \{\s*ownSettings = await SettingsStore\.open\(/);
+        expect(code('src/main/compose.ts')).toMatch(/if \(!input\.agentStores\?\.settings\) \{\s*ownSettings = await input\.alone!\.openSettings\(/);
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/await SettingsStore\.open\(home\)/);
         expect(host).toMatch(/await ChatDraftStore\.open\(home\)/);
-        expect(code('src/main/main.ts')).toMatch(/const drafts = agentEngineLink \? agentEngineLink\.client\.stores\(\)\.drafts : await ChatDraftStore\.open\(/);
+        expect(code('src/main/main.ts')).toMatch(/const drafts = agentEngineLink\.client\.stores\(\)\.drafts;/);
     });
 });
 
@@ -55,7 +55,7 @@ describe('the registry\'s files and the mail wake are genie-host\'s (P3.2)', () 
 
     it('the mail wake runs in the host; the window\'s own only on the emergency path', () => {
         expect(code('src/main/genie-host.ts')).toMatch(/wireHostMailWake\(\{/);
-        expect(code('src/main/main.ts')).toMatch(/if \(!agentEngineLink\) wireInboxPush\(\{\s*inbox: composed\.inbox/);
+        expect(code('src/main/main.ts')).not.toMatch(/wireInboxPush\(/);
     });
 });
 
@@ -66,7 +66,7 @@ describe('the process supervisor is genie-host\'s (P3.3b)', () => {
         // No window sends into the host's own children: a window's engine.spawn reaches `processes` only (since P3.3e).
         expect(host).toMatch(/if \(profile === 'processes'\) relay\?\.send\('processes', frame\);/);
         expect(code('src/main/main.ts')).toMatch(/supervisor: agentEngineLink\.client\.supervisor\(\)/);
-        expect(code('src/main/compose.ts')).toMatch(/if \(input\.supervisor\) supervisor = input\.supervisor;\s*else \{\s*const own = new ProcessSupervisor\(/);
+        expect(code('src/main/compose.ts')).toMatch(/if \(input\.supervisor\) supervisor = input\.supervisor;\s*else \{\s*const own = input\.alone!\.supervisor\(\)/);
     });
 });
 
@@ -75,7 +75,7 @@ describe('the process book and its scheduler are genie-host\'s (P3.3c)', () => {
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/await ProcessBook\.open\(home,/);
         expect(host).toMatch(/new ProcessScheduler\(\{/);
-        expect(code('src/main/main.ts')).toMatch(/if \(agentEngineLink\) \{[\s\S]{0,400}?processBook = agentEngineLink\.client\.processBook\(\);/);
+        expect(code('src/main/main.ts')).toMatch(/processBook = agentEngineLink\.client\.processBook\(\);/);
     });
 });
 
@@ -85,7 +85,7 @@ describe('flows are genie-host\'s (P3.3d)', () => {
         expect(host).toMatch(/await FlowStore\.open\(home\)/);
         expect(host).toMatch(/startFlowsEngine\(\{/);
         expect(code('src/main/main.ts')).toMatch(/flowsEngine: \{ flows: agentEngineLink\.client\.flows\(\), scheduler: agentEngineLink\.client\.flows\(\) \}/);
-        expect(code('src/main/compose.ts')).toMatch(/const ownEngine = ownFlows \? startFlowsEngine\(\{/);
+        expect(code('src/main/compose.ts')).toMatch(/const ownEngine = ownFlows \? input\.alone!\.startFlows\(\{/);
     });
 });
 
@@ -94,7 +94,7 @@ describe('the terminals are genie-host\'s (P3.3e)', () => {
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/new TerminalHost\(terminalsClient\.ptyPort\(\)/);
         expect(host).toMatch(/send: \(profile, frame\) => \{ if \(profile === 'processes'\) relay\?\.send\('processes', frame\); \}/);
-        expect(code('src/main/main.ts')).toMatch(/if \(agentEngineLink\) terminals = agentEngineLink\.client\.terminals\(\);/);
+        expect(code('src/main/main.ts')).toMatch(/terminals = agentEngineLink\.client\.terminals\(\);/);
     });
 });
 

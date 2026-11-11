@@ -13,7 +13,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join } from 'node:path';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 if (process.env.CI !== 'true' && process.env.BROWSER_PROCESS_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 if (process.platform !== 'linux') { console.error('Linux only'); process.exit(2); }
@@ -98,9 +100,9 @@ try {
     await until(`${HOST} served`, 45_000, async () => {
         const r = await cdp.evaluate(`window.genie.sitePanels.prepare(${JSON.stringify(HOST)})`);
         if (r.ok) return r;
-        const sites = JSON.parse(await cdp.evaluate(`window.genie.features.snapshot().then((d) => JSON.stringify(d.hosting?.sites ?? []))`) ?? '[]');
+        const sites = JSON.parse(await cdp.evaluate(`(window.genieTest ?? window.genie).features.snapshot().then((d) => JSON.stringify(d.hosting?.sites ?? []))`) ?? '[]');
         const site = sites.find((x) => x.host === HOST);
-        if (site) await cdp.evaluate(`window.genie.features.act({ kind: 'hosting.startSite', siteId: ${JSON.stringify(site.id)} }).then(() => true, () => false)`);
+        if (site) await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'hosting.startSite', siteId: ${JSON.stringify(site.id)} }).then(() => true, () => false)`);
         return null;
     });
 

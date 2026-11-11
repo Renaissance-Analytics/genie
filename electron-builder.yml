@@ -79,6 +79,9 @@ asarUnpack:
   - "**/node_modules/@particle-academy/fancy-pty/bin/**"
   # @napi-rs/keyring (P3.4): a .node binary in a per-platform package. It must live on disk, outside the asar.
   - "**/node_modules/@napi-rs/keyring*/**"
+  # prism-acp's prebuilt supervisor (Tynn #575). An .exe under app.asar.unpacked is signed with the app. Both architectures:
+  # the package picks by the machine, so an x64 Genie on ARM64 Windows needs the ARM64 one.
+  - "**/node_modules/@particle-academy/prism-acp/native/**"
 afterPack: ./scripts/after-pack.cjs
 
 # Cookies encrypted on disk, Linux's being in the clear without it (measured on omarchy-test, the host split's P2b). ONE WAY:

@@ -1,4 +1,5 @@
-import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
+import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
+import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import type { AgentRecord } from '../core/identity.js';
 import { addTab, clearCell, LAYOUTS, PANEL_KINDS, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, type LayoutId, type Panel, type PanelKind, type TabsState, type WorkspaceTab } from '../core/workspace-tabs.js';
 import { callerFrom } from './mcp-callers.js';
@@ -43,25 +44,7 @@ export function workspaceTabsTools(deps: WorkspaceTabsToolDeps): Registration[] 
         caller !== null && (deps.defaultAgentOf(caller.workspaceId) === caller.agentId || deps.roster().some((a) => a.id === caller.agentId && a.manageTabs === true));
 
     const tool: Registration = {
-        definition: new ToolDefinition(
-            'workspaceTabs',
-            'Manage your workspace’s tabs — the ones the person sees in its tab strip, each a grid of panels (terminal, files, site, artboard, widget). `list` shows the tabs, the layouts, the panel kinds and the sites a site panel can show. `add {name}`, `rename {tab, name}`, `remove {tab}`, `layout {tab, layout}`, `place {tab, cell, kind, ref}` (cell counts from 0; a site panel’s ref is one of the listed sites), `clear {tab, cell}`. Every change asks the person unless your “May manage workspace tabs” switch is on or you are autonomous.',
-            {
-                type: 'object',
-                properties: {
-                    action: { type: 'string', enum: [...ACTIONS] },
-                    tab: { type: 'string', description: 'A tab id from list.' },
-                    name: { type: 'string' },
-                    layout: { type: 'string', enum: LAYOUT_IDS },
-                    cell: { type: 'number', description: 'The panel’s place in the grid, counted from 0 in reading order.' },
-                    kind: { type: 'string', enum: [...PANEL_KINDS] },
-                    ref: { type: 'string', description: 'Which one: a site’s host (tynn.gen), a terminal id, a folder; leave it out to choose in Genie.' },
-                    terminalId: MIRRORED_TERMINAL_ID,
-                },
-                required: ['action'],
-            },
-            'Workspace tabs',
-        ),
+        definition: builtinToolDefinition(WORKSPACE_TABS_TOOL),
         visible: ({ headers }) => {
             const key = headers['mcp-param-genie-session'] ?? headers['genie-session'];
             return typeof key === 'string' && mayManage(deps.resolveCaller(key));
@@ -141,3 +124,28 @@ function planChange(action: string, args: JsonObject, state: TabsState, sites: r
     }
     return { error: `action is one of ${ACTIONS.join(', ')}` };
 }
+
+
+// ---------------------------------------------------------------- compiled declarations (ADF A2, Tynn #446)
+// What these tools ARE, as data: the catalog registers them (main/genie-catalog.ts); the factory above binds handlers.
+export const WORKSPACE_TABS_TOOL: BuiltinTool = declareBuiltinTool(
+    'workspaceTabs',
+    'Manage your workspace’s tabs — the ones the person sees in its tab strip, each a grid of panels (terminal, files, site, artboard, widget). `list` shows the tabs, the layouts, the panel kinds and the sites a site panel can show. `add {name}`, `rename {tab, name}`, `remove {tab}`, `layout {tab, layout}`, `place {tab, cell, kind, ref}` (cell counts from 0; a site panel’s ref is one of the listed sites), `clear {tab, cell}`. Every change asks the person unless your “May manage workspace tabs” switch is on or you are autonomous.',
+    {
+        type: 'object',
+        properties: {
+            action: { type: 'string', enum: [...ACTIONS] },
+            tab: { type: 'string', description: 'A tab id from list.' },
+            name: { type: 'string' },
+            layout: { type: 'string', enum: LAYOUT_IDS },
+            cell: { type: 'number', description: 'The panel’s place in the grid, counted from 0 in reading order.' },
+            kind: { type: 'string', enum: [...PANEL_KINDS] },
+            ref: { type: 'string', description: 'Which one: a site’s host (tynn.gen), a terminal id, a folder; leave it out to choose in Genie.' },
+            terminalId: MIRRORED_TERMINAL_ID,
+        },
+        required: ['action'],
+    },
+    'Workspace tabs'
+);
+/** This module's tools, in the order its factory returns them. */
+export const WORKSPACE_TABS_TOOLS: readonly BuiltinTool[] = [WORKSPACE_TABS_TOOL];

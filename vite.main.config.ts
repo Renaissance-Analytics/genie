@@ -27,7 +27,10 @@ export default defineConfig({
          * PEER of fancy-term-host, and electron-builder's dependency walk does not follow
          * peers) and keeps outside the asar (`asarUnpack`). fancy-term-host itself is bundled;
          * its `import { spawn } from 'node-pty'` becomes the external import.
+         *
+         * prism-acp is external for the same reason (Tynn #575): it finds its prebuilt supervisor and the pin that checks it
+         * relative to its own package directory.
          */
-        rollupOptions: { external: ['electron', 'node-pty', '@napi-rs/keyring', /^node:/] },
+        rollupOptions: { external: ['electron', 'node-pty', '@napi-rs/keyring', '@particle-academy/prism-acp', /^node:/] },
     },
 });

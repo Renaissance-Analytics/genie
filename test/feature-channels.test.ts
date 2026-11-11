@@ -10,11 +10,12 @@ import { EMPTY_FEATURES } from '../src/renderer/features.js';
  */
 
 describe('channels', () => {
-    it('are three, named once, and both halves import the constant rather than retyping the strings', () => {
+    // The snapshot, its push and a sound's data moved to the local door (P4 family 11, Tynn #560); what stays is the window's.
+    it('are named once, and both halves import the constant rather than retyping the strings', () => {
         // Five since the attachments picker (§6.4): the host's own file dialog, never a typed path. Six since an alert's own
         // sound (Tynn #766 B2): read by main, asked by setting key — never a path. Seven since the host picker reports its
         // picks (genie#1354): an AgentInbox send attaches only host paths the host's own window picked.
-        expect(FEATURE_CHANNELS).toEqual({ snapshot: 'genie:features-snapshot', act: 'genie:features-act', changed: 'genie:features-changed', browserBounds: 'genie:features-browser-bounds', soundData: 'genie:features-sound-data', picked: 'genie:features-picked' });
+        expect(FEATURE_CHANNELS).toEqual({ browserBounds: 'genie:features-browser-bounds' });
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
         for (const src of [preload, main]) {

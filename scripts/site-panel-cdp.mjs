@@ -126,10 +126,10 @@ try {
     const prepared = await until(`${HOST} to be served`, 45_000, async () => {
         const r = await cdp.evaluate(`window.genie.sitePanels.prepare(${codeLiteral(HOST)})`);
         if (r.ok) return r;
-        const state = await cdp.evaluate(`window.genie.features.snapshot().then((d) => JSON.stringify((d.hosting?.sites ?? []).map((x) => ({ id: x.id, host: x.host, state: x.state, reason: x.reason ?? x.error ?? null }))))`);
+        const state = await cdp.evaluate(`(window.genieTest ?? window.genie).features.snapshot().then((d) => JSON.stringify((d.hosting?.sites ?? []).map((x) => ({ id: x.id, host: x.host, state: x.state, reason: x.reason ?? x.error ?? null }))))`);
         console.log(`  prepare: ${JSON.stringify(r)}; sites: ${state}`);
         const site = JSON.parse(state ?? '[]').find((x) => x.host === HOST);
-        if (site) console.log(`  start: ${JSON.stringify(await cdp.evaluate(`window.genie.features.act({ kind: 'hosting.startSite', siteId: ${codeLiteral(site.id)} }).then((r) => JSON.stringify(r ?? null), (e) => String(e))`))}`);
+        if (site) console.log(`  start: ${JSON.stringify(await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'hosting.startSite', siteId: ${codeLiteral(site.id)} }).then((r) => JSON.stringify(r ?? null), (e) => String(e))`))}`);
         return null;
     });
     check(prepared?.ok === true, 'CONTROL an enabled site is allowed, with its store routed', JSON.stringify(prepared));

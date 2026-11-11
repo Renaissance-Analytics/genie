@@ -3,6 +3,13 @@ import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
+import { hostname } from 'node:os';
+import { RemoteAccessReplica } from './remote-access-replica.js';
+import { RelayHostReplica } from './relay-host-replica.js';
+import { TakeOverReplica } from './take-over-replica.js';
+import type { TakeOverView } from './take-over-service.js';
+import type { RelayHostView } from './relay-host-service.js';
+import type { RemoteAccessEvent } from './remote-access-host.js';
 import type { SyncResult } from '../core/integrations.js';
 import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import type { DeviceLinkEvent } from './device-link-service.js';
@@ -33,7 +40,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { GateView } from '../core/rate-limit-gate.js';
-import type { ClientTransport } from '../core/remote-protocol.js';
+import { forwardedCallContext, type CallContext, type ClientTransport } from '../core/remote-protocol.js';
 import type { LiveSession } from '../core/roster.js';
 import type { CancelIntent, CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -48,6 +55,12 @@ import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-in
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
+import type { PluginsDump } from './plugins-host.js';
+import { PluginsReplica } from './plugins-replica.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
+import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
+import { CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../core/catalog-sync.js';
+import type { CatalogKind, ElementDefinition } from '../core/catalog.js';
 import type { BrowserEvent } from './browser-service.js';
 import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
@@ -103,6 +116,8 @@ export interface EngineClientOptions {
     readonly onToolSignal?: (signal: unknown) => void;
     /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
+    /** A remote method genie-host does not own yet (Tynn #409): done here, by this window's own host API. Absent = refused. */
+    readonly onRemoteInvoke?: (method: string, args: unknown[], context: CallContext) => Promise<unknown>;
     /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
     readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
@@ -172,6 +187,11 @@ export class SessionEngineClient {
     #hosting: HostingReplica | null = null;
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
+    #plugins: PluginsReplica | null = null;
+    #marketplace: MarketplaceApi | null = null;
+    #gapps: GAppBookApi | null = null;
+    readonly #gappsChanged = new Set<() => void>();
+    #catalog: CatalogReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
     #tynn: TynnAccountReplica | null = null;
@@ -179,6 +199,9 @@ export class SessionEngineClient {
     #keyring: KeyringReplica | null = null;
     #workstation: WorkstationReplica | null = null;
     #deviceLink: DeviceLinkReplica | null = null;
+    #remoteAccess: RemoteAccessReplica | null = null;
+    #relayHost: RelayHostReplica | null = null;
+    #takeOvers: TakeOverReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -363,6 +386,18 @@ export class SessionEngineClient {
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
                 return;
+            case 'catalog.snapshot':
+                this.catalog().rebase(payload as CatalogSnapshot);
+                return;
+            case 'catalog.changed':
+                void this.catalog().apply(payload as CatalogChange).catch(() => {});
+                return;
+            case 'gapps.changed':
+                for (const listener of [...this.#gappsChanged]) listener();
+                return;
+            case 'plugins.event':
+                this.plugins().rebase(payload as PluginsDump);
+                return;
             case 'appInbox.dump':
                 this.appInbox().rebase(payload as AppInboxDump);
                 return;
@@ -413,6 +448,15 @@ export class SessionEngineClient {
                 return;
             case 'tynn.event':
                 this.tynn().rebase(payload as TynnAccountDump);
+                return;
+            case 'takeOver.event':
+                this.takeOvers().deliver(payload as TakeOverView);
+                return;
+            case 'relayHost.event':
+                this.relayHost().deliver(payload as RelayHostView);
+                return;
+            case 'remoteAccess.event':
+                this.remoteAccess().deliver(payload as RemoteAccessEvent);
                 return;
             case 'device.event':
                 this.deviceLink().deliver(payload as DeviceLinkEvent);
@@ -482,6 +526,12 @@ export class SessionEngineClient {
             if (method === 'client.elevate') {
                 if (!this.#options.elevate) throw new Error('this window runs no elevation');
                 reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
+                this.#transport?.send(JSON.stringify(reply));
+                return;
+            }
+            if (method === 'client.remoteInvoke') {
+                if (!this.#options.onRemoteInvoke) throw new Error('this window answers no remote calls');
+                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), Array.isArray(args[1]) ? args[1] : [], forwardedCallContext(args[2])) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
@@ -672,6 +722,36 @@ export class SessionEngineClient {
         return reply.value as SyncResult[];
     }
 
+    /** Remote access (Tynn #409, P5d.1): genie-host listens, pairs and holds the baton; this window reads and drives it. */
+    remoteAccess(): RemoteAccessReplica {
+        this.#remoteAccess ??= new RemoteAccessReplica(hostname(), async (method, args) => {
+            const reply = await this.call('engine.remoteAccess', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#remoteAccess;
+    }
+
+    /** This machine on the Tynn relay, as a host (Tynn #410): genie-host registers it and runs the link. */
+    /** Who has a TUI open, as genie-host says (Tynn #553). */
+    takeOvers(): TakeOverReplica {
+        this.#takeOvers ??= new TakeOverReplica(async (method, args) => {
+            const reply = await this.call('engine.takeOver', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#takeOvers;
+    }
+
+    relayHost(): RelayHostReplica {
+        this.#relayHost ??= new RelayHostReplica(async (method, args) => {
+            const reply = await this.call('engine.relayHost', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#relayHost;
+    }
+
     /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */
     deviceLink(): DeviceLinkReplica {
         this.#deviceLink ??= new DeviceLinkReplica(async (method, args) => {
@@ -744,6 +824,81 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#flows;
+    }
+
+    /** genie-host's catalog, as this window follows it (ADF A4, Tynn #448): a missed change asks for the snapshot again. */
+    catalog(): CatalogReplica {
+        this.#catalog ??= new CatalogReplica(async () => {
+            const reply = await this.call('catalog.snapshot', []);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value as CatalogSnapshot;
+        });
+        return this.#catalog;
+    }
+
+    /** One element's definition from the host's catalog, by kind and id; `null` when it has none. */
+    async catalogDocs(kind: CatalogKind, id: string): Promise<ElementDefinition | null> {
+        const reply = await this.call('catalog.docs', [kind, id]);
+        if (!reply.ok) throw new Error(reply.reason);
+        return reply.value as ElementDefinition | null;
+    }
+
+    /** The local window's Marketplace actions. Only the host downloads, verifies and activates packages. */
+    marketplace(): MarketplaceApi {
+        const request = async <T>(operation: keyof MarketplaceApi, args: unknown[]): Promise<T> => {
+            const answer = await this.call('engine.marketplace', [operation, args]);
+            if (!answer.ok) throw new Error(answer.reason);
+            return answer.value as T;
+        };
+        this.#marketplace ??= {
+            search: (query, cursor) => request('search', cursor === undefined ? [query] : [query, cursor]),
+            prepare: (id, version) => request('prepare', [id, version]),
+            install: (token, consent) => request('install', [token, consent]),
+            discard: async token => { await request('discard', [token]); },
+        };
+        return this.#marketplace;
+    }
+
+    /** The local window's GApp store actions (GApps v2 V7): the host's book. */
+    gapps(): GAppBookApi {
+        this.#gapps ??= {
+            list: () => this.#gappsRequest('list', []),
+            review: (folder) => this.#gappsRequest('review', [folder]),
+            install: (folder, options) => this.#gappsRequest('install', [folder, options]),
+            setOn: async (id, on) => { await this.#gappsRequest('setOn', [id, on]); },
+            uninstall: async (id) => { await this.#gappsRequest('uninstall', [id]); },
+        };
+        return this.#gapps;
+    }
+
+    /** The host's GApp book changed (Tynn #596). */
+    onGappsChanged(listener: () => void): () => void {
+        this.#gappsChanged.add(listener);
+        return () => { this.#gappsChanged.delete(listener); };
+    }
+
+    /** One window of one app (Tynn #595): this process opens it, and the token stays here. */
+    gappSessions(): GAppSessionsApi {
+        return {
+            open: (packageId) => this.#gappsRequest('openSession', [packageId]),
+            close: (token) => { void this.#gappsRequest('closeSession', [token]).catch(() => undefined); },
+        };
+    }
+
+    async #gappsRequest<T>(operation: string, args: unknown[]): Promise<T> {
+        const answer = await this.call('engine.gapps', [operation, args]);
+        if (!answer.ok) throw new Error(answer.reason);
+        return answer.value as T;
+    }
+
+    /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */
+    plugins(): PluginsReplica {
+        this.#plugins ??= new PluginsReplica(async (method, args) => {
+            const reply = await this.call('engine.plugins', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#plugins;
     }
 
     /** genie-host's process book and scheduler, as this window lists and manages them (P3.3c). */

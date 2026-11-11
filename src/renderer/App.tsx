@@ -22,13 +22,16 @@ import { mailSignals, type MailSignal } from '../core/mail-signals.js';
 import { arrive, NO_PULSES, pulse, pulsingIds, type Pulses } from '../core/view-requests.js';
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
+import { takeOverTerminalOf } from '../core/take-over-route.js';
 import { chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
-import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
+import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
+import { rewrittenAddress, routeFor, windowBridge } from './window-address.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
+import { RemoteRefusalBar } from './components/RemoteRefusalBar.js';
 import { FilesWindow } from './components/FilesWindow.js';
 import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popout.js';
 import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel } from '../core/dock.js';
@@ -50,6 +53,7 @@ import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
+import { redialer } from './remote-redial.js';
 import { pushed, useSnapshot } from './use-snapshot.js';
 import type { AuthRequest } from '../core/remote-protocol.js';
 import type { DeckItem } from '../core/deck.js';
@@ -60,6 +64,7 @@ import { RelayConnecting } from './components/RelayConnecting.js';
 import type { RelayConnect } from '../core/relay-connect.js';
 import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
+import { shareDoor } from './share-door.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
 import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
 import { AddWorkspaceWizard, type SourceReadView } from './components/AddWorkspaceWizard.js';
@@ -165,7 +170,8 @@ function useFeatures(bridge: GenieBridge | undefined): [FeatureData, Dispatch<Se
         // Another host numbers its snapshots from its own start: forget this one's, so its first is taken.
         setData(forgetHost);
         // The NEWER snapshot wins, whichever lands last (genie#1393): pushes and a click's answer race.
-        void features.snapshot().then((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); });
+        // A connection that failed is said by the local protocol's own banner, with Retry.
+        void features.snapshot().then((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); }, () => {});
         const off = features.subscribe((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); });
         return () => { live = false; off(); };
     }, [bridge]);
@@ -263,7 +269,7 @@ function ownWindowBridge(): GenieBridge | undefined {
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
  */
-function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress; boundName: string | null; relayConnect: RelayConnect; takeControl: () => Promise<void>; clearRefusal: () => void } {
+function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress; boundName: string | null; relayConnect: RelayConnect; takeControl: () => Promise<void>; clearRefusal: () => void; url: string | null } {
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     // THE HOST DIALS OTHER MACHINES AND HOLDS THEIR TOKENS (P3.4 cut e): this window has a channel, and the addresses that are paired.
@@ -290,6 +296,9 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     const [boundName, setBoundName] = useState<string | null>(() => (typeof window === 'undefined' ? null : remoteNameFromSearch(window.location.search)));
     const [relayConnect, setRelayConnect] = useState<RelayConnect>({ kind: 'working', step: 'tynn' });
     const last = useRef<{ url: string; label: string } | null>(null);
+    // A TAKE OVER WINDOW for another machine (Tynn #529 part A): the ticket main handed it, read once; it connects as the
+    // driving window's companion with it, and never drives.
+    const companionTicket = useRef<string | null>(null);
     // THE TYNN NETWORK (Tynn #837): main holds a Tynn workstation's connection; this window has a channel to it.
     const net = local?.tynnNetwork;
     const [tynnWorkstations, setTynnWorkstations] = useState<TynnWorkstationList | null>(null);
@@ -312,7 +321,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     // Read again whenever this Genie's Tynn sign-in changes (Tynn #850): read once at open, signing in afterwards left it
     // saying "sign in to Tynn".
     useEffect(() => {
-        const features = typeof window === 'undefined' ? undefined : window.genie?.features;
+        const features = ownWindowBridge()?.features;
         if (!net || !features) return;
         const read = () => { void net.workstations().then(setTynnWorkstations, (error: unknown) => setTynnWorkstations({ ok: false, reason: error instanceof Error ? error.message : String(error) })); };
         return watchTynnSignIn(features, read);
@@ -364,7 +373,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                     const transport = ipcRelayTransport(net, opened.channel);
                     // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
                     const localBrowser = window.genie?.browserWindow;
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { drive: true, ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}) });
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}) });
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
@@ -393,7 +402,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 const opened = await link.open(url.url);
                 if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
                 const transport = ipcRelayTransport(net, opened.channel);
-                const next = connectRemote(transport, auth, label || 'another screen', { drive: true });
+                const ticket = companionTicket.current;
+                const next = connectRemote(transport, auth, label || 'another screen', ticket ? { companion: ticket } : { drive: true });
                 // Dropped after it was up: the host's words, when it has some.
                 transport.onClose(() => { const why = transport.closedBecause(); if (why) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: why })); });
                 setClient(next);
@@ -426,13 +436,45 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         });
     };
     // A remote host's window connects on open, with the token this device holds (no PIN: it was paired before).
-    useEffect(() => { if (bound) void connectTo(bound, ''); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // A Take Over window reads its ticket first (Tynn #529 part A).
+    useEffect(() => {
+        if (!bound) return;
+        // Either form of its hash: as main opened it, or machine-qualified as this window rewrites it (core/take-over-route.ts).
+        const takeOverWindow = typeof window !== 'undefined' && takeOverTerminalOf(window.location.hash) !== null;
+        if (!takeOverWindow) { void connectTo(bound, ''); return; }
+        void (async () => {
+            const ticket = await window.genie?.remoteWindows?.takeOverTicket?.().catch(() => null) ?? null;
+            if (ticket === null) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'This Take Over window has no ticket. Press Take over again in the window driving that machine.' })); return; }
+            companionTicket.current = ticket;
+            void connectTo(bound, '');
+        })();
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
     // A Tynn workstation's window opened without its name (an older opener): Tynn's list names it.
     useEffect(() => {
         const id = bound ? relayWorkstationOf(bound) : null;
         if (id === null || boundName !== null || !net) return;
         void net.workstations().then((list) => { const w = list.ok ? list.workstations.find((x) => x.id === id) : undefined; if (w) setBoundName(w.name); }, () => {});
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    /*
+     * A LINK THAT DROPPED, NOT BY DISCONNECT, DIALS AGAIN (beta.61 blocker, step five): the remote host is genie-host's, so
+     * a restart of the host's genie-host drops every link; this window dials the same host again, with the token it holds,
+     * and drives again (its dial asks for the baton). Not a Tynn workstation's window (it says the drop, with Retry), not a
+     * Take Over window (its ticket was used), and not after the host said this device is not paired.
+     */
+    const leaving = useRef(false);
+    const dialAgain = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
+    dialAgain.current = () => { const l = last.current ?? (bound ? { url: bound, label: '' } : null); return l ? connectTo(l.url, l.label) : Promise.resolve(false); };
+    const [redial] = useState(() => redialer({ dial: () => dialAgain.current(), schedule: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); }, delay: reconnectDelay }));
+    useEffect(() => () => redial.stop(), [redial]);
+    const linkUp = useRef(false);
+    useEffect(() => {
+        if (state?.connected) { linkUp.current = true; leaving.current = false; return; }
+        if (!linkUp.current) return;
+        linkUp.current = false;
+        if (leaving.current || companionTicket.current !== null || (bound !== null && relayWorkstationOf(bound) !== null)) return;
+        if (/not paired/i.test(state?.lastRefusal ?? '')) return;
+        redial.dropped();
+    }, [state?.connected]); // eslint-disable-line react-hooks/exhaustive-deps
     // A Tynn workstation's connection that DROPPED after it was up: said at its last step, with Retry.
     const wasConnected = useRef(false);
     useEffect(() => {
@@ -446,7 +488,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         state,
         remembered,
         connect: connectWith,
-        disconnect: () => { client?.close(); setClient(null); setState(null); },
+        disconnect: () => { leaving.current = true; client?.close(); setClient(null); setState(null); },
         known,
         bound,
         // The link dropped (Genie 1's remote.reconnect): the same host again, with the token this device holds.
@@ -461,6 +503,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         relayConnect,
         // Take control (Tynn #529): from nobody, or from whoever drives — the host says no only to a guest asking the owner.
         takeControl: async () => { if (client) await client.takeBaton({ force: true }); },
+        // The machine this window drives, for its Take Over windows (Tynn #529 part A).
+        url: last.current?.url ?? bound,
         clearRefusal: () => client?.clearRefusal(),
     };
 }
@@ -859,7 +903,9 @@ function DesktopApp({ bridge }: AppProps) {
     reconnectNow.current = remote.reconnect;
     useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
-    const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)));
+    // A window BOUND to another host reads that host's Genie, and nothing of this machine's while it connects (window-address.ts).
+    const resolvedBridge = windowBridge({ bound: remote.bound, connected: remote.state?.connected === true, remote: remote.client?.bridge ?? null,
+        local: bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)) });
     const local = resolvedBridge?.localProtocol;
     const localState = useSyncExternalStore(local?.onState ?? noLocalSubscription, local?.state ?? noLocalState, local?.state ?? noLocalState);
     const localRevision = localState?.revision ?? 0;
@@ -885,9 +931,7 @@ function DesktopApp({ bridge }: AppProps) {
         ? { workstation: snapshot.workstation.name, workspaces: snapshot.workspaces, agents: snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents, tabsOf: (id) => tabsByWorkspace.get(id) }
         : null;
     // Not readable yet (no snapshot): an old internal route is used as it is; an address waits on the Dashboard.
-    const route = addressContext
-        ? routeOfAddress(address, addressContext) ?? DEFAULT_ROUTE
-        : isInternalRoute(address) ? address : DEFAULT_ROUTE;
+    const route = routeFor(address, addressContext);
     /*
      * WHERE AN AGENT ACTED (genie#1265; the owner, 2026-10-27): an agent's file, tab or site never moves this window — its
      * workspace is marked, and the rail row (and the Dashboard's header) pulses until the person ARRIVES there; the arrival
@@ -911,10 +955,13 @@ function DesktopApp({ bridge }: AppProps) {
     const navigate = (next: string): void => { if (next === route) { arriveAt(next); return; } writeAddress(addressContext ? addressOf(next, addressContext) : next); };
     // An OLD address (genie://workspace/<id>?chat=…, a link, a host navigation) is rewritten in place to the new form.
     const shownAddress = addressContext ? addressOf(route, addressContext) : address;
+    // The workstation this window read until now: connecting in place, its page goes with it to the host (beta.61, step four).
+    const readBefore = useRef<string | null>(null);
     useEffect(() => {
-        if (!addressContext || shownAddress === address || !isInternalRoute(address)) return;
-        window.location.replace(`#${shownAddress}`);
-    }, [address, shownAddress, addressContext !== null]);
+        const next = rewrittenAddress(address, addressContext, readBefore.current);
+        if (addressContext) readBefore.current = addressContext.workstation;
+        if (next !== null) window.location.replace(`#${next}`);
+    }, [address, shownAddress, addressContext !== null, addressContext?.workstation]);
     // LEAVING A REMOTE HOST (the two-VM proof, 2026-10-20): the address named that machine; once this window's own snapshot
     // names this one, the same page comes back here — Disconnect on the host's Remote access lands on this machine's Remote
     // access (the host it left is listed there), not the Dashboard. Not in a window BOUND to a host: it waits for its host.
@@ -1215,10 +1262,10 @@ function DesktopApp({ bridge }: AppProps) {
         void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r));
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
-    // SHARE THROUGH TYNN (Tynn #839): this Genie's own workspaces only — never from a window driving another host.
-    const shares = !remote.state?.connected ? ownWindowBridge()?.tynnNetwork?.shares : undefined;
-    const [share, setShare] = useState<{ workspaceId: string; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
-    const readShares = (forWorkspace: string) => {
+    // SHARE THROUGH TYNN (Tynn #839, #587): this machine's, or the host's while its owner drives it; a guest has none.
+    const shares = shareDoor({ connected: remote.state?.connected === true, isOwner: remote.state?.isOwner === true, own: ownWindowBridge()?.tynnNetwork?.shares, remote: remote.client?.shares });
+    const [share, setShare] = useState<{ workspaceId: string | null; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
+    const readShares = (forWorkspace: string | null) => {
         void shares?.list(forWorkspace).then((r) => setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, links: r.ok ? r.links : [], problem: r.ok ? s.problem : r.reason } : s)));
     };
     /*
@@ -1397,6 +1444,7 @@ function DesktopApp({ bridge }: AppProps) {
               model: detail?.agent.model ?? null,
               ...(modelChoices !== undefined ? { models: modelChoices } : {}),
               onRefreshModels: () => { refreshModels.current = true; setModelsAsked((n) => n + 1); },
+              ...(resolvedBridge.chooseProviderProgram ? { onChooseProviderProgram: (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) } : {}),
               onSetModel: (model) => { void resolvedBridge.agents.setModel(agentId, model).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', model ?? 'the provider default', r.apply ?? { when: 'next-start' }) : r.reason })); if (r.ok) setModelsAsked((n) => n + 1); }); },
               onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', permissions === 'edits' ? 'edits only' : permissions === 'ask' ? 'asks before shell commands' : 'all tools', r.apply ?? { when: 'next-start' }) : r.reason }))); },
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
@@ -1405,7 +1453,7 @@ function DesktopApp({ bridge }: AppProps) {
               onSetAutoApprove: (on) => { void resolvedBridge.agents.setAutoApprove(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetManageTabs: (on) => { void resolvedBridge.agents.setManageTabs(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetDrivePages: (on) => { void resolvedBridge.agents.setDrivePages(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
-              onSetIssueWatch: (setting) => { void resolvedBridge.agents.setIssueWatch(agentId, setting).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+              onSetIssueWatch: (setting) => resolvedBridge.agents.setIssueWatch(agentId, setting).then((r) => (r.ok ? { ok: true as const } : { ok: false as const, reason: r.reason })),
               // Restart is the one restart (genie#1238); Restart fresh, from the ⋯ menu, is the other operation.
               onRestart: (kind) => {
                   if (kind === 'graceful') { void restartOne(agentId).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? 'restarted on the same conversation' : r.reason }))); return; }
@@ -1733,6 +1781,25 @@ function DesktopApp({ bridge }: AppProps) {
     // A TAKE OVER WINDOW renders the terminal and nothing else: no rail, no bar, no Deck. The
     // TUI is the window (§1).
     if (parsed.surface === 'takeover') {
+        // Another machine's terminal (Tynn #529 part A): nothing until this window's companion connection is up, then the
+        // TUI from that machine, with why it can no longer type when its window stops driving.
+        if (remote.bound) {
+            if (!remote.state?.connected) {
+                return (
+                    <div data-remote-takeover-connecting="" className="flex h-full items-center justify-center bg-[var(--bg-0)] p-8 text-sm text-[var(--fg-2)]">
+                        {remote.state?.lastRefusal ?? `Connecting to ${remote.boundName ?? 'the other machine'}…`}
+                    </div>
+                );
+            }
+            return (
+                <div className="flex h-full flex-col">
+                    <RemoteRefusalBar refusal={remote.state.lastRefusal} needsBaton={false} driver={remote.state.driver} onTakeControl={() => {}} onDismiss={remote.clearRefusal} />
+                    <div className="min-h-0 flex-1">
+                        <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />
+                    </div>
+                </div>
+            );
+        }
         return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />;
     }
     // THE FLOW EDITOR IN ITS OWN WINDOW (genie#1204, Genie 1's genie#505): fancy-flow's canvas and nothing else.
@@ -1836,6 +1903,7 @@ function DesktopApp({ bridge }: AppProps) {
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
             servable={SERVABLE}
+            onShareWorkstation={shares ? () => { setShare({ workspaceId: null, name: remote.state?.host ?? snapshot.workstation?.name ?? 'this workstation', links: null, minted: null, problem: null, busy: false }); readShares(null); } : undefined}
             remote={remote.state?.connected && remote.state.host ? {
                 host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked,
                 lostTo: remote.state.batonLostTo ?? null, onTakeControl: () => { void remote.takeControl(); },
@@ -1874,6 +1942,9 @@ function DesktopApp({ bridge }: AppProps) {
             // workspace (core/chat-scope.ts), so the composer never quietly keeps a project the person left (beta.26).
             onNavigate={(r) => navigate(carryChat(r, parsed, snapshot.agents, openedThreads))}
             features={features}
+            marketplace={resolvedBridge?.marketplace}
+            gapps={resolvedBridge?.gapps}
+            pickGappFolder={() => pickFolder('Choose the folder of the app package')}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
             onFeature={(action) =>
                 (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => {
@@ -1920,8 +1991,12 @@ function DesktopApp({ bridge }: AppProps) {
                         console.error('[genie] deck answer refused:', route.reason);
                         return;
                     case 'feature':
+                        setDeckFormRefusal(null);
                         void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answer', item, optionId, ...(note ? { note } : {}) }).then(setFeatures).catch((error: unknown) => {
-                            console.error('[genie] deck answer refused:', (error as Error).message);
+                            // Said on its item, never only in the console (Tynn #600).
+                            const reason = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+                            console.error('[genie] deck answer refused:', reason);
+                            setDeckFormRefusal({ itemId: item.id, reason });
                         });
                         return;
                     case 'navigate':
@@ -2008,18 +2083,26 @@ function DesktopApp({ bridge }: AppProps) {
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             // A refused Take over is said, never a dead click (Tynn #529): a remote window's bridge keeps it under the title bar.
-            onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => { if (!r.ok && !remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); }, (error: unknown) => showAlert({ title: 'Take over', body: error instanceof Error ? error.message : String(error) })); }}
+            onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId).then((r) => {
+                if (!r.ok) { if (!remote.state?.connected) showAlert({ title: 'Take over', body: r.reason }); return; }
+                // Another machine's agent (Tynn #529 part A): its TUI started there; its Take Over window opens HERE.
+                if (!remote.state?.connected || !r.ticket) return;
+                const opened = remote.url ? window.genie?.remoteWindows?.openTakeOver?.(remote.url, r.terminalId, r.ticket, remote.state.host) : undefined;
+                if (!opened) { showAlert({ title: 'Take over', body: 'This window cannot open a Take Over window for another machine.' }); return; }
+                void opened.then((o) => { if (!o.ok) showAlert({ title: 'Take over', body: o.reason }); });
+            }, (error: unknown) => showAlert({ title: 'Take over', body: error instanceof Error ? error.message : String(error) })); }}
             {...(resolvedBridge?.crashReport ? { crashReport: { draft: () => resolvedBridge.crashReport!.draft(), send: (text: string, notes: string) => resolvedBridge.crashReport!.send(text, notes), copy: (text: string) => copyToClipboard({ plain: text }) } } : {})}
             {...(resolvedBridge?.scratchTerminal ? { onOpenScratchTerminal: (workspaceId: string) => resolvedBridge.scratchTerminal!(workspaceId) } : {})}
             // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
-            onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] restart refused:', r.reason); }); }}
+            onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onCancelTurn={(agentId, intent) => { void resolvedBridge?.cancelTurn(agentId, intent); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
             onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId); }}
-            onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] start refused:', r.reason); }); }}
+            onChooseProviderProgram={resolvedBridge?.chooseProviderProgram ? (provider: string) => resolvedBridge.chooseProviderProgram!(provider).then((r) => { if (r.ok) { refreshModels.current = true; setModelsAsked((n) => n + 1); } return r; }) : undefined}
+            onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onSafeModeStartAgent={restartOne}
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
@@ -2124,6 +2207,7 @@ function DesktopApp({ bridge }: AppProps) {
         {share && shares ? (
             <ShareWorkspaceModal
                 workspaceName={share.name}
+                workstation={share.workspaceId === null}
                 links={share.links}
                 minted={share.minted}
                 problem={share.problem}

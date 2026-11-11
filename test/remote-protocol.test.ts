@@ -39,7 +39,8 @@ describe('the capability table', () => {
         expect(capabilityOf('updates.download')).toBe('upgrade');
         expect(capabilityOf('updates.install')).toBe('upgrade');
         expect(capabilityOf('addWorkspace')).toBe('host-only');
-        expect(capabilityOf('takeOver')).toBe('host-only');
+        // Tynn #529 part A: Take over from another machine is a write — it needs the baton — and its window opens THERE.
+        expect(capabilityOf('takeOver')).toBe('write');
         expect(capabilityOf('providerLogin')).toBe('host-only');
         expect(capabilityOf('features.setBrowserBounds')).toBe('host-only');
         // COUNTED: the table covers the whole bridge surface and nothing twice.
@@ -93,7 +94,13 @@ describe('the capability table', () => {
         // 140 with agents.setAccessAgents (Tynn #526): chosen agents who may message one, a write, agent-scoped.
         // 141 with the Home's Details save (genie#1295 H1): a write, owner-only and workspace-scoped.
         // 142 with host.home, where a picker opens on the host this window drives (Tynn #527): a read.
-        expect(REMOTE_METHODS.length).toBe(142);
+        // 144 with the Tynn tab's two changes reads, local (P4 family 12, Tynn #561).
+        // 150 with family 11's local features.soundData and features.picked, and C4's four connection-owned Marketplace operations.
+        // 155 with GApps v2 V7's five local store actions. 156 with opening an app's window (Tynn #595).
+        expect(REMOTE_METHODS.length).toBe(156);
+        for (const method of ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const) expect(capabilityOf(method)).toBe('local');
+        expect(capabilityOf('features.soundData')).toBe('local');
+        expect(capabilityOf('features.picked')).toBe('local');
         for (const method of LOCAL_TERMINAL_METHODS) expect(capabilityOf(method)).toBe('local');
         for (const method of ['artboard.read', 'artboard.review'] as const) expect(capabilityOf(method)).toBe('local');
         for (const method of ['chatDrafts.load', 'chatDrafts.save', 'chatDrafts.putFile', 'chatDrafts.readFile', 'chatDrafts.release'] as const) expect(capabilityOf(method)).toBe('local');

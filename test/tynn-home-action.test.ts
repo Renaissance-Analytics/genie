@@ -64,14 +64,16 @@ describe('the window carries the Details save, owner-only, like the Issues write
     it('is a protocol write scoped to the workspace, with its IPC row', () => {
         expect(capabilityOf('workspaces.tynnPageAction')).toBe('write');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnPageAction');
-        expect(IPC_INVENTORY).toContainEqual(['genie:workspace-tynn-page-action', 'protocol:workspaces.tynnPageAction']);
+        // P4 family 12 (Tynn #561): the window's own call goes over the local door now; no IPC row is left.
+        expect(IPC_INVENTORY.map(([c]) => c)).not.toContain('genie:workspace-tynn-page-action');
     });
 
-    it('main runs it through the person\'s pairing on both the native IPC and the HostApi; preload exposes it', () => {
+    it('main runs it through the person\'s pairing on the HostApi, the one way in (the IPC handler is gone)', () => {
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        expect(main).toMatch(/ipcMain\.handle\('genie:workspace-tynn-page-action'[\s\S]{0,400}runTynnPageAction\(tynnBoardPorts\(\)/);
-        expect(main).toMatch(/tynnPageAction: \(id, input\) => [^\n]*runTynnPageAction\(tynnBoardPorts\(\)/);
+        expect(main).not.toContain("'genie:workspace-tynn-page-action'");
+        expect(main).toContain('...workspaceTynnApi(tynnBoardPorts, readWorkspaceTynnPage)');
+        expect(readFileSync(new URL('../src/main/workspace-tynn-api.ts', import.meta.url), 'utf8')).toMatch(/tynnPageAction: async \(id, input\) => [^\n]*runTynnPageAction\(await board\(\)/);
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
-        expect(preload).toContain("ipcRenderer.invoke('genie:workspace-tynn-page-action'");
+        expect(preload).not.toContain("'genie:workspace-tynn-page-action'");
     });
 });

@@ -23,7 +23,9 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { homedir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { join } from 'node:path';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this stops the keyring; test machines only'); process.exit(2); }
 process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
@@ -133,7 +135,7 @@ async function launch() {
     if (!page) throw new Error('no window on the debugger port');
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     await until('window.genie', 30_000, () => cdp.evaluate('typeof window.genie === "object"'));
-    const card = () => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.keyring ?? null)');
+    const card = () => cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.integrations?.keyring ?? null)');
     return { cdp, card };
 }
 
@@ -175,7 +177,7 @@ try {
         check(Boolean(host) && alive(host), 'B5-the-host-is-up', String(host));
         const windowPid = window.pid;
         say('pressing the button');
-        await cdp.evaluate(`window.genie.features.act({ kind: 'keyring.fix' })`);
+        await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'keyring.fix' })`);
         const answered = await until('the keychain to answer', 60_000, keychainAnswers);
         check(Boolean(answered), 'B6-the-keychain-answers-now', bus().line);
         const gone = await until('the card to go', 30_000, async () => (await card()) === null);
@@ -200,7 +202,7 @@ try {
         const back = await until('the card to come by itself', 30_000, card);
         check(back?.state === 'not-running', 'B11-the-card-came-with-nothing-pressed', JSON.stringify(back));
         check(window?.pid === windowPid && alive(windowPid) && alive(host) && hostPid() === host, 'B12-no-restart');
-        await cdp.evaluate(`window.genie.features.act({ kind: 'keyring.fix' })`);
+        await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'keyring.fix' })`);
         const returned = await until('the card to go again', 60_000, async () => (await card()) === null);
         check(Boolean(returned), 'B13-the-button-brought-it-back', bus().line);
         machine.closeAllConnections();

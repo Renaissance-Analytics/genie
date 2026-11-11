@@ -1,3 +1,6 @@
+import { bcryptHash } from './mail-bcrypt.js';
+import { MailService, type MailServicePorts } from './mail-service.js';
+import { mailToolPort, type MailPort } from './mcp-tools-mail.js';
 import { phpWorkerEnvWithTrust } from './php-trust-host.js';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -165,6 +168,16 @@ export interface HostingComposeInput extends HostingOptions {
     readonly trustWatchEveryMs?: number | undefined;
     /** False = no folder watchers, the slow pass alone. Absent = watch. */
     readonly trustWatchFolders?: boolean | undefined;
+    /**
+     * Genie Mail G5: the host keychain, for the workspaces' default inbox passwords. Absent (the emergency path): no inbox
+     * book, and Genie's shared Mailpit asks no one for credentials.
+     */
+    readonly mailSecrets?: MailServicePorts['secrets'] | undefined;
+    /** GApps v2 V4: the installed apps' routes, and a way to hear that they changed. */
+    readonly gappRoutes?: (() => readonly GenRoute[]) | undefined;
+    readonly onGappRoutesChange?: ((listener: () => void) => void) | undefined;
+    /** Genie Mail G5: restart the running background processes of these workspaces with their env as it is now. */
+    readonly restartWorkspaceProcesses?: MailServicePorts['restartProcesses'];
 }
 
 /** The hosting as its builder holds it: the API, and its shutdown in the steps a quit interleaves with stopping every supervised process. */
@@ -179,6 +192,8 @@ export interface HostingStack extends HostingApi {
     readonly frontDoor: GenRouterServer;
     /** The workspaces' trust (genie#1519): its record and verdicts, owned where the hosting is. */
     readonly trust: TrustApi;
+    /** Genie Mail's inboxes and the shared Mailpit, for the agents' `mail` tool (G6); null where there is no inbox book. */
+    readonly mail: MailPort | null;
     /** Nothing more is started or synced: the hosts sync and the port probe, the docker watch, the workspace watch. */
     quiesce(): void;
     /** The `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short. */
@@ -508,7 +523,13 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     const driver = new ServiceDriver(docker);
     const dockerEvents: DockerEventsPort | undefined = input.dockerEvents ?? (input.docker ? undefined : (args, onLine, onEnd) => lineStreamRunner('docker', args, onLine, onEnd));
     if (dockerEvents) driver.watch(dockerEvents);
-    const engines = await ServiceRegistry.open(input.userData, driver, { allocatePort, randomPassword: () => randomBytes(18).toString('base64url'), portFree: input.portFree ?? loopbackPortFree });
+    // Genie Mail G5: the inbox book's auth directory and each workspace's default inbox credentials, bound once the book opens.
+    let mail: MailService | null = null;
+    const mailAuthDir = join(runtimeDir(input.userData), 'mailpit-auth');
+    const engines = await ServiceRegistry.open(input.userData, driver, {
+        allocatePort, randomPassword: () => randomBytes(18).toString('base64url'), portFree: input.portFree ?? loopbackPortFree,
+        ...(input.mailSecrets ? { mail: { authDir: mailAuthDir, credentialsFor: (workspaceId: string) => mail?.credentialsFor(workspaceId) ?? null } } : {}),
+    });
     registry = engines;
     // Genie 1's engines, taken over in place (and its sandboxes stopped) BEFORE anything reads a workspace's env, primes
     // a port or reconciles: the adopted engines' ports are then reserved, and the reconcile sees them as registered.
@@ -527,6 +548,29 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         }
     }
     await portAllocator?.prime();
+    // GENIE MAIL G5: each workspace using Genie's shared Mailpit sends as its default inbox. The book opens here; every
+    // change to the engines (a workspace attaching) brings the missing credentials up, then the env, then Mailpit reading
+    // the book (main/mail-service.ts): never the other way round, so no app is refused for credentials it was not given.
+    if (input.mailSecrets) {
+        const secrets = input.mailSecrets;
+        mail = await MailService.open({
+            storeFile: join(runtimeDir(input.userData), 'mail-inboxes.json'),
+            authDir: mailAuthDir,
+            hash: bcryptHash,
+            secrets,
+            attachedWorkspaces: () => (input.workspaces?.() ?? []).map((w) => w.id).filter((id) => engines.usesSharedMail(id)),
+            wired: () => engines.mailWired(),
+            wire: async () => { await engines.wireMail(); },
+            restart: () => engines.restartMail(),
+            envChanged: () => { engines.envChanged(); },
+            ...(input.restartWorkspaceProcesses ? { restartProcesses: input.restartWorkspaceProcesses } : {}),
+            say: (line) => { console.error(`[genie] ${line}`); },
+        });
+        const syncMail = () => { void mail?.sync().catch((error: unknown) => { console.error(`[genie] Genie Mail: ${error instanceof Error ? error.message : String(error)}`); }); };
+        engines.onChange(syncMail);
+        input.onWorkspacesChange?.(syncMail);
+        syncMail();
+    }
     // The person's engine Stops are machine-local like the sites' (site-run-state.json below): a restart keeps them stopped.
     const engineRunState = join(runtimeDir(input.userData), 'engine-run-state.json');
     const engineStopped = new Set<string>(
@@ -607,7 +651,8 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     settings.onChange((key, _value, workspaceId) => { if (key === 'app_inbox') sites.serviceEnvChanged(workspaceId); });
     // The sites' routes and the shared WebSockets server's browser-facing ones (core/services.ts websocketRoutes).
     // Mailpit's web inbox at its .gen name (core/mailpit-name.ts): the Genie browser opens .gen sites only.
-    const routes = () => [...sites.routes(), ...websocketRoutes(engines.list()), ...mailpitRoutes(engines.list())];
+    // GApps v2 V4: each installed app's <app-slug>.apps.gen, from the host's GApp server (main/gapp-server.ts).
+    const routes = () => [...sites.routes(), ...websocketRoutes(engines.list()), ...mailpitRoutes(engines.list()), ...(input.gappRoutes?.() ?? [])];
     // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.
     const siteRunState = join(runtimeDir(input.userData), 'site-run-state.json');
     const envelopeSites = new EnvelopeSites(sites, {
@@ -674,7 +719,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         sites,
         supervisor,
         routes,
-        onRoutesChange: (listener) => { engines.onChange(listener); },
+        onRoutesChange: (listener) => { engines.onChange(listener); input.onGappRoutesChange?.(listener); },
         configuredHosts,
         hostsIo: input.hostsIo ?? realHostsIo({ platform: process.platform, tmpDir: runtimeDir(input.userData) }),
         hostsPath: hostsFilePath(process.platform),
@@ -746,10 +791,13 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     };
     let down: Promise<void> | null = null;
 
+    const mailPort = mail ? mailToolPort({ service: mail, envFor: (ws) => engines.envFor(ws), apiUrl: () => engines.mailApiUrl() }) : null;
+
     return {
         sites,
         envelopeSites,
         engines,
+        mail: mailPort,
         engineReconcile,
         envFiles,
         engineStatuses: () => engineStatusesOf(enginePorts),

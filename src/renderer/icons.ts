@@ -45,6 +45,8 @@ export const ICON_NAMES: readonly string[] = [
     'home', 'trending-up', 'trending-down', 'octagon-alert', 'clipboard-check',
     // Its Features page (row F1): the nav's grid, an empty Features tab, Repositories' heading and the kinds, Models.
     'layout-grid', 'puzzle', 'folder-git-2', 'code', 'database',
+    // Its VIP lane (row V1): the nav's flame, a story's one-click move on.
+    'flame', 'chevrons-right',
     // Its claims (row B3): Claim + Start and Assign to.
     'hand', 'user-plus',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
@@ -54,6 +56,8 @@ export const ICON_NAMES: readonly string[] = [
     'cpu',
     // Connect to another machine (the title bar's button, Genie 1's Hosts), and a Tynn workstation's desktop / cloud.
     'monitor', 'cloud',
+    // Share a workspace or the workstation through Tynn (Tynn #587).
+    'share-2',
     // A Tynn workstation's role (genie#1278 W6): pilot, drone.
     'navigation', 'bot',
     // A workspace's GitHub (IssueWatch) panel heading (Tynn #806), its rows' kinds and its Refresh.

@@ -1,5 +1,7 @@
 import type { Delivery } from './dashboard-view.js';
-import { editLineCounts, type TimedEvent } from './stream-view.js';
+import { editCountsFor, type TimedEvent } from './stream-view.js';
+import { editLabel } from './file-edits.js';
+import type { FileEditFact } from './stream-event.js';
 
 /**
  * THE DASHBOARD'S "LATEST DELIVERY" — the design mockup's column, filled (the owner, 2026-10-19: "make sure the dashboard
@@ -19,6 +21,8 @@ interface Call {
     name: string | null;
     toolKind: string | null;
     input: unknown;
+    /** A native edit's list (Codex, Tynn #440 part C), the latest that carried one. */
+    edits: readonly FileEditFact[] | null;
     status: string | null;
     output: string | null;
     at: number | null;
@@ -59,9 +63,9 @@ function deliveryOfCall(c: Call, now: number): Delivery | null {
         return { kind: 'handoff', main: 'handoff', sub: firstLine(input['handoff'] as string), plus: null, minus: null, age };
     }
     if (c.toolKind === 'edit' && c.status === 'completed') {
-        const path = [input?.['file_path'], input?.['path'], input?.['filePath']].find((p): p is string => typeof p === 'string' && p.length > 0);
+        const path = c.edits !== null ? editLabel(c.edits) : [input?.['file_path'], input?.['path'], input?.['filePath']].find((p): p is string => typeof p === 'string' && p.length > 0);
         if (!path) return null;
-        const counts = editLineCounts(c.input);
+        const counts = editCountsFor({ rawInput: c.input, ...(c.edits !== null ? { edits: c.edits } : {}) });
         return { kind: 'file', main: path, sub: null, plus: counts?.plus ?? null, minus: counts?.minus ?? null, age };
     }
     return null;
@@ -71,11 +75,12 @@ function deliveryOfCall(c: Call, now: number): Delivery | null {
 function withRow(c: Call | undefined, r: TimedEvent, index: number): Call | null {
     const e = r.event;
     if (e.kind !== 'tool' || !e.toolCallId) return null;
-    const was = c ?? { name: null, toolKind: null, input: null, status: null, output: null, at: null, index };
+    const was = c ?? { name: null, toolKind: null, input: null, edits: null, status: null, output: null, at: null, index };
     return {
         name: was.name ?? e.name,
         toolKind: was.toolKind ?? e.toolKind,
         input: was.input ?? e.rawInput ?? null,
+        edits: e.edits ?? was.edits,
         status: e.status ?? was.status,
         output: e.output ?? was.output,
         at: r.at ?? was.at,

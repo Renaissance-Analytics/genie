@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFileSync as read } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +12,7 @@ import { materializeHostRuntime, runtimeFiles, type HostRuntimeInput } from '../
  * copy, which holds 0 files of the install. Keyed by Electron's version, so only an Electron update copies 240 MB.
  */
 
+const require = createRequire(import.meta.url);
 let root: string;
 function write(file: string, text = 'x'): void { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text); }
 
@@ -25,12 +27,16 @@ function install(platform: NodeJS.Platform = 'linux'): HostRuntimeInput {
     write(join(app, 'dist', 'main', 'chunk-1.js'), 'chunk');
     write(join(app, 'package.json'), '{"type":"module"}');
     write(join(app, 'node_modules', 'node-pty', 'index.js'), 'pty');
-    write(join(app, 'node_modules', 'unrelated', 'index.js'), 'not needed');
+    write(join(app, 'node_modules', 'some-dependency', 'index.js'), 'a runtime dependency');
+    write(join(app, 'node_modules', '@particle-academy', 'fancy-file-commons', 'index.js'), 'commons');
+    write(join(app, 'node_modules', '@particle-academy', 'prism-acp', 'dist', 'index.js'), 'prism');
+    write(join(app, 'node_modules', '@particle-academy', 'prism-acp', 'package.json'), '{"type":"module"}');
     const unpacked = join(dist, 'resources', 'app.unpacked');
     write(join(unpacked, 'node_modules', 'node-pty', 'prebuilds', 'pty.node'), 'native');
     write(join(unpacked, 'node_modules', '@napi-rs', 'keyring', 'index.js'), 'keyring');
     write(join(unpacked, 'node_modules', '@napi-rs', 'keyring-linux-x64-gnu', 'k.node'), 'native');
     write(join(unpacked, 'node_modules', '@particle-academy', 'fancy-pty', 'bin', 'helper'), 'helper');
+    write(join(unpacked, 'node_modules', '@particle-academy', 'prism-acp', 'native', 'win32-x64', 'prism-acp-supervisor.exe'), 'supervisor');
     chmodSync(join(unpacked, 'node_modules', '@particle-academy', 'fancy-pty', 'bin', 'helper'), 0o755);
     return { packaged: true, platform, execPath: exe, electronVersion: '45.2.2', appRoot: app, unpackedRoot: unpacked, hostHash: 'abc123', genieHome: join(root, 'home'), log: () => {} };
 }
@@ -71,10 +77,29 @@ describe('the copy', () => {
         expect(got.error).toBeNull();
     });
 
-    it('not what it doesn’t', async () => {
+    it('holds prism-acp, which the host imports at run time, with its supervisor from the unpacked side (Tynn #597)', async () => {
         const input = install();
         await materializeHostRuntime(input);
-        expect(existsSync(join(input.genieHome, 'host', 'abc123', 'node_modules', 'unrelated'))).toBe(false);
+        const prism = join(input.genieHome, 'host', 'abc123', 'node_modules', '@particle-academy', 'prism-acp');
+        for (const f of ['dist/index.js', 'package.json', 'native/win32-x64/prism-acp-supervisor.exe']) expect(existsSync(join(prism, f)), f).toBe(true);
+    });
+
+    it('holds EVERY package the install ships: the main build is ssr, so all dependencies stay external (Tynn #597)', async () => {
+        // A hand list missed @particle-academy/fancy-file-commons on CI (a chunk of the host imports it), and the packaged
+        // host died with ERR_MODULE_NOT_FOUND. Whatever electron-builder ships is a runtime dependency of some bundle.
+        expect(readFileSync('vite.main.config.ts', 'utf8'), 'the main build externalizes its dependencies').toMatch(/ssr: true/);
+        const input = install();
+        await materializeHostRuntime(input);
+        const modules = join(input.genieHome, 'host', 'abc123', 'node_modules');
+        for (const name of ['some-dependency', '@particle-academy/fancy-file-commons', '@particle-academy/prism-acp', 'node-pty']) {
+            expect(existsSync(join(modules, name)), name).toBe(true);
+        }
+        expect(readFileSync('src/main/host-runtime.ts', 'utf8'), 'no hand list to fall behind').not.toMatch(/HOST_PACKAGES/);
+    });
+
+    it('not what it doesn’t: Electron files the runtime does not need', async () => {
+        const input = install();
+        await materializeHostRuntime(input);
         expect(existsSync(join(input.genieHome, 'host', 'runtime-45.2.2', 'locales'))).toBe(false);
     });
 
@@ -84,6 +109,20 @@ describe('the copy', () => {
         const got = await materializeHostRuntime(input);
         expect(statSync(got.execPath).mode & 0o111).toBe(0o111);
         expect(statSync(join(input.genieHome, 'host', 'abc123', 'node_modules', '@particle-academy', 'fancy-pty', 'bin', 'helper')).mode & 0o111).toBe(0o111);
+    });
+});
+
+describe('CI: what was packaged really comes up (Tynn #597)', () => {
+    const steps = () => (require('js-yaml').load(readFileSync('.github/workflows/ci.yml', 'utf8')) as { jobs: { package: { steps: Array<{ name?: string; run?: string }> } } }).jobs.package.steps;
+
+    it('the packaged app’s step waits for the window to be linked to its host, and says why not', () => {
+        const run = steps().find((s) => s.name === 'the packaged app starts genie-host through genie-launch.exe')?.run ?? '';
+        expect(run, 'the step exists').toContain('host spawn via=');
+        expect(run).toContain('agent host (started|replaced|adopted) pid=');
+        expect(run).toContain('did not come up');
+        expect(run).toContain('genie-host.log');
+        // Read before anything is killed: the kill is what makes a host's own log stop.
+        expect(run.indexOf('agent host (started')).toBeLessThan(run.indexOf('Stop-Process'));
     });
 });
 

@@ -2,9 +2,11 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import { localTerminalClient } from './local-terminal-client.js';
 import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
-import { BATON_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
+import type { TynnWatchEvent, TynnWatchKind } from '../core/local-tynn-watch.js';
+import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
+import { BATON_EVENT, COMPANION_EVENT, LOCAL_EVENTS, parseMessage, type BatonEvent, type CompanionEvent, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
-import type { FeatureData } from './features.js';
+import type { FeatureAction, FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
@@ -12,7 +14,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
-import { localPageClient, localUploadClient } from './local-content-client.js';
+import { heldLimiter, localPageClient, localUploadClient } from './local-content-client.js';
 import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
@@ -53,6 +55,8 @@ export interface RemoteClient {
     readonly pages?: PageClient;
     /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
     readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
+    /** Share links on the host this client is connected to (Tynn #587): that host makes them, for itself. */
+    readonly shares: NonNullable<import('./relay-transport.js').TynnNetworkBridge['shares']>;
     readonly bridge: GenieBridge;
     readonly ready: Promise<{ ok: true } | { ok: false; reason: string }>;
     state(): RemoteState;
@@ -90,6 +94,11 @@ export interface RemoteOptions {
      * has full control with no extra step. Someone else driving is never taken from silently: the window is told who.
      */
     readonly drive?: boolean;
+    /**
+     * A TAKE OVER WINDOW (Tynn #529 part A): the ticket the driving window's Take over was answered with. This connection
+     * types into that one terminal while that window drives, and is told why when it may not any more. Never `drive`.
+     */
+    readonly companion?: string;
 }
 
 /**
@@ -155,7 +164,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null });
                 resolveReady({ ok: true });
                 // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
-                if (options.drive === true && auth.kind !== 'local') {
+                if (options.drive === true && options.companion === undefined && auth.kind !== 'local') {
                     void call('baton.watch');
                     void control('baton.take');
                 }
@@ -191,7 +200,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         pending.clear();
     });
 
-    transport.send(JSON.stringify({ kind: 'hello', auth, label, ...(options.profile ? { profile: options.profile } : {}) }));
+    transport.send(JSON.stringify({ kind: 'hello', auth, label, ...(options.profile ? { profile: options.profile } : {}), ...(options.companion ? { companion: options.companion } : {}) }));
 
     /** A refusal for the person to see; one for lack of the baton says Take control is what it needs. */
     const refused = (reason: string): void => setState({ lastRefusal: reason, needsBaton: reason.endsWith(BATON_REFUSAL) });
@@ -522,6 +531,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         if (r.ok && method === 'baton.take' && state.needsBaton) setState({ lastRefusal: null, needsBaton: false });
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
     };
+    // A Take Over window's ticket stopped letting it type: why, for the person to see (Tynn #529 part A).
+    on(COMPANION_EVENT, (payload) => { refused((payload as CompanionEvent).revoked); });
     // Who drives, pushed by the host when something this window did not do changed it (Tynn #529).
     on(BATON_EVENT, (payload) => {
         const e = payload as BatonEvent;
@@ -552,14 +563,123 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
     }) : undefined;
     if (local) {
-        terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on });
+        bridge.gapps = {
+            list: () => read('gapps.list'),
+            review: (folder) => read('gapps.review', folder),
+            install: (folder, options) => read('gapps.install', folder, options),
+            setOn: async (id, on) => { await read('gapps.setOn', id, on); },
+            uninstall: async (id) => { await read('gapps.uninstall', id); },
+            open: async (id) => { await read('gapps.open', id); },
+            onChanged: (listener) => on(LOCAL_EVENTS.gapps, () => listener()),
+        };
+        bridge.marketplace = {
+            search: (query, cursor) => cursor === undefined ? read('marketplace.search', query) : read('marketplace.search', query, cursor),
+            prepare: (id, version) => read('marketplace.prepare', id, version),
+            install: (token, consent) => read('marketplace.install', token, consent),
+            discard: async token => { await read('marketplace.discard', token); },
+        };
+        // ONE limiter for every family on this connection: together they never ask the host to hold more than it can (Tynn #547).
+        const limit = heldLimiter();
+        /*
+         * THE FEATURE SNAPSHOT (P4 family 11, Tynn #560): it has no bound of its own, so it crosses inline when small and
+         * as one blob when not; a change is pushed as a revision, and the window re-reads: one read at a time, the latest last.
+         */
+        const decodeJson = <T>(read0: () => Promise<unknown>): Promise<T> => limit(async () => {
+            const result = await read0();
+            if (!result || typeof result !== 'object' || !('jsonContent' in result)) return result as T;
+            const content = (result as { jsonContent: { ref: string; blob: string } }).jsonContent;
+            try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await blobs!.readAll('features-json', content.blob))) as T; }
+            finally { await blobRead('content.release', content.ref); }
+        });
+        const snapshotNow = (): Promise<FeatureData> => decodeJson<FeatureData>(() => read('features.snapshot'));
+        // A frame over the door's cap would end this window's connection, so a call that large is refused here, with a reason.
+        const tooLargeForFrame = (args: readonly unknown[]): boolean => new TextEncoder().encode(JSON.stringify(args)).length > LOCAL_FRAME_LIMIT_BYTES - 4 * 1024;
+        // P4 family 9b (Tynn #563): the composer keeps a host's reason (a slash command the agent does not offer, Tynn #440).
+        Object.assign(bridge, {
+            prompt: (agentId: string, text: string, attachments?: readonly { name: string; type: string; bytes: Uint8Array }[]) => (attachments && attachments.length > 0
+                ? promptWithFiles(agentId, text, attachments)
+                : answer<{ ok: boolean; reason?: string }>('prompt', agentId, text)),
+        });
+        const featureListeners = new Set<(data: FeatureData) => void>();
+        let rereading = false, again = false;
+        const reread = async (): Promise<void> => {
+            if (rereading) { again = true; return; }
+            rereading = true;
+            try {
+                do {
+                    again = false;
+                    const data = await snapshotNow();
+                    for (const listener of [...featureListeners]) listener(data);
+                } while (again);
+            } catch (error) {
+                // The next change reads again; a connection that went is said by the session.
+                console.warn(`[genie] the feature snapshot could not be read: ${error instanceof Error ? error.message : String(error)}`);
+            } finally { rereading = false; }
+        };
+        on(LOCAL_EVENTS.features, () => { if (featureListeners.size > 0) void reread(); });
+        Object.assign(bridge.features, {
+            snapshot: snapshotNow,
+            // Reads at once: a subscribe is also a window coming back, and a revision sent while it was away is not sent again.
+            subscribe: (listener: (data: FeatureData) => void) => { featureListeners.add(listener); void reread(); return () => { featureListeners.delete(listener); }; },
+            soundData: (key: string) => decodeJson<string | null>(() => read('features.soundData', key)),
+            // P4 (Tynn #560): an action and its result. The limiter holds only a result that came as a blob: an action can take long.
+            act: async (action: FeatureAction) => {
+                if (tooLargeForFrame([action])) throw new Error('this is too large to send to Genie in one piece');
+                const result = await read<unknown>('features.act', action);
+                if (!result || typeof result !== 'object' || !('jsonContent' in result)) return result as FeatureData;
+                return decodeJson<FeatureData>(async () => result);
+            },
+            picked: async (paths: readonly string[]) => {
+                if (tooLargeForFrame([paths])) throw new Error('too many files were picked to report in one piece');
+                await read('features.picked', paths);
+            },
+        });
+        terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });
         bridge.terminals = terminalClient.terminals;
-        bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
-        bridge.chatDrafts = localDraftsClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
-        const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
+        bridge.artboard = localArtboardClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });
+        bridge.chatDrafts = localDraftsClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });
+        const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages!, limit });
         Object.assign(bridge.files, files.files); bridge.repo = files.repo;
-        filesWatches = localFilesWatchClient({ read: blobRead, decode: filesContentReader({ release: ref => blobRead('content.release', ref), blobs: blobs!, pages: pages! }), on: listener => on(LOCAL_EVENTS.files, listener), refusal: reason => setState({ lastRefusal: reason }) });
+        filesWatches = localFilesWatchClient({ read: blobRead, decode: filesContentReader({ release: ref => blobRead('content.release', ref), blobs: blobs!, pages: pages! }), on: listener => on(LOCAL_EVENTS.files, listener), refusal: reason => setState({ lastRefusal: reason }), limit });
         Object.assign(bridge.files, filesWatches.files);
+        /*
+         * THE TYNN TAB (P4 family 12, Tynn #561): this machine's window only, as it had over IPC; a remote window's
+         * bridge is unchanged. Following a board, the issues or the Features page is BY SUBSCRIPTION: the watch is this
+         * connection's, its signals come on `local-tynn` for the kind and workspace it watches, and stopping releases it.
+         */
+        const tynnFollow = (kind: TynnWatchKind) => (workspaceId: string, listener: (signal: never) => void): (() => void) => {
+            let watchId: number | null = null;
+            let stopped = false;
+            const off = on(LOCAL_EVENTS.tynn, (payload) => {
+                const e = payload as TynnWatchEvent;
+                if (e.kind === kind && e.workspaceId === workspaceId) listener(e.signal as never);
+            });
+            void call('tynn.watch', kind, workspaceId).then((r) => {
+                const id = r.ok && typeof r.value === 'number' ? r.value : null;
+                if (id === null) return;
+                if (stopped) void call('tynn.unwatch', id);
+                else watchId = id;
+            });
+            return () => {
+                stopped = true;
+                off();
+                if (watchId !== null) void call('tynn.unwatch', watchId);
+                watchId = null;
+            };
+        };
+        Object.assign(bridge.workspaces, {
+            tynnBoard: (id: string, scope: unknown) => read('workspaces.tynnBoard', id, scope),
+            tynnBoardAction: (id: string, input: unknown) => read('workspaces.tynnBoardAction', id, input),
+            tynnPage: (id: string, page: unknown, query: unknown) => read('workspaces.tynnPage', id, page, query),
+            tynnPageAction: (id: string, input: unknown) => read('workspaces.tynnPageAction', id, input),
+            tynnBoardChanges: (id: string, scope: unknown, cursor: string, ids: readonly string[]) => read('workspaces.tynnBoardChanges', id, scope, cursor, Array.isArray(ids) ? [...ids] : ids),
+            tynnIssues: (id: string, filters: unknown) => read('workspaces.tynnIssues', id, filters),
+            tynnIssueAction: (id: string, input: unknown) => read('workspaces.tynnIssueAction', id, input),
+            tynnIssueChanges: (id: string, filters: unknown, cursor: string, ids: readonly string[]) => read('workspaces.tynnIssueChanges', id, filters, cursor, Array.isArray(ids) ? [...ids] : ids),
+            tynnBoardWatch: tynnFollow('board'),
+            tynnIssuesWatch: tynnFollow('issues'),
+            tynnFeaturesWatch: tynnFollow('features'),
+        });
     }
 
     return {
@@ -568,6 +688,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         ...(uploads ? { uploads } : {}),
         ...(pages ? { pages } : {}),
         ...(localOwner ? { localOwner } : {}),
+        shares: {
+            list: (workspaceId) => answer('tynnNetwork.shares.list', workspaceId),
+            mint: (input) => answer('tynnNetwork.shares.mint', input),
+            revoke: (linkId) => answer('tynnNetwork.shares.revoke', linkId),
+        },
         ready,
         state: () => state,
         onState: (l) => { stateListeners.add(l); return () => { stateListeners.delete(l); }; },

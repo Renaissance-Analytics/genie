@@ -93,16 +93,17 @@ describe('Issues reads use the host-owned page door', () => {
 
 describe('the window delegates both Issues entry points', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    it('native IPC and HostApi use one host-backed Issues adapter', () => {
-        const ipc = main.slice(main.indexOf("ipcMain.handle('genie:workspace-tynn-issues'"), main.indexOf("ipcMain.handle('genie:workspace-tynn-issue-action'"));
-        expect(ipc).toContain('readWorkspaceTynnIssues(');
-        expect(ipc).not.toContain('readTynnIssues(tynnBoardPorts()');
-        expect(main.match(/tynnIssues: ([^\n]+)/)?.[1]).toContain('readWorkspaceTynnIssues(');
+    // P4 family 12 (Tynn #561): the HostApi is the one way in; the native IPC handler is gone.
+    it('the HostApi uses the host-backed Issues adapter, and no native IPC handler is left', () => {
+        expect(main).not.toContain("'genie:workspace-tynn-issues'");
+        expect(main).toContain('...workspaceTynnApi(tynnBoardPorts, readWorkspaceTynnPage)');
+        expect(readFileSync(new URL('../src/main/workspace-tynn-api.ts', import.meta.url), 'utf8')).toContain('tynnIssues: (id, filters) => issues(id, filters ?? {})');
     });
     it('the Issues adapter calls the same host-backed page door as WIP', () => {
-        const adapter = main.match(/async function readWorkspaceTynnIssues[\s\S]*?\n\}/)?.[0];
+        const shared = readFileSync(new URL('../src/main/workspace-tynn-api.ts', import.meta.url), 'utf8');
+        const adapter = shared.match(/const issues = async[\s\S]*?\n    \};/)?.[0];
         expect(adapter).toBeDefined();
-        expect(adapter).toContain("readWorkspaceTynnPage(workspaceId, 'issues',");
-        expect(adapter).not.toContain('readTynnIssues(tynnBoardPorts()');
+        expect(adapter).toContain("await page(id, 'issues', filters)");
+        expect(main).not.toContain('readTynnIssues(tynnBoardPorts()');
     });
 });

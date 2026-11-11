@@ -18,8 +18,6 @@ export function runtimeFiles(platform: NodeJS.Platform): readonly string[] {
     return platform === 'linux' ? ['icudtl.dat', 'v8_context_snapshot.bin', 'libffmpeg.so'] : ['icudtl.dat', 'v8_context_snapshot.bin'];
 }
 
-/** The host's externals (vite.main.config.ts) and the helper a pty needs: by package, with their native files beside them. */
-const HOST_PACKAGES: readonly RegExp[] = [/^node-pty$/, /^@napi-rs\/keyring(-.*)?$/, /^@particle-academy\/fancy-pty(-.*)?$/];
 
 export interface HostRuntimeInput {
     readonly packaged: boolean;
@@ -103,11 +101,11 @@ export async function materializeHostRuntime(input: HostRuntimeInput): Promise<H
         const copiedApp = await committed(app, async () => {
             await copyTree(join(input.appRoot, 'dist'), join(app, 'dist'), onWrite);
             await copyTree(join(input.appRoot, 'package.json'), join(app, 'package.json'), onWrite);
-            // The unpacked side after the packed one: a native file wins, and an asar holds only a stub of it.
+            // EVERY package the install ships (Tynn #597): the main build is ssr, so all of its dependencies stay external, and a
+            // hand list fell behind (fancy-file-commons, prism-acp). The unpacked side after the packed one: a native file wins,
+            // and an asar holds only a stub of it.
             for (const root of [input.appRoot, input.unpackedRoot]) {
-                for (const name of await packagesIn(root)) {
-                    if (HOST_PACKAGES.some((p) => p.test(name))) await copyTree(join(root, 'node_modules', name), join(app, 'node_modules', name), onWrite);
-                }
+                for (const name of await packagesIn(root)) await copyTree(join(root, 'node_modules', name), join(app, 'node_modules', name), onWrite);
             }
         }, onWrite);
         // Other hosts' folders go when nothing holds them; a locked one waits. Other runtimes stay: an old host may run on one.

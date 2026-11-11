@@ -202,11 +202,9 @@ describe('Genie’s socket against that rule (real socket, real wire)', () => {
         const featuresHub = host.match(/const tynnFeatures = new TynnBoardHub\(\{([\s\S]*?)\n    \}\);/)?.[1];
         expect(featuresHub).toContain('socket: tynnSocket,');
         expect(featuresHub).toContain('feed: TYNN_FEATURES_FEED,');
-        const emergency = await readFile(resolve('src/main/issue-watch-emergency.ts'), 'utf8');
-        expect(emergency.match(/dialTynnSocket\(url, p\.account\(\)\?\.host\(\) \?\? TYNN_HOST\)/g)).toHaveLength(1);
         const main = await readFile(resolve('src/main/main.ts'), 'utf8');
         expect(main).not.toMatch(/dialTynnSocket/);
-        for (const file of [host, emergency, main]) expect(file).not.toMatch(/new WebSocket\(url\) as unknown as SocketLike/);
+        for (const file of [host, main]) expect(file).not.toMatch(/new WebSocket\(url\) as unknown as SocketLike/);
     });
 });
 

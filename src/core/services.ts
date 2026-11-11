@@ -1,3 +1,4 @@
+import { MAILPIT_AUTH_MOUNT, MAILPIT_SMTP_AUTH_FILE } from './mail.js';
 import { mailpitNameOf } from './mailpit-name.js';
 import { assertGeneratedPassword, seaweedEntrypointScript } from './service-provision.js';
 import { APP_ENGINES, SOCKUDO_COMMAND, SOCKUDO_CONFIG_TARGET, SOCKUDO_IMAGE, SOCKUDO_PORT, SOCKUDO_VERSION, websocketHostEnv } from './websockets.js';
@@ -108,6 +109,13 @@ export interface EngineDef {
     readonly sharing: 'shared-or-dedicated' | 'shared-only' | 'dedicated-only';
     /** Why a `dedicated-only` engine is never shared, said when a shared one is asked for. */
     readonly dedicatedBecause?: string;
+    /** Why a `shared-only` engine is never added per workspace, said when a dedicated one is asked for. */
+    readonly sharedBecause?: string;
+    /**
+     * A `shared-only` engine that WAS offered per workspace (Mailpit, before Genie Mail G2): a dedicated one already on a
+     * machine is still planned, started and updated as it is. Only a NEW one is refused, where it is added.
+     */
+    readonly keepsDedicated?: boolean;
     /**
      * The image tag for a major, when it is not the major itself — Mailpit publishes `v1.30`, and
      * there is no bare `1.30` (Genie 1 measured that 404 on its first live run).
@@ -225,6 +233,8 @@ export interface ServiceInstance {
      * own `credentials` are its env (a dedicated engine, or a shared one created before slices existed).
      */
     readonly slices?: Readonly<Record<string, AdoptedSlice>>;
+    /** Genie Mail G5: this shared Mailpit reads the inbox book's SMTP auth file (its container has the auth directory). */
+    readonly mailAuth?: boolean;
     /** Every surface the container publishes BESIDE the primary, by Genie 1's surface name (Mailpit's `ui`, MinIO's `console`). */
     readonly publishedPorts?: Readonly<Record<string, number>>;
     /** The engine's variant (`pgvector`), from its catalog entry's `variants`; absent = the engine's own image. */
@@ -271,7 +281,21 @@ const sqlEnv = (driver: string, defaultUser: string) => (host: string, port: num
 };
 
 /** The plus address Mailpit auto-tags (genie#552) — Genie 1's env-wiring.ts, byte for byte. */
-const mailTagEnv = (namespace: string): Record<string, string> => ({ MAIL_FROM_ADDRESS: `genie+${namespace}@mail.gen`, GENIE_MAIL_TAG: namespace });
+/**
+ * Genie 1's mail tag: the plus address Mailpit tags and the same tag for an app that sets its own From. Kept for a Mailpit
+ * taken over from Genie 1 only (its own source, decision 2): Genie 2's Mailpit gives each workspace its default inbox's
+ * credentials instead (Genie Mail G5, Tynn #491), and routes by addresses and authenticated users, never tags (G4).
+ */
+const genie1MailTagEnv = (namespace: string): Record<string, string> => ({ MAIL_FROM_ADDRESS: `genie+${namespace}@mail.gen`, GENIE_MAIL_TAG: namespace });
+
+/** A workspace's default inbox, as its sites' and processes' env carries it (Genie Mail G5). */
+export interface MailCredentials {
+    readonly username: string;
+    readonly password: string;
+    readonly from: string;
+}
+const mailCredentialsEnv = (mail: MailCredentials | undefined): Record<string, string> =>
+    (mail ? { MAIL_USERNAME: mail.username, MAIL_PASSWORD: mail.password, MAIL_FROM_ADDRESS: mail.from } : {});
 
 export const SERVICE_CATALOG: readonly EngineDef[] = [
     {
@@ -329,10 +353,19 @@ export const SERVICE_CATALOG: readonly EngineDef[] = [
         // half an engine. Each workspace's mail carries its own tag (a namespace, as Genie 1's did): the plus address
         // in MAIL_FROM_ADDRESS, which Mailpit tags by default from v1.19, and GENIE_MAIL_TAG for an app that sets its
         // own From.
-        engine: 'mailpit', image: 'axllent/mailpit', tag: (major) => `v${major}`, internalPort: 1025, majors: ['1.30'], sharing: 'shared-or-dedicated',
+        //
+        // GENIE MAIL (Tynn #383, story G2 #488): ONE Mailpit per workstation, owned by the host, because Genie Mail at
+        // mail.gen is one app for every workspace. A new per-workspace Mailpit is refused with the reason; one already on
+        // a machine keeps running as its own source (decision 2, 2026-11-07: no migration).
+        // ITS SEND API IS GENIE'S ALONE (G1's finding 6, genie#1712): with no send-API auth, Mailpit records an
+        // unverified Basic user as a message's Username and tag. Its own credential (the instance's, which no workspace's
+        // env carries) closes that: measured in test/mailpit-measure/mailpit-send-api-auth.accept.ts.
+        engine: 'mailpit', image: 'axllent/mailpit', tag: (major) => `v${major}`, internalPort: 1025, majors: ['1.30'], sharing: 'shared-only', keepsDedicated: true,
+        sharedBecause: 'Genie Mail at mail.gen is one app for every workspace: each workspace gets its own inboxes in the one Mailpit',
         surfaces: [{ name: 'ui', internalPort: 8025 }],
-        containerEnv: () => ({ MP_DATABASE: '/data/mailpit.db' }),
-        hostEnv: (host, port, _c, namespace) => ({ MAIL_MAILER: 'smtp', MAIL_HOST: host, MAIL_PORT: String(port), ...(namespace ? mailTagEnv(namespace) : {}) }),
+        containerEnv: (c) => ({ MP_DATABASE: '/data/mailpit.db', ...(c.user && c.password ? { MP_SEND_API_AUTH: `${c.user}:${c.password}` } : {}) }),
+        // A dedicated Mailpit kept from before G2 has no book: its address alone (Genie 1's tag is retired, G5).
+        hostEnv: (host, port) => ({ MAIL_MAILER: 'smtp', MAIL_HOST: host, MAIL_PORT: String(port) }),
     },
     {
         engine: 'minio', image: 'quay.io/minio/minio', internalPort: 9000, majors: ['latest'], sharing: 'shared-only', adoptOnly: true,
@@ -516,7 +549,7 @@ export function customEnvToken(value: string): string {
 /** The host an engine is reached at: a Mailpit by its `.gen` name when it has one (core/mailpit-name.ts), else loopback. */
 const hostOf = (one: ServiceInstance): string => (one.engine === 'mailpit' ? mailpitNameOf(one) ?? HOST : HOST);
 
-export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string, options: { namespace?: string } = {}): Record<string, string> {
+export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string, options: { namespace?: string; mail?: MailCredentials } = {}): Record<string, string> {
     const env: Record<string, string> = {};
     // Every custom engine emits its own names (each is namespaced by its own name) and its env, as Genie 1's did —
     // whether or not it is the workspace's engine of its kind. Its env is applied LAST (below): what was set by hand on
@@ -544,10 +577,14 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
             const slice = workspaceId === undefined ? undefined : one.slices[workspaceId];
             if (!slice) continue;
             // Genie 1 gave `DATABASE_URL`/`DB_*` to Postgres when a workspace had both Postgres and MySQL.
-            Object.assign(env, v1HostEnv(kind, one.publishedPort, slice, { primaryRelational: (kind !== 'mysql' && kind !== 'mariadb') || !chosen.has('postgres'), host: hostOf(one) }));
+            // Genie 2's shared Mailpit gives the workspace its default inbox (G5); one taken over from Genie 1 keeps Genie 1's tag.
+            const mail = one.engine === 'mailpit' && one.adopted !== 'v1' ? { mail: options.mail } : {};
+            Object.assign(env, v1HostEnv(kind, one.publishedPort, slice, { primaryRelational: (kind !== 'mysql' && kind !== 'mariadb') || !chosen.has('postgres'), host: hostOf(one), genie1: one.adopted === 'v1', ...mail }));
             continue;
         }
         Object.assign(env, def.hostEnv(hostOf(one), one.publishedPort, one.credentials, options.namespace));
+        // Genie 2's shared Mailpit: the workspace's default inbox (Genie Mail G5). A dedicated or Genie 1 one has no book.
+        if (one.engine === 'mailpit' && one.scope.kind === 'shared' && one.adopted !== 'v1') Object.assign(env, mailCredentialsEnv(options.mail));
     }
     Object.assign(env, custom);
     return env;
@@ -562,7 +599,7 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
  * env that disagrees with the file the app reads, and the exported variable wins (dotenv is
  * immutable) — which is how Genie 1's genie#242 broke apps in the first place.
  */
-export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, options: { primaryRelational: boolean; host?: string }): Record<string, string> {
+export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, options: { primaryRelational: boolean; host?: string; genie1?: boolean; mail?: MailCredentials | undefined }): Record<string, string> {
     const id = slice.identifier;
     const pw = slice.password;
     const p = String(port);
@@ -588,7 +625,9 @@ export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, opt
         }
         case 'mailpit':
             // The plus address Mailpit auto-tags (genie#552), and the same tag for an app that sets its own From.
-            return { MAIL_MAILER: 'smtp', MAIL_HOST: options.host ?? HOST, MAIL_PORT: p, ...mailTagEnv(id) };
+            // Genie 1's Mailpit: its plus-address tag, as Genie 1 gave it (genie#552). Genie 2's: the workspace's default inbox
+            // (Genie Mail G5), or the address alone until it has one.
+            return { MAIL_MAILER: 'smtp', MAIL_HOST: options.host ?? HOST, MAIL_PORT: p, ...(options.genie1 ? genie1MailTagEnv(id) : mailCredentialsEnv(options.mail)) };
         case 'websockets':
             // The workspace's own app on the shared server: Genie 1's env-wiring.ts + hosting.ts names (core/websockets.ts).
             // The one secure address, every key (core/websockets.ts WEBSOCKETS_HOST); the workspace is its app.
@@ -688,15 +727,23 @@ export function containerPlan(input: {
     configFile?: string;
     /** The engine's variant (`pgvector`): its image, everything else the engine's. */
     variant?: string;
+    /**
+     * Mailpit only (Genie Mail G3): the host directory holding the inbox book's SMTP auth file (main/mail-host.ts). Mounted
+     * as a directory, so the host's rename-in-place is seen; Mailpit reads it only at start (G1's finding 7).
+     */
+    smtpAuthDir?: string;
 }): ContainerPlan {
     const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
     if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
     if (def.adoptOnly) throw new Error(`${input.engine} can only be taken over from Genie 1, not created: its images are no longer published`);
-    if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
+    // A kept dedicated one (Mailpit's, before G2) is planned as it is: new ones are refused where they are ADDED.
+    if (def.sharing === 'shared-only' && input.scope.kind !== 'shared' && !def.keepsDedicated) throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
     // The arbitrary image only. A Redis shared before the owner's D2 (hosting fixes 3.2) is still planned as it is: new
     // shared ones are refused where they are ADDED (service-registry.ts), not ones already on a machine.
     if (def.custom && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — an arbitrary image has no multi-tenant story to share`);
     if (input.variant !== undefined && !def.variants?.[input.variant]) throw new Error(`${input.engine} has no variant ${JSON.stringify(input.variant)}`);
+    if (input.smtpAuthDir !== undefined && input.engine !== 'mailpit') throw new Error(`${input.engine} reads no SMTP auth file; only Mailpit does`);
+    const mailAuth = input.engine === 'mailpit' ? input.smtpAuthDir : undefined;
     const key = `${input.scope.kind === 'shared' ? 'shared' : input.scope.workspaceId}-${input.engine}${input.variant ? `-${input.variant}` : ''}-${input.major}`;
     if (def.custom) {
         const c = input.custom;
@@ -730,10 +777,15 @@ export function containerPlan(input: {
         // A stateless engine (Sockudo) has nothing to keep: no volume is created, and none is there for "delete data".
         volume: def.stateless ? null : `genie-${key}-data`,
         publish,
-        env: tenancy && input.admin ? tenancy.containerEnv(input.admin.password) : def.containerEnv(input.credentials ?? {}),
+        env: {
+            ...(tenancy && input.admin ? tenancy.containerEnv(input.admin.password) : def.containerEnv(input.credentials ?? {})),
+            // The inbox book's auth file: an inbox's SMTP user and password, plain AUTH over loopback (as G1 measured it).
+            ...(mailAuth ? { MP_SMTP_AUTH_FILE: `${MAILPIT_AUTH_MOUNT}/${MAILPIT_SMTP_AUTH_FILE}`, MP_SMTP_AUTH_ALLOW_INSECURE: 'true' } : {}),
+        },
         ...(launch ? { entrypoint: launch.entrypoint } : {}),
         ...(command ? { command } : {}),
         ...(def.config && input.configFile ? { mounts: [{ source: input.configFile, target: def.config.target }] } : {}),
+        ...(mailAuth ? { mounts: [{ source: mailAuth, target: MAILPIT_AUTH_MOUNT }] } : {}),
     };
 }
 

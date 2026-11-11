@@ -7,7 +7,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { agentRecord, mintAgentId } from '../../src/core/identity.js';
-import { composeServices } from '../../src/main/compose.js';
+import { composeServices } from '../helpers/compose-alone.js';
 import { SessionHost } from '../../src/main/session-host.js';
 
 if (process.env.GENIE_TEST_VM !== '1') throw new Error('Run this gate in a test VM through the shared FIFO.');

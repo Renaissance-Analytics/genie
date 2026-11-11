@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import { featureOrigin, HostPicks, REMOTE_ORIGIN } from '../src/main/host-picks.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
@@ -143,8 +144,8 @@ describe('HostPicks', () => {
 
 /*
  * THE WIRING (main.ts): read as text, comments stripped, because main.ts only runs inside Electron. The remote API's
- * `features.act` must name NO origin (so it is the default, remote); main's own IPC must derive the origin from the
- * SENDER — whether it is one of the remote windows — and record picks only from a window that is not one.
+ * `features.act` takes its origin from what the host admitted (host-picks.ts `featureOriginOf`), and a pick counts only
+ * from this machine's own window (host-api.ts); p4-call-context.test.ts and p4-features-act.test.ts assert who that is.
  */
 describe('main.ts wiring', () => {
     const source = readFileSync('src/main/main.ts', 'utf8')
@@ -152,12 +153,8 @@ describe('main.ts wiring', () => {
         .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
         .join('\n');
 
-    it('the remote API’s features.act passes no origin', () => {
-        expect(source).toMatch(/act: \(action\) => handleFeatureAction\(services!, action, featureState, featurePorts\),/);
-    });
-
-    it('main’s own IPC derives the origin from the sender, and records picks only from a window that is not remote', () => {
-        expect(source).toMatch(/ipcMain\.handle\(FEATURE_CHANNELS\.act, async \(event, raw: unknown\) => \{[\s\S]{0,400}handleFeatureAction\(composed, action, featureState, featurePorts, featureOrigin\(\{ remoteWindow: isRemoteWindow\(event\.sender\), picks: hostPicks \}\)\)/);
-        expect(source).toMatch(/ipcMain\.handle\(FEATURE_CHANNELS\.picked, \(event, raw: unknown\) => \{\s*if \(isRemoteWindow\(event\.sender\)\) return;/);
+    it('an action’s origin is the host’s context, never the action, and a pick is recorded by the host', () => {
+        expect(source).toMatch(/handleFeatureAction\(composed, action, featureState, featurePorts, featureOriginOf\(context, hostPicks\)\)/);
+        expect(source).toMatch(/picked: \(paths\) => hostPicks\.record\(paths\)/);
     });
 });

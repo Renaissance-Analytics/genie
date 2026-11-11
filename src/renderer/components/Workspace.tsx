@@ -1,4 +1,5 @@
 import type { ActivityFeed } from '../../core/activity-feed.js';
+import { pluginPaneState } from '../../core/catalog-projections.js';
 import { flushSync } from 'react-dom';
 import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import { useMinuteTick } from '../use-activity-feeds.js';
@@ -23,11 +24,14 @@ import {
     emptyWorkspace,
     terminalClosed,
     terminalData,
+    terminalOutput,
+    terminalReplaced,
     terminalExited,
     terminalOpened,
     type WorkspaceState,
 } from '../../core/workspace-view.js';
-import { closeCancelled, closeRequested, codeClosed, codeOpened, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
+import { closeCancelled, closeRequested, codeClosed, codeOpened, OUTPUT_CAP, pluginClosed, pluginOpened, terminalHidden, terminalShown, terminalSuspended } from '../../core/workspace-view.js';
+import { outputBatch } from '../terminal-output-batch.js';
 import { Badge, Button, Icon, Popover, Select, Switch } from '@particle-academy/react-fancy';
 import { agentFilesLine, agentFilesWhen, type AgentFilesReport } from '../../core/agent-files-health.js';
 import type { SyncResult } from '../../core/integrations.js';
@@ -171,6 +175,8 @@ export interface WorkspaceProps {
     onStartAgent?: ((agentId: string) => void) | undefined;
     /** The panels ENABLED plugins contribute (§4.6 `+plugin`); absent or empty = no `+plugin`. */
     pluginPanels?: readonly PluginPanelView[] | undefined;
+    /** The plugins as the host lists them (Settings, Plugins): why an open pane's panel is gone (ADF A6). */
+    pluginEntries?: readonly { readonly id: string; readonly name: string; readonly state: string }[] | undefined;
     /** IssueWatch's view of this workspace (Tynn #806); absent = none to show, and no GitHub tab. */
     issueWatch?: IssueWatchPanelView | null | undefined;
     /** The GitHub panel's Refresh (Tynn reads the repos now). Absent = no Refresh. */
@@ -234,7 +240,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
@@ -336,13 +342,17 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
         ? shown.filter(id => state.terminals.some(terminal => terminal.id === id))
         : onScreen.startsWith('tab:') ? (designed.tabs.find(tab => `tab:${tab.id}` === onScreen)?.cells ?? []).flatMap(cell => cell?.kind === 'terminal' && cell.ref !== null ? [cell.ref] : []) : [])]);
     useEffect(() => {
+        // ONE RENDER PER FRAME while a terminal streams (Tynn #525): its chunks are joined and applied at the next frame.
+        const batch = outputBatch({ cap: OUTPUT_CAP, apply: (held) => setState((value) => held.reduce((v, [id, text]) => terminalData(v, id, text), value)) });
         const stops = (JSON.parse(terminalMembership) as string[]).map(id => watchTerminal(terminals, workspace.id, id, {
-            snapshot: joined => flushSync(() => { setState(value => ({ ...value, output: { ...value.output, [id]: joined.scrollback } })); setTerminalError(null); }),
-            data: text => flushSync(() => setState(value => terminalData(value, id, text))),
-            exit: code => flushSync(() => setState(value => terminalExited(value, id, code))),
+            // A snapshot replaces the output: what was held before it is in it.
+            snapshot: joined => { batch.drop(id); flushSync(() => { setState(value => terminalReplaced(value, id, joined.scrollback)); setTerminalError(null); }); },
+            data: text => batch.data(id, text),
+            // The output before an exit is applied first, in the same update.
+            exit: code => flushSync(() => { batch.flush(); setState(value => terminalExited(value, id, code)); }),
             error: error => setTerminalError(error.message),
         }));
-        return () => { for (const stop of stops) stop(); };
+        return () => { batch.close(); for (const stop of stops) stop(); };
     }, [terminals, workspace.id, terminalMembership]);
     // SPLITS (§4.6): remembered per workspace and per arrangement; a stored split that does not fit is equal panes.
     const splits = splitsFrom(ops?.settings?.values ?? {}, layout, shown.length);
@@ -539,7 +549,10 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                 return (
                                     <div key={id} data-pane-slot={id} data-pane-kind="plugin" {...(id === state.active ? { 'data-pane-active': '' } : {})} className="min-h-0 min-w-0 bg-[var(--bg-0)]" onFocusCapture={() => { if (id !== state.active) setState((s) => activate(s, id)); }}>
                                         {panel ? <PluginPane panel={panel} workspace={workspace} /> : (
-                                            <p data-plugin-pane-missing={`${plugin.pluginId}/${plugin.panelId}`} className="p-3 text-[13px] text-[var(--fg-3)]">The plugin {plugin.pluginId} is not enabled any more (or no longer offers this panel); close this pane.</p>
+                                            // ADF A6 (Tynn #450): never drawn from a panel its package no longer offers; said why, in words.
+                                            <p data-plugin-pane-missing={`${plugin.pluginId}/${plugin.panelId}`} data-plugin-pane-unavailable="" className="p-3 text-[13px] text-[var(--fg-3)]">
+                                                {(() => { const s = pluginPaneState(pluginPanels, pluginEntries ?? [], plugin.pluginId, plugin.panelId); return s.available ? null : s.reason; })()}
+                                            </p>
                                         )}
                                     </div>
                                 );
@@ -560,6 +573,8 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                             key={id}
                                             paneId={id}
                                             output={state.output[id] ?? ''}
+                                            outputEnd={terminalOutput(state, id).end}
+                                            outputEpoch={terminalOutput(state, id).epoch}
                                             readOnly={t.exited !== null}
                                             onData={(data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
                                             onResize={({ cols, rows }) => {
@@ -660,7 +675,6 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                         ) : (
                             <button type="button" data-action="hibernate" title="Ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Hibernate</button>
                         )}
-                        {ops.onShare ? <button type="button" data-action="share-workspace" title="A link someone opens to reach this workspace over Tynn — control or read-only, for as long as you choose" onClick={ops.onShare} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Share…</button> : null}
                         <button type="button" data-action="remove-workspace" onClick={ops.onPreviewRemove} className="min-w-0 truncate rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">Remove from Genie…</button>
                     </div>
                 ) : null}
@@ -683,6 +697,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                 onView={(v) => { if (v === 'files') { if (!filesInline) onTogglePanel?.(); } else onViewChange?.(v as WorkspaceView); }}
                 onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
                 onOpenAgent={(id) => onOpenAgent?.(id)}
+                onShare={ops?.onShare}
             />
             {ops?.asleep ? (
                 <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
@@ -946,6 +961,7 @@ export function Workspace({ trustStep, onTrust, workspace, terminals, ops, onOpe
                                         terminalId={p.ref}
                                         terminal={held}
                                         output={p.ref === null ? '' : state.output[p.ref] ?? ''}
+                                        {...(p.ref === null ? {} : { outputEnd: terminalOutput(state, p.ref).end, outputEpoch: terminalOutput(state, p.ref).epoch })}
                                         Pane={Pane}
                                         root={workspace.path}
                                         onData={(id, data) => terminalAction(() => terminals.write(id, data), setTerminalError)}

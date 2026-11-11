@@ -35,6 +35,13 @@ interface Entry {
 export class RemoteBrowsers {
     readonly #makeDoor: MakeDoor;
     readonly #by = new Map<string, Entry>();
+    readonly #changed = new Set<(workstationId: string) => void>();
+
+    /** A door learned its host's CA (Tynn #552): genie-host tells the window browsing through it. */
+    onChange(listener: (workstationId: string) => void): () => void {
+        this.#changed.add(listener);
+        return () => { this.#changed.delete(listener); };
+    }
 
     constructor(makeDoor: MakeDoor) {
         this.#makeDoor = makeDoor;
@@ -57,7 +64,10 @@ export class RemoteBrowsers {
                     allowed: () => true,
                     open: async (host) => {
                         const opened = await transport.openSite(host);
-                        if (opened.ok && opened.ca !== undefined && this.#by.get(workstationId) === fresh) fresh.ca = opened.ca;
+                        if (opened.ok && opened.ca !== undefined && this.#by.get(workstationId) === fresh && fresh.ca !== opened.ca) {
+                            fresh.ca = opened.ca;
+                            for (const l of [...this.#changed]) l(workstationId);
+                        }
                         return opened;
                     },
                 }),

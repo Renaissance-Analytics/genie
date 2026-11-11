@@ -12,7 +12,7 @@ import { HOST_NATIVE_TOOLS, hostRegistrations, type ForwardedToolCall } from './
 import { withActionSignal } from './mcp-signal.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
 import type { Caller } from './mcp-tools.js';
-import type { PluginToolRef } from './mcp-tools-plugins.js';
+import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 
 /**
  * GENIE'S MCP SERVER, IN GENIE-HOST (the host split, P3.1: plan §11d).
@@ -22,9 +22,10 @@ import type { PluginToolRef } from './mcp-tools-plugins.js';
  * caller key) is built here. The host answers its own tools from the stores and the sessions it owns; every other tool
  * goes to the window (mcp-host-tools.ts).
  *
- * Until P3.2 moves the registry and settings here, the window tells the host what the tools need of them: the workspaces,
- * the settings, whether the person is at the computer, the callers of terminals it runs (Take Over windows, flow runs),
- * and its plugins' tools. The server starts once a window has said so — the plugin tools are its tool list's tail.
+ * The window tells the host what only it knows: the workspaces' names, whether the person is at the computer, the callers
+ * of terminals it runs (Take Over windows, flow runs). The server does NOT wait for it (ADF A3, Tynn #447): it starts
+ * when the host does, with the PLUGINS' tools the host's own (main/plugins-host.ts) — offered and run here, so an agent
+ * keeps them with no window.
  */
 
 type SettingValue = boolean | string;
@@ -36,7 +37,6 @@ export interface WindowView {
     readonly userActive: boolean;
     /** Terminals the window runs whose agents call Genie (Take Over windows, flow runs): terminal id → caller. */
     readonly callers: Readonly<Record<string, Caller>>;
-    readonly pluginTools: readonly PluginToolRef[];
 }
 
 export interface HostMcpPorts {
@@ -54,8 +54,12 @@ export interface HostMcpPorts {
     readonly processes?: import('./mcp-tools-processes.js').ProcessesPort;
     /** The flows the `flows` tool acts on (P3.3d): the host's store and scheduler. */
     readonly flows?: import('./mcp-tools-flows.js').FlowsPort;
+    /** Genie Mail's inboxes and the shared Mailpit, for the `mail` tool (G6): the host's hosting. */
+    readonly mail?: import('./mcp-tools-mail.js').MailPort;
     /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
     readonly flowCallers?: { callerFor(key: string): Caller | null };
+    /** A Take Over TUI's caller: known here, so it works with no window to tell the host (Tynn #553). */
+    readonly takeOverCaller?: (id: string) => Caller | null;
     /**
      * The sites and service engines `sites` and `services` act on (Tynn #444): the host's own hosting (P5a) and its
      * supervisor. Absent = the host's hosting did not start, and the tools say so. `sites open` / `services exec` are the window's.
@@ -78,10 +82,17 @@ export interface HostMcpPorts {
     /** The OSA's home, `<root>/osa` (P7: from the host's root, never homedir()'s `.genie`). */
     readonly osaDir: string;
     readonly log: (line: string) => void;
+    /** The plugins' tools, the host's own (ADF A3: main/plugins-host.ts `hostPluginTools`). Absent = this host offers none. */
+    readonly plugins?: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
 }
 
 export interface HostMcp {
-    /** What the window said; the first one starts the server. */
+    /**
+     * The plugins changed: build the tools again and serve them (ADF A6, Tynn #450). An agent's next `tools/list` shows
+     * them, on the same endpoint, with no restart.
+     */
+    refreshTools(): void;
+    /** What the window said. The server is already starting (it does not wait for a window). */
     setView(view: WindowView): Promise<void>;
     /** A session's Genie MCP entry: the endpoint, its token and this agent's caller key. */
     sessionServers(record: AgentRecord): McpServer[];
@@ -106,6 +117,8 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
     let verified: Verification | null = null;
     let tools: Array<{ name: string; description: string }> = [];
     let starting: Promise<void> | null = null;
+    /** The endpoint file's private write, while it is landing. It never rejects: a failure is logged. */
+    let endpointWrite: Promise<void> = Promise.resolve();
     let native = new Map<string, import('./mcp-tools.js').Registration>();
     let servedNow: readonly import('./mcp-tools.js').Registration[] = [];
     /** Callers the window vouched for, for the length of one call (runNative). */
@@ -118,7 +131,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const vouched = injected.get(id);
         if (vouched) return vouched;
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, ports.osaDir);
-        return session ?? ports.flowCallers?.callerFor(id) ?? view?.callers[id] ?? null;
+        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? view?.callers[id] ?? null;
     };
     const settings = ports.settings;
 
@@ -145,9 +158,10 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             openFile: unavailable('openFileForUser'),
             terminals: ports.terminals ?? { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
             ...(ports.terminalEnv ? { terminalEnv: ports.terminalEnv } : {}),
-            plugins: { tools: () => view?.pluginTools ?? [], guard: () => null, run: unavailable('a plugin tool') },
+            plugins: ports.plugins ?? { tools: () => [], guard: () => null, run: unavailable('a plugin tool') },
             ...(ports.processes ? { processes: ports.processes } : {}),
             ...(ports.flows ? { flows: ports.flows } : {}),
+            ...(ports.mail ? { mail: ports.mail } : {}),
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
@@ -157,9 +171,12 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         // window, which signals it there — signalled here too, it would show twice. hostRegistrations replaces a window
         // tool's handler and calls a host tool's own only for what runs here (a `sites open` is forwarded, unsignalled).
         const all = withActionSignal(tools0, resolveCaller, (agentId, kind, tool) => ports.signal({ kind: 'action', agentId, action: kind, tool }));
-        const served = hostRegistrations(all, { resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
+        // The plugins' tools run HERE (ADF A3): the host has their plugins, so nothing of theirs is forwarded to a window.
+        const pluginNames = new Set((ports.plugins?.tools() ?? []).map((ref) => `${ref.pluginId}.${ref.tool.name}`));
+        const isNative = (name: string) => HOST_NATIVE_TOOLS.has(name) || pluginNames.has(name);
+        const served = hostRegistrations(all, { native: (name) => pluginNames.has(name), resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
         tools = served.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
-        native = new Map(served.filter((r) => HOST_NATIVE_TOOLS.has(r.definition.name)).map((r) => [r.definition.name, r]));
+        native = new Map(served.filter((r) => isNative(r.definition.name)).map((r) => [r.definition.name, r]));
         servedNow = served;
         return served;
     };
@@ -174,7 +191,8 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
                         return typeof v.port === 'number' && typeof v.token === 'string' && v.token.length >= 32 ? { port: v.port, token: v.token } : null;
                     } catch { return null; }
                 },
-                write: (value) => { void writeTextPrivate(ports.endpointFile, JSON.stringify(value)).catch((error: unknown) => ports.log(`mcp: could not remember its endpoint: ${error instanceof Error ? error.message : String(error)}`)); },
+                // Not waited for here (the server is already serving); stop() waits for it (Tynn #583).
+                write: (value) => { endpointWrite = writeTextPrivate(ports.endpointFile, JSON.stringify(value)).catch((error: unknown) => ports.log(`mcp: could not remember its endpoint: ${error instanceof Error ? error.message : String(error)}`)); },
             },
         });
         try {
@@ -187,17 +205,28 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         }
     };
 
+    // No window needed (ADF A3): the server starts with the host.
+    starting = start();
     return {
         setView: async (next) => {
             view = next;
             ports.registry.setNames(new Map(Object.entries(next.workspaceNames ?? {})));
-            starting ??= start();
             await starting;
         },
         sessionServers: (record) => genieMcpServers(server?.endpoint() ?? null, book.keyFor(record.id)),
         endpoint: () => server?.endpoint() ?? null,
         status: () => ({ endpoint: server?.endpoint() ?? null, verified, tools }),
-        stop: async () => { await server?.stop().catch(() => undefined); },
+        stop: async () => { await server?.stop().catch(() => undefined); await endpointWrite; },
+        refreshTools: () => {
+            if (!server) return;
+            try {
+                server.setRegistrations(build());
+                ports.log(`mcp: now serving ${tools.length} tools`);
+            } catch (error) {
+                // What was offered stays offered: a build that fails must not take every agent's tools away.
+                ports.log(`mcp: the tools could not be rebuilt: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        },
         registrations: () => servedNow,
         runNative: async (call) => {
             const r = native.get(call.name);

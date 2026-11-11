@@ -36,6 +36,8 @@ export interface LocalOwnerBridge {
     tynnNetwork: Pick<TynnNetworkBridge, 'workstations' | 'setRole' | 'shares'>;
 }
 import type { LiveSession } from '../core/roster.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
+import type { GAppsApi } from '../core/gapps.js';
 import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { AgentDetailViews, type AgentWireSubscribe } from '../core/agent-push-wire.js';
@@ -137,17 +139,10 @@ export interface AgentDetail {
     takeOver?: TakeOverProbe | null;
 }
 
-/** The three feature channels, named ONCE. Preload and main import this; neither retypes a string. */
+/** The feature channel a window still owns, named ONCE. Preload and main import this; neither retypes a string. */
 export const FEATURE_CHANNELS = {
-    snapshot: 'genie:features-snapshot',
-    act: 'genie:features-act',
-    changed: 'genie:features-changed',
     /** The renderer reports where the browser box is, so main can place the WebContentsView over it. */
     browserBounds: 'genie:features-browser-bounds',
-    /** An alert's own sound file, read by main into a data URL — asked by setting KEY, never by path (Tynn #766 B2). */
-    soundData: 'genie:features-sound-data',
-    /** The host's own file picker reports what it picked: the only host paths an AgentInbox send may attach (genie#1354). */
-    picked: 'genie:features-picked',
 } as const;
 
 /** The Dashboard lanes' feeds (beta.33 item 10). */
@@ -157,10 +152,24 @@ export interface ActivityBridge {
 }
 
 export interface GenieBridge {
+    /** The admitted local window's Marketplace; absent on a remote bridge. */
+    marketplace?: MarketplaceApi;
+    /** The admitted local window's GApp store actions; absent on a remote bridge. */
+    gapps?: GAppsApi;
     /** This window's local connection status; absent when connected to another host. */
     localProtocol?: LocalProtocolControl;
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
-    remoteWindows?: { open(url: string, name?: string | null): Promise<void>; onReconnectAsked?(listener: () => void): () => void };
+    remoteWindows?: {
+        open(url: string, name?: string | null): Promise<void>;
+        onReconnectAsked?(listener: () => void): () => void;
+        /**
+         * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): a Take Over window HERE on that host's terminal. Main keeps the
+         * ticket for the window it opens, never in its URL or title; that window reads it once (`takeOverTicket`).
+         */
+        openTakeOver?(url: string, terminalId: string, ticket: string, name?: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** This Take Over window's ticket, read once; `null` when there is none (or it was read already). */
+        takeOverTicket?(): Promise<string | null>;
+    };
     /**
      * Every chat's unsent draft, kept by THIS machine's main so it survives a restart and a reload (genie#1261,
      * main/chat-draft-store.ts). Host-only: absent on a remote bridge — a remote host's agents are not this machine's.
@@ -294,7 +303,8 @@ export interface GenieBridge {
      * opens the terminal in the agent's workspace and the window on it; Genie then only
      * watches. The answer says whether it opened and which terminal, or why not.
      */
-    takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+    /** From another machine (Tynn #529 part A) the answer also carries the ticket for this machine's Take Over window. */
+    takeOver(agentId: string): Promise<{ ok: true; terminalId: string; ticket?: string; started?: boolean } | { ok: false; reason: string }>;
 
     /** The safe-mode banner's crash report (Tynn #386 part 4): never sent until the person presses Send. Absent = remote. */
     crashReport?: {
@@ -306,6 +316,8 @@ export interface GenieBridge {
      * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
      * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
      */
+    /** Pick the .exe for a provider hidden behind a batch wrapper (Tynn #577). This machine's own window only. */
+    chooseProviderProgram?(provider: string): Promise<{ ok: true } | { ok: false; reason?: string }>;
     scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
 
     /** WORKSPACE OPERATIONS (§6.1). Add is preview-then-confirm: nothing is written before the plan was shown. */
@@ -643,8 +655,9 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'restartWithHandoff' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
+    features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
     workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
@@ -711,11 +724,14 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const { subscribeAgentWire: _wire, ...rest } = preload;
     const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
+        marketplace: local.marketplace,
+        gapps: local.gapps,
         appInbox: local.owner.appInbox,
         deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
         files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
-        terminals: local.terminals,
+        ...local.agentCommands,
+        terminals: local.terminals, host: local.host, features: { ...preload.features, ...local.features },
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
     if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;

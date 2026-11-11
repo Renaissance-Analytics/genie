@@ -32,9 +32,10 @@ describe('unsupportedSlashCommand — the rule', () => {
         expect(unsupportedSlashCommand('/compact', none, false)).toContain('/compact');
     });
 
-    it('an agent that reported commands, or reports them later (Claude before its first turn): sent, its CLI decides', () => {
+    it('an agent that reported the command, or reports them later (Claude before its first turn): sent, its CLI decides', () => {
         expect(unsupportedSlashCommand('/compact', compact, true)).toBeNull();
-        expect(unsupportedSlashCommand('/other', compact, true)).toBeNull();
+        // Not in the list it reported: refused (prism-acp 0.39.0, Tynn #440 part B), never sent for the model to read.
+        expect(unsupportedSlashCommand('/other', compact, true)).toContain('/other');
         expect(unsupportedSlashCommand('/compact', compact, false)).toBeNull();
         expect(unsupportedSlashCommand('/compact', null, true)).toBeNull();
     });

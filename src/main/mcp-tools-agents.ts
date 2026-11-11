@@ -1,4 +1,5 @@
-import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
+import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
+import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import { isAcpProvider } from '../core/engine.js';
 import type { AgentRecord } from '../core/identity.js';
 import { callerFrom } from './mcp-callers.js';
@@ -36,20 +37,7 @@ const NAME = /^[a-z][a-z0-9-]{0,39}$/;
 export function agentTools(deps: AgentToolsDeps): Registration[] {
     const isDefault = (caller: Caller | null): boolean => caller !== null && deps.defaultAgentOf(caller.workspaceId) === caller.agentId;
     const createAgent: Registration = {
-        definition: new ToolDefinition(
-            'createAgent',
-            'Ask the person to create a new agent in your workspace: its name, the provider it runs on, and its instructions. The person approves or declines in the Deck; nothing is created until they approve. You have this because you are this workspace’s default agent.',
-            {
-                type: 'object',
-                properties: {
-                    name: { type: 'string', description: 'Lower-case letters, digits and dashes, e.g. "reviewer".' },
-                    provider: { type: 'string', enum: ['claude', 'codex'] },
-                    instructions: { type: 'string', description: 'What the new agent is for, in a sentence or two.' },
-                },
-                required: ['name', 'provider'],
-            },
-            'Create agent',
-        ),
+        definition: builtinToolDefinition(CREATE_AGENT_TOOL),
         // Headers arrive lower-cased (prism-mcp-server 0.3.0), as the raw `Mcp-Param-Genie-Session` or its mirrored form.
         visible: ({ headers }) => {
             const key = headers['mcp-param-genie-session'] ?? headers['genie-session'];
@@ -74,3 +62,23 @@ export function agentTools(deps: AgentToolsDeps): Registration[] {
     };
     return [createAgent];
 }
+
+
+// ---------------------------------------------------------------- compiled declarations (ADF A2, Tynn #446)
+// What these tools ARE, as data: the catalog registers them (main/genie-catalog.ts); the factory above binds handlers.
+export const CREATE_AGENT_TOOL: BuiltinTool = declareBuiltinTool(
+    'createAgent',
+    'Ask the person to create a new agent in your workspace: its name, the provider it runs on, and its instructions. The person approves or declines in the Deck; nothing is created until they approve. You have this because you are this workspace’s default agent.',
+    {
+        type: 'object',
+        properties: {
+            name: { type: 'string', description: 'Lower-case letters, digits and dashes, e.g. "reviewer".' },
+            provider: { type: 'string', enum: ['claude', 'codex'] },
+            instructions: { type: 'string', description: 'What the new agent is for, in a sentence or two.' },
+        },
+        required: ['name', 'provider'],
+    },
+    'Create agent'
+);
+/** This module's tools, in the order its factory returns them. */
+export const AGENT_TOOLS: readonly BuiltinTool[] = [CREATE_AGENT_TOOL];

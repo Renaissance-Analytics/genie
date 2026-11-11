@@ -8,7 +8,8 @@ import { isAppSender } from '../src/core/app-inbox.js';
 import { deliveryHeader as reminderText, summarizeInboxPrompt } from './helpers/inbox-delivery.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { wireInboxPush, type InboxPushPorts } from '../src/main/inbox-push.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
@@ -330,12 +331,12 @@ describe('main wires it', () => {
         expect(ports.appMail('auto' as AgentId, { from: APP_FROM })).toBe('push');
     });
 
-    it('main.ts spreads appMailPushPorts, with a real timer, into the MAIL push (source guard)', async () => {
+    it('the host mail wake spreads appMailPushPorts, with a real timer, into the MAIL push (source guard)', async () => {
         const { readFileSync } = await import('node:fs');
         // By line on CR LF too: a Windows checkout (autocrlf, the windows CI runner) has CR LF, and '\n' anchors miss it.
-        const code = readFileSync(join(__dirname, '../src/main/main.ts'), 'utf8')
+        const code = readFileSync(join(__dirname, '../src/main/host-mail-wake.ts'), 'utf8')
             .split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-        const start = code.indexOf('wireInboxPush({\n        inbox: composed.inbox');
+        const start = code.indexOf('wireInboxPush({');
         expect(start).toBeGreaterThan(-1);
         const call = code.slice(start, code.indexOf('\n    });', start));
         expect(call).toContain('...appMailPushPorts({');

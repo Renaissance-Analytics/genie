@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { BATON_REFUSAL, type Baton, type PairingPins } from '../core/remote.js';
 import { isLocalTerminalMethod } from '../core/local-terminals.js';
 import { LocalTerminalServer } from './local-terminal-server.js';
@@ -5,13 +7,17 @@ import type { NativeTerminalPort } from './local-terminal-native.js';
 import {
     AGENT_SCOPED_METHODS,
     BATON_EVENT,
+    COMPANION_EVENT,
     WORKSPACE_SCOPED_METHODS,
     LOCAL_EVENTS as LOCAL_EVENT_CHANNELS,
     capabilityOf,
     filterSnapshotForWorkspace,
     parseMessage,
     REMOTE_PROTOCOL,
+    CONTROL_METHODS as CONTROL_METHOD_LIST,
     type BatonEvent,
+    type CallContext,
+    type CompanionEvent,
     type ControlMethod,
     type RemoteMethod,
     type ServerConnection,
@@ -35,7 +41,12 @@ import { localDraftArguments } from './local-drafts-api.js';
 import { isLocalArtboardMethod } from '../core/local-artboard.js';
 import { localArtboardArguments } from './local-artboard-api.js';
 import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
+import { isTynnWatchKind, type TynnWatchEvent, type TynnWatchKind, type TynnWatchPort } from '../core/local-tynn-watch.js';
 import type { FilesHubEvent } from './files-watch-hub.js';
+import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
+import { isGappMethod, type GAppsApi } from '../core/gapps.js';
+import { dispatchGapps } from './gapps-api.js';
+import { MarketplaceSession } from './marketplace-session.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -50,10 +61,14 @@ import type { FilesHubEvent } from './files-watch-hub.js';
  */
 
 export interface HostApi {
+    readonly marketplace?: () => MarketplaceApi | null;
+    readonly gapps?: () => GAppsApi | null;
     readonly filesWatch?: FilesWatchPort;
+    /** Following the Tynn tab (P4 family 12, Tynn #561): one view per local window's watch. Absent = no live tab here. */
+    readonly tynnWatch?: TynnWatchPort;
     readonly localTerminals?: NativeTerminalPort;
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
-    invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
+    invoke(method: RemoteMethod, args: unknown[], context?: CallContext): Promise<unknown>;
     /**
      * Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`.
      * `wantsAgent`: whether anyone listening wants an agent's detail now — one nobody wants is not built (genie#1346).
@@ -64,11 +79,24 @@ export interface HostApi {
     workspaceOfTerminal?(terminalId: string): string | null;
     /** Each workspace's folder on this host — how far a guest may browse (Tynn #835). Absent = a guest browses nothing. */
     workspacePaths?(): Readonly<Record<string, string>>;
+    /** A TUI started for another machine's Take Over window is done with: its window closed, or never came (Tynn #529 A). */
+    takeOverEnded?(terminalId: string): void;
 }
+
+/** The largest payload a local event may carry: room left in one door frame for its envelope (P4 family 11). */
+const LOCAL_EVENT_MAX_BYTES = LOCAL_FRAME_LIMIT_BYTES - 4 * 1024;
+
+/** How long a Take over ticket waits for its window (Tynn #529 part A). */
+const TICKET_TTL_MS = 30_000;
+const TICKET_SPENT = 'this Take Over ticket was used already, or has expired';
+const TICKET_FOREIGN = 'this Take Over ticket belongs to another window';
+const COMPANION_ONLY = 'this Take Over window types only into its own terminal';
+const COMPANION_DOES_NOT_DRIVE = 'a Take Over window does not drive; the window it was opened from does';
+const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'terminals.resize', 'terminals.close'];
 
 // 'workspaces.create' too: New can create a repository under the host owner's GitHub and declare it on their Tynn (Add workspace parity 11).
 /** What only the host's OWNER may do, whoever the guest is: it adds to the host itself (Tynn #835). */
-const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'host.mkdir'];
+const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke'];
 
 /** `/`-separated, `..` resolved — so `/w/tynn/../fancy` is judged as `/w/fancy`. */
 function normalizedPath(p: string): string {
@@ -111,6 +139,8 @@ interface Connection {
     /** Independent activity views belonging to this admitted local window. */
     readonly activityViews: Set<string>;
     filesViews: LocalFilesWatches | null;
+    /** This local window's Tynn-tab watches (P4 family 12): by watch id, its kind, workspace and the host's view id. */
+    readonly tynnWatches: Map<number, { kind: TynnWatchKind; workspaceId: string; viewId: string }>;
     blobs: LocalBlobs | null;
     uploads: LocalUploads | null;
     uploadOpening: Promise<LocalUploads> | null;
@@ -118,6 +148,11 @@ interface Connection {
     content: LocalFilesContent | null;
     /** This window asked to be told who drives (`baton.watch`, Tynn #529). */
     batonWatch: boolean;
+    /**
+     * A TAKE OVER WINDOW (Tynn #529 part A): the window it was opened from, its one terminal, whether its click started the
+     * TUI, and, once its window lost the baton or left, why it may type no more.
+     */
+    companion: { parentId: string; terminalId: string; started: boolean; revoked: string | null } | null;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
@@ -166,6 +201,7 @@ export class RemoteHost {
     /** Re-pair: the device the PIN on screen was issued to replace, if any. */
     #pinReplaces: string | null = null;
     readonly #connections = new Map<string, Connection>();
+    readonly #marketplaces = new WeakMap<Connection, MarketplaceSession>();
     #localTerminals: LocalTerminalServer | null = null;
     readonly #transport: ServerTransport;
     readonly #now: () => number;
@@ -173,6 +209,7 @@ export class RemoteHost {
     readonly #staging: UploadStaging;
     #pin: { code: string; expiresAt: number } | null = null;
     #next = 0;
+    #tynnWatchSeq = 0;
     #locked = false;
     /**
      * The host API's events, listened to ONLY while an authenticated connection exists (genie#1200). Listening builds an
@@ -180,12 +217,15 @@ export class RemoteHost {
      * no one — main at 78–98 % of a core for seconds on the owner's machine with many agents.
      */
     #stopListening: (() => void) | null = null;
+    /** Take over tickets not yet presented (Tynn #529 part A): by ticket, the window that asked and its terminal. */
+    readonly #tickets = new Map<string, { parentId: string; terminalId: string; started: boolean; expiresAt: number; cancel: () => void }>();
+    readonly #schedule: (ms: number, fn: () => void) => () => void;
 
     /**
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads> }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; schedule?: (ms: number, fn: () => void) => () => void }) {
         this.#api = deps.api;
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
@@ -199,6 +239,7 @@ export class RemoteHost {
         this.#openPage = deps.openPage;
         this.#createLocalUploads = deps.createLocalUploads;
         this.#staging = new UploadStaging({ now: this.#now });
+        this.#schedule = deps.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); });
         deps.transport.onConnection((socket) => this.#accept(socket));
     }
 
@@ -219,6 +260,8 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        const marketplace = this.#marketplaces.get(connection);
+        if (marketplace) { this.#marketplaces.delete(connection); void marketplace.close().catch(() => console.warn('[genie] Marketplace review cleanup failed')); }
         this.#localTerminals?.dropOwner(connection.id);
         connection.filesViews?.dispose();
         connection.content?.dispose();
@@ -227,6 +270,9 @@ export class RemoteHost {
         // Disposal marks the connection closed synchronously, then drains any pending disk operation.
         if (connection.uploads) void connection.uploads.dispose().catch(() => console.warn('[genie] a local upload area could not be released'));
         connection.activityViews.clear();
+        // Its Tynn-tab watches go with it (P4 family 12).
+        for (const w of connection.tynnWatches.values()) this.#api.tynnWatch?.unwatch(w.kind, w.viewId);
+        connection.tynnWatches.clear();
         if (connection.pendingPair !== null) {
             this.#confirm.cancel(connection.pendingPair);
             connection.pendingPair = null;
@@ -319,12 +365,64 @@ export class RemoteHost {
         this.#batonChanged(except, null);
     }
 
+    /** A window lost the baton or left: its unused tickets go (and the TUIs they started), its Take Over windows are told why. */
+    #companionsOf(parentId: string, reason: string): void {
+        for (const [ticket, t] of this.#tickets) {
+            if (t.parentId !== parentId) continue;
+            this.#tickets.delete(ticket);
+            t.cancel();
+            if (t.started) this.#api.takeOverEnded?.(t.terminalId);
+        }
+        for (const c of this.#connections.values()) {
+            if (c.companion?.parentId !== parentId || c.companion.revoked !== null) continue;
+            c.companion.revoked = reason;
+            const payload: CompanionEvent = { revoked: reason };
+            this.#send(c, { kind: 'event', channel: COMPANION_EVENT, payload });
+        }
+    }
+
+    /** Take over answered: a ticket for the window that asked, good once, for that terminal, for 30 s. */
+    #issueTicket(parentId: string, terminalId: string, started: boolean): string {
+        const ticket = randomBytes(24).toString('base64url');
+        const cancel = this.#schedule(TICKET_TTL_MS, () => {
+            if (!this.#tickets.delete(ticket)) return;
+            if (started) this.#api.takeOverEnded?.(terminalId);
+        });
+        this.#tickets.set(ticket, { parentId, terminalId, started, expiresAt: this.#now() + TICKET_TTL_MS, cancel });
+        return ticket;
+    }
+
+    /** A Take Over window's hello: the ticket must be live, its window's, and from the same device or Tynn identity. */
+    #redeem(connection: Connection, ticket: string): string | null {
+        const t = this.#tickets.get(ticket);
+        if (!t || this.#now() > t.expiresAt) return TICKET_SPENT;
+        const parent = this.#connections.get(t.parentId);
+        const auth = connection.auth!;
+        const same = parent?.auth != null && auth.isOwner && parent.auth.isOwner && !auth.readonly && auth.workspaceId === null
+            && (parent.deviceId !== null ? connection.deviceId === parent.deviceId : connection.deviceId === null && parent.auth.label === auth.label);
+        if (!same) return TICKET_FOREIGN;
+        this.#tickets.delete(ticket);
+        t.cancel();
+        connection.companion = { parentId: t.parentId, terminalId: t.terminalId, started: t.started, revoked: null };
+        return null;
+    }
+
     /**
      * Who drives changed by something `except` did not do itself: every OTHER remote window that asked is told at once,
      * and by whom (`by`; `null` when it was released or lost). The window that did it learns from its own answer.
      */
     #batonChanged(except: string | null, by: string | null): void {
+        // Who drives is part of the connections (beta.61): genie-host pushes its status on a change, and a status kept from
+        // hello said nobody drove while the Pilot did.
+        this.#changed();
         const holder = this.#baton.holder();
+        // Every ticket, and every Take Over window, of a window that no longer drives stops here (Tynn #529 part A).
+        const parents = new Set([...this.#tickets.values()].map((t) => t.parentId));
+        for (const c of this.#connections.values()) if (c.companion) parents.add(c.companion.parentId);
+        for (const parentId of parents) {
+            if (holder?.connectionId === parentId) continue;
+            this.#companionsOf(parentId, holder ? `${holder.label} took control of ${this.#hostName}` : `nobody is driving ${this.#hostName} now`);
+        }
         for (const c of this.#connections.values()) {
             if (c.auth === null || c.local || !c.batonWatch || c.id === except) continue;
             const payload: BatonEvent = { driver: holder?.label ?? null, mine: holder?.connectionId === c.id, locked: this.#locked, by };
@@ -333,13 +431,16 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, companion: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
             const held = this.#baton.connectionLost(connection.id);
             this.#staging.dropOwner(connection.id);
             this.#drop(connection);
+            this.#companionsOf(connection.id, 'the window this was taken over from closed');
+            // A Take Over window closed: the TUI its click started goes with it, as a local one's does.
+            if (connection.companion?.started) this.#api.takeOverEnded?.(connection.companion.terminalId);
             // The driver left: nobody drives now, and every window left is told (Tynn #529).
             if (held) this.#batonChanged(null, null);
         });
@@ -451,6 +552,10 @@ export class RemoteHost {
             connection.auth = { label: pre.label, isOwner: pre.isOwner, workspaceId: pre.workspaceId, readonly: pre.readonly };
         }
         if (!connection.local && message.profile === 'mobile') connection.profile = 'mobile';
+        if (typeof message.companion === 'string') {
+            const refused = connection.local ? TICKET_FOREIGN : this.#redeem(connection, message.companion);
+            if (refused !== null) { connection.auth = null; connection.deviceId = null; return this.#refuse(connection, refused, true); }
+        }
         this.#send(connection, {
             kind: 'welcome',
             connectionId: connection.id,
@@ -472,8 +577,48 @@ export class RemoteHost {
         const refuse = (reason: string): WireMessage => ({ kind: 'result', id, ok: false, reason });
 
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
+        // A local window takes over through its own window opener (genie:take-over), never this door.
+        if (connection.local && method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; this window does it itself`);
+
+        // A TAKE OVER WINDOW (Tynn #529 part A): reads as any window; types into its one terminal while its window drives.
+        const companion = connection.companion;
+        if (companion) {
+            if (method === 'baton.take' || method === 'baton.release' || method === 'host.lock' || method === 'host.unlock') return refuse(COMPANION_DOES_NOT_DRIVE);
+            if (COMPANION_TERMINAL_METHODS.includes(method)) {
+                if (String(args[0] ?? '') !== companion.terminalId) return refuse(COMPANION_ONLY);
+                if (companion.revoked !== null) return refuse(companion.revoked);
+                if (this.#locked) return refuse('this Genie is locked');
+                try { return ok(await this.#api.invoke(method as RemoteMethod, args, this.#callContext(connection))); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
+            const read = method === 'baton.status' || method === 'agent.watch' || method === 'agent.unwatch'
+                || (!(CONTROL_METHOD_LIST as readonly string[]).includes(method) && capabilityOf(method as RemoteMethod) === 'read');
+            if (!read) return refuse(COMPANION_ONLY);
+        }
 
         switch (method) {
+            // FOLLOWING THE TYNN TAB (P4 family 12, Tynn #561): the local window's own, by subscription.
+            case 'tynn.watch': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                const port = this.#api.tynnWatch;
+                const [kind, workspaceId] = args;
+                if (!port) return ok(null);
+                if (!isTynnWatchKind(kind) || typeof workspaceId !== 'string' || workspaceId === '') return refuse('tynn.watch names board, issues or features, and a workspace');
+                const id = ++this.#tynnWatchSeq;
+                const viewId = `${connection.id}:tynn-${kind}-${id}`;
+                if (!(await port.watch(kind, viewId, workspaceId))) return ok(null);
+                // The window left while its watch was being opened: nothing is kept for it.
+                if (!this.#connections.has(connection.id)) { port.unwatch(kind, viewId); return ok(null); }
+                connection.tynnWatches.set(id, { kind, workspaceId, viewId });
+                return ok(id);
+            }
+            case 'tynn.unwatch': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                const watch = typeof args[0] === 'number' ? connection.tynnWatches.get(args[0]) : undefined;
+                if (!watch) return ok({ unwatched: false });
+                connection.tynnWatches.delete(args[0] as number);
+                this.#api.tynnWatch?.unwatch(watch.kind, watch.viewId);
+                return ok({ unwatched: true });
+            }
             case 'files.watch':
             case 'files.unwatch':
             case 'files.watchState': {
@@ -483,7 +628,7 @@ export class RemoteHost {
                 try {
                     if (method === 'files.watch') return ok(await views.watch(args[0], args[1], args[2]));
                     if (method === 'files.unwatch') return ok(views.unwatch(args[0]));
-                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree'));
+                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree', false, method));
                 } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
             }
             case 'content.release': {
@@ -589,7 +734,7 @@ export class RemoteHost {
         if (capability === 'local' && !connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
 
         // Allow is pressed on THIS machine's screen, never sent from another device — not even the owner's (q_8c07b142).
-        if (method === 'features.act' && isAnswerPair(args)) return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
+        if (method === 'features.act' && isAnswerPair(args) && this.#callContext(connection).origin !== 'local-window') return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
 
         // A phone has no terminals (genie#1346): refused here, before anything on the host is asked.
         if (connection.profile === 'mobile' && PHONE_REFUSES(method)) return refuse(`${method}: a phone has no terminals; open one on ${this.#hostName}`);
@@ -622,11 +767,25 @@ export class RemoteHost {
             if (!may.ok) return refuse(may.reason);
             if (capability === 'write' && this.#baton.holder() === null) return refuse(`nobody is driving ${this.#hostName}; ${BATON_REFUSAL}`);
         }
+        // Take over from another machine is the OWNER's: its window opens there, on the TUI started here (Tynn #529 A).
+        if (method === 'takeOver' && !auth.isOwner) return refuse(`only the owner of ${this.#hostName} can take over its agents from another machine`);
         if (auth.workspaceId !== null) {
             const scoped = this.#guestScope(auth.workspaceId, method, args);
             if (scoped) return refuse(scoped);
         }
 
+        if (isGappMethod(method)) {
+            if (!connection.local || !this.#connections.has(connection.id)) return refuse('GApp actions need this machine\'s own local window.');
+            try { return ok(await dispatchGapps(() => this.#api.gapps?.() ?? null, method.slice('gapps.'.length), args)); }
+            catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
+        if (isMarketplaceMethod(method)) {
+            if (!connection.local || !this.#connections.has(connection.id)) return refuse('The Marketplace local window connection is closed.');
+            let session = this.#marketplaces.get(connection);
+            if (!session) { session = new MarketplaceSession(() => this.#api.marketplace?.() ?? null); this.#marketplaces.set(connection, session); }
+            try { return ok(await session.call(method.slice('marketplace.'.length), args)); }
+            catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
         // Staged bytes are taken only now, after every gate passed (genie#1346): never a path, never bytes inline.
         if (isLocalTerminalMethod(method)) {
             if (!connection.local || !this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
@@ -635,7 +794,7 @@ export class RemoteHost {
             try {
                 const value = await terminals.call(connection.id, method, args, (channel, payload) => this.#send(connection, { kind: 'event', channel, payload }));
                 if (!this.#connections.has(connection.id)) return refuse('the local terminal connection is closed');
-                return ok(this.#content(connection).terminalResult(value));
+                return ok(this.#content(connection).terminalResult(value, method));
             } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
         }
         const materialized = this.#materialize(connection, method, args);
@@ -643,16 +802,16 @@ export class RemoteHost {
 
         let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, artboard: Awaited<ReturnType<typeof localArtboardArguments>> | null = null, response: string | null = null;
         try {
-            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(); }
+            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(method); }
             if (isLocalDraftMethod(method)) {
                 drafts = await localDraftArguments(method, materialized.args, connection.uploads);
-                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin();
+                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin(method);
             }
             if (isLocalArtboardMethod(method)) {
                 artboard = await localArtboardArguments(method, materialized.args, connection.uploads);
-                if (method === 'artboard.read') response = this.#content(connection).begin();
+                if (method === 'artboard.read') response = this.#content(connection).begin(method);
             }
-            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args);
+            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? artboard?.args ?? materialized.args, this.#callContext(connection));
             if (files) { await files.close(); files = null; }
             if (drafts) { await drafts.close(); drafts = null; }
             if (artboard) { await artboard.close(); artboard = null; }
@@ -662,8 +821,16 @@ export class RemoteHost {
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices and the connections. Only an owner sees them.
+            // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
+            // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
+            if (connection.local && (method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
+            // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).
+            if (method === 'takeOver') {
+                const started = value as { ok?: unknown; terminalId?: unknown; started?: unknown } | null;
+                if (started?.ok === true && typeof started.terminalId === 'string') return ok({ ...started, ticket: this.#issueTicket(connection.id, started.terminalId, started.started === true) });
+            }
             return ok(value);
         } catch (error) {
             if (response !== null) connection.content?.release(response);
@@ -673,6 +840,13 @@ export class RemoteHost {
             if (drafts) { try { await drafts.close(); } catch { console.warn('[genie] a consumed draft stage could not be released'); } }
             if (artboard) { try { await artboard.close(); } catch { console.warn('[genie] a consumed ArtBoard stage could not be released'); } }
         }
+    }
+
+    /** Who this call came from (Tynn #578): what this host admitted, the door's or the relay's proof, never the hello's say-so. */
+    #callContext(connection: Connection): CallContext {
+        const auth = connection.auth!, pre = connection.socket.preAuth;
+        const origin = connection.local ? (pre?.window === 'main' ? 'local-window' : 'remote-window') : pre ? 'relay' : 'device';
+        return { connectionId: connection.id, origin, profile: connection.profile ?? 'desktop', isOwner: auth.isOwner, workspaceId: auth.workspaceId, readonly: auth.readonly, label: auth.label };
     }
 
     #content(connection: Connection): LocalFilesContent {
@@ -712,7 +886,7 @@ export class RemoteHost {
     async #watch(connection: Connection, agentId: string, options: WatchOptions): Promise<{ seq: number; detail: unknown; rows: unknown }> {
         const auth = connection.auth!;
         if (auth.workspaceId !== null && this.#api.workspaceOfAgent(agentId) !== auth.workspaceId) throw new Error(`${agentId} is not in the workspace this link shares`);
-        const detail = (await this.#api.invoke('agentDetail', [agentId])) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
+        const detail = (await this.#api.invoke('agentDetail', [agentId], this.#callContext(connection))) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
         if (!this.#connections.has(connection.id)) throw new Error('the connection closed before its agent watch was ready');
         if (detail === null || detail === undefined) {
             connection.watching.delete(agentId);
@@ -763,11 +937,23 @@ export class RemoteHost {
                 continue;
             }
             if (channel === LOCAL_EVENT_CHANNELS.activity && c.activityViews.size === 0) continue;
+            // A Tynn-tab signal goes to the window that watches that kind and workspace, and to no other (P4 family 12).
+            if (channel === LOCAL_EVENT_CHANNELS.tynn) {
+                const e = payload as TynnWatchEvent;
+                if (![...c.tynnWatches.values()].some((w) => w.kind === e.kind && w.workspaceId === e.workspaceId)) continue;
+            }
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
             if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);
             if (out !== NOT_SENT && c.profile === 'mobile') out = this.#forPhone(c, channel, out);
-            if (out !== NOT_SENT) this.#send(c, { kind: 'event', channel, payload: out });
+            if (out === NOT_SENT) continue;
+            // THE GUARD (P4 family 11): a frame over the door's cap ends a window's whole connection, so a local event that
+            // large is dropped and said, never sent. Local events are signals; content crosses through a read.
+            if (c.local && Buffer.byteLength(JSON.stringify(out)) > LOCAL_EVENT_MAX_BYTES) {
+                console.warn(`[genie] the local event ${channel} was too large to send and was dropped`);
+                continue;
+            }
+            this.#send(c, { kind: 'event', channel, payload: out });
         }
     }
 

@@ -2,9 +2,12 @@ import { BLOB_METHODS } from './local-blobs.js';
 import { LOCAL_TERMINAL_METHODS, type LocalTerminalMethod } from './local-terminals.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
 import { FILES_WATCH_METHODS } from './local-files-watch.js';
+import { TYNN_WATCH_METHODS } from './local-tynn-watch.js';
 import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
 import { LOCAL_DRAFT_METHODS, type LocalDraftMethod } from './local-drafts.js';
 import { LOCAL_ARTBOARD_METHODS, type LocalArtboardMethod } from './local-artboard.js';
+import { MARKETPLACE_METHODS, type MarketplaceMethod } from './marketplace.js';
+import { GAPP_METHODS, type GAppMethod } from './gapps.js';
 
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie.
@@ -85,6 +88,9 @@ export const REMOTE_METHODS = [
     'workspaces.tynnIssues',
     'workspaces.tynnIssueAction',
     'workspaces.tynnPageAction',
+    // P4 family 12 (Tynn #561): what changed on the board or the issue queue since a cursor — the live tab's reads.
+    'workspaces.tynnBoardChanges',
+    'workspaces.tynnIssueChanges',
     'workspaces.addRepo',
     'workspaces.removeRepo',
     'workspaces.removeRepoLock',
@@ -105,6 +111,10 @@ export const REMOTE_METHODS = [
     'terminals.attach',
     'terminals.list',
     'features.snapshot',
+    // P4 family 11 (Tynn #560): a custom alert sound's data, read by this machine's own window.
+    'features.soundData',
+    // Tynn #560: the host's own file picker says what it picked; only this machine's window counts (CallContext).
+    'features.picked',
     'features.act',
     'features.setBrowserBounds',
     'updates.state',
@@ -141,6 +151,8 @@ export const REMOTE_METHODS = [
     ...LOCAL_DRAFT_METHODS,
     ...LOCAL_ARTBOARD_METHODS,
     ...LOCAL_TERMINAL_METHODS,
+    ...MARKETPLACE_METHODS,
+    ...GAPP_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -151,7 +163,7 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -161,9 +173,12 @@ export type ControlMethod = (typeof CONTROL_METHODS)[number];
  * took it (`null` when it was released or lost). `mine`: whether this window holds it.
  */
 export const BATON_EVENT = 'remote-baton';
+/** A Take Over window's connection is told when its ticket stops letting it type, and why (Tynn #529 part A). */
+export const COMPANION_EVENT = 'remote-companion';
+export interface CompanionEvent { readonly revoked: string }
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
@@ -173,6 +188,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'terminals.list': 'read',
     'terminals.attach': 'read',
     'features.snapshot': 'read',
+    'features.soundData': 'local',
+    'features.picked': 'local',
     'updates.state': 'read',
     openAgent: 'write',
     stopAgent: 'write',
@@ -253,6 +270,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.tynnIssueAction': 'write',
     // The Home's Details save (genie#1295 H1) writes on Tynn.
     'workspaces.tynnPageAction': 'write',
+    'workspaces.tynnBoardChanges': 'local',
+    'workspaces.tynnIssueChanges': 'local',
     'workspaces.addRepo': 'write',
     'workspaces.removeRepo': 'write',
     'workspaces.removeRepoLock': 'write',
@@ -285,9 +304,10 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.adopt': 'local',
     'tynnNetwork.workstations': 'local',
     'tynnNetwork.setRole': 'local',
-    'tynnNetwork.shares.list': 'local',
-    'tynnNetwork.shares.mint': 'local',
-    'tynnNetwork.shares.revoke': 'local',
+    // Tynn #587: the host being shared makes its own links. Its owner only (OWNER_ONLY, remote-host.ts); making or revoking takes the baton.
+    'tynnNetwork.shares.list': 'read',
+    'tynnNetwork.shares.mint': 'write',
+    'tynnNetwork.shares.revoke': 'write',
     // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
     'inbox.sendFile': 'write',
     // The phone's files (genie#1346): reading a workspace's files is a read; an upload writes into it.
@@ -299,8 +319,11 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
     ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
     ...Object.fromEntries(LOCAL_TERMINAL_METHODS.map(method => [method, 'local'])) as Record<LocalTerminalMethod, 'local'>,
+    ...Object.fromEntries(MARKETPLACE_METHODS.map(method => [method, 'local'])) as Record<MarketplaceMethod, 'local'>,
+    ...Object.fromEntries(GAPP_METHODS.map(method => [method, 'local'])) as Record<GAppMethod, 'local'>,
     addWorkspace: 'host-only',
-    takeOver: 'host-only',
+    // Tynn #529 part A: from another machine, the TUI starts here and its window opens THERE — a write, on the baton.
+    takeOver: 'write',
     // A provider's login opens a window on the host, for the person at it: like Take Over.
     providerLogin: 'host-only',
     'features.setBrowserBounds': 'host-only',
@@ -336,6 +359,43 @@ export interface PreAuth {
     readonly workspaceId: string | null;
     /** Reads only: every change is refused. */
     readonly readonly: boolean;
+    /** Only with `kind: 'local'`: which window the door admitted. Absent = not known to be this machine's own (Tynn #578). */
+    readonly window?: 'main' | 'remote';
+}
+
+/**
+ * WHO A HOST CALL CAME FROM (host split P4, Tynn #578). Built by RemoteHost from what it admitted, never from anything
+ * the caller says, and the only thing an origin-dependent rule may read.
+ */
+export interface CallContext {
+    readonly connectionId: string;
+    /** `local-window` is this machine's own window; a window driving another machine is `remote-window`, though it holds the door. */
+    readonly origin: 'local-window' | 'remote-window' | 'device' | 'relay';
+    readonly profile: 'mobile' | 'desktop';
+    readonly isOwner: boolean;
+    /** The one workspace this caller may reach; `null` = the whole host. */
+    readonly workspaceId: string | null;
+    readonly readonly: boolean;
+    readonly label: string;
+}
+
+/** A call nobody vouched for: no owner, reads only, and a workspace id no workspace has (`null` would be the whole host). */
+export const RESTRICTED_CALL_CONTEXT: CallContext = Object.freeze({ connectionId: '', origin: 'relay', profile: 'mobile', isOwner: false, workspaceId: '', readonly: true, label: 'an unidentified caller' });
+
+/**
+ * A context that crossed from genie-host to a window. Only a remote caller is ever forwarded, so one claiming this
+ * machine's window, or that is not exactly a context, is treated as nobody's.
+ */
+export function forwardedCallContext(value: unknown): CallContext {
+    if (value === null || typeof value !== 'object') return RESTRICTED_CALL_CONTEXT;
+    const v = value as Record<string, unknown>;
+    const keys = ['connectionId', 'origin', 'profile', 'isOwner', 'workspaceId', 'readonly', 'label'];
+    if (Object.keys(v).length !== keys.length || !keys.every((k) => k in v)) return RESTRICTED_CALL_CONTEXT;
+    if (v.origin !== 'remote-window' && v.origin !== 'device' && v.origin !== 'relay') return RESTRICTED_CALL_CONTEXT;
+    if (v.profile !== 'mobile' && v.profile !== 'desktop') return RESTRICTED_CALL_CONTEXT;
+    if (typeof v.connectionId !== 'string' || typeof v.label !== 'string' || typeof v.isOwner !== 'boolean' || typeof v.readonly !== 'boolean') return RESTRICTED_CALL_CONTEXT;
+    if (v.workspaceId !== null && typeof v.workspaceId !== 'string') return RESTRICTED_CALL_CONTEXT;
+    return { connectionId: v.connectionId, origin: v.origin, profile: v.profile, isOwner: v.isOwner, workspaceId: v.workspaceId as string | null, readonly: v.readonly, label: v.label };
 }
 
 /**
@@ -345,7 +405,11 @@ export interface PreAuth {
 export type ClientProfile = 'mobile';
 
 export type WireMessage =
-    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile }
+    /**
+     * `companion` (Tynn #529 part A): the ticket a driving window's Take over was answered with — this connection is that
+     * window's Take Over window, for that one terminal. Beside `auth`, never in it: a saved hello's auth is rewritten.
+     */
+    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string }
     | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
     /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
@@ -393,6 +457,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, relay or local' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
             if (raw.profile !== undefined && raw.profile !== 'mobile') return { ok: false, reason: 'hello profile must be "mobile" when given' };
+            if (raw.companion !== undefined && typeof raw.companion !== 'string') return { ok: false, reason: 'hello companion must be a string when given' };
             return { ok: true, message: raw as unknown as Frame<M> };
         }
         case 'call': {

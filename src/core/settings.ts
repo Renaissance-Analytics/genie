@@ -42,6 +42,11 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'ftq_nudge_hotkey', group: 'general', scope: 'host', label: 'ForceTheQuestion nudge key', description: 'Tells the agent in front of you to ask its question through ForceTheQuestion. Empty: F5.', type: 'string', default: '', hidden: true },
     // WHAT'S NEW (Tynn #762; Genie 1's): the version whose What's New the person has closed — shown once per version.
     { key: 'whats_new_seen_version', group: 'general', scope: 'host', label: 'What’s new seen', description: 'The version whose What’s new was last closed.', type: 'string', default: '', hidden: true },
+    // THE FINISHED HISTORY, BOUNDED (Tynn #549, the owner's numbers): what genie-host keeps of agents' handoffs. Every
+    // unseen one is always kept; a cut handoff's whole text is the agent's handoff file.
+    { key: 'finished_kept_per_agent', group: 'general', scope: 'host', label: 'Finished handoffs kept per agent', description: 'How many of an agent’s finished handoffs Genie keeps. One you have not seen is always kept.', type: 'enum', options: ['5', '10', '20', '50', '100'], default: '20' },
+    { key: 'finished_seen_days', group: 'general', scope: 'host', label: 'Keep seen handoffs for', description: 'Days a handoff you have seen is kept. One you have not seen is always kept.', type: 'enum', options: ['3', '7', '14', '30', '90'], optionLabels: { 3: '3 days', 7: '7 days', 14: '14 days', 30: '30 days', 90: '90 days' }, default: '14' },
+    { key: 'handoff_kept_kb', group: 'general', scope: 'host', label: 'Handoff text kept', description: 'How much of each handoff Genie keeps with it. The whole text is in the agent’s handoff file.', type: 'enum', options: ['2', '4', '8', '16', '32'], optionLabels: { 2: '2 KB', 4: '4 KB', 8: '8 KB', 16: '16 KB', 32: '32 KB' }, default: '8' },
     { key: 'tray_notice_shown', group: 'general', scope: 'host', label: 'Tray notice shown', description: 'The one-time “Genie is still running in the tray” notice has been shown.', type: 'boolean', default: false, hidden: true },
     // APPS AND SCRIPTS REPORT TO AGENTS (genie#1345; the owner's D2: on by default): this workspace's sites, background
     // processes and script keys may post into its own agents' AgentInbox. Off: none of them holds a key.
@@ -71,7 +76,9 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'mcp_sync_cursor', group: 'workstation', scope: 'host', label: 'Sync Genie into Cursor (.cursor/mcp.json)', description: 'Config sync writes Genie’s MCP endpoint into the workspace’s .cursor/mcp.json.', type: 'boolean', default: true },
     { key: 'mcp_sync_codex', group: 'workstation', scope: 'host', label: 'Sync Genie into Codex (.codex/config.toml)', description: 'Config sync writes Genie’s MCP server block into the workspace’s Codex config.', type: 'boolean', default: true },
     { key: 'mcp_sync_hooks', group: 'workstation', scope: 'host', label: 'Seed the imDone Stop hook (.claude/settings.local.json)', description: 'Config sync adds the hook that files a handoff when a Claude Code agent stops.', type: 'boolean', default: true },
-    { key: 'developer_mode', group: 'workstation', scope: 'host', label: 'Developer mode', description: 'Run local UNSIGNED plugins from the plugins folder, labelled as such. Off: only plugins signed by a publisher key Genie carries are installed.', type: 'boolean', default: false },
+    // ADF B5 (Tynn #455; the owner: "signed packages only, with a user toggle to turn publisher checks off at their own
+    // risk"). Drawn on Settings → Plugins as its own switch, which asks before it turns checks off: hidden from the rows.
+    { key: 'publisher_checks_off', group: 'workstation', scope: 'host', label: 'Turn off publisher checks', description: 'Run plugins that are unsigned or signed by a publisher Genie does not know, labelled Unverified, each with no network until you allow it. Unsigned or unknown publishers can run code on this machine. You accept that risk.', type: 'boolean', default: false, hidden: true },
     { key: 'panel_splits', group: 'workstation', scope: 'workspace', label: 'Pane split sizes', description: 'Where the splits between panes sit, per layout — written by dragging, remembered per workspace.', type: 'string', default: '', hidden: true },
     // WORKSPACE TABS YOU DESIGN (Tynn #282): the tabs between Agents and Settings, their grids and panels, as JSON
     // (core/workspace-tabs.ts reads it forgivingly). Hidden: it is edited on the Workspace view, not in Settings.
@@ -79,7 +86,6 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'panel_layout', group: 'workstation', scope: 'workspace', label: 'Terminal layout', description: 'How this workspace’s terminals are laid out: one at a time, two columns, two rows, or a 2×2 grid. Remembered per workspace.', type: 'enum', options: ['single', 'columns', 'rows', 'grid'], default: 'single' },
     { key: 'track_cwd', group: 'workstation', scope: 'host', label: 'Track terminal directory', description: 'Let terminals report their working directory so a new one opens where the last was.', type: 'boolean', default: true },
     { key: 'rate_limit_refresh', group: 'workstation', scope: 'host', label: 'Rate-limit refresh on the Dashboard', description: 'How often each provider’s rate-limit reading in the Dashboard header may change, in seconds. A reading that arrives sooner is ignored, so many agents reporting at once do not churn the window.', type: 'enum', options: ['30', '60', '120', '300'], default: '60' },
-    { key: 'detached_terminals', group: 'workstation', scope: 'host', label: 'Keep terminals through a quit', description: 'Terminals survive Genie closing and are rejoined on the next launch.', type: 'boolean', default: false },
     { key: 'theme', group: 'appearance', scope: 'device', label: 'Theme', description: 'Dark, light, or follow the system.', type: 'enum', options: ['dark', 'light', 'system'], default: 'system' },
     { key: 'sidebar_width', group: 'appearance', scope: 'device', label: 'Sidebar width', description: 'Pixels.', type: 'string', default: '208' },
     // One row per alert kind, DERIVED from the registry — never a hand-kept list.
@@ -102,7 +108,6 @@ const V1_MAP: Readonly<Record<string, string>> = {
     theme: 'theme',
     update_channel: 'update_channel',
     track_cwd: 'track_cwd',
-    detached_terminals: 'detached_terminals',
     // Genie 1's master sound switch is `notify_sound` ('on' / 'off'; genie main/db.ts). This map named
     // `notification_sounds`, which Genie 1 never had, so nobody's sound settings carried over (Tynn #766).
     notify_sound: 'notification_sounds',
@@ -132,6 +137,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {
+    // genie-host owns the terminals and keeps them past a window's quit (Tynn #416).
+    detached_terminals: 'genie-host keeps the terminals past a window closing; there is no setting',
     // Genie 2 has no restore switch (the owner, 2026-10-20): every agent that was running always comes back.
     restore_agents_on_launch: 'Genie 2 always starts again the agents that were running; there is no setting',
     agent_command: 'agents are sessions in Genie 2; there is no launch line to carry',

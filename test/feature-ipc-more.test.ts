@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import type { ToolStatus } from '../src/core/toolchain.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction, type FeaturePorts, type FeatureState } from '../src/main/feature-ipc.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 

@@ -120,7 +120,7 @@ describe('local windows are not remote devices or remote state changes', () => {
         const holder = baton.holder();
         const here = await local();
         expect(await here.call('workspaces.setSetting', 'work', 'workspace_tabs', '{}')).toMatchObject({ kind: 'result', ok: true });
-        expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.setSetting', ['work', 'workspace_tabs', '{}']);
+        expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.setSetting', ['work', 'workspace_tabs', '{}'], expect.anything());
         expect(baton.holder()).toEqual(holder);
         expect(host.locked()).toBe(true);
     });

@@ -6,7 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import { OS_WORKSPACE } from '../src/core/os-agent.js';
 import type { SyncResult } from '../src/core/integrations.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import type { WorkspaceConfigRequest } from '../src/main/workspace-config-sync.js';
 import { SessionHost } from '../src/main/session-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
@@ -296,7 +297,7 @@ it('production main restarts the agents Tynn recovery names when the account cha
     const main = await readFile('src/main/main.ts', 'utf8');
     expect(/tynnAccount\.onChange\(\(\) => recoverTynnAgents\(\)\)/.test(main), 'an account change asks for recovery').toBe(true);
     expect(/\n\s*recoverTynnAgents\(\);/.test(main), 'and once after the account opens, signed in before anyone listened').toBe(true);
-    expect(/function recoverTynnAgents[\s\S]*?tynnRecovery\(asked\)[\s\S]*?restartForMcp/.test(main), 'with the existing graceful restart').toBe(true);
+    expect(/function recoverTynnAgents[\s\S]*?\.recovery\(asked\)[\s\S]*?restartForMcp/.test(main), 'with the existing graceful restart').toBe(true);
     expect(/prepareAgentMcp\(record,\s*signal\)[\s\S]*?tynnNote\(record\.id\)[\s\S]*?notice\(/.test(main), 'the note reaches the chat').toBe(true);
 });
 

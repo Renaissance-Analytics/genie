@@ -1,5 +1,6 @@
 import { callerFrom } from './mcp-callers.js';
-import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
+import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
+import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './builtin-tool.js';
 import type { KnowledgeStore, MemoryClass, Scope, ScopeFilter } from './knowledge-store.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
 
@@ -66,32 +67,7 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
     };
 
     const knowledge: Registration = {
-        definition: new ToolDefinition(
-            'knowledge',
-            'Read and write Genie’s workstation knowledge graph: search / get / add / list / link. Nodes are markdown memories in four classes (profile, episodic, procedural, knowledge); [[wikilinks]] become edges; an ambiguous link resolves to nothing. Scope (system | workspace | gapp | all) is noise reduction, not a boundary.',
-            {
-                type: 'object',
-                properties: {
-                    terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['search', 'get', 'add', 'list', 'link'] },
-                    query: { type: 'string' },
-                    id: { type: 'string' },
-                    title: { type: 'string' },
-                    body: { type: 'string' },
-                    class: { type: 'string', enum: ['profile', 'episodic', 'procedural', 'knowledge'] },
-                    tags: { type: 'array', items: { type: 'string' } },
-                    tag: { type: 'string' },
-                    links: { type: 'array', items: { type: 'string' } },
-                    scope: { type: 'string', enum: ['system', 'workspace', 'gapp', 'all'] },
-                    limit: { type: 'number' },
-                    cursor: { type: 'string' },
-                    from: { type: 'string' },
-                    to: { type: 'string' },
-                },
-                required: ['action'],
-            },
-            'Knowledge',
-        ),
+        definition: builtinToolDefinition(KNOWLEDGE_TOOL),
         handler: withCaller((caller, args) => {
             const action = str(args.action) ?? '';
             const own: Scope = { kind: 'workspace', id: caller.workspaceId };
@@ -141,24 +117,7 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
     };
 
     const manageTerminals: Registration = {
-        definition: new ToolDefinition(
-            'manageTerminals',
-            'Your workspace’s terminals: list; create (approval-gated; runs a command or opens a shell — with the workspace’s service variables already set); write (approval-gated; multi-line text is bracketed-pasted and Enter is sent separately — pass enter:false to hold it); read (the scrollback; `dropped: true` means it was cut at the cap). Databases, Redis and other engines are the `services` tool’s, and sites are the `sites` tool’s: never run `docker` in a terminal for them.',
-            {
-                type: 'object',
-                properties: {
-                    terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['list', 'create', 'write', 'read'] },
-                    id: { type: 'string' },
-                    command: { type: 'string' },
-                    cwd: { type: 'string' },
-                    text: { type: 'string' },
-                    enter: { type: 'boolean' },
-                },
-                required: ['action'],
-            },
-            'Manage terminals',
-        ),
+        definition: builtinToolDefinition(MANAGE_TERMINALS_TOOL),
         handler: withCaller(async (caller, args, context) => {
             const action = str(args.action) ?? '';
             const mine = () => deps.terminals.list().filter((t) => t.workspaceId === caller.workspaceId);
@@ -209,3 +168,53 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
 
     return [knowledge, manageTerminals];
 }
+
+
+// ---------------------------------------------------------------- compiled declarations (ADF A2, Tynn #446)
+// What these tools ARE, as data: the catalog registers them (main/genie-catalog.ts); the factory above binds handlers.
+export const KNOWLEDGE_TOOL: BuiltinTool = declareBuiltinTool(
+    'knowledge',
+    'Read and write Genie’s workstation knowledge graph: search / get / add / list / link. Nodes are markdown memories in four classes (profile, episodic, procedural, knowledge); [[wikilinks]] become edges; an ambiguous link resolves to nothing. Scope (system | workspace | gapp | all) is noise reduction, not a boundary.',
+    {
+        type: 'object',
+        properties: {
+            terminalId: MIRRORED_TERMINAL_ID,
+            action: { type: 'string', enum: ['search', 'get', 'add', 'list', 'link'] },
+            query: { type: 'string' },
+            id: { type: 'string' },
+            title: { type: 'string' },
+            body: { type: 'string' },
+            class: { type: 'string', enum: ['profile', 'episodic', 'procedural', 'knowledge'] },
+            tags: { type: 'array', items: { type: 'string' } },
+            tag: { type: 'string' },
+            links: { type: 'array', items: { type: 'string' } },
+            scope: { type: 'string', enum: ['system', 'workspace', 'gapp', 'all'] },
+            limit: { type: 'number' },
+            cursor: { type: 'string' },
+            from: { type: 'string' },
+            to: { type: 'string' },
+        },
+        required: ['action'],
+    },
+    'Knowledge'
+);
+export const MANAGE_TERMINALS_TOOL: BuiltinTool = declareBuiltinTool(
+    'manageTerminals',
+    'Your workspace’s terminals: list; create (approval-gated; runs a command or opens a shell — with the workspace’s service variables already set); write (approval-gated; multi-line text is bracketed-pasted and Enter is sent separately — pass enter:false to hold it); read (the scrollback; `dropped: true` means it was cut at the cap). Databases, Redis and other engines are the `services` tool’s, and sites are the `sites` tool’s: never run `docker` in a terminal for them.',
+    {
+        type: 'object',
+        properties: {
+            terminalId: MIRRORED_TERMINAL_ID,
+            action: { type: 'string', enum: ['list', 'create', 'write', 'read'] },
+            id: { type: 'string' },
+            command: { type: 'string' },
+            cwd: { type: 'string' },
+            text: { type: 'string' },
+            enter: { type: 'boolean' },
+        },
+        required: ['action'],
+    },
+    'Manage terminals'
+);
+/** This module's tools, in the order its factory returns them. */
+export const MORE_TOOLS: readonly BuiltinTool[] = [KNOWLEDGE_TOOL, MANAGE_TERMINALS_TOOL];

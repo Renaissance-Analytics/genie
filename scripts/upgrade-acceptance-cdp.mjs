@@ -34,7 +34,9 @@ import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readd
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { lookup } from 'node:dns/promises';
-import { join } from 'node:path';
+import { join } from 'node:path';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this replaces a profile and hides system files; test machines only'); process.exit(2); }
 process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
@@ -157,7 +159,7 @@ async function launch(command, args) {
     return cdp;
 }
 const launchNew = () => launch(require('electron'), ['.']);
-const features = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d) => ({ user: d?.integrations?.tynn?.user?.name ?? null, keyring: d?.integrations?.keyring ?? null }))');
+const features = (cdp) => cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => ({ user: d?.integrations?.tynn?.user?.name ?? null, keyring: d?.integrations?.keyring ?? null }))');
 
 // Windows' curl is schannel: it asks for a revocation answer the alias's local certificate cannot give, and refuses without one (batch II: CRYPT_E_NO_REVOCATION_CHECK). Only that check is off; the chain and the name are still checked (0a, 0b). And it has no /dev/null.
 const CURL_OS = process.platform === 'win32' ? ['--ssl-no-revoke'] : [];
@@ -332,7 +334,7 @@ try {
     const version = await before.evaluate('window.genie.updates?.state?.().then((s) => s?.currentVersion ?? s?.version ?? null).catch(() => null)');
     say(`beta.56 window up, it says ${version}`);
     const code = signInCode();
-    const signed = await before.evaluate(`window.genie.features.act({ kind: 'integrations.tynnCode', code: ${JSON.stringify(code)} }).then((r) => r.tynnMessage ?? null)`);
+    const signed = await before.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'integrations.tynnCode', code: ${JSON.stringify(code)} }).then((r) => r.tynnMessage ?? null)`);
     if (signed) say(`Tynn said: ${String(signed).slice(0, 160)}`);
     const who = await until('beta.56 to be signed in', 60_000, async () => (await features(before)).user);
     check(Boolean(who), '2-beta56-signed-in-to-tynn-gen', String(who));
@@ -449,8 +451,8 @@ try {
 
     if (process.env.UPGRADE_RELAY) {
         say('S11: the moved key signs its way onto the relay');
-        const workstation = (c) => c.evaluate('window.genie.features.snapshot().then((d) => d?.remote?.tynnWorkstation ?? null)');
-        await again.evaluate(`window.genie.features.act({ kind: 'settings.set', key: 'remote_access', value: true }).then(() => true)`);
+        const workstation = (c) => c.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.remote?.tynnWorkstation ?? null)');
+        await again.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'settings.set', key: 'remote_access', value: true }).then(() => true)`);
         const reached = await until('the relay', 90_000, async () => { const t = await workstation(again); return t?.relay?.state === 'reachable' ? t : null; });
         const seen = await workstation(again);
         check(Boolean(reached), 'S11.2-the-moved-key-gets-onto-the-relay', reached ? String(reached.relay.relay) : JSON.stringify(seen?.relay ?? null));

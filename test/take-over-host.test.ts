@@ -175,3 +175,29 @@ describe('Genie does not manage it', () => {
         expect(s.host.probe(s.record.id)).toBeNull();
     });
 });
+
+/**
+ * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A). The person's Take Over window is on THEIR machine, attached to this
+ * host's terminal over the link: the host starts the TUI and opens NO window of its own. Closing that remote window closes
+ * the TUI, as closing a local one does — but only a TUI the remote click started; one already open here is not its to end.
+ */
+describe('taking over for another machine', () => {
+    type Start = (record: unknown, cwd: string, tui: string, options?: { window?: boolean }) => { ok: true; terminalId: string; started?: boolean } | { ok: false; reason: string };
+
+    it('starts the TUI with no window on this host and says it started it; a second ask reuses it and says so', () => {
+        const s = setup();
+        const start = s.host.start.bind(s.host) as unknown as Start;
+        expect(start(s.record, '/repos/tynn', 'claude', { window: false })).toEqual({ ok: true, terminalId: 'term_1', started: true });
+        expect(s.windows).toEqual([]);
+        expect(s.host.probe(s.record.id)).toMatchObject({ terminalId: 'term_1' });
+        expect(start(s.record, '/repos/tynn', 'claude', { window: false })).toEqual({ ok: true, terminalId: 'term_1', started: false });
+        expect(s.windows).toEqual([]);
+        expect(s.pty.opened).toHaveLength(1);
+    });
+
+    it('CONTROL: the local click still opens its window, as before', () => {
+        const s = setup();
+        expect(s.host.start(s.record, '/repos/tynn', 'claude')).toMatchObject({ ok: true, terminalId: 'term_1' });
+        expect(s.windows).toEqual(['genie://takeover/term_1']);
+    });
+});

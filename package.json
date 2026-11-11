@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "2.0.0-beta.60",
+  "version": "2.0.0-beta.61",
   "private": true,
   "type": "module",
   "description": "Genie 2 — an agent is a session, never a terminal.",
@@ -22,7 +22,11 @@
     "verify:leak": "tsx test/live/terminal-leak.live.ts",
     "verify:flows": "vitest run -c vitest.flows.config.mts",
     "verify:zip64": "vitest run -c vitest.zip64.config.mts",
-    "verify:app-inbox": "tsx test/live/app-inbox.live.ts"
+    "verify:mailpit": "vitest run -c vitest.mailpit.config.mts",
+    "verify:app-inbox": "tsx test/live/app-inbox.live.ts",
+    "docs:sdk": "tsx scripts/gen-sdk-docs.ts",
+    "check:package": "tsx scripts/check-package.ts",
+    "publish:plugin": "tsx scripts/publish-plugin.ts"
   },
   "dependencies": {
     "@napi-rs/keyring": "2.1.2",
@@ -42,15 +46,17 @@
     "@particle-academy/fancy-ws": "0.1.1",
     "@particle-academy/holy-sheet": "2.13.0",
     "@particle-academy/last-word": "0.10.0",
-    "@particle-academy/prism-acp": "0.38.0",
-    "@particle-academy/prism-harness": "0.8.0",
+    "@particle-academy/prism-acp": "0.41.1",
+    "@particle-academy/prism-harness": "0.10.3",
     "@particle-academy/prism-mcp": "^0.3.0",
     "@particle-academy/prism-mcp-server": "0.5.0",
     "@particle-academy/react-fancy": "6.7.2",
+    "bcryptjs": "3.0.3",
     "electron-updater": "^6.8.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "ws": "^8.22.1",
+    "yauzl": "3.4.0",
     "yazl": "3.3.1"
   },
   "devDependencies": {
@@ -68,8 +74,7 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5",
-    "yauzl": "3.4.0"
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "global-agent": "^4.1.3",

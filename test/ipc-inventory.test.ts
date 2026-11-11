@@ -67,8 +67,43 @@ describe('P4 IPC inventory', () => {
         expect(new Set(inventoried).size).toBe(inventoried.length);
     });
 
-    it('names a protocol method, a window port, or the reason it is deferred', () => {
-        for (const [, destination] of IPC_INVENTORY) expect(destination).toMatch(/^(protocol:.+|protocol-door|window-port|later:.+)$/);
+    const KNOWN = /^(protocol:.+|protocol-door|window-port|browser-process|later:.+)$/;
+    it('names a protocol method, a window port, the Genie browser process, or the reason it is deferred', () => {
+        for (const [, destination] of IPC_INVENTORY) expect(destination).toMatch(KNOWN);
+    });
+
+    it('CONTROL: a destination nobody knows is not one', () => {
+        expect('browser-proces').not.toMatch(KNOWN);
+        expect('later').not.toMatch(KNOWN);
+    });
+
+    // Tynn #562: which process answers each browser row. The browser process runs genie-browser-electron.ts; the window keeps
+    // only its fallback copy of that file until P6, and the site panels are webviews in the window by design.
+    describe('the two processes', () => {
+        const src = (name: string) => fileURLToPath(new URL(`../src/main/${name}`, import.meta.url));
+        const browserFile = channels(readFileSync(src('genie-browser-electron.ts'), 'utf8'), 'genie-browser-electron.ts');
+        const rowsFor = (destination: string) => IPC_INVENTORY.filter(([, d]) => d === destination).map(([channel]) => channel);
+
+        it('no row waits on P2b any more', () => {
+            expect(IPC_INVENTORY.filter(([, d]) => d.startsWith('later:P2b')).map(([channel]) => channel)).toEqual([]);
+        });
+
+        it('browser-process is exactly what genie-browser-electron.ts registers, and that is what the browser process runs', () => {
+            expect(browserFile.length).toBeGreaterThan(0);
+            expect(rowsFor('browser-process').sort()).toEqual([...browserFile].sort());
+            expect(readFileSync(src('browser-process.ts'), 'utf8')).toContain("from './genie-browser-electron.js'");
+        });
+
+        it('a window port is never registered in the browser process\'s file', () => {
+            expect(rowsFor('window-port').filter((channel) => browserFile.includes(channel))).toEqual([]);
+        });
+
+        it('the site panels and the window\'s opener are window ports', () => {
+            const panels = channels(readFileSync(src('site-panels-electron.ts'), 'utf8'), 'site-panels-electron.ts');
+            expect(panels.length).toBeGreaterThan(0);
+            expect(panels.filter((channel) => !rowsFor('window-port').includes(channel))).toEqual([]);
+            expect(rowsFor('window-port')).toContain('genie:browser-window-open');
+        });
     });
 
     it('reserves protocol-door for the frame channel and requires that channel', () => {
@@ -93,8 +128,8 @@ describe('P4 IPC inventory', () => {
         expect(channels(`// ipcMain.handle('not:a:call', () => {});
             const text = "ipcMain.handle('not:a:call', () => {})";
             ipcMain.handle(CLIPBOARD_WRITE_CHANNEL, () => {});
-            ipcMain.handle(FEATURE_CHANNELS.snapshot, () => {});`, 'control.ts'))
-            .toEqual([CLIPBOARD_WRITE_CHANNEL, FEATURE_CHANNELS.snapshot]);
+            ipcMain.handle(FEATURE_CHANNELS.browserBounds, () => {});`, 'control.ts'))
+            .toEqual([CLIPBOARD_WRITE_CHANNEL, FEATURE_CHANNELS.browserBounds]);
         expect(() => channels('ipcMain.handle(unlistedBinding, () => {});', 'control.ts')).toThrow('unresolved IPC channel');
     });
 });

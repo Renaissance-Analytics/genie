@@ -1,3 +1,4 @@
+import { isOsAgent } from '../core/os-agent.js';
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
@@ -8,10 +9,13 @@ import { LiveReadings, planStepsOf } from '../core/live-readings.js';
 import { BackgroundCount } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
-import type { Headroom } from '../core/headroom.js';
+import { resetsIn, type Headroom } from '../core/headroom.js';
 import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Comms } from '../core/comms.js';
-import { statSync } from 'node:fs';
+import { supervisorFailureWords } from '../core/supervisor-failure.js';
+import { readFileSync, statSync } from 'node:fs';
+import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
+import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 
@@ -78,7 +82,15 @@ export interface SessionLifecycle {
     straggler(agentId: AgentId, run: number): void;
     /** The machine could not be read after this run's spawn: its pids are recorded with no start time. */
     readingFailed?(agentId: AgentId, run: number, pids: readonly number[]): void;
+    /** How far a start has come (Tynn #558). */
+    phase?(agentId: AgentId, run: number, phase: AgentStartPhase): void;
 }
+
+/** How long a start may go unanswered before the person is told (Tynn #558). A normal start takes about a second. */
+export const START_REPORT_MS = 20_000;
+
+/** A start's progress: its connections, the provider's handshake, then up, failed, or still not up when reported. */
+export type AgentStartPhase = 'preparing' | 'handshake' | 'ready' | 'failed' | 'slow';
 
 /** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
 export const HISTORY_LIMIT = 3000;
@@ -111,13 +123,14 @@ import {
     type StopVerdict,
     type TurnOutcomeLike,
 } from '../core/session.js';
+import type { NativeStopVerdict } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
-import { unsupportedSlashCommand } from '../core/provider-commands.js';
+import { slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
@@ -232,10 +245,29 @@ export function providerLaunchOptions(
 export function providerBinary(
     provider: string,
     env: Record<string, string | undefined> = process.env,
+    ports: ProviderProgramPorts = realProgramPorts(env),
 ): string | undefined {
     const configured = env[`GENIE2_${provider.toUpperCase()}_BINARY`];
     const trimmed = configured?.trim();
-    return trimmed ? trimmed : undefined;
+    if (trimmed) return trimmed;
+    // Behind a batch wrapper the driver would refuse: the real program, found once here for every start (Tynn #577).
+    const program = resolveProviderProgram(provider, ports);
+    return program.kind === 'found' ? program.path : undefined;
+}
+
+function realProgramPorts(env: Record<string, string | undefined>): ProviderProgramPorts {
+    return {
+        platform: process.platform, env,
+        isFile: (path) => { try { return statSync(path).isFile(); } catch { return false; } },
+        readText: (path) => { try { return statSync(path).size <= 65_536 ? readFileSync(path, 'utf8') : ''; } catch { return ''; } },
+        chosen: (provider) => readProviderChoice(providerChoiceFile(), provider),
+    };
+}
+
+/** The words for a provider whose wrapper hides its program, or `null`. An explicit `GENIE2_<PROVIDER>_BINARY` is the person's answer. */
+export function providerStartProblem(provider: string, env: Record<string, string | undefined> = process.env, ports: ProviderProgramPorts = realProgramPorts(env)): string | null {
+    if (env[`GENIE2_${provider.toUpperCase()}_BINARY`]?.trim()) return null;
+    return providerProgramProblem(provider, ports);
 }
 
 /**
@@ -262,6 +294,7 @@ export function driverEvents(events: DriverEvents): {
     onProtocolError: (problem: string, detail?: { readonly recoverable: boolean }) => void;
     onStderr: (line: string) => void;
     onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+    onStopVerdict: (verdict: NativeStopVerdict) => void;
     onSteerUpdate: (update: SteerRecordLike) => void;
 } {
     return {
@@ -278,6 +311,7 @@ export function driverEvents(events: DriverEvents): {
         onProtocolError: (problem, detail) => events.onProtocolError?.(problem, detail),
         onStderr: (line) => events.onStderr?.(line),
         onExit: (code, signal) => events.onExit?.(code, signal),
+        onStopVerdict: (verdict) => events.onStopVerdict?.(verdict),
         // prism-acp 0.38.0: a Codex steer's record (Tynn #440) — how mail steered mid-turn becomes Delivered.
         onSteerUpdate: (update) => events.onSteerUpdate?.(update),
     };
@@ -368,13 +402,17 @@ export function listModelsOptionsFor(
     provider: string,
     env: Record<string, string | undefined>,
     runtime: { readonly execPath: string; readonly electron: boolean },
+    ports?: ProviderProgramPorts,
 ): ListModelsOptions {
-    return { ...providerLaunchOptions(providerBinary(provider, env), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
+    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
-export const realListModels: ListProviderModels = (provider) =>
-    listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }));
+export const realListModels: ListProviderModels = (provider) => {
+    const problem = providerStartProblem(provider);
+    if (problem !== null) return Promise.reject(new Error(problem));
+    return listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }));
+};
 
 /** How often a held login is read again while it waits (genie#1195). */
 export const LIMIT_REREAD_MS = 15 * 60_000;
@@ -412,6 +450,9 @@ export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(rec
 }
 
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
+    // Said in Genie's words, naming the file, before the driver refuses in its own.
+    const problem = providerStartProblem(record.provider);
+    if (problem !== null) return () => { throw new Error(problem); };
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
     // Without an explicit private Tynn server, neither provider may recover one from user/project config.
@@ -517,6 +558,7 @@ export class SessionHost {
     readonly #processTree: ProcessTree | undefined;
     readonly #stopGraceMs: number;
     readonly #lifecycle: SessionLifecycle | undefined;
+    readonly #startReportMs: number;
     /** Stops still in their grace or verification, by agent: a start waits for them (hosting plan 1.3). */
     readonly #ending = new Map<AgentId, Promise<StopVerdict>>();
     /** The last stop's verdict, by agent — what `ended()` answers once the stop is over. */
@@ -621,6 +663,8 @@ export class SessionHost {
         stopGraceMs?: number;
         /** Every run's processes and how it ended — the ledger, the log, the Deck. Absent = told to nobody. */
         lifecycle?: SessionLifecycle;
+        /** How long before a start that has not come up is reported. Absent = `START_REPORT_MS`. */
+        startReportMs?: number;
     }) {
         this.#userData = options.userData;
         // ONE store for every thread this host reads and writes (genie#1340): it keeps each log's line count, so a run's
@@ -643,6 +687,7 @@ export class SessionHost {
         this.#processTree = options.processTree;
         this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
         this.#lifecycle = options.lifecycle;
+        this.#startReportMs = options.startReportMs ?? START_REPORT_MS;
         this.#onThreadId = options.onThreadId;
         this.#onCarryOverSent = options.onCarryOverSent;
         this.#onRedockSent = options.onRedockSent;
@@ -671,19 +716,43 @@ export class SessionHost {
 
     /** A session's readings: the gate decides; a closed login holds every agent on it, and the wake is (re)scheduled. */
     #limitReport(provider: string, readings: readonly LimitReading[], message: string | null): void {
-        const view = this.#gate.report(this.#loginOf(provider), readings, this.#clock(), message);
-        if (view.state !== 'open') this.#holdLogin(provider);
+        this.#gate.report(this.#loginOf(provider), readings, this.#clock(), message);
+        // The provider's own reading says the login is limited: every agent on it waits (Tynn #793).
+        if (this.#gate.limitedByReading(this.#loginOf(provider), this.#clock())) this.#holdLogin(provider);
         this.#wake();
     }
 
     /**
-     * A turn the provider ended on its limit with no reading (Tynn #791): the gate holds the login on its stated
-     * backoff — there is no reset to wait for — and every agent on it is held.
+     * A turn the provider ended on its limit with no reading (Tynn #791): the gate retries on its stated backoff — there
+     * is no reset to wait for. ONE TURN'S BREACH HOLDS ONLY THE AGENT THAT HIT IT (Tynn #556): the others on the login are
+     * held only when the provider's own reading says the login is limited (`#limitReport`); the held agent's next re-read
+     * asks for that reading.
      */
-    #limitBreach(provider: string, reason: string): void {
+    #limitBreach(agentId: AgentId, provider: string, reason: string): void {
         this.#gate.breach(this.#loginOf(provider), this.#clock(), `The provider ended a turn on its rate limit (${reason}).`);
-        this.#holdLogin(provider);
+        this.#emit(agentId);
+        this.#onAction?.(agentId, 'limited');
         this.#wake();
+    }
+
+    /**
+     * The limit an agent is under: its login's, as the gate holds it — except a breach's retry, which is the agent's own
+     * that hit it and not the login's (Tynn #556): an agent it did not hold reads open.
+     */
+    #limitOf(provider: string, held: boolean): GateView {
+        const login = this.#loginOf(provider), now = this.#clock(), view = this.#gate.view(login, now);
+        if (view.state === 'retrying' && !held && !this.#gate.limitedByReading(login, now)) return { state: 'open' };
+        return view;
+    }
+
+    /** Why an agent is held, and until when — said in its chat when it comes up held (Tynn #556), never silent. */
+    #heldWords(provider: string): string {
+        const now = this.#clock(), view = this.#gate.view(this.#loginOf(provider), now);
+        const name = provider.charAt(0).toUpperCase() + provider.slice(1);
+        const at = view.state === 'paused' ? view.resumeAtMs : view.state === 'retrying' ? view.nextTryAtMs : null;
+        if (at === null) return `Held: the ${name} login needs you before it can go on${view.state === 'needs-person' && view.message ? ` (${view.message})` : ''}. Genie starts this agent once it is sorted.`;
+        const clock = new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `Held: the ${name} login is at its rate limit. Genie resumes this agent at ${clock} (${resetsIn(at, now).replace(/^resets/, 'resumes')}); Resume now starts it at once.`;
     }
 
     #holdLogin(provider: string): void {
@@ -753,7 +822,9 @@ export class SessionHost {
         const out: Array<{ provider: string; view: GateView }> = [];
         for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
             const view = this.#gate.view(this.#loginOf(provider), now);
-            if (view.state !== 'open') out.push({ provider, view });
+            // A breach's retry is the login's only while it holds one of its agents (Tynn #556).
+            const holds = view.state !== 'retrying' || this.#gate.limitedByReading(this.#loginOf(provider), now) || [...this.#running.values()].some((e) => e.provider === provider && e.session.held);
+            if (view.state !== 'open' && holds) out.push({ provider, view });
         }
         return out;
     }
@@ -851,8 +922,13 @@ export class SessionHost {
 
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
+        // WHERE A START HAS GOT TO (Tynn #558): told to the lifecycle log, and to the person if it does not come up.
+        const startPhase = (phase: AgentStartPhase): void => { const run = this.#running.get(record.id)?.run; if (run !== undefined) this.#lifecycle?.phase?.(record.id, run, phase); };
+        const deferred = this.#prepareMcpServers !== undefined || this.#untrustedFilesFor !== undefined;
+        let waitingFor = deferred ? 'its connections (MCP servers and sign-ins)' : 'the provider to answer';
+        let startReport: ReturnType<typeof setTimeout> | null = null;
         // Read before each launch, not kept: a workspace trusted or changed since the last one counts now. A failure here starts nothing.
-        const driverFactory = this.#prepareMcpServers || this.#untrustedFilesFor ? deferredDriverFactory(async (signal) => {
+        const driverFactory = deferred ? deferredDriverFactory(async (signal) => {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
@@ -870,6 +946,8 @@ export class SessionHost {
                 }
                 this.#emit(record.id);
             }
+            waitingFor = 'the provider to answer';
+            startPhase('handshake');
             return factory;
         }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
         if (!driverFactory) {
@@ -946,6 +1024,8 @@ export class SessionHost {
         const session: AgentSession = new AgentSession({
             agentId: record.id,
             cwd,
+            // The OS agent is never told to continue after a rate limit (Tynn #543).
+            limitNudge: !isOsAgent(record),
             store: this.#store(),
             driverFactory,
             runId,
@@ -956,6 +1036,10 @@ export class SessionHost {
             ...(record.redockAt ? { redockAt: record.redockAt, onRedockSent: (at: string) => this.#onRedockSent?.(record.id, at) } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
+            onStartSettled: (ok) => {
+                if (startReport !== null) clearTimeout(startReport);
+                if (this.#running.get(record.id)?.session === session) startPhase(ok ? 'ready' : 'failed');
+            },
             onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
@@ -975,7 +1059,7 @@ export class SessionHost {
             } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
             mayTakeWork: () => !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
-            onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
+            onLimitBreach: (reason) => this.#limitBreach(record.id, record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
              *
@@ -1096,15 +1180,30 @@ export class SessionHost {
          * workspace folder, which is now refused above, by name, before anything spawns.
          */
         try {
+            startPhase(deferred ? 'preparing' : 'handshake');
             session.start();
-            // Its login is at its limit: held from the start, so nothing is sent to a provider that would refuse it.
-            if (this.#gate.view(this.#loginOf(record.provider), this.#clock()).state !== 'open') session.hold();
+            // NEVER SILENT (Tynn #558): a start that has not come up says what it is waiting for. It may still come up.
+            if (session.starting) {
+                startReport = setTimeout(() => {
+                    if (this.#running.get(record.id)?.session !== session || !session.starting) return;
+                    const lastWords = session.recentStderr.at(-1);
+                    session.notice(`${record.name} has not come up after ${Math.round(this.#startReportMs / 1000)} seconds: still waiting for ${waitingFor}.${lastWords ? ` It last said: ${lastWords}` : ''} It may still start. If it does not, restart it.`);
+                    startPhase('slow');
+                }, this.#startReportMs);
+                startReport.unref?.();
+            }
+            // Its login is at its limit (the provider's reading says so): held from the start, so nothing is sent to a
+            // provider that would refuse it — and the chat says why and until when (Tynn #556).
+            if (this.#gate.limitedByReading(this.#loginOf(record.provider), this.#clock())) {
+                session.hold();
+                session.notice(this.#heldWords(record.provider));
+            }
         } catch (error) {
             this.#running.delete(record.id);
 
             const configured = providerBinary(record.provider);
             const reason = [
-                `Genie could not start ${record.provider}: ${String((error as Error).message ?? error)}.`,
+                `Genie could not start ${record.provider}: ${supervisorFailureWords(error) ?? String((error as Error).message ?? error)}.`,
                 // The configured PATH, when there is one. An error like "spawn EINVAL" names
                 // no file, so on its own it sends the reader looking in the wrong place — and
                 // a `GENIE2_<PROVIDER>_BINARY` pointing somewhere stale is a cause nothing
@@ -1181,9 +1280,8 @@ export class SessionHost {
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): { ok: true } | { ok: false; reason: string | null } {
         const entry = this.#running.get(agentId);
         if (!entry || !entry.session.running) return { ok: false, reason: null };
-        // A slash command the agent cannot run is said to the composer, never sent as a chat message (Tynn #440).
-        const unsupported = by === 'you' ? unsupportedSlashCommand(text, entry.session.extensions, reportsCommandsFor(entry.provider)) : null;
-        if (unsupported !== null) return { ok: false, reason: unsupported };
+        const command = this.#yourCommand(agentId, entry, text, by, attachments.length > 0);
+        if (command !== null) return command;
         const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
         if (!built.ok) return { ok: false, reason: built.reason };
         try {
@@ -1193,6 +1291,24 @@ export class SessionHost {
         }
         this.#emit(agentId);
         return { ok: true };
+    }
+
+    /**
+     * A SLASH COMMAND YOU TYPED (Tynn #440): `null` when this is not one Genie acts on (not a command, or not yours —
+     * Genie's notice, a peer's message), else what became of it. One the agent did not advertise is refused, never sent
+     * as chat. One it advertised goes to a provider that runs commands (`runsCommands`: Codex) as that command, taking
+     * no arguments; to one that does not (Claude), it is the prompt text as before (`null` here), and its CLI runs it.
+     */
+    #yourCommand(agentId: AgentId, entry: Running, text: string, by: string | null, withFiles: boolean): { ok: true } | { ok: false; reason: string } | null {
+        if (by !== 'you') return null;
+        const unsupported = unsupportedSlashCommand(text, entry.session.extensions, reportsCommandsFor(entry.provider));
+        if (unsupported !== null) return { ok: false, reason: unsupported };
+        const command = slashCommandOf(text);
+        if (command === null || !entry.session.runsCommands) return null;
+        if (command.args || withFiles) return { ok: false, reason: `/${command.name} was not sent: it takes no arguments here.` };
+        const refused = entry.session.runCommand(command.name, text.trim(), by);
+        this.#emit(agentId);
+        return refused === null ? { ok: true } : { ok: false, reason: refused };
     }
 
     /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
@@ -1420,6 +1536,9 @@ export class SessionHost {
         const entry = this.#running.get(agentId);
         if (!entry) return null;
         if (!entry.session.running) return null;
+        // The phone's text-only message comes this way: the same check as the composer's (Tynn #440).
+        const command = this.#yourCommand(agentId, entry, text, by, false);
+        if (command !== null) return command.ok ? { queued: null } : null;
         const queued = entry.session.deliver(text, by, null, context);
         this.#emit(agentId);
         return { queued };
@@ -1694,7 +1813,7 @@ export class SessionHost {
                 : null;
 
         return {
-            limit: this.#gate.view(this.#loginOf(entry.provider), this.#clock()),
+            limit: this.#limitOf(entry.provider, entry.session.held),
             signedOut: entry.session.signedOut,
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),

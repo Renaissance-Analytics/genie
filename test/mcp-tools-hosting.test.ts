@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import type { JsonObject } from '@particle-academy/prism-mcp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import { genieToolDeps } from '../src/main/genie-tool-deps.js';
 import { allGenieTools } from '../src/main/mcp-registrations.js';
@@ -175,7 +176,7 @@ describe('services: reading', () => {
         try {
             observed = await composeServices({ userData: ownDir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
                 onComposeStage: () => { throw new Error('synthetic observer'); } });
-            expect(observed.engines.list()).toEqual([]); expect(observed.settings.snapshot().developer_mode).toBe(false);
+            expect(observed.engines.list()).toEqual([]); expect(observed.settings.snapshot().publisher_checks_off).toBe(false);
         } finally { await observed?.shutdown(); await rm(ownDir, { recursive: true, force: true }); }
     });
 

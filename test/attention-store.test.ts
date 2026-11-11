@@ -6,6 +6,7 @@ import { mintAgentId } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import { InboxStore } from '../src/main/inbox-store.js';
 import { AttentionStore } from '../src/main/attention-store.js';
+import { deckItemsFrom } from '../src/core/deck-sources.js';
 
 /**
  * THE ATTENTION PROTOCOL — the durable half (§6.3): imDone with a handoff, ForceTheQuestion
@@ -228,5 +229,35 @@ describe('the two lists', () => {
 
         await reopened.lists.clear({ list: 'agent', workspaceId: 'tynn', agentId: agent });
         expect(reopened.lists.show({ list: 'agent', workspaceId: 'tynn', agentId: agent })).toEqual([]);
+    });
+});
+
+/**
+ * AN UPDATE SAYS THE AGENT WAITS NOW (2026-11-08, beta.60). impactium asked on 11-06; Genie restarted, so its session
+ * started later; it UPDATED the question at 17:51Z and the owner never saw it. The Deck judges whether the asker still
+ * waits by its latest ask (`reaskedAt`, else `askedAt`); an update kept `askedAt` and set nothing, so the question stayed
+ * "asked by an earlier run": stale, never in the ForceTheQuestion window, never in the count.
+ */
+describe('an update is the agent waiting now', () => {
+    const questions = [{ header: 'Next', question: 'What next?', options: [{ label: 'a' }, { label: 'b' }] }];
+    const updated = [{ header: 'Next', question: 'What next, now?', options: [{ label: 'a' }, { label: 'b' }] }];
+    const deck = (q: ReturnType<AttentionStore['pending']>[number], startedAt: number) =>
+        deckItemsFrom({ questions: [q], userList: [], unreadDms: [], finished: [], agents: { [agent]: { name: 'atlas', workspaceId: 'tynn' } }, asker: () => ({ running: true, startedAt }) })[0]!;
+
+    it('stamps reaskedAt, keeps askedAt, and the Deck then counts it as waiting; the same question before the update is stale (CONTROL)', async () => {
+        const asked = await store.ask({ agentId: agent, agentName: 'atlas', workspaceId: 'tynn', questions }, { userActive: true });
+        const before = store.pending()[0]!;
+        expect(before.reaskedAt).toBeUndefined();
+        // The agent's session now started after the ask (a Genie restart), and before the update.
+        clock += 1_000;
+        const sessionStartedAt = clock;
+        clock += 1_000;
+        await store.update({ agentId: agent, workspaceId: 'tynn', questionId: asked.questionId, questions: updated });
+        const after = store.pending()[0]!;
+        expect(after.askedAt).toBe(before.askedAt);
+        expect(after.revision).toBe(1);
+        expect(Date.parse(after.reaskedAt!)).toBeGreaterThan(sessionStartedAt);
+        expect(deck(after, sessionStartedAt).stale).toBeUndefined();
+        expect(deck(before, sessionStartedAt).stale).toBe('earlier-run');
     });
 });

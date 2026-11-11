@@ -231,7 +231,7 @@ describe('the verified reader uses the local client’s existing frame stream', 
         console.info(`[p4-blob-fixture] reader native byte equality: ${Math.round(performance.now() - comparisonStart)} ms`);
         expect(f.calls.map(call => call.method)).toEqual(['blob.open', ...Array(5).fill('blob.read'), 'blob.close']);
         expect(f.sources[0]!.close).toHaveBeenCalledOnce(); expect(c.state().connected).toBe(true);
-        await c.bridge.workspaces.settings('work'); expect(f.invoke).toHaveBeenCalledWith('workspaces.settings', ['work']);
+        await c.bridge.workspaces.settings('work'); expect(f.invoke).toHaveBeenCalledWith('workspaces.settings', ['work'], expect.anything());
         expect(Math.max(...f.serialized.map(text => Buffer.byteLength(text, 'utf8')))).toBeLessThanOrEqual(LOCAL_FRAME_LIMIT_BYTES);
     });
     it('rejects changed content on hash mismatch and still closes its handle', async () => {

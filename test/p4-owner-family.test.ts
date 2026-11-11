@@ -102,20 +102,21 @@ it('late fixture cleanup removes only the directory whose device writes it await
 });
 
 describe('family5 owner methods and real recorded bridge calls', () => {
-    it.each(methods)('%s starts local', method => { expect(REMOTE_METHODS).toContain(method); expect(capabilityOf(method as RemoteMethod)).toBe('local'); });
+    it.each(methods.filter((m) => !m.startsWith('tynnNetwork.shares.')))('%s starts local', method => { expect(REMOTE_METHODS).toContain(method); expect(capabilityOf(method as RemoteMethod)).toBe('local'); });
     it.each(rows)('$method sends its actual arguments and preserves the native result', async row => {
         const f = setup(), c = await f.client();
         const owner = (c as unknown as { localOwner: Owner }).localOwner;
         expect(owner, 'local-only facade on the same client').toBeDefined();
         expect(await row.call(owner)).toEqual(row.value);
         expect(f.calls).toEqual([{ method: row.method, args: row.args }]);
-        expect(f.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args);
+        expect(f.invoke).toHaveBeenCalledExactlyOnceWith(row.method, row.args, expect.anything());
         expect(f.ports[row.port as keyof typeof f.ports]).toHaveBeenCalledWith(...row.portArgs);
     });
     it.each(['tailnet owner', 'relay owner', 'workspace guest', 'host guest', 'readonly relay', 'phone owner', 'phone relay guest'])('%s is refused before invocation and receives no local key/share payload', async kind => {
         const f = setup(), relay = kind.includes('relay') || kind.includes('guest'), guest = kind.includes('guest');
         const p = await f.raw(relay ? { label: kind, isOwner: !guest, workspaceId: kind === 'workspace guest' ? 'work' : null, readonly: kind.includes('readonly') } : undefined, kind.startsWith('phone'));
-        for (const row of rows) expect(await p.call(row.method, row.args)).toMatchObject({ kind: 'result', ok: false, reason: expect.stringContaining("own Genie window") });
+        // Share links are the host owner's over any connection, with the baton (share-door.test.tsx); the rest stay local.
+        for (const row of rows.filter((r) => !r.method.startsWith('tynnNetwork.shares.'))) expect(await p.call(row.method, row.args)).toMatchObject({ kind: 'result', ok: false, reason: expect.stringContaining("own Genie window") });
         expect(f.invoke).not.toHaveBeenCalled(); expect(f.ports.createKey).not.toHaveBeenCalled(); expect(f.ports.adopt).not.toHaveBeenCalled(); expect(f.ports.mint).not.toHaveBeenCalled();
         expect(JSON.stringify(p.frames)).not.toContain('synthetic-key-never-a-real-secret'); expect(JSON.stringify(p.frames)).not.toContain('/connect/synthetic');
     });
@@ -134,11 +135,10 @@ describe('family5 owner methods and real recorded bridge calls', () => {
         const b = pageBridge({ appInbox: { state: old, createKey: old, revokeKey: old, source: old }, deviceLink: { hosts: old, forget: old, adopt: old }, tynnNetwork: { workstations: old, setRole: old, shares: { list: old, mint: old, revoke: old } }, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge);
         await expect(row.call(b as Owner)).rejects.toThrow('no local protocol connection'); expect(old).not.toHaveBeenCalled();
     });
-    it('a stable owner facade survives manual recovery over the page connection', async () => {
+    it('a stable owner facade survives a dropped page connection: the call waits for the link', async () => {
         const f = setup(), port = f.port(); vi.stubGlobal('window', { genieLocalProtocol: port });
         const b = pageBridge({ deviceLink: { open: vi.fn() }, tynnNetwork: { open: vi.fn() }, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge), inbox = b.appInbox;
         expect(await b.appInbox!.state('work')).toEqual({ ok: true, state }); port.send('close', '', ''); await tick();
-        await expect(b.appInbox!.state('work')).rejects.toThrow('connection'); b.localProtocol!.retry();
         expect(await b.appInbox!.state('work')).toEqual({ ok: true, state }); expect(b.appInbox).toBe(inbox); expect(f.calls).toEqual([{ method: 'appInbox.state', args: ['work'] }, { method: 'appInbox.state', args: ['work'] }]);
     });
 });
@@ -232,7 +232,7 @@ describe('native paths retired and P5/window boundaries pinned', () => {
     });
     it('leaves all five retained native bodies byte-identical apart from line endings', () => {
         const main = readFileSync('src/main/main.ts', 'utf8').replace(/\r\n/g, '\n');
-        const hashes = { 'connect-link': '0b9ae3b3eda218ec458bcd0d9b770a714b31301cf031296696221ca672511252', 'relay-open': 'dca6a87c27dd79d32160394c490b63c01f1eb04c1546b27c2dac98d5362794f7', 'device-open': '2751229ddfd8bb2a12b227926d5b620bb794a1416290745538fa5c543045d753', 'relay-send': 'f6d54a0b0ffe0c6aea96a79181e7b0022623ebde512cedfbfb85410279231c95', 'relay-close': '6555bcd95a145d3b60b88bba0061da764f5dec0f0988909f1ad39310a2d1e9c0' };
+        const hashes = { 'connect-link': '0b9ae3b3eda218ec458bcd0d9b770a714b31301cf031296696221ca672511252', 'relay-open': '98cdfeb54514ae882c367a9d2c5d0d3f23a280828c264029589ec4f226c23976', 'device-open': '2751229ddfd8bb2a12b227926d5b620bb794a1416290745538fa5c543045d753', 'relay-send': 'f34a50135a124bcd30285701daadb10cc19c56739987bd628b95d85975645409', 'relay-close': 'cb283050ceec2132cef13da9b7bf9037ca55dded976d38189145ed4fb1c21143' };
         for (const [channel, hash] of Object.entries(hashes)) {
             const body = new RegExp(`^    ipcMain\\.(?:handle|on)\\('genie:${channel}'.*?^    \\}\\);`, 'ms').exec(main)?.[0];
             expect(body, channel).toBeDefined(); expect(createHash('sha256').update(body!).digest('hex'), channel).toBe(hash);
@@ -247,7 +247,7 @@ describe('native paths retired and P5/window boundaries pinned', () => {
         expect(inv).toContain("['genie:connect-link', 'window-port']"); expect(main).toContain("ipcMain.handle('genie:connect-link'"); expect(preload).toContain("ipcRenderer.invoke('genie:connect-link'");
         for (const channel of ['relay-open', 'device-open', 'relay-send', 'relay-close']) expect(inv).toContain(`['genie:${channel}', 'later:P5 relay client moves into genie-host']`);
         expect(main).toContain("ipcMain.handle('genie:relay-open', async (event, workstationId: unknown)"); expect(main).toContain("ipcMain.handle('genie:device-open', async (event, url: unknown)");
-        expect(main.match(/deviceChannels\.get\(channel\) === event\.sender/g)).toHaveLength(2); expect(main.match(/c\.sender === event\.sender/g)).toHaveLength(3);
+        expect(main.match(/deviceChannels\.get\(channel\) === event\.sender/g)).toHaveLength(2); expect(main.match(/c\.sender === event\.sender/g)).toHaveLength(1);
         for (const event of ['relay-open-step', 'relay-message', 'relay-closed']) { expect(main).toContain(`'genie:${event}'`); expect(preload).toContain(`'genie:${event}'`); }
         const protocol = readFileSync('src/core/remote-protocol.ts', 'utf8'); for (const event of ['local-relay-step', 'local-relay-message', 'local-relay-closed']) expect(protocol).not.toContain(event);
     });

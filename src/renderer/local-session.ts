@@ -9,10 +9,15 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'onSettingsChanged'
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
-    | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn';
+    | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn'
+    // P4 family 12 (Tynn #561): the Tynn tab.
+    | 'tynnBoard' | 'tynnBoardAction' | 'tynnPage' | 'tynnPageAction' | 'tynnBoardChanges' | 'tynnBoardWatch'
+    | 'tynnIssues' | 'tynnIssueAction' | 'tynnIssueChanges' | 'tynnIssuesWatch' | 'tynnFeaturesWatch'
+    // P4 family 10 (Tynn #559): the workspace lifecycle.
+    | 'hibernate' | 'wake' | 'remove';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
-type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry'>>;
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'marketplace' | 'gapps'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -31,10 +36,19 @@ export interface LocalProtocolControl {
 const STARTING = 'Genie is still starting';
 const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
+/** How long after a drop the link is tried again. The last repeats: it never gives up. */
+const RECONNECT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000] as const;
+/** How long a change made during a drop waits for the link before it says so. */
+const DROP_WAIT_MS = 15_000;
+const LINK_DOWN = 'Genie isn’t answering this window yet. Try that again in a moment.';
+/** Another connection in this window took the link. Taking it back would fight it forever, so this needs the person. */
+const REPLACED = 'this window opened a replacement protocol connection';
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'restartWithHandoff'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
+    let wasReady = false;
+    const everReady = () => wasReady;
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
     let client: RemoteClient | null = null;
@@ -49,6 +63,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     };
     const update = (next: LocalProtocolState) => {
         state = next;
+        if (next.phase === 'ready') wasReady = true;
         for (const listener of listeners) listener();
     };
     const release = () => {
@@ -64,24 +79,42 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         update({ ...state, phase: 'failed', reason });
         return { ok: false, reason };
     };
+    /** One connection, up and subscribed. Otherwise released, and the reason. */
+    const connect = async (revise: boolean): Promise<Connected> => {
+        const transport = localTransport(port!);
+        const attempt = connectRemote(transport, { kind: 'local' }, 'this window');
+        client = attempt;
+        const result = await attempt.ready;
+        if (!result.ok) { release(); return result; }
+        offSettings = attempt.bridge.workspaces.onSettingsChanged!((id) => { for (const listener of settingsListeners) listener(id); });
+        offState = attempt.onState((next) => { if (!next.connected && client === attempt) dropped(transport.closeReason()); });
+        for (const entry of subscriptions) entry.off = entry.start(attempt.bridge);
+        update({ phase: 'ready', reason: null, revision: state.revision + (revise ? 1 : 0) });
+        return result;
+    };
+    /** THE LINK WENT (Tynn #590): every later call waits for it, and it is tried until it comes back. */
+    const reconnect = async (): Promise<Connected> => {
+        for (let attempt = 0; ; attempt++) {
+            await new Promise<void>((resolve) => setTimeout(resolve, RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)]));
+            try {
+                const result = await connect(true);
+                if (result.ok) return result;
+            } catch { release(); /* tried again after the next wait */ }
+        }
+    };
+    const dropped = (reason: string | null): void => {
+        if (reason === REPLACED) { fail(reason); ready = Promise.resolve({ ok: false, reason }); return; }
+        release();
+        update({ ...state, phase: 'starting', reason: null });
+        ready = reconnect();
+    };
     const start = async (manual: boolean): Promise<Connected> => {
         update({ ...state, phase: 'starting', reason: null });
         if (!port) return fail('This Genie window has no local protocol connection.');
         for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
             try {
-                client = connectRemote(localTransport(port), { kind: 'local' }, 'this window');
-                const result = await client.ready;
-                if (result.ok) {
-                    const connected = client;
-                    offSettings = connected.bridge.workspaces.onSettingsChanged!((id) => { for (const listener of settingsListeners) listener(id); });
-                    offState = connected.onState((next) => {
-                        if (!next.connected && client === connected) fail('The connection to Genie closed. Retry to reconnect.');
-                    });
-                    for (const entry of subscriptions) entry.off = entry.start(connected.bridge);
-                    update({ phase: 'ready', reason: null, revision: state.revision + (manual ? 1 : 0) });
-                    return result;
-                }
-                release();
+                const result = await connect(manual);
+                if (result.ok) return result;
                 if (result.reason !== STARTING || attempt === ATTEMPTS - 1) return fail(result.reason);
             } catch (error) {
                 return fail(error instanceof Error ? error.message : String(error));
@@ -90,12 +123,19 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         }
         return fail(STARTING);
     };
-    let ready = start(false);
+    let ready: Promise<Connected> = start(false);
+    /** The link, or why it isn't here: a drop is waited out for {@link DROP_WAIT_MS}, startup for as long as it takes. */
+    const linked = (): Promise<Connected> => {
+        if (state.phase === 'ready' || !everReady()) return ready;
+        let timer: ReturnType<typeof setTimeout>;
+        const waited = new Promise<Connected>((resolve) => { timer = setTimeout(() => resolve({ ok: false, reason: LINK_DOWN }), DROP_WAIT_MS); });
+        return Promise.race([ready, waited]).finally(() => clearTimeout(timer));
+    };
     const requestBridge = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T | Refusal> => {
         if (state.phase === 'failed') return { ok: false, reason: state.reason! };
-        const result = await ready;
+        const result = await linked();
         if (!result.ok) return result;
-        if (!client || state.phase !== 'ready') return { ok: false, reason: state.reason ?? 'The connection to Genie closed. Retry to reconnect.' };
+        if (!client || state.phase !== 'ready') return { ok: false, reason: state.reason ?? LINK_DOWN };
         return call(client.bridge);
     };
     const request = <T>(call: (ws: Workspaces) => Promise<T>) => requestBridge((bridge) => call(bridge.workspaces));
@@ -104,9 +144,9 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     // Checking connection state separately avoids mistaking an actual host value for a refusal.
     const read = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T> => {
         if (state.phase === 'failed') throw new Error(state.reason!);
-        const result = await ready;
+        const result = await linked();
         if (!result.ok) throw new Error(result.reason);
-        if (!client || state.phase !== 'ready') throw new Error(state.reason ?? 'The connection to Genie closed. Retry to reconnect.');
+        if (!client || state.phase !== 'ready') throw new Error(state.reason ?? LINK_DOWN);
         return call(client.bridge);
     };
     // The same admitted local client, with the same read/rejection and recovery semantics as the other moved families.
@@ -126,8 +166,53 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         void read(async () => {}).catch(error => { if (alive) observer.error(error instanceof Error ? error : new Error(String(error))); });
         return () => { alive = false; off(); };
     });
+    // P4 family 9b (Tynn #563): a command's caller shows a refusal, so a connection that went is one, never a throw.
+    const answered = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T | { ok: false; reason: string }> => {
+        try { return await read(call); } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+    };
+    const agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'restartWithHandoff'> = {
+        openAgent: (id) => { void read(async (b) => { b.openAgent(id); }).catch(() => {}); },
+        stopAgent: (id) => { void read(async (b) => { b.stopAgent(id); }).catch(() => {}); },
+        resumeLimit: (id) => answered((b) => b.resumeLimit(id)),
+        cancelTurn: (id, intent) => answered((b) => b.cancelTurn(id, intent)),
+        prompt: (id, text, attachments) => answered((b) => b.prompt(id, text, attachments)),
+        resolvePrompt: (id, promptId, action) => answered((b) => b.resolvePrompt(id, promptId, action)) as never,
+        answerApproval: (id, optionId, note) => answered((b) => b.answerApproval(id, optionId, note)),
+        addAgent: (workspaceId, input) => answered((b) => b.addAgent(workspaceId, input)),
+        restartWithHandoff: (id, finishedId) => answered((b) => b.restartWithHandoff(id, finishedId)),
+    };
     return {
+        agentCommands,
         terminals,
+        gapps: {
+            list: () => read(b => b.gapps!.list()),
+            review: folder => read(b => b.gapps!.review(folder)),
+            install: (folder, options) => read(b => b.gapps!.install(folder, options)),
+            setOn: (id, on) => read(b => b.gapps!.setOn(id, on)),
+            uninstall: id => read(b => b.gapps!.uninstall(id)),
+            open: id => read(b => b.gapps!.open(id)),
+            onChanged: listener => subscribe(b => b.gapps!.onChanged(listener)),
+        },
+        marketplace: {
+            search: (query, cursor) => read(b => b.marketplace!.search(query, cursor)),
+            prepare: (id, version) => read(b => b.marketplace!.prepare(id, version)),
+            install: (token, consent) => read(b => b.marketplace!.install(token, consent)),
+            discard: token => read(b => b.marketplace!.discard(token)),
+        },
+        // P4 family 11 (Tynn #560): the feature snapshot, its push and a sound's data.
+        features: {
+            snapshot: () => read((b) => b.features.snapshot()),
+            subscribe: (listener) => subscribe((b) => b.features.subscribe(listener)),
+            soundData: (key) => read((b) => b.features.soundData(key)),
+            act: (action) => read((b) => b.features.act(action)),
+            picked: (paths) => read(async (b) => { await b.features.picked?.(paths); }),
+        },
+        // P4 family 10 (Tynn #559): the host's folders, for every picker — a failure rejects, as the IPC call did.
+        host: {
+            listDir: (path) => read((b) => b.host!.listDir(path)),
+            mkdir: (parent, name) => read((b) => b.host!.mkdir!(parent, name)),
+            home: () => read((b) => b.host!.home!()),
+        },
         artboard: { read: id => read(b => b.artboard!.read(id)), review: (id, post, verdict, comment) => read(b => b.artboard!.review(id, post, verdict, comment)) },
         chatDrafts: {
             load: () => read(b => b.chatDrafts!.load()), save: (id, draft) => read(b => b.chatDrafts!.save(id, draft)),
@@ -243,6 +328,21 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setDefaultAgent: (id, agentId) => request((ws) => ws.setDefaultAgent(id, agentId)),
             setColor: (id, color) => request((ws) => ws.setColor!(id, color)),
             onSettingsChanged: (listener) => { settingsListeners.add(listener); return () => { settingsListeners.delete(listener); }; },
+            // The Tynn tab (P4 family 12): reads and actions reject on a failed connection, as the IPC calls did.
+            tynnBoard: (id, scope) => read((b) => b.workspaces.tynnBoard!(id, scope)),
+            tynnBoardAction: (id, input) => read((b) => b.workspaces.tynnBoardAction!(id, input)),
+            tynnPage: (id, page, query) => read((b) => b.workspaces.tynnPage!(id, page, query)),
+            tynnPageAction: (id, input) => read((b) => b.workspaces.tynnPageAction!(id, input)),
+            tynnBoardChanges: (id, scope, cursor, ids) => read((b) => b.workspaces.tynnBoardChanges!(id, scope, cursor, ids)),
+            tynnIssues: (id, filters) => read((b) => b.workspaces.tynnIssues!(id, filters)),
+            tynnIssueAction: (id, input) => read((b) => b.workspaces.tynnIssueAction!(id, input)),
+            tynnIssueChanges: (id, filters, cursor, ids) => read((b) => b.workspaces.tynnIssueChanges!(id, filters, cursor, ids)),
+            tynnBoardWatch: (id, listener) => subscribe((b) => b.workspaces.tynnBoardWatch!(id, listener)),
+            tynnIssuesWatch: (id, listener) => subscribe((b) => b.workspaces.tynnIssuesWatch!(id, listener)),
+            tynnFeaturesWatch: (id, listener) => subscribe((b) => b.workspaces.tynnFeaturesWatch!(id, listener)),
+            hibernate: (id) => request((ws) => ws.hibernate(id)),
+            wake: (id) => request((ws) => ws.wake(id)),
+            remove: (id) => request((ws) => ws.remove(id)),
         },
     };
 }

@@ -7,7 +7,8 @@ name: CI
 #
 # No Docker. These suites need no service containers, which also keeps them clear of the
 # Docker Hub unauthenticated pull quota that made the old repo's `hosting` job unrunnable
-# (Renaissance-Analytics/genie#864).
+# (Renaissance-Analytics/genie#864). One job is the exception, by design: `mailpit measure`
+# runs the Mailpit image Genie runs, pulled from GHCR by digest, never from Docker Hub.
 
 on:
   push:
@@ -39,6 +40,21 @@ jobs:
       # `npm ci` and not `npm install`: the lockfile is the contract. prism-acp is ESM-only
       # and prism-harness pins the durability layer we build on, so a silent resolution drift
       # is a behaviour change, not a version bump.
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
       - run: npm ci
 
       # Typecheck is a first-class gate, not a lint. The no-pty rule is enforced IN THE TYPE
@@ -92,6 +108,12 @@ jobs:
           grep -q "150px_minmax" "$css"
           grep -q "280px" "$css"
           grep -q "30px" "$css"
+
+      # EVERY ALERT SOUND IS IN THE BUILT RENDERER (Tynn #441; test/alert-sound-library.test.ts): each sound file under
+      # src/renderer/sounds/ was emitted under dist/renderer/assets/, which electron-builder packs whole (dist/**). The unit
+      # test holds every choice to a file in that folder; this holds the folder to what the build shipped.
+      - name: every alert sound is in the built renderer
+        run: node scripts/sound-assets-check.mjs dist/renderer src/renderer/sounds
 
   # GENIE-HOST ON PLAIN NODE (the host split, P10.1b). genie-cloud runs `node dist/main/host.js` in a container with
   # Node 22 and no Electron (P10.3), so the host bundle has to boot and serve there. Node 22.16.0 exactly: the oldest
@@ -173,6 +195,21 @@ jobs:
           echo "flows=$flows" >> "$GITHUB_OUTPUT"
           echo "Flows changed: $flows"
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
       - run: npm ci
         if: steps.changed.outputs.flows == 'true'
 
@@ -197,6 +234,21 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
       # Native staging tests exercise the same built worker that the packaged app loads.
@@ -291,11 +343,62 @@ jobs:
           echo "zip64=$zip64" >> "$GITHUB_OUTPUT"
           echo "Zip writer changed: $zip64"
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
       - run: npm ci
         if: steps.changed.outputs.zip64 == 'true'
 
       - run: npm run verify:zip64
         if: steps.changed.outputs.zip64 == 'true'
+
+  # GENIE MAIL G1 (Tynn #487): MEASURE MAILPIT BEFORE GENIE MAIL RELIES ON IT (`npm run verify:mailpit`,
+  # test/mailpit-measure/). A real axllent/mailpit v1.30 container (the same manifest from GHCR, by digest:
+  # test/mailpit-measure/mailpit-image.ts): SMTP auth with two users, the username on a message, the websocket,
+  # the HTML and link checks, the send API, and when the auth file is read. Each finding is printed as
+  # `MAILPIT_FINDING <name> <json>`. Not in `npm test`, which runs on people's machines too; always run here, so it
+  # always reports. test/mailpit-measure-ci.test.ts holds the rules.
+  mailpit:
+    name: mailpit measure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
+      - run: npm ci
+      - run: npm run verify:mailpit
 
   smoke:
     name: a real window
@@ -336,6 +439,21 @@ jobs:
         run: |
           sudo cp scripts/smoke-fonts.conf /etc/fonts/local.conf
           sudo fc-cache -f
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
 
@@ -439,6 +557,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: a real installed app opens in its own window
+        run: timeout 300 node scripts/gapp-open-cdp.mjs
+
       - name: ArtBoard images, paged posts and the native image-post path
         run: timeout 360 node scripts/artboard-cdp.mjs --trace-main
 
@@ -539,6 +660,21 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
+
       - run: npm ci
 
       # The bundles first. `electron-builder` packs `dist/` — it does not produce it — so
@@ -601,12 +737,22 @@ jobs:
           $log = "$h\.genie\runtime\lifecycle.log"
           $line = $null
           for ($i = 0; $i -lt 90 -and -not $line; $i++) { Start-Sleep -Seconds 1; if (Test-Path $log) { $line = Select-String -Path $log -Pattern "host spawn via=" | Select-Object -Last 1 } }
+          # A SPAWN IS NOT A HOST (Tynn #597): the window's own link to it says the host loaded and answered. Read before anything is killed.
+          $up = $null
+          for ($i = 0; $i -lt 90 -and $line -and -not $up; $i++) { Start-Sleep -Seconds 1; $up = Select-String -Path $log -Pattern "agent host (started|replaced|adopted) pid=" | Select-Object -Last 1 }
+          $hostLog = "$h\.genie\logs\genie-host.log"
+          if (-not $up) { Write-Output "--- lifecycle.log"; if (Test-Path $log) { Get-Content $log -Tail 30 }; Write-Output "--- genie-host.log"; if (Test-Path $hostLog) { Get-Content $hostLog -Tail 40 } }
           $hostJson = "$h\.genie\runtime\host.json"
           if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
           if (-not $app.HasExited) { taskkill /PID $app.Id /T /F *> $null }
           if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
           Write-Output "the packaged app: $($line.Line)"
           if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
+          if (-not $up) { throw "the packaged app's genie-host did not come up within 90 s of its spawn (see genie-host.log above)" }
+          Write-Output "the packaged app: $($up.Line)"
+          # taskkill above sets $LASTEXITCODE (part of the tree already gone), and the step's result is the last exit code:
+          # 3 of ~20 runs failed after both checks printed. Every failure above has thrown, so reaching here is a pass.
+          exit 0
 
       # The artifacts, so somebody can actually install one and find out. A build that produced
       # a file nobody can reach proves only that the command exited zero.
@@ -636,6 +782,21 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      # ELECTRON'S DOWNLOAD, CACHED (Tynn #540): GitHub answered 504 on it four runs in a row and every Electron job failed
+      # before any code ran. Restored before npm ci, so a run downloads Electron only when its version is new (its zip is
+      # still checked against its published checksum when it is unpacked). Both OSes' cache paths; a missing one is skipped.
+      - uses: actions/cache@v4
+        id: electron-cache
+        with:
+          path: |
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+      # What the cache gave, said in the log: `exact` (this lockfile's), `fallback` (the OS's last), or `none` (downloaded).
+      - run: echo "ELECTRON_CACHE ${{ steps.electron-cache.outputs.cache-hit == 'true' && 'exact' || (steps.electron-cache.outputs.cache-matched-key != '' && 'fallback' || 'none') }} ${{ steps.electron-cache.outputs.cache-matched-key }}"
 
       - run: npm ci
       - run: npm run build
@@ -783,6 +944,10 @@ jobs:
           path: smoke-out/chat-drafts*
           if-no-files-found: warn
           retention-days: 7
+
+      - name: a real installed app opens in its own window
+        shell: pwsh
+        run: node scripts/gapp-open-cdp.mjs
 
       - name: ArtBoard images, paged posts and the native image-post path
         shell: pwsh

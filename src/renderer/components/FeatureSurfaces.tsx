@@ -1,6 +1,9 @@
 import { deviceExpiryText, isExpiringSoon } from '../../core/device-expiry.js';
 import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
+import { PluginsPage } from './PluginsPage.js';
+import { MarketplacePane } from './MarketplacePane.js';
+import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
@@ -11,7 +14,7 @@ import { mobilePageUrl } from '../../core/mobile.js';
 import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
-import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
+import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, soundPickerList, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
@@ -1630,7 +1633,8 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
         const select = (
             // Custom file… opens the host's picker (Tynn #766 B2); the row becomes Custom file only once a file is chosen.
             // By name when the setting has names for its options (a sound is "Wind Down", not `winddown`).
-            <Select list={def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => { if (isAlertSoundKey(def.key) && v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }} aria-label={def.label} />
+            // An alert's sounds are grouped by family (Tynn #441): Genie's own, the library's five families, then Custom file and None.
+            <Select list={isAlertSoundKey(def.key) ? soundPickerList() : def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} value={String(value)} onValueChange={(v) => { if (isAlertSoundKey(def.key) && v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }} aria-label={def.label} />
         );
         if (!isAlertSoundKey(def.key)) return select;
         // PREVIEW (Tynn #766; Genie 1's): the sound this alert would play, through the alert's own player. None has nothing to play.
@@ -1654,7 +1658,7 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
     return <Input defaultValue={String(value)} onBlur={(e) => onAction({ kind: 'settings.set', key: def.key, value: e.target.value })} aria-label={def.label} />;
 }
 
-export function SettingsSurface({ data, onAction, onNavigate, section, workspaces = [], remoteConnect, query, update, providers }: SurfaceProps & { section: SectionId | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined; providers?: readonly ProviderStatus[] | undefined }) {
+export function SettingsSurface({ data, onAction, onNavigate, section, workspaces = [], remoteConnect, query, update, providers, marketplace }: SurfaceProps & { section: SectionId | null; remoteConnect?: RemoteConnectProps | undefined; query?: string | undefined; update?: UpdateCheckProps | undefined; providers?: readonly ProviderStatus[] | undefined; marketplace?: MarketplaceApi | undefined }) {
     const values = data.settings.values;
     const active: SectionId = section ?? 'general';
     // SEARCH across every page (§6.9). Transient view state: a query is not a place, so it is not in the route.
@@ -1765,7 +1769,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'plugins' ? (
                                 <>
                                     <SetSection title="Developer mode" desc="Unsigned local plugins, labelled as such.">{rows('plugins')}</SetSection>
-                                    <Plugins plugins={data.plugins} onAction={onAction} />
+                                    <PluginsPage plugins={data.plugins} onAction={onAction} marketplace={marketplace ? <MarketplacePane api={marketplace} /> : undefined} />
                                 </>
                             ) : null}
                             {active === 'remote' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
@@ -2169,55 +2173,6 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
 }
 
 /**
- * PLUGINS (§6.7). Every folder in the plugins directory is listed with its state and label — signed by
- * whom, or UNSIGNED under developer mode — and a refused or invalid plugin shows its REASON rather than
- * vanishing. Enable/Disable only for installable ones. The folder path is shown so a person knows where
- * plugins go; developer mode is named when it is on.
- */
-function Plugins({ plugins, onAction }: { plugins: FeatureData['plugins']; onAction: SurfaceProps['onAction'] }) {
-    const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
-    const tone = (state: string) => (state === 'enabled' ? 'emerald' : state === 'disabled' ? undefined : 'amber') as 'emerald' | 'amber' | undefined;
-    return (
-        <section data-plugins className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
-            <h2 className="text-sm font-semibold">Plugins</h2>
-            {plugins === null ? (
-                <Skeletons rows={3} />
-            ) : (
-                <>
-                    <p className="text-xs text-[var(--fg-3)]">
-                        Plugins live in <span className="font-mono">{plugins.dir}</span>. Signed by default: a plugin signed by a publisher key Genie carries is installed; anything else is listed with the reason.
-                        {plugins.developerMode ? ' Developer mode is on: local unsigned plugins run, labelled UNSIGNED.' : ''}
-                    </p>
-                    {plugins.entries.length === 0 ? (
-                        <p className="text-sm text-[var(--fg-3)]">No plugins yet. Drop a folder with a genie-plugin.json into the plugins directory.</p>
-                    ) : (
-                        <ul className="divide-y divide-[var(--border-1)]">
-                            {plugins.entries.map((p) => {
-                                const colour = tone(p.state);
-                                return (
-                                <li key={p.id} data-plugin={p.id} data-plugin-state={p.state} className="flex flex-wrap items-center gap-3 py-2 text-sm">
-                                    <span className="font-medium">{p.name}</span>
-                                    {p.version ? <span className="font-mono text-xs text-[var(--fg-4)]">{p.version}</span> : null}
-                                    <Badge variant="soft" size="sm" {...(colour ? { color: colour } : {})}>{p.state}</Badge>
-                                    {p.label ? <span className={`text-xs ${p.label.startsWith('UNSIGNED') ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{p.label}</span> : null}
-                                    {p.reason ? <span className="basis-full text-xs text-[var(--fg-3)]">{p.reason}</span> : null}
-                                    {p.state === 'enabled' ? (
-                                        <Button size="xs" type="button" data-action="plugin-disable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: false })}>Disable</Button>
-                                    ) : p.state === 'disabled' ? (
-                                        <Button size="xs" type="button" data-action="plugin-enable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: true })}>Enable</Button>
-                                    ) : null}
-                                </li>
-                                );
-                            })}
-                        </ul>
-                    )}
-                </>
-            )}
-        </section>
-    );
-}
-
-/**
  * INTEGRATIONS (§6.9). Tynn is OPTIONAL: signed out shows the sign-in and every Tynn-gated row still
  * listed, annotated with the route; signed in shows Sign out. GitHub is its own card (GithubBlock). A workspace's agent files — their status and its Sync now — are in that workspace's own Settings; this
  * section says so (the owner, 2026-10-13: a picker here, above Genie start's record of every workspace, read as
@@ -2529,18 +2484,23 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
     return (
         <section data-remote className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
             <h2 className="text-sm font-semibold">Remote access</h2>
-            {remote === null ? (
+            {/* DRIVE ANOTHER MACHINE FIRST (genie#1278 C1): this page is where the title bar's Connect lands, so the way to
+                another machine is the first thing on it. Never on a drone (W5): Tynn refuses it every connect-grant. It is THIS
+                window's, so it does not wait for the host's own section: a windowless Drone sends none (gp-11102335, beta.61),
+                and a connected window keeps its Disconnect whatever the host is (gp-11102252). */}
+            {connect && (connect.state?.connected === true || (remote !== null && browse)) ? (
+                <div data-drive-another="">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
+                    <ConnectRemote {...connect} />
+                </div>
+            ) : null}
+            {remote === null && connect?.state?.connected === true && connect.state.host ? (
+                // A host with no window open sends no Remote access of its own yet (#1231): said, never a skeleton for ever.
+                <p data-remote-host-settings="unavailable" className="text-xs text-[var(--fg-3)]">{`Open Genie on ${connect.state.host} to see its settings.`}</p>
+            ) : remote === null ? (
                 <Skeletons rows={3} />
             ) : (
                 <>
-                    {/* DRIVE ANOTHER MACHINE FIRST (genie#1278 C1): this page is where the title bar's Connect lands, so the way to
-                        another machine is the first thing on it. Never on a drone (W5): Tynn refuses it every connect-grant. */}
-                    {connect && browse ? (
-                        <div data-drive-another="">
-                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
-                            <ConnectRemote {...connect} />
-                        </div>
-                    ) : null}
                     {/* THE SWITCH (Tynn #820; the owner: "Off by default", as Genie 1 had it): off, nothing listens. It is ALSO what
                         makes this machine reachable through the Tynn relay (main.ts relayAfterSwitch), so it says Tynn first. */}
                     <div data-remote-enabled={remote.enabled ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 text-sm">

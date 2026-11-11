@@ -28,7 +28,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
-import { secretNote } from './secret-note.mjs';
+import { secretNote } from './secret-note.mjs';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 const MODE = process.argv[2];
 if (MODE !== 'sign-in' && MODE !== 'run' && MODE !== 'install-check') { console.error('usage: github-live-cdp.mjs sign-in|run|install-check'); process.exit(2); }
@@ -111,7 +113,7 @@ async function launch() {
     await until('window.genie', 30_000, () => cdp.evaluate('typeof window.genie === "object"'));
     return cdp;
 }
-const githubView = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.github ?? null)');
+const githubView = (cdp) => cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d?.integrations?.github ?? null)');
 // Installations too: with none read yet the clone goes without the sign-in (core/github.ts cloneAuthFor), and this would read as no token.
 const signedInAs = (cdp) => until('the GitHub sign-in and its installations', 60_000, async () => { const g = await githubView(cdp); return g?.status === 'signed-in' && g.installations !== null ? g : null; });
 
@@ -227,7 +229,7 @@ async function signIn() {
     repoOf(process.env.GITHUB_CLONE_URL);
     repoOf(process.env.GITHUB_PUSH_URL);
     const cdp = await launch();
-    await cdp.evaluate(`window.genie.features.act({ kind: 'integrations.githubSignIn' }).then(() => true)`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'integrations.githubSignIn' }).then(() => true)`);
     const device = await until('a device code', 60_000, async () => (await githubView(cdp))?.device ?? null);
     if (!device) throw new Error(`no device code: ${JSON.stringify(await githubView(cdp))}`);
     const lasts = Math.max(0, Math.round((device.expiresAt - Date.now()) / 1000));
@@ -348,7 +350,7 @@ async function a5() {
     const cdp = await launch();
     await signedInAs(cdp);
     const finalToken = await held(ACCESS);
-    await cdp.evaluate(`window.genie.features.act({ kind: 'integrations.githubSignOut' }).then(() => true)`);
+    await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'integrations.githubSignOut' }).then(() => true)`);
     const out = await until('the sign-out to reach the file', 30_000, () => { try { return json(githubFile).state === 'signed-out'; } catch { return false; } });
     check(Boolean(out), 'A5.1-signed-out-is-on-disk');
     check((await held(ACCESS)) === null && (await held(REFRESH)) === null, 'A5.2-both-entries-are-gone');

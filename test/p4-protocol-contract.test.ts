@@ -12,15 +12,25 @@ import { protocolContractDeps } from './support/protocol-contract-deps.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 import { LocalStagingArea } from '../src/main/local-staging-area.js';
 import type { LocalUploads } from '../src/main/local-uploads.js';
+import { MARKETPLACE_METHODS } from '../src/core/marketplace.js';
+import { GAPP_METHODS } from '../src/core/gapps.js';
 
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
     addWorkspace: 'addWorkspace opens a folder picker on the host; do it there',
-    takeOver: 'takeOver opens a window on the host; do it there',
     providerLogin: 'providerLogin opens the provider login in a window on the host; do it there',
     'features.setBrowserBounds': "features.setBrowserBounds places a view on the host's own window; nothing to do remotely",
 };
 const hostOnlyMethods = REMOTE_METHODS.filter((method) => capabilityOf(method) === 'host-only');
+/** Connection-owned reviews cannot go through bare HostApi.invoke. This fixture has no Marketplace service. */
+/** The GApp book's actions are a local window's too, and this fixture has no book. */
+const GAPP_CONNECTION_REFUSALS: Partial<Record<RemoteMethod, string>> = Object.fromEntries(GAPP_METHODS.map((method) => [method, 'GApps are not available on this host.']));
+const MARKETPLACE_CONNECTION_REFUSALS: Partial<Record<RemoteMethod, string>> = {
+    'marketplace.search': 'Marketplace is not available on this host.',
+    'marketplace.prepare': 'Marketplace is not available on this host.',
+    'marketplace.install': 'This Marketplace review does not belong to this window.',
+    'marketplace.discard': 'This Marketplace review does not belong to this window.',
+};
 /** Explicit rows: adding a protocol method without its contract must fail, rather than silently testing nothing. */
 const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     // Positive native and connection-control contracts live in the 8B suites. This fixture checks missing-service refusals.
@@ -51,6 +61,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.confirmAddFromTynn': [ROOT, 'project_1'], 'workspaces.hibernate': ['work'],
     'workspaces.wake': ['work'], 'workspaces.remove': ['work'], 'workspaces.listRepos': ['work'],
     'workspaces.tynnBoard': ['work', 'all'], 'workspaces.tynnBoardAction': ['work', { kind: 'refresh' }],
+    'workspaces.tynnBoardChanges': ['work', {}, 'c1', []], 'workspaces.tynnIssueChanges': ['work', {}, 'c1', []],
     'workspaces.tynnPage': ['work', 'wip', { view: 'attention' }],
     'workspaces.tynnIssues': ['work', { status: 'open' }],
     'workspaces.tynnIssueAction': ['work', { action: 'issue.resolve', issueId: 'i1', body: { reason: 'Done' } }],
@@ -64,7 +75,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'terminals.open': ['work', { cols: 80, rows: 24 }], 'terminals.write': ['term_1', 'hello'],
     'terminals.resize': ['term_1', 80, 24], 'terminals.close': ['term_1'],
     'terminals.attach': ['work', 'missing'], 'terminals.list': ['work'],
-    'features.snapshot': [], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
+    'features.snapshot': [], 'features.soundData': ['sound_question'], 'features.picked': [['/picked.txt']], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
     'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'], 'host.home': [],
     'updates.check': [], 'updates.download': [], 'updates.install': [], 'updates.notes': [],
     headroom: [], accountRetry: ['agent_a'],
@@ -81,6 +92,9 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'chatDrafts.putFile': [Uint8Array.of(111, 107)], 'chatDrafts.readFile': ['00000000-0000-4000-8000-000000000001'],
     'chatDrafts.release': [['00000000-0000-4000-8000-000000000001']],
     'artboard.read': ['work'], 'artboard.review': ['work', 'p1', 'approved', 'review comment'],
+    'marketplace.search': [''], 'marketplace.prepare': ['org.example.plugin', '1.0.0'],
+    'marketplace.install': ['unknown-review', true], 'marketplace.discard': ['unknown-review'],
+    'gapps.list': [], 'gapps.review': ['/nowhere'], 'gapps.install': ['/nowhere', { scope: 'workstation' }], 'gapps.setOn': ['com.example.app', false], 'gapps.uninstall': ['com.example.app'], 'gapps.open': ['com.example.app'],
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };
@@ -174,6 +188,8 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
     it('has an explicit row for exactly every method in the protocol table', () => {
         expect(Object.keys(ROWS).sort()).toEqual([...REMOTE_METHODS].sort());
         expect(Object.keys(HOST_ONLY_BACKSTOPS).sort()).toEqual([...hostOnlyMethods].sort());
+        expect(Object.keys(MARKETPLACE_CONNECTION_REFUSALS).sort()).toEqual([...MARKETPLACE_METHODS].sort());
+        expect(Object.keys(GAPP_CONNECTION_REFUSALS).sort()).toEqual([...GAPP_METHODS].sort());
     });
 
     it.each(REMOTE_METHODS)('%s keeps the direct value, null, or refusal across the wire', async (method) => {
@@ -181,6 +197,14 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
         expect(row, `missing contract row for ${method}`).toBeDefined();
         const args = row!.map((arg) => arg === ROOT ? dir : arg);
         const wireArgs = [...args];
+        const gappRefusal = GAPP_CONNECTION_REFUSALS[method];
+        const connectionRefusal = MARKETPLACE_CONNECTION_REFUSALS[method] ?? gappRefusal;
+        if (connectionRefusal) {
+            expect(await directResult(() => api.invoke(method, args))).toEqual({ ok: false, reason: `${gappRefusal ? 'GApp' : 'Marketplace'} actions require their authenticated local window connection.` });
+            expect(await rpc(method, wireArgs)).toEqual({ ok: false, reason: connectionRefusal });
+            expect(wireInvocations).not.toContain(method);
+            return;
+        }
         if (capabilityOf(method) === 'host-only') {
             const result = await rpc(method, wireArgs);
             expect(result.ok).toBe(false);

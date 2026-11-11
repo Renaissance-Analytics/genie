@@ -25,7 +25,7 @@ import {
 } from '../core/engine-protocol.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { cancelIntent } from '../core/session.js';
-import type { ClientTransport } from '../core/remote-protocol.js';
+import type { CallContext, ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
@@ -43,6 +43,10 @@ import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView } from '../core/crash-record.js';
+import type { MarketplaceApi } from '../core/marketplace.js';
+import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
+import { dispatchGapps, GAppSessionOwner } from './gapps-api.js';
+import { MarketplaceSession } from './marketplace-session.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -94,6 +98,11 @@ export interface EngineServerOptions {
     readonly workstation?: WorkstationService;
     /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
     readonly deviceLink?: DeviceLinkService;
+    /** Remote access's host side (Tynn #409, P5d.1): driven from a LOCAL window only; a window leaving ends its bridged connections. */
+    readonly remoteAccess?: { call(owner: string, method: string, args: unknown[]): unknown };
+    /** The Tynn relay host's registration, role and link (Tynn #410): read and driven from a LOCAL window only. */
+    readonly relayHost?: { call(method: string, args: unknown[]): unknown };
+    readonly takeOver?: { call(method: string, args: unknown[]): unknown };
     /** A workspace's agent config (P3.4): one writer, here. */
     readonly configSync?: (asked: WorkspaceConfigRequest) => Promise<readonly SyncResult[]>;
     /** The keyring card, as the host found it (P3.4 cut c). */
@@ -165,6 +174,17 @@ export interface EngineServerOptions {
     readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
     readonly flows?: FlowsService;
+    /** The host's catalog (ADF A4: catalog-host.ts). Absent = `catalog.*` is refused and no window is sent one. */
+    readonly catalog?: Pick<import('./catalog-host.js').CatalogService, 'snapshot' | 'docs' | 'onEvent'>;
+    /** The host's plugins (ADF A3: plugins-host.ts). Absent = `engine.plugins` is refused and no window is told of any. */
+    readonly plugins?: Pick<import('./plugins-host.js').PluginsService, 'dump' | 'onEvent' | 'call'>;
+    readonly marketplace?: MarketplaceApi | undefined;
+    /** The GApp book's actions (GApps v2 V7). Absent = the book could not open, and the store says so. */
+    readonly gapps?: GAppBookApi | undefined;
+    /** One window of one app (Tynn #595), for the window process to open; never asked for by a page. */
+    readonly gappSessions?: GAppSessionsApi | undefined;
+    /** The GApp book changed: every local window reads its list again (Tynn #596). */
+    readonly gappsChanged?: ((listener: () => void) => () => void) | undefined;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
@@ -245,6 +265,8 @@ interface Connection {
 export class SessionEngineServer {
     readonly #options: EngineServerOptions;
     #host: SessionHost | null = null;
+    readonly #marketplaceReviews = new WeakMap<Connection, MarketplaceSession>();
+    readonly #gappSessionOwners = new WeakMap<Connection, GAppSessionOwner>();
     readonly #records = new Map<string, AgentRecord>();
     readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
@@ -288,6 +310,15 @@ export class SessionEngineServer {
         });
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
+        });
+        options.catalog?.onEvent((change) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'catalog.changed', change);
+        });
+        options.gappsChanged?.(() => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'gapps.changed', null);
+        });
+        options.plugins?.onEvent((dump) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'plugins.event', dump);
         });
         options.browser?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'browser.event', event);
@@ -366,6 +397,31 @@ export class SessionEngineServer {
         return this.#reverse('client.elevate', [steps], { localOnly: true }) as Promise<ElevationOutcome>;
     }
 
+    /** A remote method genie-host does not own yet, done by the newest LOCAL window (Tynn #409). Rejects with none. */
+    remoteInvoke(method: string, args: unknown[], context?: CallContext): Promise<unknown> {
+        return this.#reverse('client.remoteInvoke', [method, args, context ?? null], { localOnly: true });
+    }
+
+    /** The newest local window's connection: the one remote calls go to, and whose events remote connections follow. */
+    newestLocalWindow(): string | null {
+        return [...this.#connections].filter((c) => c.authed && c.window && c.local).at(-1)?.id ?? null;
+    }
+
+    /** Remote access's status (to every local window) or a bridged connection's frame (to the window that owns it). */
+    remoteAccessEvent(owner: string | null, event: unknown): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local && (owner === null || conn.id === owner)) this.#event(conn, 'remoteAccess.event', event);
+    }
+
+    /** The relay host's state, to every local window (Tynn #410). */
+    relayHostEvent(view: unknown): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'relayHost.event', view);
+    }
+
+    /** Who has a TUI open, to every local window (Tynn #553). */
+    takeOverEvent(view: unknown): void {
+        for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'takeOver.event', view);
+    }
+
     /** Whether a LOCAL window is connected now: the only kind asked to elevate (P5a.2). */
     localWindowConnected(): boolean {
         return [...this.#connections].some((c) => c.authed && c.window && c.local);
@@ -404,6 +460,12 @@ export class SessionEngineServer {
             }
             const was = conn.authed;
             this.#connections.delete(conn);
+            this.#gappSessionOwners.get(conn)?.closeAll();
+            const reviews = this.#marketplaceReviews.get(conn);
+            if (reviews) {
+                this.#marketplaceReviews.delete(conn);
+                void reviews.close().catch(() => this.#options.log?.('Marketplace review cleanup failed after a window disconnected.'));
+            }
             for (const p of conn.pending.values()) p.reject(new Error('The window closed before it answered.'));
             conn.pending.clear();
             if (was) this.#options.onClients?.(this.clients);
@@ -489,6 +551,10 @@ export class SessionEngineServer {
         }
         if (this.#options.issueWatch && conn.local) this.#event(conn, 'issueWatch.dump', this.#options.issueWatch.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
+        // The catalog BEFORE ready (ADF A4): a window has the snapshot it follows changes from as soon as it connects.
+        if (this.#options.catalog) this.#event(conn, 'catalog.snapshot', this.#options.catalog.snapshot());
+        // The plugins BEFORE ready (ADF A3): a window lists them and routes files to their editors as soon as it connects.
+        if (this.#options.plugins) this.#event(conn, 'plugins.event', this.#options.plugins.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
         // Safe mode BEFORE ready: the window's own boot restore holds on it (relaunch-restore.ts).
@@ -516,14 +582,53 @@ export class SessionEngineServer {
         conn.transport.send(JSON.stringify(reply.ok ? { kind: 'result', id, ok: true, value: reply.value ?? null } : { kind: 'result', id, ok: false, reason: reply.reason }));
     }
 
+    async #marketplace(conn: Connection, args: unknown[]): Promise<unknown> {
+        if (!conn.local || !conn.window) throw new Error('Marketplace actions require a local window.');
+        if (args.length !== 2 || !Array.isArray(args[1])) throw new Error('Invalid Marketplace operation arguments.');
+        let session = this.#marketplaceReviews.get(conn);
+        if (!session) { session = new MarketplaceSession(() => this.#options.marketplace ?? null, this.#options.log); this.#marketplaceReviews.set(conn, session); }
+        return session.call(args[0], args[1]);
+    }
+
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
         // The updater helper's link calls its own method and nothing else (P5b).
         if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
+        if (method === 'engine.marketplace') return this.#marketplace(conn, args);
+        if (method === 'engine.gapps') {
+            if (!conn.local || !conn.window) throw new Error('GApp actions require a local window.');
+            if (args[0] === 'openSession' || args[0] === 'closeSession') {
+                let owner = this.#gappSessionOwners.get(conn);
+                if (!owner) { owner = new GAppSessionOwner(() => this.#options.gappSessions ?? null); this.#gappSessionOwners.set(conn, owner); }
+                return owner.call(args[0], Array.isArray(args[1]) ? args[1] : []);
+            }
+            return dispatchGapps(() => this.#options.gapps ?? null, args[0], Array.isArray(args[1]) ? args[1] : []);
+        }
         // The crash state is the host's own, ready before any agent engine is: answered here.
         if (method === 'engine.crash') {
             if (!this.#options.crash || !conn.local) throw new Error('This window is not told about crashes here.');
             if (args[0] !== 'dismiss') throw new Error('engine.crash takes dismiss');
             return this.#options.crash.dismiss();
+        }
+        // Remote access is the host's own too (Tynn #409), up before any agent engine: a phone may already be connected.
+        if (method === 'engine.remoteAccess') {
+            if (!this.#options.remoteAccess) throw new Error('This host runs no remote access.');
+            if (!conn.local) throw new Error('Remote access is driven from a local window only.');
+            return this.#options.remoteAccess.call(conn.id, typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
+        }
+        if (method === 'engine.takeOver') {
+            if (!this.#options.takeOver) throw new Error('This host runs no take-over host.');
+            if (!conn.local) throw new Error('Take over is driven from a local window only.');
+            return this.#options.takeOver.call(typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
+        }
+        if (method === 'engine.relayHost') {
+            if (!this.#options.relayHost) throw new Error('This host runs no relay host.');
+            if (!conn.local) throw new Error('The relay host is driven from a local window only.');
+            return this.#options.relayHost.call(typeof args[0] === 'string' ? args[0] : '', Array.isArray(args[1]) ? args[1] : []);
+        }
+        // The catalog is the host's own, ready before any agent engine is (ADF A4): answered here.
+        if (method === 'catalog.snapshot' || method === 'catalog.docs') {
+            if (!this.#options.catalog) throw new Error('This host keeps no catalog.');
+            return method === 'catalog.snapshot' ? this.#options.catalog.snapshot() : this.#options.catalog.docs(String(args[0] ?? '') as never, String(args[1] ?? ''));
         }
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
@@ -676,6 +781,10 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.plugins':
+                if (!this.#options.plugins) throw new Error('This host keeps no plugins.');
+                if (!conn.local) throw new Error('Genie’s plugins are changed from a local window only.');
+                return this.#options.plugins.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.appInbox':
                 if (!this.#options.appInbox) throw new Error('This host runs no app door.');
                 if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');

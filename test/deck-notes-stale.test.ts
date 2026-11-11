@@ -8,7 +8,8 @@ import type { Question } from '../src/core/attention.js';
 import { mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import { needsYouCount } from '../src/core/deck.js';
 import { HUMAN } from '../src/core/inbox.js';
-import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { composeServices } from './helpers/compose-alone.js';
+import { type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction } from '../src/main/feature-ipc.js';
 import { QuestionWindow } from '../src/main/question-window.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
@@ -160,8 +161,8 @@ describe('liveness not known yet', () => {
         expect(before).toHaveLength(2);
         expect(before.filter((i) => i.stale !== undefined)).toHaveLength(0);
         expect(needsYouCount(services.deckItems())).toBe(2);
-        // "Dismiss all stale" sent now (a stale screen from before) removes nothing: unknown is not stale.
-        await handleFeatureAction(services, { kind: 'deck.dismissStale', ids: [gone.questionId] }, STATE);
+        // "Dismiss all stale" sent now (a stale screen from before) removes nothing: unknown is not stale. Said, never silent (Tynn #600).
+        await expect(handleFeatureAction(services, { kind: 'deck.dismissStale', ids: [gone.questionId] }, STATE)).rejects.toThrow(/nothing was dismissed/);
         expect(services.attention.pending()).toHaveLength(2);
 
         livenessKnown = true;

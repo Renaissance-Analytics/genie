@@ -145,22 +145,25 @@ describe('one breach holds the whole login', () => {
 describe('a breach the turn reported itself', () => {
     const failOnLimit = (name: string) => events.get(name)!.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error_during_execution', failure: { kind: 'rate_limit', reason: 'rate_limit' } });
 
-    it('holds the whole login, retries on the first backoff step, and every held agent goes on then', () => {
+    // Tynn #556 changed this contract: one turn's breach with no reading holds ONLY the agent that hit it. The login's
+    // other agents are held when the provider's own reading says it is limited (the describe block above).
+    it('holds the agent that hit it, retries on the first backoff step, and it goes on then; the others never wait', () => {
         const a = record('atlas'); const b = record('wren'); const c = record('kai', 'codex');
         for (const r of [a, b, c]) host.start(r, dir);
         host.prompt(a.id, 'build it', 'you');
         failOnLimit('atlas');
         expect(host.probe(a.id)?.limit).toMatchObject({ state: 'retrying', nextTryAtMs: now + 15 * MIN, attempt: 1 });
+        host.prompt(a.id, 'then this', 'you');
+        expect(sent.get('atlas')).toEqual(['build it']);
         host.prompt(b.id, 'hello', 'you');
-        expect(sent.get('wren')).toEqual([]);
-        // CONTROL: codex is another login
+        expect(sent.get('wren')).toEqual(['hello']);
+        expect(host.probe(b.id)?.limit).toEqual({ state: 'open' });
         expect(host.probe(c.id)?.limit).toEqual({ state: 'open' });
         const t0 = now;
         advanceTo(t0 + 14 * MIN);
-        expect(sent.get('wren')).toEqual([]);
+        expect(sent.get('atlas')).toEqual(['build it']);
         advanceTo(t0 + 15 * MIN);
-        expect(sent.get('atlas')).toEqual(['build it', LIMIT_RESUME_PROMPT]);
-        expect(sent.get('wren')).toEqual(['hello']);
+        expect(sent.get('atlas')).toEqual(['build it', 'then this']);
     });
 
     it('CONTROL: a turn that failed for another reason holds nobody', () => {

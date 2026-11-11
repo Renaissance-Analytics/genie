@@ -122,5 +122,14 @@ export function boundToolEvent(event: StreamEvent, options: { sidecar: boolean }
             if (options.sidecar) whole = event.output!;
         }
     }
+    // A native edit's diffs (Tynn #440 part C) ride in the row only while small: past the budget each file keeps its path
+    // and counts, its diff is dropped, and the edit reads "diff unavailable (too large)".
+    if (next.edits !== undefined) {
+        const diffBytes = next.edits.reduce((n, e) => n + (e.diff === undefined ? 0 : utf8Bytes(e.diff)), 0);
+        if (diffBytes > EDIT_DIFF_BYTES) next = { ...next, edits: next.edits.map(({ diff: _cut, ...rest }) => rest) };
+    }
     return { event: next === event ? event : next, whole };
 }
+
+/** The most of a native edit's diffs one row keeps (Tynn #440 part C). */
+export const EDIT_DIFF_BYTES = 256 * 1024;

@@ -105,8 +105,7 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions & { rea
             reconnecting = false;
         })();
     };
-    // LIVE HOST, NO FALLBACK (genie-test-windows, 2026-11-01): a window that fell back beside a running host ran the
-    // fallback's boot sweep and ended that host's eleven providers. The fallback is for a host that cannot start at all.
+    // A LIVE HOST THAT WILL NOT LINK is reached again and again; only a host that cannot start at all answers null (and the window stops).
     const liveHostPid = (): number | null => {
         const read = options.launch.readFile ?? ((file: string) => { try { return readFileSync(file, 'utf8'); } catch { return null; } });
         const record = parseHostRecord(read(join(options.launch.runtimeDir, 'host.json')));

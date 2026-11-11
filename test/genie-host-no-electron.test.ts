@@ -18,6 +18,13 @@ const IMPORT = /(?:^|\n)\s*(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]|(?:
 /** `import('x')` and `require('x')`: a module a runtime loads later, and fails to load as surely. */
 const DYNAMIC = /\b(?:import|require)\(\s*['"]([^'"]+)['"]\s*\)/g;
 
+/**
+ * A whole-statement `import type` / `export type` is erased by TypeScript and loads nothing at run time: not followed.
+ * (Tynn #551: genie-host runs the window's host API, whose renderer imports are types only.) A value import — including
+ * `import { type X, y }` — is still followed.
+ */
+const typeOnly = (statement: string): boolean => /^\s*(?:import|export)\s+type\s/.test(statement);
+
 function graph(entry: string): Map<string, string[]> {
     const seen = new Map<string, string[]>();
     const walk = (file: string): void => {
@@ -25,6 +32,7 @@ function graph(entry: string): Map<string, string[]> {
         const text = readFileSync(file, 'utf8');
         const specs: string[] = [];
         for (const m of text.matchAll(IMPORT)) {
+            if (typeOnly(m[0])) continue;
             const spec = m[1] ?? m[2];
             if (spec) specs.push(spec);
         }
@@ -48,6 +56,13 @@ describe('genie-host\'s import graph', () => {
         expect(names.some((f) => f.endsWith('src/main/session-host.ts'))).toBe(true);
         expect(names.some((f) => f.endsWith('src/core/session.ts'))).toBe(true);
         expect(names.some((f) => f.endsWith('src/main/session-engine-server.ts'))).toBe(true);
+    });
+
+    it('loads nothing from the renderer: no file under src/renderer is in its run-time graph (types are erased)', () => {
+        const names = [...files.keys()].map((f) => f.replace(/\\/g, '/'));
+        // Control: the walk reaches the window's host API, whose renderer imports are types (Tynn #551).
+        expect(names.some((f) => f.endsWith('src/main/host-api.ts'))).toBe(true);
+        expect(names.filter((f) => f.includes('/src/renderer/'))).toEqual([]);
     });
 
     it('imports electron nowhere', () => {

@@ -444,12 +444,8 @@ function graph(entry: string, followDynamic: boolean): Set<string> {
     return files;
 }
 
-/*
- * THE WINDOW KEEPS NO ISSUEWATCH, BOARD OR PUSHER SOCKET. Its one exception is the emergency no-host path (no host could
- * start, §4.1), which loads issue-watch-emergency.ts lazily until P6 removes that path — the same exception as compose's
- * in-window hosting and the window's updater.
- */
-describe('the guard: main builds no IssueWatchClient, IssueWatchDelivery, TynnBoardLive or dialTynnSocket — but on the emergency no-host path, lazily, until P6', () => {
+/* THE WINDOW KEEPS NO ISSUEWATCH, BOARD OR PUSHER SOCKET (Tynn #585: no exception left). */
+describe('the guard: main builds no IssueWatchClient, IssueWatchDelivery, TynnBoardLive or dialTynnSocket', () => {
     const socketModules = ['issue-watch-client.ts', 'issue-watch-delivery.ts', 'tynn-board-live.ts', 'tynn-socket.ts', 'pusher-link.ts'].map((f) => resolve('src/main', f));
 
     it('genie-host’s graph reaches every one of them (the control)', () => {
@@ -462,14 +458,9 @@ describe('the guard: main builds no IssueWatchClient, IssueWatchDelivery, TynnBo
         for (const m of socketModules) expect(main.has(m), m).toBe(false);
     });
 
-    it('main names none of them, and builds no IssueWatch push; its one way in is the emergency module, loaded only with no host', () => {
+    it('main names none of them, and builds no IssueWatch push', () => {
         const main = code('src/main/main.ts');
         for (const name of ['IssueWatchClient', 'IssueWatchDelivery', 'TynnBoardLive', 'dialTynnSocket', 'wireIssueWatchPush', 'issueWatchDelivery']) expect(main, name).not.toContain(name);
-        expect(main.match(/import\('\.\/issue-watch-emergency\.js'\)/g)).toHaveLength(1);
-        expect(main).toMatch(/agentEngineLink \? null : import\('\.\/issue-watch-emergency\.js'\)/);
-        // The emergency module does reach them (the control that the lazy door is a real one).
-        const emergency = graph('src/main/issue-watch-emergency.ts', false);
-        for (const m of socketModules) expect(emergency.has(m), m).toBe(true);
     });
 
     it('genie-host builds the service and the board hub, dials through dialTynnSocket with its account’s host, and gives the queue to its one wake', () => {

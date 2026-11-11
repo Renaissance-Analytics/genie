@@ -19,7 +19,7 @@ import { httpFetchOver, installPhpVersion, managedPhp, nodePhpVersionsFs, phpVer
 const liveFetch = httpFetchOver(fetch);
 import { execFileRunner } from '../../src/main/toolchain-runner.js';
 import type { CommandRunner } from '../../src/main/toolchain-prober.js';
-import { composeServices } from '../../src/main/compose.js';
+import { composeServices } from '../helpers/compose-alone.js';
 import { realFancyTermPort } from '../../src/main/fancy-term-port.js';
 import { siteAnswers } from '../../src/main/port-probe.js';
 

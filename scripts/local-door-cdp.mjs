@@ -213,7 +213,7 @@ const forceUpdateCheck = () => inspector.evaluate(`(() => {
 async function cleanup() {
     if (cleaned) return; cleaned = true;
     log('cleanup: only this run’s agent, app tree and isolated-home host');
-    if (main) for (const id of agents) { try { await main.evaluate(`window.genie.stopAgent(${JSON.stringify(id)}); true`, 5_000); } catch { /* dead page */ } }
+    if (main) for (const id of agents) { try { await main.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(id)}); true`, 5_000); } catch { /* dead page */ } }
     try { await inspector?.evaluate('globalThis.__doorNative?.detach(); true', 3_000); } catch { /* gone */ }
     for (const c of sessions) c.close(); remote?.close();
     if (app?.pid) {
@@ -294,7 +294,7 @@ try {
     main = await Cdp.connect(target.webSocketDebuggerUrl);
     inspector = await Cdp.connect((await until('main inspector', async () => (await targets(INSPECT))[0], 30_000)).webSocketDebuggerUrl);
     await until('preload/door registration', () => main.evaluate('typeof window.genieLocalProtocol === "object" && typeof window.genie === "object"'), 60_000);
-    await until('real composed services', () => main.evaluate('window.genie.features.snapshot().then(d=>!!d.remote)'), 60_000);
+    await until('real composed services', () => main.evaluate('(window.genieTest ?? window.genie).features.snapshot().then(d=>!!d.remote)'), 60_000);
     const refs = await doorScopes(); await observeDoor(refs);
     mainId = await inspector.evaluate(`(() => { const { BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron'); return BrowserWindow.getAllWindows().find((w) => /index\\.html/.test(w.webContents.getURL())).webContents.id; })()`);
     if (BREAK) await inspector.evaluate(`(() => { for (const wc of globalThis.__doorNative.admitted.keys()) if (wc.id === ${mainId}) globalThis.__doorNative.admitted.delete(wc); return true; })()`);
@@ -318,7 +318,7 @@ try {
     const windows = {};
     for (const [kind, open, matches] of [
         ['files', `window.genie.files.windows.popOut('tynn')`, (t) => /genie:\/\/files\//.test(t.url)],
-        ['flow', `window.genie.features.act({kind:'flows.newFlow',workspaceId:'tynn'})`, (t) => /genie:\/\/flow\//.test(t.url)],
+        ['flow', `(window.genieTest ?? window.genie).features.act({kind:'flows.newFlow',workspaceId:'tynn'})`, (t) => /genie:\/\/flow\//.test(t.url)],
     ]) await row(3, `${kind} product window owner welcome`, async () => {
         await main.evaluate(`${open}; true`);
         const target = await pageFor(matches), cdp = await Cdp.connect(target.webSocketDebuggerUrl);
@@ -344,8 +344,8 @@ try {
             log(`  4 ${label}`);
             try { return await run(); } catch (error) { throw new Error(`${label}: ${error.message}`); }
         };
-        const site = await until('declared fixture site', async () => (await main.evaluate('window.genie.features.snapshot()')).hosting?.sites?.find((s) => s.host === 'doorpanel.gen'), 30_000);
-        await step('start declared fixture site', () => main.evaluate(`window.genie.features.act({kind:'hosting.startSite',siteId:${JSON.stringify(site.id)}})`));
+        const site = await until('declared fixture site', async () => (await main.evaluate('(window.genieTest ?? window.genie).features.snapshot()')).hosting?.sites?.find((s) => s.host === 'doorpanel.gen'), 30_000);
+        await step('start declared fixture site', () => main.evaluate(`(window.genieTest ?? window.genie).features.act({kind:'hosting.startSite',siteId:${JSON.stringify(site.id)}})`));
         const before = await inspector.evaluate(`process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').webContents.getAllWebContents().map((w) => w.id)`);
         const tabs = { tabs: [{ id: 'door-tab', name: 'Door panel', layout: 'single', cells: [{ kind: 'site', ref: 'doorpanel.gen' }] }] };
         const r = await step('write the real site tab', () => call(main, 'workspaces.setSetting', ['tynn', 'workspace_tabs', JSON.stringify(tabs)]));
@@ -493,14 +493,14 @@ try {
         let access;
         try {
             access = await until('real tailnet availability', async () => {
-                const state = await main.evaluate('window.genie.features.snapshot().then(d=>d.remote)');
+                const state = await main.evaluate('(window.genieTest ?? window.genie).features.snapshot().then(d=>d.remote)');
                 return state?.url || (state?.unavailable && !['not started', 'stopped'].includes(state.unavailable)) ? state : null;
             }, 75_000);
         } catch { throw new Unmeasured('the enabled fixture tailnet listener did not settle within 75s'); }
         const url = access.url;
         if (!url) throw new Unmeasured(access.unavailable ?? 'no advertised tailnet endpoint');
         const label = `door-native-${process.pid}`;
-        const issued = await main.evaluate(`window.genie.features.act({kind:'remote.issuePin'})`);
+        const issued = await main.evaluate(`(window.genieTest ?? window.genie).features.act({kind:'remote.issuePin'})`);
         demand(issued.remote?.pin?.code, 'native pairing PIN issued (not printed)');
         remote = new WebSocket(url);
         const frames = [];
@@ -508,8 +508,8 @@ try {
         await within(10_000, 'real remote socket', new Promise((resolve, reject) => { remote.addEventListener('open',resolve,{once:true}); remote.addEventListener('error',()=>reject(new Unmeasured('advertised tailnet endpoint unreachable')),{once:true}); }));
         remote.send(JSON.stringify({kind:'hello',auth:{kind:'pin',code:issued.remote.pin.code},label}));
         await until('pairing request', async () => frames.find(f=>f.kind==='pairing'));
-        const waiting = await until('own native Allow request', async () => (await main.evaluate('window.genie.features.snapshot()')).remote.pairRequests.find(p=>p.label===label));
-        await main.evaluate(`window.genie.features.act({kind:'remote.answerPair',id:${JSON.stringify(waiting.id)},allow:true})`);
+        const waiting = await until('own native Allow request', async () => (await main.evaluate('(window.genieTest ?? window.genie).features.snapshot()')).remote.pairRequests.find(p=>p.label===label));
+        await main.evaluate(`(window.genieTest ?? window.genie).features.act({kind:'remote.answerPair',id:${JSON.stringify(waiting.id)},allow:true})`);
         await until('real remote owner welcome', async () => frames.find(f=>f.kind==='welcome'&&f.isOwner));
         let next=0;
         const rpc = async (method) => { const id=++next; remote.send(JSON.stringify({kind:'call',id,method,args:[]})); return until(method,async()=>frames.find(f=>f.kind==='result'&&f.id===id)); };
@@ -527,7 +527,7 @@ try {
     await row(10, 'streaming without agent/activity/snapshot/terminal frames on the app\'s own connection', async () => {
         let marker; try { marker = Number(readFileSync(TICKER,'utf8').trim()); } catch { /* absent */ }
         demand(marker===process.pid, 'this run owns ticker provider mode');
-        const added = await main.evaluate(`window.genie.addAgent('tynn',{name:${JSON.stringify(`door-ticker-${process.pid}`)},purpose:'Native local-door streaming check',provider:'codex'})`);
+        const added = await main.evaluate(`(window.genieTest ?? window.genie).addAgent('tynn',{name:${JSON.stringify(`door-ticker-${process.pid}`)},purpose:'Native local-door streaming check',provider:'codex'})`);
         demand(added?.ok, `agent added: ${added?.reason??'no result'}`); agents.push(added.id);
         // Earlier admission/lifetime probes may replace the app's connection. Restore that
         // same pageBridge through its own recovery, observed by the existing preload listener.
@@ -539,7 +539,7 @@ try {
         // Off the workspace Dashboard: this view must have no activity subscription.
         await main.evaluate("location.hash='#genie://settings'; true");
         await until('streaming agent ready',()=>main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>d?.session?.running===true)`),30_000);
-        const prompt = await main.evaluate(`window.genie.prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
+        const prompt = await main.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
         const ticks = async () => main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
         const count = (text) => [...text.matchAll(/tick (\d+) pid (\d+)/g)].map(m=>{ providerPids.add(Number(m[2])); return Number(m[1]); });
         await until('at least four real provider ticks',async()=>count(await ticks()).length>=4,30_000);
@@ -564,7 +564,7 @@ try {
         demand(nativeEnd.records.some(r=>r.connectionId===w.connectionId&&!r.closed),'native connection remains live');
         const beforeWatch = await quietFrames('unwatched streaming',frameStart,frameEnd,nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames-nativeStart.records.find(r=>r.connectionId===w.connectionId).frames);
         // Positive activity gauge on that SAME app connection, then a second absence interval.
-        const activityAgent = await main.evaluate(`window.genie.addAgent('tynn',{name:${JSON.stringify(`door-activity-${process.pid}`)},purpose:'Native activity subscription positive control',provider:'codex'})`);
+        const activityAgent = await main.evaluate(`(window.genieTest ?? window.genie).addAgent('tynn',{name:${JSON.stringify(`door-activity-${process.pid}`)},purpose:'Native activity subscription positive control',provider:'codex'})`);
         demand(activityAgent?.ok, `activity control agent added: ${activityAgent?.reason??'no result'}`); agents.push(activityAgent.id);
         await main.evaluate(`window.__doorActivitySeen=0; window.__doorActivityOff=window.genieTest.activity.subscribe(feed=>{if(feed.agentId===${JSON.stringify(activityAgent.id)})window.__doorActivitySeen++}); true`);
         try {
@@ -573,7 +573,7 @@ try {
             const activityStart = await main.evaluate(`window.genieTest.agents.restart(${JSON.stringify(activityAgent.id)},'graceful')`);
             demand(activityStart?.ok,'own new agent started while its activity view watches');
             await until('activity control agent ready',()=>main.evaluate(`window.genie.agentDetail(${JSON.stringify(activityAgent.id)}).then(d=>d?.session?.running===true)`),30_000);
-            demand((await main.evaluate(`window.genie.prompt(${JSON.stringify(activityAgent.id)},'Stream ticks for the activity positive control.')`))?.ok,'activity control driver accepts its prompt');
+            demand((await main.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(activityAgent.id)},'Stream ticks for the activity positive control.')`))?.ok,'activity control driver accepts its prompt');
             await until('activity control provider has four real ticks',async()=>count(await main.evaluate(`window.genie.agentDetail(${JSON.stringify(activityAgent.id)}).then(d=>JSON.stringify(d?.rows??[]))`)).length>=4,30_000);
             await until('watched activity callback',()=>main.evaluate('window.__doorActivitySeen>=1'),20_000);
             demand(await main.evaluate('window.__doorCdp.frames.some(r=>r.frame?.kind==="event"&&r.frame.channel==="local-activity")'),'watched activity traverses the actual app frame channel');
@@ -604,6 +604,20 @@ try {
             demand((await welcome(main)).connectionId===w.connectionId,'forced check used the unchanged app connection');
             return `app connection ${w.connectionId}; actual menu check; forbidden frames=0; permitted ${JSON.stringify(observed)}`;
         } finally { await main.evaluate('window.__doorUpdateOff?.(); delete window.__doorUpdateOff; delete window.__doorUpdateStates; true'); }
+    });
+    await row(12, 'a link the window refuses to follow costs the window nothing (Tynn #590)', async () => {
+        // A plain anchor, as a link in rendered Markdown is: the window's guard refuses the navigation and the page stays.
+        const w = await welcome(main), url = await main.evaluate('location.href');
+        demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app owns its ready connection before the click');
+        const start = await main.evaluate('window.__doorCdp.total');
+        await main.evaluate(`(()=>{const a=document.createElement('a');a.href='https://blocked.invalid/refused-by-genie';a.textContent='link';document.body.append(a);a.click();a.remove();return true})()`);
+        await sleep(1_500);
+        demand(await main.evaluate('location.href') === url, 'the page stayed where it was');
+        const closed = await main.evaluate(`window.__doorCdp.frames.filter(f=>f.seq>${start}&&f.action==='closed').map(f=>f.reason)`);
+        demand(closed.length === 0, `the door closed this window's connection: ${JSON.stringify(closed)}`);
+        demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'the app connection stayed ready');
+        demand((await welcome(main)).connectionId === w.connectionId, 'the same connection answers');
+        return `app connection ${w.connectionId} unchanged after a refused navigation`;
     });
 } catch (error) {
     if (!reports.some((r) => r.status === 'FAIL')) result(Number.parseInt(phase) || 1, error instanceof Unmeasured ? 'UNMEASURED' : 'FAIL', error.message);

@@ -1,4 +1,5 @@
-import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { renameOver } from '../core/atomic-rename.js';
+import { chmod, lstat, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
 import { isOsAgent } from '../core/os-agent.js';
@@ -126,7 +127,7 @@ export async function writeTextPrivate(file: string, text: string): Promise<void
     try {
         await writeFile(tmp, text, { encoding: 'utf8', mode: PRIVATE_FILE.mode });
         await restrictPrivateFile(tmp);
-        await rename(tmp, file);
+        await renameOver(tmp, file);
     } catch (error) {
         await rm(tmp, { force: true }).catch(() => undefined);
         throw error;
@@ -167,20 +168,7 @@ async function writeJsonAtomicNow(file: string, value: unknown, mode?: number): 
             throw error;
         }
     }
-    for (let attempt = 0; ; attempt += 1) {
-        try {
-            await rename(tmp, file);
-            break;
-        } catch (error) {
-            const code = (error as NodeJS.ErrnoException).code;
-            if (attempt < 5 && (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) {
-                await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
-                continue;
-            }
-            await rm(tmp, { force: true }).catch(() => undefined);
-            throw error;
-        }
-    }
+    await renameOver(tmp, file);
     // After the rename, never inside its retries: a failed flush is not a failed rename.
     await syncDirectory(dirname(file));
 }

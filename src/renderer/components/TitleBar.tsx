@@ -1,6 +1,8 @@
 import { browserPlatformHints, Button, detectPlatform, Icon, modifierKeyLabel, Popover, Tooltip, type FancyPlatform } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { FEATURE_ICONS } from '../../core/rail-view.js';
+import type { GAppListing } from '../../core/gapps.js';
+import { GAppStoreFlyout, type GAppStoreActions } from './GAppStore.js';
 import type { UpdateChip } from '../../core/update-chip.js';
 import { GenieLogo } from './GenieLogo.js';
 import { ConnectMenu } from './ConnectMenu.js';
@@ -81,6 +83,14 @@ export interface TitleBarProps {
      * progress, a share-link button and the way to Settings → Remote access. Absent = this window cannot connect (it
      * shows another machine, or this machine is a drone).
      */
+    /**
+     * THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens its flyout here, over the window, rather than routing to
+     * genie://gapps, which no surface serves. `apps: null` = still loading. Absent = this window has no store, and the
+     * icon routes as before.
+     */
+    gapps?: { apps: readonly GAppListing[] | null; actions?: GAppStoreActions | undefined } | undefined;
+    /** Share this workstation through Tynn (Tynn #587), the host's when driving one. Absent for a guest. */
+    share?: { readonly onShare: () => void } | undefined;
     connect?: {
         workstations: TynnWorkstationList | null;
         onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
@@ -104,7 +114,8 @@ export interface RemoteBadge {
     readonly onTakeControl?: (() => void) | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect, gapps, share }: TitleBarProps) {
+    const [storeOpen, setStoreOpen] = useState(false);
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -177,7 +188,9 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                             type="button"
                             data-feature={f.label}
                             aria-label={f.label}
-                            onClick={() => onNavigate(f.route)}
+                            // GApps D5: the GApps icon opens the GApp Store flyout (when this window has one).
+                            onClick={() => (f.route === 'genie://gapps' && gapps ? setStoreOpen((open) => !open) : onNavigate(f.route))}
+                            {...(f.route === 'genie://gapps' && gapps ? { 'aria-pressed': storeOpen } : {})}
                             className="[-webkit-app-region:no-drag] flex size-6 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
                         >
                             <Icon name={f.icon} size="sm" />
@@ -201,6 +214,19 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                                     {inbox.unread > 99 ? '99+' : inbox.unread}
                                 </span>
                             ) : null}
+                        </Button>
+                    </Tooltip>
+                ) : null}
+                {share ? (
+                    <Tooltip content="Share this workstation" placement="bottom">
+                        <Button variant="ghost" size="xs" labelClassName="contents"
+                            type="button"
+                            data-action="share-workstation"
+                            aria-label="Share this workstation"
+                            onClick={share.onShare}
+                            className="[-webkit-app-region:no-drag] flex size-6 items-center justify-center rounded-md text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
+                        >
+                            <Icon name="share-2" size="sm" />
                         </Button>
                     </Tooltip>
                 ) : null}
@@ -325,6 +351,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     {workstation.name}
                 </div>
             ) : null}
+            {gapps ? <GAppStoreFlyout open={storeOpen} onClose={() => setStoreOpen(false)} apps={gapps.apps} actions={gapps.actions} /> : null}
         </div>
     );
 }

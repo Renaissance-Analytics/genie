@@ -1,5 +1,6 @@
 import { Agent, request } from 'node:https';
 import tls from 'node:tls';
+import type { IncomingMessage } from 'node:http';
 import { routeLabel, type ProxyRoute } from '../core/proxy-answer.js';
 import type { SessionFetch } from './tynn-account.js';
 
@@ -35,6 +36,41 @@ export interface HostHttpsOptions {
     readonly log?: (line: string) => void;
     /** Follow this many redirects on the same origin. Absent: every redirect is refused. */
     readonly followSameOrigin?: number;
+    /** Optional protocol-specific cap, enforced while receiving bytes, including chunked responses. */
+    readonly maxResponseBytes?: number;
+    /** A byte-preserving, backpressured body for signed Marketplace archives. */
+    readonly streamResponse?: boolean;
+}
+
+export interface HostHttpsResponse {
+    readonly ok: boolean;
+    readonly status: number;
+    readonly headers: { get(name: string): string | null };
+    readonly body?: ReadableStream<Uint8Array>;
+    text(): Promise<string>;
+}
+/** Binary upload bodies stay bytes; account/session fetches retain their narrower string-only contract. */
+export type HostHttpsInit = Omit<Parameters<SessionFetch>[1], 'body'> & { readonly body?: string | Uint8Array };
+export type HostHttpsFetch = (url: string, init: HostHttpsInit) => Promise<HostHttpsResponse>;
+
+function binaryBody(res: IncomingMessage, limit: number | undefined): ReadableStream<Uint8Array> {
+    // No flowing data listener: the socket stays backpressured until its owner reads or cancels it.
+    const iterator = res[Symbol.asyncIterator]();
+    let bytes = 0;
+    return new ReadableStream<Uint8Array>({
+        start(controller) { res.on('error', error => controller.error(error)); },
+        async pull(controller) {
+            try {
+                const part = await iterator.next();
+                if (part.done) { controller.close(); return; }
+                const chunk = part.value as Buffer;
+                bytes += chunk.byteLength;
+                if (limit !== undefined && bytes > limit) throw new Error('The response exceeds its size limit.');
+                controller.enqueue(chunk);
+            } catch (error) { controller.error(error); res.destroy(); }
+        },
+        cancel() { res.destroy(); },
+    }, { highWaterMark: 0 });
 }
 
 /** Each of these is cached by Node for the process; so is this. A root added to the OS store is read at the next host start. */
@@ -64,7 +100,7 @@ function hostOfProxy(url: string): string {
     try { return new URL(url).host; } catch { return 'the proxy in HTTPS_PROXY'; }
 }
 
-export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
+export function hostHttpsFetch(options: HostHttpsOptions = {}): HostHttpsFetch {
     const env = options.env ?? process.env;
     /** One agent per route: a context over every root costs real time, and a call should not. */
     const agents = new Map<string, Agent>();
@@ -88,7 +124,7 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
 
     /** Where a redirect points, when it may be followed, by the fetch standard's rules for the method. */
     const REDIRECT_LIMIT = options.followSameOrigin ?? 0;
-    const redirected = (target: URL, init: Parameters<SessionFetch>[1], status: number, location: string | undefined, hops: number): { target: URL; init: Parameters<SessionFetch>[1] } => {
+    const redirected = (target: URL, init: HostHttpsInit, status: number, location: string | undefined, hops: number): { target: URL; init: HostHttpsInit } => {
         if (REDIRECT_LIMIT === 0 || !location) throw new Error(`${target.host} answered with a redirect (${status}), which is refused.`);
         if (hops >= REDIRECT_LIMIT) throw new Error(`${target.host} sent too many redirects (${REDIRECT_LIMIT}).`);
         const next = new URL(location, target);
@@ -101,7 +137,7 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
         return { target: next, init };
     };
 
-    const send = (target: URL, init: Parameters<SessionFetch>[1], agent: Agent, hops = 0): ReturnType<SessionFetch> => new Promise((resolve, reject) => {
+    const send = (target: URL, init: HostHttpsInit, agent: Agent, hops = 0): ReturnType<HostHttpsFetch> => new Promise((resolve, reject) => {
         const ask = request(target, { method: init.method, headers: init.headers, agent, rejectUnauthorized: true, signal: init.signal }, (res) => {
             const status = res.statusCode ?? 0;
             if (status >= 300 && status < 400) {
@@ -112,17 +148,38 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
                 } catch (error) { reject(error as Error); }
                 return;
             }
+            const headers = { get: (name: string): string | null => { const value = res.headers[name.toLowerCase()]; return Array.isArray(value) ? value.join(', ') : value ?? null; } };
+            if (options.streamResponse) {
+                const body = binaryBody(res, options.maxResponseBytes);
+                resolve({ ok: status >= 200 && status < 300, status, headers, body, text: async () => {
+                    const reader = body.getReader(); const chunks: Uint8Array[] = [];
+                    try {
+                        for (;;) { const part = await reader.read(); if (part.done) break; chunks.push(part.value); }
+                        return Buffer.concat(chunks).toString('utf8');
+                    } finally { reader.releaseLock(); }
+                } });
+                return;
+            }
             const chunks: Buffer[] = [];
             const body = new Promise<string>((done, failed) => {
-                res.on('data', (chunk: Buffer) => chunks.push(chunk));
+                let bytes = 0;
+                res.on('data', (chunk: Buffer) => {
+                    bytes += chunk.length;
+                    if (options.maxResponseBytes !== undefined && bytes > options.maxResponseBytes) {
+                        const error = new Error('The response exceeds its size limit.');
+                        failed(error);
+                        res.destroy(error);
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
                 res.on('end', () => done(Buffer.concat(chunks).toString('utf8')));
                 res.on('error', failed);
                 res.on('close', () => { if (!res.complete) failed(new Error('The connection closed before the answer finished.')); });
             });
             // A status-only caller need not read it; its failure must still be handled.
             void body.catch(() => {});
-            const headers = { get: (name: string): string | null => { const value = res.headers[name.toLowerCase()]; return Array.isArray(value) ? value.join(', ') : value ?? null; } };
-            resolve({ ok: status >= 200 && status < 300, status, headers, text: () => body } as never);
+            resolve({ ok: status >= 200 && status < 300, status, headers, text: () => body });
         });
         ask.on('error', reject);
         ask.end(init.body);

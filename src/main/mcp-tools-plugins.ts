@@ -19,6 +19,8 @@ export interface PluginToolRef {
     readonly tool: PluginTool;
     /** Genie's own (an official plugin, beta.33 item 14): run in-process, not launched from a plugin folder. */
     readonly official?: boolean;
+    /** ADF B4: check the package again before its code is loaded to run; null = run it, else why it is refused. */
+    readonly verify?: () => Promise<string | null>;
 }
 
 export interface PluginToolsDeps {
@@ -47,28 +49,51 @@ export function pluginToolTitle(pluginName: string, toolName: string): string {
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
 
+/**
+ * What a plugin's tool goes out as (ADF A2, Tynn #446): its name under the plugin's namespace, its words with the plugin
+ * named, its schema with `terminalId`. The catalog registers exactly this (main/genie-catalog.ts), so the definition an
+ * agent is offered is the catalog's.
+ */
+export function pluginToolOffer(pluginId: string, manifest: Pick<PluginManifest, 'name' | 'version'>, tool: PluginTool): { name: string; description: string; inputSchema: JsonObject; title: string } {
+    const schema = tool.inputSchema;
+    const properties = { ...((schema.properties as Record<string, unknown> | undefined) ?? {}), terminalId: MIRRORED_TERMINAL_ID };
+    return {
+        name: `${pluginId}.${tool.name}`,
+        description: `${tool.description} (plugin ${manifest.name} ${manifest.version}${tool.gated ? '; approval-gated' : ''})`,
+        inputSchema: { ...schema, type: 'object', properties } as JsonObject,
+        title: pluginToolTitle(manifest.name, tool.name),
+    };
+}
+
 export function pluginTools(deps: PluginToolsDeps): Registration[] {
     return deps.plugins.tools().map((ref) => {
-        const name = `${ref.pluginId}.${ref.tool.name}`;
-        const schema = ref.tool.inputSchema;
-        const properties = { ...((schema.properties as Record<string, unknown> | undefined) ?? {}), terminalId: MIRRORED_TERMINAL_ID };
-        const definition = new ToolDefinition(
-            name,
-            `${ref.tool.description} (plugin ${ref.manifest.name} ${ref.manifest.version}${ref.tool.gated ? '; approval-gated' : ''})`,
-            { ...schema, type: 'object', properties } as JsonObject,
-            pluginToolTitle(ref.manifest.name, ref.tool.name),
-        );
+        const offer = pluginToolOffer(ref.pluginId, ref.manifest, ref.tool);
+        const name = offer.name;
+        const definition = new ToolDefinition(offer.name, offer.description, offer.inputSchema, offer.title);
         const handler = async (args: JsonObject, context: { headers: Record<string, string> } & McpCall): Promise<McpToolResult> => {
             const caller = callerFrom(args, context.headers, deps.resolveCaller);
             if (typeof caller === 'string') return err(caller);
-            const guard = deps.plugins.guard(ref.pluginId);
-            if (!guard) return err(`plugin ${ref.pluginId} is not enabled`);
+            /*
+             * THE PACKAGE AS IT IS NOW (ADF A6, Tynn #450): the tool is resolved at the call, never from the list this
+             * registration was built with, so a disabled, uninstalled or updated package's OLD handler is never called. A
+             * call already running when that happens finishes; this one is refused with the reason, or runs the new one.
+             */
+            const current = deps.plugins.tools().find((t) => t.pluginId === ref.pluginId && t.tool.name === ref.tool.name);
+            if (!current) {
+                const now = deps.plugins.tools().find((t) => t.pluginId === ref.pluginId);
+                return err(now ? `${name} is unavailable: ${ref.pluginId} ${now.manifest.version} no longer offers it` : `${name} is unavailable: ${ref.pluginId} is not enabled any more`);
+            }
+            const guard = deps.plugins.guard(current.pluginId);
+            if (!guard) return err(`${name} is unavailable: ${ref.pluginId} is not enabled any more`);
+            // ADF B4: a signed package's files are checked again before its code is loaded to run — the CURRENT one's (A6).
+            const refused = current.verify ? await current.verify() : null;
+            if (refused) return err(refused);
             const { terminalId: _omit, ...rest } = args;
-            if (ref.tool.gated) {
+            if (current.tool.gated) {
                 const verdict = await deps.approve(caller, 'plugin', name, context);
                 if (verdict !== 'allowed') return err(`${name} was denied by the person; nothing ran`);
             }
-            const result = await deps.run({ dir: ref.dir, manifest: ref.manifest, tool: ref.tool, args: rest, caller, guard, official: ref.official === true, pluginId: ref.pluginId });
+            const result = await deps.run({ dir: current.dir, manifest: current.manifest, tool: current.tool, args: rest, caller, guard, official: current.official === true, pluginId: current.pluginId });
             return result.ok ? ok(result) : err(result.reason);
         };
         return { definition, handler: handler as Registration['handler'] };

@@ -178,9 +178,24 @@ describe('invoke', () => {
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {
         const api = buildHostApi(fakes().deps);
         await expect(api.invoke('addWorkspace', [])).rejects.toThrow(/folder picker/);
-        await expect(api.invoke('takeOver', ['agent_a'])).rejects.toThrow(/window/);
         await expect(api.invoke('features.setBrowserBounds', [{}])).rejects.toThrow(/host/);
         await expect(api.invoke('workspaces.tynnProjects', [])).rejects.toThrow(/host/);
+    });
+
+    // Tynn #529 part A: Take over from another machine starts the TUI here with NO window here; the person's own machine
+    // opens the window. Without the Take Over host wired in, it still says where to do it.
+    it('takeOver starts the TUI through the Take Over host, with no window on this host, and answers its terminal; closing it ends only what it started', async () => {
+        const f = fakes();
+        const asked: string[] = [];
+        const ended: string[] = [];
+        Object.assign(f.deps, { takeOver: { start: (agentId: string) => { asked.push(agentId); return { ok: true, terminalId: 'term_9', started: true }; }, ended: (terminalId: string) => { ended.push(terminalId); } } });
+        const api = buildHostApi(f.deps) as ReturnType<typeof buildHostApi> & { takeOverEnded?: (terminalId: string) => void };
+        expect(await api.invoke('takeOver', ['agent_a'])).toEqual({ ok: true, terminalId: 'term_9', started: true });
+        expect(asked).toEqual(['agent_a']);
+        api.takeOverEnded?.('term_9');
+        expect(ended).toEqual(['term_9']);
+        // CONTROL: no Take Over host wired in — the old backstop's words.
+        await expect(buildHostApi(fakes().deps).invoke('takeOver', ['agent_a'])).rejects.toThrow(/window/);
     });
 
     it('the default agent reaches the registry with the agent; an empty choice is none (null)', async () => {
@@ -250,12 +265,14 @@ describe('events', () => {
             ['terminal-data', { id: 'term_1', data: 'hi' }],
             ['terminal-exit', { id: 'term_1', exitCode: 0 }],
             ['features', { knowledge: {} }],
+            // This machine's own windows hear that it changed, and re-read (P4 family 11).
+            ['local-features', { revision: 1 }],
             ['updates', { phase: 'none' }],
             ['local-updates', { phase: 'none' }],
         ]);
         off();
         for (const l of f.listeners.snapshot) l({ agents: [] } as never);
-        expect(got).toHaveLength(7);
+        expect(got).toHaveLength(8);
         expect(f.listeners.snapshot.size).toBe(0);
     });
 
@@ -307,12 +324,24 @@ describe('the phone’s files, attachments and wanted agents', () => {
         expect(seen).toEqual([]);
     });
 
-    it('a prompt with files goes to promptWith — by YOU — and may carry no text; without files it is the plain prompt (control)', async () => {
+    it('a prompt with files goes to promptWith — by YOU — and may carry no text; without files it goes there too, so a refusal can say why', async () => {
         const { f, seen, api } = withFiles();
         expect(await api.invoke('prompt', ['agent_a', 'what is this?', [{ name: 'IMG_1.jpg', type: 'image/jpeg', bytes: new Uint8Array(12) }]])).toEqual({ ok: true });
         expect(await api.invoke('prompt', ['agent_a', '', [{ name: 'IMG_2.jpg', type: 'image/jpeg', bytes: new Uint8Array(3) }]])).toEqual({ ok: true });
-        expect(seen).toEqual(['promptWith:agent_a:what is this?:IMG_1.jpg/image/jpeg/12:you', 'promptWith:agent_a::IMG_2.jpg/image/jpeg/3:you']);
         expect(await api.invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: true });
+        expect(seen).toEqual(['promptWith:agent_a:what is this?:IMG_1.jpg/image/jpeg/12:you', 'promptWith:agent_a::IMG_2.jpg/image/jpeg/3:you', 'promptWith:agent_a:hi::you']);
+        expect(f.calls).not.toContain('prompt:agent_a:hi');
+    });
+
+    it('the phone’s TEXT-ONLY message refused (a slash command the agent does not offer) comes back with its reason (Tynn #440)', async () => {
+        const { f, api } = withFiles();
+        f.deps.host.promptWith = () => ({ ok: false, reason: '/frobnicate was not sent: this agent does not offer it.' });
+        expect(await api.invoke('prompt', ['agent_a', '/frobnicate'])).toEqual({ ok: false, reason: '/frobnicate was not sent: this agent does not offer it.' });
+    });
+
+    it('control: a host with no promptWith still takes the plain prompt', async () => {
+        const f = fakes();
+        expect(await buildHostApi(f.deps).invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: true });
         expect(f.calls).toContain('prompt:agent_a:hi');
     });
 

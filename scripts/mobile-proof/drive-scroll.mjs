@@ -26,7 +26,9 @@ import { homedir } from 'node:os';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright-core';
-import { answerPairOnDesktop, genieWindow } from './genie-cdp.mjs';
+import { answerPairOnDesktop, genieWindow } from './genie-cdp.mjs';
+// The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
+process.env.GENIE_PAGE_PROBE ??= '1';
 
 const OUT = join(process.cwd(), 'mobile-evidence', 'scroll');
 const IP = process.env.TAILNET_IP ?? '100.100.7.7';
@@ -39,7 +41,7 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const note = (name, detail) => { checks.push({ name, note: true, detail }); console.log(`NOTE ${name} — ${detail}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const act = (g, action) => g.call((a) => window.genie.features.act(a).then((d) => d.remote), action);
+const act = (g, action) => g.call((a) => (window.genieTest ?? window.genie).features.act(a).then((d) => d.remote), action);
 
 /** Where the target is on screen, the viewport, the document's own scroll, and the scroller's computed style (if any). */
 const measure = (page, target) => page.evaluate((sel) => {
@@ -332,7 +334,7 @@ async function runProfile(g, profile, device) {
 async function main() {
     const g = await genieWindow();
     let remote = await act(g, { kind: 'settings.set', key: 'remote_access', value: true });
-    for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await g.evaluate('window.genie.features.snapshot().then((d) => d.remote)'); }
+    for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote)'); }
     check('remote access listens on the tailnet name', remote.url === `wss://${DNS}:7421/genie`, `url=${remote.url}`);
     for (const [profile, name] of [['iphone13', 'iPhone 13'], ['pixel7', 'Pixel 7']]) {
         try { await runProfile(g, profile, devices[name]); } catch (error) {
@@ -343,7 +345,7 @@ async function main() {
     }
     // Leave no paired phones behind: batch B ran drive.mjs after this in the same boot, and its "remove the device"
     // step removed the first listed — one of these — so its own phone was never sent back to pairing.
-    const left = await g.evaluate('window.genie.features.snapshot().then((d) => d.remote.devices)').catch(() => []);
+    const left = await g.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => d.remote.devices)').catch(() => []);
     for (const d of left ?? []) await act(g, { kind: 'remote.revokeDevice', deviceId: d.id }).catch(() => {});
     note('paired devices removed after the drive', String((left ?? []).length));
     g.close();

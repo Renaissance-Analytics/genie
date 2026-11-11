@@ -49,7 +49,7 @@ describe('the approval gate', () => {
         const compose = readFileSync('src/main/compose.ts', 'utf8');
         // genie#1294 added `granted` (the agent's permission switches) beside it; test/permission-switch-approvals.test.ts
         // checks both through the composed queue.
-        expect(compose).toMatch(/new ApprovalQueue\(\{\s*now,\s*autoApproved: \(caller\) => \(input\.roster\?\.\(\) \?\? \[\]\)\.some\(\(a\) => a\.id === caller\.agentId && a\.autoApprove === true\),/);
+        expect(compose).toMatch(/input\.alone!\.approvals\(\{\s*now,\s*autoApproved: \(caller\) => \(input\.roster\?\.\(\) \?\? \[\]\)\.some\(\(a\) => a\.id === caller\.agentId && a\.autoApprove === true\),/);
     });
 });
 

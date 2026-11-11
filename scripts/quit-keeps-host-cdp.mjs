@@ -409,7 +409,7 @@ async function cleanup(why) {
         for (const s of [b, a]) {
             if (!s?.cdp || s.app.gone) continue;
             for (const ag of agents) {
-                try { await s.cdp.evaluate(`window.genie.stopAgent(${JSON.stringify(ag.id)}); true`, 5_000); console.log(`  stopped ${ag.name}`); } catch (e) { console.log(`  could not stop ${ag.name}: ${e.message}`); }
+                try { await s.cdp.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(ag.id)}); true`, 5_000); console.log(`  stopped ${ag.name}`); } catch (e) { console.log(`  could not stop ${ag.name}: ${e.message}`); }
             }
             break;
         }
@@ -527,7 +527,7 @@ try {
     for (let i = 1; i <= AGENTS; i++) {
         const name = `ticker-${i}-${process.pid}`;
         step(`1.${i}`, `adding the codex agent ${name}`);
-        const added = await a.cdp.evaluate(`window.genie.addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the quit check.', provider: 'codex' })`, 30_000);
+        const added = await a.cdp.evaluate(`(window.genieTest ?? window.genie).addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the quit check.', provider: 'codex' })`, 30_000);
         if (check(added?.ok === true, `1.${i} agent ${name} added`, added?.ok ? added.id : added?.reason)) agents.push({ id: added.id, name });
     }
     for (const ag of agents) await carry(`2-3. ${ag.name}`, async () => {
@@ -537,7 +537,7 @@ try {
         const running = await until(() => a.cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(ag.id)}).then((d) => d?.session?.running === true)`, 5_000), 30_000);
         check(running === true, `2. ${ag.name}'s session is running`);
         step('3', `prompting ${ag.name}`);
-        const sent = await a.cdp.evaluate(`window.genie.prompt(${JSON.stringify(ag.id)}, 'Stream ticks until stopped.')`, 15_000);
+        const sent = await a.cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(ag.id)}, 'Stream ticks until stopped.')`, 15_000);
         check(sent?.ok === true, `3. ${ag.name} took the prompt`, sent?.reason ?? '');
     });
     for (const ag of agents) await carry(`4. ${ag.name}`, async () => {
@@ -569,9 +569,8 @@ try {
     if (controlFailures.length && !CARRY_ON) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
     if (controlFailures.length) console.log(`  CARRYING ON past ${controlFailures.length} failed setup or control row(s), to answer the quit and tray rows with what is running`);
 
-    // A TERMINAL, with "Keep terminals through a quit" ON (genie#1508: from reading, that setting decides nothing with a host).
-    step('9t', 'the setting on, and a terminal open');
-    await a.cdp.evaluate(`window.genie.features.act({ kind: 'settings.set', key: 'detached_terminals', value: true }).then(() => true)`, 15_000);
+    // A TERMINAL: "Shut down everything" must end it (genie#1508).
+    step('9t', 'a terminal open');
     const terminal = await a.cdp.evaluate(`window.genieTest.terminals.open(${JSON.stringify(workspaceId)}, {}).then((t) => ({ id: t.id, pid: t.pid }))`, 30_000);
     check(alive(terminal?.pid), '9t. CONTROL: a terminal is open, its pid alive', JSON.stringify(terminal));
 
@@ -674,10 +673,9 @@ try {
         const gone = await until(() => !alive(ag.pid), 30_000);
         check(gone === true, `28. and ${ag.name}'s provider (the same gauge reading it dead now)`, `pid ${ag.pid}`);
     }
-    // What the setting is measured by: on, and a real quit. Alive here would mean it keeps them; ended means it decides nothing.
-    step('28t', `waiting for the terminal's pid ${terminal.pid} to end, the setting on (≤ 30 s)`);
+    step('28t', `waiting for the terminal's pid ${terminal.pid} to end (≤ 30 s)`);
     const terminalGone = await until(() => !alive(terminal.pid), 30_000);
-    check(terminalGone === true, '28t. "Shut down everything" ends the terminal even with "Keep terminals through a quit" on (genie#1508)', `pid ${terminal.pid}`);
+    check(terminalGone === true, '28t. "Shut down everything" ends the terminal (genie#1508)', `pid ${terminal.pid}`);
     shutDownProven = hostGone === true;
 } catch (error) {
     if (cannot === null) check(false, `the run stopped in step ${current}`, String(error?.message ?? error));

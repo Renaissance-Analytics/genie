@@ -9,7 +9,7 @@ export type SafeModeAnswer = { ok: true } | { ok: false; reason: string };
  * A crash report's send (Tynn #386 part 4): `signIn` = this Genie is not signed in or enrolled with Tynn, so it cannot
  * send; `cleaned` = Genie's redaction would change the text, which comes back to be looked at again instead of being sent.
  */
-export type CrashReportAnswer = { ok: true; issueUrl: string } | { ok: false; reason: string; signIn?: boolean; cleaned?: string };
+export type CrashReportAnswer = { ok: true; issueUrl: string } | { ok: false; reason: string; signIn?: boolean; cleaned?: string; cleanedNotes?: string };
 export interface CrashReportPort {
     /** The report as Genie built it, redacted: exactly what the person is shown. */
     draft(): Promise<{ text: string }>;
@@ -96,7 +96,7 @@ export function SafeModeBanner({ view, agentName, clock = clockAmPm, onStart, on
 type ReportStep =
     | { phase: 'closed' }
     | { phase: 'opening' }
-    | { phase: 'editing'; text: string; notes: string; status: { kind: 'idle' } | { kind: 'busy' } | { kind: 'failed'; reason: string } | { kind: 'sign-in' } | { kind: 'sent'; issueUrl: string } | { kind: 'copied' } };
+    | { phase: 'editing'; text: string; notes: string; status: { kind: 'idle' } | { kind: 'busy' } | { kind: 'failed'; reason: string } | { kind: 'cleaned'; reason: string } | { kind: 'sign-in' } | { kind: 'sent'; issueUrl: string } | { kind: 'copied' } };
 
 /**
  * SEND A CRASH REPORT (Tynn #386 part 4; spec §4). Never automatic: the person opens it, sees the EXACT text Genie built
@@ -124,7 +124,9 @@ export function CrashReport({ port }: { port: CrashReportPort }) {
             (a) => {
                 if (a.ok) setStep({ phase: 'editing', text, notes, status: { kind: 'sent', issueUrl: a.issueUrl } });
                 else if (a.signIn) setStep({ phase: 'editing', text, notes, status: { kind: 'sign-in' } });
-                else setStep({ phase: 'editing', text: a.cleaned ?? text, notes, status: { kind: 'failed', reason: a.reason } });
+                // Redaction changed something: nothing failed. The cleaned boxes are shown, and the button stays Send (Tynn #598).
+                else if (a.cleaned !== undefined || a.cleanedNotes !== undefined) setStep({ phase: 'editing', text: a.cleaned ?? text, notes: a.cleanedNotes ?? notes, status: { kind: 'cleaned', reason: a.reason } });
+                else setStep({ phase: 'editing', text, notes, status: { kind: 'failed', reason: a.reason } });
             },
             (e: unknown) => setStep({ phase: 'editing', text, notes, status: { kind: 'failed', reason: e instanceof Error ? e.message : String(e) } }),
         );
@@ -147,6 +149,7 @@ export function CrashReport({ port }: { port: CrashReportPort }) {
                 <Button type="button" size="xs" data-action="crash-report-send" loading={busy} disabled={busy} onClick={send}>{busy ? 'Sending…' : status.kind === 'failed' ? 'Retry' : 'Send'}</Button>
                 <Button type="button" size="xs" variant="ghost" data-action="crash-report-cancel" disabled={busy} onClick={() => setStep({ phase: 'closed' })}>Cancel</Button>
                 {status.kind === 'failed' ? <span data-crash-report-failure="" role="status" className="text-[var(--danger,#d33)]">{status.reason}</span> : null}
+                {status.kind === 'cleaned' ? <span data-crash-report-cleaned="" role="status" className="text-[var(--fg-2)]">{status.reason}</span> : null}
             </div>
             {status.kind === 'sign-in' || status.kind === 'copied' ? (
                 <div className="flex items-center gap-2">
