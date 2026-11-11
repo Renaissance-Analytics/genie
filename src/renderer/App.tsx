@@ -8,6 +8,8 @@ import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
+import { sendKeyFrom } from '../core/send-key.js';
+import { setSendKey } from './send-key-store.js';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
 import { slugsFor } from '../core/address.js';
@@ -999,6 +1001,8 @@ function DesktopApp({ bridge }: AppProps) {
     useAlerts(snapshot, features.settings.values, showAlert);
     useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values, showAlert);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
+    // The send key, to every open composer, the moment the setting changes (Tynn issue #697).
+    useEffect(() => { setSendKey(sendKeyFrom(features.settings.values)); }, [features.settings.values]);
     const soundSettings = useRef(features.settings.values);
     soundSettings.current = features.settings.values;
     // ...and the row's emoji (genie#1209): 👍 thumbsUp, ✅ imDone, 🧞 a Genie action, on that agent's row for a moment.
@@ -1750,7 +1754,7 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => {
         const onKey = (e: KeyboardEvent): void => {
             // Not in Settings' key recorders — a key pressed there is being assigned.
-            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-binding]')) return;
+            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-hotkey-capture][data-capturing="true"]')) return;
             const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
             const action = hotkeyAction(press, bindings, promptPlatform);
             if (action === 'open-palette') {

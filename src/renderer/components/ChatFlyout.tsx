@@ -3,7 +3,10 @@ import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
 import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
-import { Button, Icon, PromptInput } from '@particle-academy/react-fancy';
+import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { sendKeyHint } from '../../core/send-key.js';
+import { useSendKey } from '../send-key-store.js';
+import { SendKeyBoundary } from './SendKeyBoundary.js';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
@@ -454,6 +457,10 @@ function ChatFlyoutBody({
      */
     const elsewhere = scope?.kind === 'elsewhere' ? scope.workspace : null;
     const blocked = scope?.kind === 'blocked' ? scope.reason : null;
+    const sendKey = useSendKey();
+    // Resolved after mount, as the title bar's hint is: reading `navigator` while rendering is a hydration mismatch.
+    const [keysPlatform, setKeysPlatform] = useState('generic');
+    useEffect(() => { setKeysPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
     const addressee = thread ? (elsewhere ? `${thread.name} — in ${elsewhere}` : thread.name) : null;
     // The agent's workspace COLOUR (genie#1300): beside its name in the header, and down the composer's edge.
     const color = useAgentColor(thread?.agentId);
@@ -850,6 +857,7 @@ function ChatFlyoutBody({
                  * start empty, and react-fancy reads `defaultDraft` only at mount.
                  */}
                 {drafts !== 'loading' ? (
+                <SendKeyBoundary>
                 <ChatComposers chats={keptChats} active={activeChat}>
                     {(chat) => (
                     <PromptInput
@@ -894,7 +902,11 @@ function ChatFlyoutBody({
                     />
                     )}
                 </ChatComposers>
+                </SendKeyBoundary>
                 ) : null}
+                {/* The keys as they are now (Tynn issue #697), in Genie's own line: the send button's tooltip is the
+                    component's and names only its built-in key, which still sends as well. */}
+                {!blocked ? <div data-composer-keys="" className="px-1 pt-1 text-[10px] text-[var(--fg-4)]">{sendKeyHint(sendKey, keysPlatform)}</div> : null}
                 <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
         </aside>
