@@ -41,28 +41,41 @@ export function modelListReason(provider: string, error: unknown): string {
     return `could not start ${provider}: ${error instanceof Error ? error.message : String(error)}`;
 }
 
+/** How long a provider's list is kept before a picker opening asks again (Tynn #608: a new model shows with no Genie update). */
+export const MODEL_LIST_MAX_AGE_MS = 10 * 60_000;
+
 /**
- * ONE ASK PER PROVIDER, KEPT UNTIL REFRESHED. Asking starts the provider's CLI (seconds, and a process), so a picker
- * opening must not do it each time: the answer — or the failure — is kept per provider, two pickers opening together
- * share one ask, and `refresh` asks again. A failure is kept too: a signed-out provider would otherwise start a CLI on
- * every open to be refused again; the person's Refresh is what retries. The list is the ACCOUNT's, not a workspace's,
- * so one per provider is right.
+ * ONE ASK PER PROVIDER, KEPT FOR A WHILE. Asking starts the provider's CLI (seconds, and a process), so a picker
+ * opening must not do it each time: the answer is kept per provider, two pickers opening together share one ask, and
+ * `refresh` asks again. A list is kept only `maxAgeMs`, so what the provider adds since shows on the next open with no
+ * Genie update (Tynn #608). A failure is kept until the person's Retry: a signed-out provider would otherwise start a CLI
+ * on every open to be refused again. The list is the ACCOUNT's, not a workspace's, so one per provider is right.
  */
 export class ProviderModelCache {
     readonly #list: ListProviderModels;
-    readonly #asked = new Map<AcpProvider, Promise<ModelChoices>>();
+    readonly #now: () => number;
+    readonly #maxAgeMs: number;
+    readonly #asked = new Map<AcpProvider, { at: number; answer: Promise<ModelChoices> }>();
 
-    constructor(list: ListProviderModels) {
+    constructor(list: ListProviderModels, options: { now?: () => number; maxAgeMs?: number } = {}) {
         this.#list = list;
+        this.#now = options.now ?? Date.now;
+        this.#maxAgeMs = options.maxAgeMs ?? MODEL_LIST_MAX_AGE_MS;
     }
 
-    get(provider: string, options: { refresh?: boolean } = {}): Promise<ModelChoices> {
-        if (!isAcpProvider(provider)) return Promise.resolve({ ok: false, provider, reason: `Genie cannot run a "${provider}" agent, so it has no models to list` });
+    async get(provider: string, options: { refresh?: boolean } = {}): Promise<ModelChoices> {
+        if (!isAcpProvider(provider)) return { ok: false, provider, reason: `Genie cannot run a "${provider}" agent, so it has no models to list` };
         const kept = this.#asked.get(provider);
-        if (kept && options.refresh !== true) return kept;
-        const asking = this.#ask(provider);
+        if (kept && options.refresh !== true) {
+            const answer = await kept.answer;
+            // A list goes stale; a failure waits for Retry. An ask still running is shared, whatever its age.
+            if (!answer.ok || this.#now() - kept.at < this.#maxAgeMs || this.#asked.get(provider) !== kept) return answer;
+            if (this.#asked.get(provider) === kept) this.#asked.delete(provider);
+            return this.get(provider);
+        }
+        const asking = { at: this.#now(), answer: this.#ask(provider) };
         this.#asked.set(provider, asking);
-        return asking;
+        return asking.answer;
     }
 
     async #ask(provider: AcpProvider): Promise<ModelChoices> {
