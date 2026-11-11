@@ -10,6 +10,10 @@ export interface WorkstationServiceOptions {
     readonly host: () => string;
     readonly hostname: () => string;
     readonly machineKey: () => Promise<string | null>;
+    /** The clock; absent = the system's. */
+    readonly now?: () => number;
+    /** What each registration sent and what Tynn answered, for the lifecycle log (beta.61.1). */
+    readonly log?: (line: string) => void;
 }
 
 /** The answers a window, or a window's own engine, reads. */
@@ -52,15 +56,52 @@ export class WorkstationService implements WorkstationPort {
     async sign(host: string, data: Buffer): Promise<Buffer> { return (await this.#must(host)).sign(data); }
     async authHeader(host: string): Promise<string> { return (await this.#must(host)).authHeader(); }
 
+    /*
+     * ONE REGISTRATION AT A TIME, AND NO PROOF TWICE (beta.61.1). Tynn takes a re-attach proof once, and a request whose
+     * proof it does not accept is the same machine registering unproven: a drone. The proof signs a time in whole seconds,
+     * so two registrations in one second were one proof. Each waits for the one before, and each proof's second is its own.
+     */
+    #registering: Promise<unknown> = Promise.resolve();
+    #lastProofSecond = 0;
+
     ensure(options: { readonly host: string; readonly legacy?: LegacyIdentity | null }): Promise<EnsureWorkstationResult> {
+        const run = this.#registering.then(() => this.#ensureOne(options));
+        this.#registering = run.catch(() => {});
+        return run;
+    }
+
+    #ensureOne(options: { readonly host: string; readonly legacy?: LegacyIdentity | null }): Promise<EnsureWorkstationResult> {
         const legacy = options.legacy ?? null;
+        const clock = this.#options.now ?? Date.now;
+        const request: EnsureWorkstationPorts['request'] = async (path, init) => {
+            if (path !== '/api/v1/workstations/self-register') return this.#options.request(path, init);
+            const proof = (init.body as { proof?: { workstation_id?: unknown } } | undefined)?.proof;
+            const sent = proof ? `proved (${String(proof.workstation_id)})` : 'unproven (nothing on record)';
+            try {
+                const res = await this.#options.request(path, init);
+                if (!res.ok) { this.#options.log?.(`tynn registration: ${sent}; Tynn refused it, HTTP ${res.status}`); return res; }
+                // Read once here for the log, and handed on as read.
+                const body = (await res.json().catch(() => null)) as { workstation?: { id?: unknown }; enrollment?: unknown } | null;
+                this.#options.log?.(`tynn registration: ${sent}; Tynn answered HTTP ${res.status}, workstation ${String(body?.workstation?.id ?? 'none')}, ${body?.enrollment ? 'a new enrollment' : 'no new enrollment'}`);
+                return { ok: res.ok, status: res.status, json: async () => body };
+            } catch (error) {
+                this.#options.log?.(`tynn registration: ${sent}; Tynn was not reached: ${error instanceof Error ? error.message : String(error)}`);
+                throw error;
+            }
+        };
         return ensureWorkstation({
             host: () => options.host,
             hostname: this.#options.hostname,
-            request: this.#options.request,
+            request,
             store: this.#options.store,
             machineKey: this.#options.machineKey,
             legacy: async () => legacy,
+            // Each proof's second is later than the last one's, so no two proofs are the same signature.
+            now: () => {
+                const second = Math.max(Math.floor(clock() / 1000), this.#lastProofSecond + 1);
+                this.#lastProofSecond = second;
+                return second * 1000;
+            },
         });
     }
 

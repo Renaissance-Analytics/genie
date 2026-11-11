@@ -856,6 +856,7 @@ async function main(): Promise<void> {
     // THIS MACHINE'S KEY IS HERE (P3.4), and the relay that signs with it (Tynn #410).
     const workstationService = new WorkstationService({
         store: workstationKeyStore(join(home, 'workstation.json'), keychain),
+        log: (line) => say(line),
         request: async (path, init) => (await tynnOpening).request(path, init),
         host: () => TYNN_HOST,
         hostname,
