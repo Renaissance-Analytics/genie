@@ -47,6 +47,10 @@ $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Set-Location (Resolve-Path (Join-Path $PSScriptRoot '..\..'))
 $Repo = (Get-Location).Path
 $Out = Join-Path $Repo 'ci-out'
+# WHAT THE SETUP WRITES goes under ci-out\setup, never beside the rows' own logs: a row's log is open for the whole row,
+# and the build row's helper once wrote ci-out\build.log too ("being used by another process", the build row failed in
+# 0 s; reproduced with both PowerShell engines, and gone with the helper's file under setup\).
+$Setup = Join-Path $Out 'setup'
 
 $Rows = @(
     'deps', 'electron-binary',
@@ -90,7 +94,7 @@ if ($Only -or $From) {
     $selected = @($setup | Where-Object { $selected -notcontains $_ }) + $selected
 }
 
-New-Item -ItemType Directory -Force $Out | Out-Null
+New-Item -ItemType Directory -Force $Out, $Setup | Out-Null
 $script:Failed = @()
 $script:Notes = @()
 $script:Blocked = ''
@@ -127,8 +131,8 @@ function Need-Install {
     if ($script:Installed) { Block $script:Installed }
     $script:Installed = 'npm ci failed'
     Write-Output "--- node $(node --version), npm $(npm --version), $((Get-CimInstance Win32_OperatingSystem).Caption) $((Get-CimInstance Win32_OperatingSystem).BuildNumber)"
-    npm ci --no-audit --no-fund *> (Join-Path $Out 'npm-ci.log')
-    if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Out 'npm-ci.log') -Tail 40; Block $script:Installed }
+    npm ci --no-audit --no-fund *> (Join-Path $Setup 'npm-ci.log')
+    if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Setup 'npm-ci.log') -Tail 40; Block $script:Installed }
     $script:Installed = 'ok'
 }
 
@@ -142,8 +146,8 @@ function Need-Electron {
     if ($script:Electron) { Block $script:Electron }
     Need-Install
     if (-not (Test-Path $script:ElectronExe)) {
-        node node_modules/electron/install.js *> (Join-Path $Out 'electron-install.log')
-        Get-Content (Join-Path $Out 'electron-install.log') -Tail 5
+        node node_modules/electron/install.js *> (Join-Path $Setup 'electron-install.log')
+        Get-Content (Join-Path $Setup 'electron-install.log') -Tail 5
     }
     if (-not (Test-Path $script:ElectronExe)) { $script:Electron = "$($script:ElectronExe) missing (node_modules/electron/install.js did not fetch it: see ci-out\electron-install.log)"; Block $script:Electron }
     Write-Output "--- Electron: $($script:ElectronExe) ($([int]((Get-Item $script:ElectronExe).Length / 1MB)) MB)"
@@ -157,8 +161,8 @@ function Need-Build {
     Need-Install
     Need-Electron
     $script:Built = 'the build failed'
-    npm run build *> (Join-Path $Out 'build.log')
-    if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Out 'build.log') -Tail 40; Block $script:Built }
+    npm run build *> (Join-Path $Setup 'build.log')
+    if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Setup 'build.log') -Tail 40; Block $script:Built }
     $script:Built = 'ok'
 }
 
@@ -201,10 +205,10 @@ function Need-App {
     if ($script:AppState) { Block $script:AppState }
     Need-Build; Need-TestMachine
     $script:AppState = 'the seed could not be written'
-    if (-not (Test-Path (Join-Path $Out 'seed.done'))) {
-        node scripts/smoke-seed.mjs *> (Join-Path $Out 'seed.out')
-        if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Out 'seed.out') -Tail 20; Block $script:AppState }
-        Set-Content (Join-Path $Out 'seed.done') ''
+    if (-not (Test-Path (Join-Path $Setup 'seed.done'))) {
+        node scripts/smoke-seed.mjs *> (Join-Path $Setup 'seed.out')
+        if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Setup 'seed.out') -Tail 20; Block $script:AppState }
+        Set-Content (Join-Path $Setup 'seed.done') ''
     }
     $env:GENIE2_CODEX_BINARY = "$Repo\scripts\stub-codex.mjs"
     $env:GENIE_PAGE_PROBE = '1'
