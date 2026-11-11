@@ -14,7 +14,7 @@ const read = (request: unknown) => (reader as unknown as { readWorkstationRoleOu
 describe('the role read says which answer came', () => {
     it('null from Tynn is "not bound", told apart from no role in the answer', async () => {
         const answers = (body: unknown) => async () => ({ ok: true, status: 200, json: async () => body });
-        expect(await read(answers({ workstation: null, role: null }))).toEqual({ role: null, words: 'null (this sign-in is not bound to a workstation)' });
+        expect(await read(answers({ workstation: null, role: null }))).toEqual({ role: null, words: 'null (this sign-in is not bound to a workstation)', unbound: true });
         expect(await read(answers({ role: 'captain' }))).toEqual({ role: null, words: 'no answer (HTTP 200, no role in it)' });
     });
 });
