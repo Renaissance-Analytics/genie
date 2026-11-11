@@ -38,6 +38,9 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'launch_at_login', group: 'general', scope: 'host', label: 'Launch at sign-in', description: 'Start Genie when you sign in to this computer.', type: 'boolean', default: false },
     // GENIE'S REMAPPABLE KEYS (Tynn #759; Genie 1's): empty = Genie's default (Ctrl/⌘+K, F5). Hidden: Settings → General
     // draws them as recorders (core/hotkeys.ts reads them; a malformed one disables its binding).
+    // THE COMPOSER'S SEND KEY (Tynn issue #697): an accelerator; empty = Enter. Kept per person on this machine. Drawn in
+    // Settings → Keyboard as a key the person presses, never typed: hidden from the rows.
+    { key: 'send_key', group: 'general', scope: 'device', label: 'Send message key', description: 'The key that sends what you wrote to an agent. Empty: Enter, with Shift+Enter for a new line.', type: 'string', default: '', hidden: true },
     { key: 'command_window_hotkey', group: 'general', scope: 'host', label: 'Command Window key', description: 'Opens the Command Window. Empty: Ctrl+K (⌘K on macOS).', type: 'string', default: '', hidden: true },
     { key: 'ftq_nudge_hotkey', group: 'general', scope: 'host', label: 'ForceTheQuestion nudge key', description: 'Tells the agent in front of you to ask its question through ForceTheQuestion. Empty: F5.', type: 'string', default: '', hidden: true },
     // WHAT'S NEW (Tynn #762; Genie 1's): the version whose What's New the person has closed — shown once per version.

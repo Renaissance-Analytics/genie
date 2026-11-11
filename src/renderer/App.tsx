@@ -8,6 +8,8 @@ import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
+import { sendKeyFrom } from '../core/send-key.js';
+import { setSendKey } from './send-key-store.js';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
 import { slugsFor } from '../core/address.js';
@@ -92,6 +94,7 @@ import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import { addConfirmer } from './add-confirm.js';
 import { mcpRows, workspaceMcpRows } from '../core/agent-mcp.js';
+import { failureWords, tynnPlanner } from './tynn-plan.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
 import { applyOutcome, providerSwitchAfter, switchOutcome, type DeletePlan, type ProviderSwitchState } from '../core/agent-ops.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -999,6 +1002,8 @@ function DesktopApp({ bridge }: AppProps) {
     useAlerts(snapshot, features.settings.values, showAlert);
     useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values, showAlert);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
+    // The send key, to every open composer, the moment the setting changes (Tynn issue #697).
+    useEffect(() => { setSendKey(sendKeyFrom(features.settings.values)); }, [features.settings.values]);
     const soundSettings = useRef(features.settings.values);
     soundSettings.current = features.settings.values;
     // ...and the row's emoji (genie#1209): 👍 thumbsUp, ✅ imDone, 🧞 a Genie action, on that agent's row for a moment.
@@ -1113,6 +1118,11 @@ function DesktopApp({ bridge }: AppProps) {
     const [addFromGit, setAddFromGit] = useState(false);
     // From Tynn (§6.1): the person's projects while picking one; `undefined` when not picking.
     const [tynnPick, setTynnPick] = useState<TynnProjectsView | undefined>(undefined);
+    // Import from Tynn, after the folder is picked (Tynn #688): whose plan is being read, and what a failure tries again.
+    const [tynnPlanning, setTynnPlanning] = useState<{ projectId: string; parent: string } | null>(null);
+    const [tynnRetry, setTynnRetry] = useState<{ projectId: string; parent: string } | null>(null);
+    const planTynn = useMemo(() => tynnPlanner<AddPreviewView>(() => ({ setPlanning: setTynnPlanning, setPick: setTynnPick, setPreview: setAddPreview, setRetry: setTynnRetry })), []);
+    const sayAddFailed = (e: unknown) => { setTynnPick(undefined); setAddPreview({ ok: false, reason: failureWords(e) }); };
     // The workspace on screen — its own views, or one of its agents' pages, which sit under its strip (Tynn #805).
     const workspaceId = routeWorkspace(route, snapshot.agents);
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
@@ -1207,7 +1217,7 @@ function DesktopApp({ bridge }: AppProps) {
     const primaryWorkspace = typeof features.settings.values?.['primary_workspace'] === 'string' ? (features.settings.values['primary_workspace'] as string) : '';
     const addStart = pickerStart({ primaryWorkspace, home: hostHome });
     const hostSep = /\\/.test(primaryWorkspace || hostHome || '') ? '\\' : '/';
-    const previewAdd = () => { setAddPreview(null); setAddFromGit(false); setTynnPick(undefined); setAddOpen(true); };
+    const previewAdd = () => { setAddPreview(null); setTynnRetry(null); setAddFromGit(false); setTynnPick(undefined); setAddOpen(true); };
     /*
      * OPEN EXISTING FOLDER / IMPORT FROM GIT (Add workspace parity item 7): Genie 1's wizard — the folder (or an import's
      * staging clone) is READ, then a NEW <slug>.agi is built beside it; the source is never written. A host without the
@@ -1254,13 +1264,14 @@ function DesktopApp({ bridge }: AppProps) {
         setGitRepos(null);
         void list().then(setGitRepos, (e: unknown) => setGitRepos({ status: 'failed', message: e instanceof Error ? e.message : String(e) }));
     };
-    const startAddFromGit = () => { setAddOpen(false); setAddPreview(null); setTynnPick(undefined); setAddFromGit(true); loadGitRepos(); };
+    const startAddFromGit = () => { setAddOpen(false); setAddPreview(null); setTynnRetry(null); setTynnPick(undefined); setAddFromGit(true); loadGitRepos(); };
     const startAddFromTynn = () => {
         setAddOpen(false);
         setAddFromGit(false);
         setAddPreview(null);
+        setTynnRetry(null);
         setTynnPick(null);
-        void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r));
+        void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r), (e: unknown) => setTynnPick({ ok: false, reason: failureWords(e) }));
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839, #587): this machine's, or the host's while its owner drives it; a guest has none.
@@ -1626,6 +1637,8 @@ function DesktopApp({ bridge }: AppProps) {
      * click the answer button but nothing happens" — a refusal that only reached the console was nothing happening).
      */
     const [deckFormRefusal, setDeckFormRefusal] = useState<{ itemId: string; reason: string } | null>(null);
+    // The action running on one of Genie's own Deck items (Tynn #693): its button shows progress until it ends either way.
+    const [deckBusy, setDeckBusy] = useState<{ itemId: string; optionId: string } | null>(null);
 
     /**
      * The chat subject comes from the ROUTE, so a link can open a conversation. Navigation carries it (`carryChat`):
@@ -1706,9 +1719,10 @@ function DesktopApp({ bridge }: AppProps) {
     // NOT ON EVERY ESTATE SNAPSHOT (genie#1340): the thread reads only the agents' ids, names and fidelity, and the
     // snapshot changes whenever any agent's status does — twenty times a second with eleven at work. Keyed on what it
     // reads, the list it is given changes only when one of those does.
-    const agentsKey = chatAgentsKey(snapshot.agents);
+    // Genie's own agent is not among the workspace agents, and it sends mail (Tynn #621): the chat names it too.
+    const agentsKey = chatAgentsKey(snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    const chatAgents = useMemo(() => snapshot.agents, [agentsKey]);
+    const chatAgents = useMemo(() => (snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents), [agentsKey]);
     const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, chatAgents, Date.now, chatLines)), [chatDetail, chatSubject, chatAgents, chatLines]);
     const chatRunning = chatDetail !== null && chatBase !== null && chatDetail.agent.id === chatBase.agentId && chatDetail.session?.running === true;
     const inboxRecent = features.inbox?.recent ?? null;
@@ -1749,7 +1763,7 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => {
         const onKey = (e: KeyboardEvent): void => {
             // Not in Settings' key recorders — a key pressed there is being assigned.
-            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-binding]')) return;
+            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-hotkey-capture][data-capturing="true"]')) return;
             const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
             const action = hotkeyAction(press, bindings, promptPlatform);
             if (action === 'open-palette') {
@@ -1938,7 +1952,7 @@ function DesktopApp({ bridge }: AppProps) {
             addPreview={addPreview}
             addBusy={addBusy}
             onConfirmAdd={(path) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAdd(path))}
-            onCancelAdd={() => setAddPreview(null)}
+            onCancelAdd={() => { setAddPreview(null); setTynnRetry(null); }}
             agentDetail={detail}
             agentResolved={resolved}
             selectedRowId={selectedRowId}
@@ -1991,6 +2005,7 @@ function DesktopApp({ bridge }: AppProps) {
                 });
             }}
             deckFormRefusal={deckFormRefusal}
+            deckBusy={deckBusy}
             onAnswerDeckItem={(item, optionId, note) => {
                 // The Deck answers for an agent the route is NOT on, so the id comes from the
                 // item rather than from the URL — and the item's id says which channel it takes.
@@ -2001,12 +2016,13 @@ function DesktopApp({ bridge }: AppProps) {
                         return;
                     case 'feature':
                         setDeckFormRefusal(null);
+                        if (item.source === 'genie') setDeckBusy({ itemId: item.id, optionId });
                         void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answer', item, optionId, ...(note ? { note } : {}) }).then(setFeatures).catch((error: unknown) => {
                             // Said on its item, never only in the console (Tynn #600).
                             const reason = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
                             console.error('[genie] deck answer refused:', reason);
                             setDeckFormRefusal({ itemId: item.id, reason });
-                        });
+                        }).finally(() => setDeckBusy(null));
                         return;
                     case 'navigate':
                         // Open: the window goes there itself; the finish stays on the Deck until marked read.
@@ -2052,8 +2068,14 @@ function DesktopApp({ bridge }: AppProps) {
             tynnPick={tynnPick}
             onAddWorkspaceFromTynn={startAddFromTynn}
             onPickTynnProject={(projectId) => {
-                void pickFolder('Where should the Tynn envelope be created? Pick the parent folder', addStart).then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromTynn(projectId, parent).then((p) => { setTynnPick(undefined); setAddPreview(p); }); });
+                // Never silent (Tynn #688): progress while the plan is read, then the plan or the failure in words.
+                void pickFolder('Where should the Tynn envelope be created? Pick the parent folder', addStart).then((parent) => { if (parent) planTynn(resolvedBridge?.workspaces.previewAddFromTynn ? () => resolvedBridge.workspaces.previewAddFromTynn(projectId, parent) : undefined, projectId, parent); }, sayAddFailed);
             }}
+            tynnPlanning={tynnPlanning?.projectId ?? null}
+            onRetryAdd={tynnRetry ? () => {
+                const { projectId, parent } = tynnRetry;
+                planTynn(resolvedBridge?.workspaces.previewAddFromTynn ? () => resolvedBridge.workspaces.previewAddFromTynn(projectId, parent) : undefined, projectId, parent);
+            } : undefined}
             onCancelTynnPick={() => setTynnPick(undefined)}
             onConfirmAddTynn={(parent, projectId) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAddFromTynn(parent, projectId))}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}

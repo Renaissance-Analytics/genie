@@ -679,7 +679,16 @@ export class SessionHost {
          * agent on that provider is held; a timer (`schedule`, no polling) wakes the host at the gate's resume time.
          * Defaults: a 2-minute margin, the real setTimeout.
          */
-        rateLimit?: { gate?: RateLimitGate; schedule?: (ms: number, fn: () => void) => () => void };
+        rateLimit?: {
+            gate?: RateLimitGate;
+            schedule?: (ms: number, fn: () => void) => () => void;
+            /**
+             * The provider's signed-in account now (`accountIdentityFrom` of its status command), `null` when there is
+             * nothing to tell it by. Asked for a HELD login only, when the hold begins and at each re-read: a different
+             * account releases every agent held on it (Tynn #699). Absent = an account switch is noticed only by a Log in.
+             */
+            accountOf?: (provider: string) => Promise<string | null>;
+        };
         /** Where the threads are kept. Default: the durable file store under `userData` — a test may hand in its own. */
         store?: () => SessionStore;
         /** A graceful stop's grace for a provider that has one (`gracefulEndFor`). Default `STOP_GRACE_MS`. */
@@ -720,6 +729,27 @@ export class SessionHost {
         this.#heldElsewhere = options.heldElsewhere;
         this.#gate = options.rateLimit?.gate ?? new RateLimitGate();
         this.#schedule = options.rateLimit?.schedule ?? ((ms, fn) => { const t = setTimeout(fn, Math.max(0, ms)); t.unref?.(); return () => clearTimeout(t); });
+        this.#accountOf = options.rateLimit?.accountOf;
+    }
+
+    readonly #accountOf: ((provider: string) => Promise<string | null>) | undefined;
+    /** The account each held login was signed in to when its hold began (`null`: not known yet). Forgotten when it opens. */
+    readonly #heldAccount = new Map<string, string | null>();
+    /** When each held login's account was last read: its own interval, so a login no session can read limits for is read too. */
+    readonly #lastAccountRead = new Map<string, number>();
+
+    /** Read a held login's account: the first read is the one it is held on; a different one later releases it (Tynn #699). */
+    #readAccount(provider: string): void {
+        const read = this.#accountOf;
+        if (!read) return;
+        void read(provider).then((account) => {
+            if (account === null || !this.#heldAccount.has(provider)) return;
+            const was = this.#heldAccount.get(provider) ?? null;
+            if (was === null) { this.#heldAccount.set(provider, account); return; }
+            if (was === account) return;
+            this.#heldAccount.delete(provider);
+            this.resumeLimit(provider);
+        }, () => {});
     }
 
     readonly #currentRecord: ((agentId: AgentId) => AgentRecord | null) | undefined;
@@ -816,7 +846,17 @@ export class SessionHost {
         const ask: Array<() => void> = [];
         for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
             const state = this.#gate.view(this.#loginOf(provider), now).state;
-            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(provider); continue; }
+            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(provider); this.#heldAccount.delete(provider); this.#lastAccountRead.delete(provider); continue; }
+            // The account it is held on, read when the hold begins and every LIMIT_REREAD_MS after (Tynn #699).
+            if (this.#accountOf) {
+                if (!this.#heldAccount.has(provider)) this.#heldAccount.set(provider, null);
+                const lastAccount = this.#lastAccountRead.get(provider);
+                if (lastAccount === undefined || now >= lastAccount + LIMIT_REREAD_MS) {
+                    ask.push(() => this.#readAccount(provider));
+                    this.#lastAccountRead.set(provider, now);
+                    next = Math.min(next, now + LIMIT_REREAD_MS);
+                } else next = Math.min(next, lastAccount + LIMIT_REREAD_MS);
+            }
             // The session that will be asked: the first on this login whose driver can read. None — nothing to wait for.
             const reader = [...this.#running.values()].find((e) => e.provider === provider && e.session.canReadRateLimits);
             if (!reader) { this.#lastLimitRead.delete(provider); continue; }

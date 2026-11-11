@@ -9,7 +9,7 @@ import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
-import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
+import { MainErrorBook, installMainErrorPolicy, retryHostCopy } from '../core/main-errors.js';
 import { forwardRendererConsole } from '../core/render-error.js';
 import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
@@ -116,6 +116,7 @@ import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
 import { providerBinary } from './session-host.js';
+import { afterSignedIn } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
@@ -274,6 +275,8 @@ import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } fro
  * this: Genie did not start, and `boot().catch` at the bottom says so and quits.
  */
 const mainErrors = new MainErrorBook();
+/** Make genie-host's copy again, for the Deck item's Try again (Tynn #693): its error, or `null` when it is made. Set at boot. */
+let remakeHostCopy: () => Promise<string | null> = async () => 'Genie has not finished starting; try again in a moment';
 installMainErrorPolicy(process, mainErrors);
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -1169,6 +1172,10 @@ let thisMachineIds: () => Promise<ReadonlySet<string>> = () => Promise.resolve(n
 /** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
 // A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
 let workstationRoleNow: WorkstationRole | null = 'drone';
+/** What Tynn answered (`null` = not yet): tells a drone from "not known", which asks Tynn again before refusing. */
+let workstationSaidNow: WorkstationRole | null = null;
+/** Why the role is not known, when genie-host knows (not registered, a sign-in Tynn has not bound): the refusal's words. */
+let workstationWhyNow: string | null = null;
 /** Read this machine's role from Tynn again (set where the reader is built). */
 let readWorkstationRoleNow: (() => Promise<void>) | null = null;
 /** Tynn refused this caller: read the role again FIRST, then word the refusal from it (genie#1278, M0 finding 3). */
@@ -1549,8 +1556,11 @@ async function boot(): Promise<void> {
         // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
         // Electron copies the runtime; every failure answers the install, with the reason.
         const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
-        const hostRuntime = await materializeHostRuntime({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog });
-        if (hostRuntime.error !== null) mainErrors.record('agent-host', new Error(hostRuntime.error));
+        const hostCopyInput = { packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog };
+        const hostRuntime = await materializeHostRuntime(hostCopyInput);
+        // Its own Deck item (Tynn #693): the error alone is the item's folded detail; the words are core/main-errors.ts's.
+        if (hostRuntime.error !== null) mainErrors.record('host-copy', new Error(hostRuntime.cause ?? hostRuntime.error));
+        remakeHostCopy = () => materializeHostRuntime(hostCopyInput).then((made) => (made.error === null ? null : made.cause ?? made.error));
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
@@ -1876,11 +1886,11 @@ async function boot(): Promise<void> {
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
         runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
-        onSignedIn: (provider) => {
-            for (const id of host?.signedOutAgents(provider) ?? []) {
-                void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
-            }
-        },
+        onSignedIn: (provider) => afterSignedIn(provider, {
+            signedOutAgents: (p) => host?.signedOutAgents(p) ?? [],
+            restart: (id) => { void restartAgent(agentOps, id as AgentId, 'graceful').then((r) => { if (r.ok) host?.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch()); },
+            resumeLimit: (p) => { host?.resumeLimit(p); refreshTray(); },
+        }),
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry; a retry that
         // is refused again raises the prompt again. They are not restarted: only a tool failed, never their session.
         onDesignLoginEnded: () => {
@@ -2069,7 +2079,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:device-open', async (event, url: unknown) => {
         const link = deviceLinkNow();
         if (link) hearDeviceLink(link);
-        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, link: () => link });
+        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, said: () => workstationSaidNow, why: () => workstationWhyNow, reread: async () => { await readWorkstationRoleNow?.(); }, link: () => link });
         if (!opened.ok) return opened;
         const sender = event.sender;
         deviceChannels.set(opened.channel, sender);
@@ -2596,10 +2606,11 @@ async function boot(): Promise<void> {
      */
     const linkedRelayHost = agentEngineLink.client.relayHost();
     {
-        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
+        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); workstationSaidNow = linkedRelayHost.said(); workstationWhyNow = linkedRelayHost.unknownWhy(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
         void linkedRelayHost.refresh().catch((error: unknown) => console.error(`[tynn relay] ${error instanceof Error ? error.message : String(error)}`));
     }
-    readWorkstationRoleNow = () => readRole();
+    // The host reads, then this window takes its answer, so a caller that awaited it decides on the new role.
+    readWorkstationRoleNow = async () => { await readRole(); await linkedRelayHost.refresh(); };
     const readRole = (): Promise<void> => linkedRelayHost.readRole();
     let registering: Promise<void> | null = null;
     const registerWorkstation = (): Promise<void> => {
@@ -3089,8 +3100,12 @@ async function boot(): Promise<void> {
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
         deliverToAgent: (agentId, text) => host?.deliver(agentId as AgentId, text, 'you') ?? false,
-        // The Deck's Dismiss on a recorded main-process error.
-        mainErrors,
+        // The Deck's actions on a recorded main-process error: Dismiss; the host's copy made now; the lifecycle log opened.
+        mainErrors: {
+            dismiss: (id) => mainErrors.dismiss(id),
+            retryHostCopy: (id) => retryHostCopy(mainErrors, id, () => remakeHostCopy()),
+            openLog: () => shell.openPath(join(runtimeDir(genieRoot()), 'lifecycle.log')).then((failed) => failed || null),
+        },
         toolchain: {
             probe: () => probeToolsLive(latestFor),
             update: async (tool, version, progress) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),

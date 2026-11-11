@@ -49,7 +49,8 @@ function run(phase: 'logon-install' | 'logon-read', scenario = 'ok', hasResult =
     return { ...r, state, repo, publicDir };
 }
 
-describe('the Windows keychain sign-in hook, through its real phases', { timeout: ROW_TIMEOUT_MS }, () => {
+// CI: WINDOWS ONLY (the Windows sign-in hook, run through Windows PowerShell)
+describe.runIf(process.platform === 'win32')('the Windows keychain sign-in hook, through its real phases', { timeout: ROW_TIMEOUT_MS }, () => {
     it('installs and verifies a per-user string value without needing scheduled-task permission', () => {
         const r = run('logon-install');
         expect(r.status, r.stdout + r.stderr).toBe(0);

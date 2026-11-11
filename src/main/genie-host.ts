@@ -98,8 +98,8 @@ import { remoteAccess } from './remote-access.js';
 import { staticServer } from './static-page.js';
 import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
 import { RelayHostService } from './relay-host-service.js';
-import { droneRefusal } from '../core/workstation-role.js';
-import { readWorkstationRole } from './workstation-role-reader.js';
+import { connectOutRefusal, mayBrowse } from '../core/workstation-role.js';
+import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
 import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
@@ -112,7 +112,9 @@ import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
-import { execFileText } from './toolchain-runner.js';
+import { execFileRunner, execFileText } from './toolchain-runner.js';
+import { statusCommandFor } from './login-host.js';
+import { accountIdentityFrom } from '../core/provider-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
@@ -858,6 +860,7 @@ async function main(): Promise<void> {
     // THIS MACHINE'S KEY IS HERE (P3.4), and the relay that signs with it (Tynn #410).
     const workstationService = new WorkstationService({
         store: workstationKeyStore(join(home, 'workstation.json'), keychain),
+        log: (line) => say(line),
         request: async (path, init) => (await tynnOpening).request(path, init),
         host: () => TYNN_HOST,
         hostname,
@@ -879,7 +882,13 @@ async function main(): Promise<void> {
         account: () => tynnAccountNow,
         workstation: workstationService,
         enabled: () => settings.snapshot().remote_access === true,
-        readRole: (request) => readWorkstationRole(request),
+        // Each read says what Tynn answered, in the lifecycle log (beta.61.1).
+        readRole: async (request) => {
+            const outcome = await readWorkstationRoleOutcome(request);
+            say(`tynn role read: ${outcome.words}`);
+            return { role: outcome.role, unbound: outcome.unbound === true };
+        },
+        schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         start: ({ host, workstationId, fingerprint, onStatus }) => startRelayHost({
             ports: relayHostPorts({ tynnHost: host, workstationId, authHeader: () => workstationService.authHeader(host), fetch: relayFetch }),
             socket: (url) => deviceSocket(url),
@@ -995,7 +1004,11 @@ async function main(): Promise<void> {
              */
             relay: {
                 signedIn: () => tynnAccountNow?.status().signedIn === true,
-                refusal: () => droneRefusal(relayHostService.role()),
+                // Not known to be a drone: ask Tynn first (beta.61.1); only its own "drone" is refused as one.
+                refusal: async () => {
+                    if (!mayBrowse(relayHostService.role()) && relayHostService.said() === null) await relayHostService.readRole().catch(() => {});
+                    return connectOutRefusal({ role: relayHostService.role(), said: relayHostService.said(), why: relayHostService.unknownWhy() });
+                },
                 keypair: () => PopKeypair.generate(),
                 mint: (workstationId, jwk) => (tynnAccountNow
                     ? mintConnectGrant((path, init) => tynnAccountNow!.request(path, init), workstationId, jwk)
@@ -1077,6 +1090,16 @@ async function main(): Promise<void> {
             return writeGenieInstructions(join(runtime, 'untrusted-agent'), tools, hostTynn?.status().signedIn === true ? 'tynn' : 'files');
         },
         untrustedNow: (record) => hostUntrustedNow(record),
+        // WHICH ACCOUNT A HELD LOGIN IS ON (Tynn #699): the provider's own status command, read while a login is held; a
+        // different account releases the agents held on it. Nothing to tell it by = no change.
+        rateLimit: {
+            accountOf: async (provider) => {
+                const command = statusCommandFor(provider, providerBinary(provider as AgentRecord['provider']) ?? null);
+                if (command === null) return null;
+                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000 });
+                return r.exitCode === 0 ? accountIdentityFrom(r.streams.stdout) : null;
+            },
+        },
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
         onHeadroom: (provider, room) => { headroomFeed.offer(provider, room); engineHostOptions.onHeadroom(provider, room); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.

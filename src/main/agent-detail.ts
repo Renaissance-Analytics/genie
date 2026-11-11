@@ -85,6 +85,6 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
         takeOver,
         // Its AgentInbox mail — with other agents AND the person (an FTQ answer is the person's) — for the mail rows in its
         // chat (core/chat-view.ts `chatCommsOf`).
-        comms: ports.mail ? chatCommsOf(ports.mail(record.id, 50)) : null,
+        comms: ports.mail ? chatCommsOf(ports.mail(record.id, 50), (id) => ports.registry.listAgents().find((a) => a.id === id)?.name ?? null) : null,
     };
 }

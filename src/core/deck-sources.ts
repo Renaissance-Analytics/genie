@@ -1,6 +1,6 @@
 import type { ListItem } from './attention.js';
 import { plainLabel, type DeckItem, type StaleReason } from './deck.js';
-import { HUMAN } from './inbox.js';
+import { HUMAN, UNNAMED_AGENT } from './inbox.js';
 import type { Finished, PendingQuestion } from '../main/attention-store.js';
 import type { InboxMessage } from '../main/inbox-store.js';
 
@@ -82,7 +82,7 @@ function truncate(text: string, max: number): string {
 export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
     const who = (agentId: string) => {
         const a = input.agents[agentId];
-        return { agentId, agentName: a?.name ?? agentId, workspaceId: a?.workspaceId ?? null };
+        return { agentId, agentName: a?.name ?? UNNAMED_AGENT, workspaceId: a?.workspaceId ?? null };
     };
     const named = (workspaceId: string | null): { workspaceName?: string; workspaceColor?: string } => {
         const name = workspaceId === null ? undefined : input.workspaceNames?.[workspaceId];
