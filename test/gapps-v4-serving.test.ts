@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { request } from 'node:http';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -138,6 +138,16 @@ describe('serving the installed copy', () => {
         } finally {
             await new Promise<void>((r) => door.close(r));
         }
+    });
+
+    it('a folder link inside the installed copy that leads outside it is not followed (CodeQL path alert, beta.61)', async () => {
+        const outside = join(root, 'outside');
+        await mkdir(outside, { recursive: true });
+        await writeFile(join(outside, 'secret.txt'), 'not the app\'s');
+        const dir = book.installedDir(NOTES)!;
+        await symlink(outside, join(dir, 'app', 'linked'), 'junction');
+        expect((await get('/app/linked/secret.txt')).status).toBe(404);
+        expect((await get('/app/index.html')).status, 'the app itself is still served').toBe(200);
     });
 
     it('nothing outside the app\'s own files is served', async () => {
