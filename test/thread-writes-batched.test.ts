@@ -42,7 +42,8 @@ function rig() {
 
 describe("a turn's rows reach the thread together", () => {
     // Six runs (#682): a miss one run in a few is seen with its figures, and so are the runs that do not miss.
-    it.each([1, 2, 3, 4, 5, 6])('120 turns of an 8 KB reply settle in a few appends, in order, and within a bound (run %i)', async () => {
+    /** 120 turns settled once, with where the time went. */
+    async function settleOnce(): Promise<{ ms: number; appends: number; measured: Record<string, unknown> }> {
         // WHERE THE TIME GOES (#682): each lock's wait before its callback runs, the time it is held, and each append.
         // The WHOLE settle is accounted for: before the first lock is asked for, each lock from asked to given back (its
         // wait, its hold, and its RELEASE, which the first measurement left out), and after the last one is given back.
@@ -99,10 +100,37 @@ describe("a turn's rows reach the thread together", () => {
             ...Object.fromEntries(Object.entries(timing).map(([k, v]) => [k, Math.round(v)])),
             beforeFirstLockMs: Math.round((span.firstAsked ?? ended) - started), afterLastLockMs: Math.round(ended - span.lastBack), slowSteps,
         };
+        return { ms, appends: appends.mock.calls.length, measured };
+    }
+
+    it.each([1, 2, 3, 4, 5, 6])('120 turns of an 8 KB reply settle in a few appends, in order, and within a bound (run %i)', async () => {
+        const { ms, appends, measured } = await settleOnce();
         console.log(`[#682] ${process.platform} ${JSON.stringify(measured)}`);
         // The figure itself is in the failure, so a miss says where the time went.
-        expect({ appends: appends.mock.calls.length <= 20, settledUnder2s: ms < 2000, measured }).toEqual({ appends: true, settledUnder2s: true, measured: expect.objectContaining({ settleMs: expect.any(Number), lockWaitMs: expect.any(Number) }) });
+        expect({ appends: appends <= 20, settledUnder2s: ms < 2000, measured }).toEqual({ appends: true, settledUnder2s: true, measured: expect.objectContaining({ settleMs: expect.any(Number), lockWaitMs: expect.any(Number) }) });
     }, 60_000);
+
+    // PROBE (removed before this is done): the same settle while something else writes and syncs on the same disk, as a
+    // busy runner does. No bound: it is here for its figures, to see which part of a settle a busy disk stretches.
+    it.each([1, 2, 3, 4])('PROBE: the settle under a busy disk, for its figures (run %i)', async () => {
+        const { open } = await import('node:fs/promises');
+        let hogging = true;
+        const block = Buffer.alloc(4 * 1024 * 1024, 1);
+        const hogs = [0, 1, 2, 3].map(async (n) => {
+            let writes = 0;
+            while (hogging) {
+                const handle = await open(join(dir, `hog-${n}.bin`), 'a');
+                try { await handle.write(block); await handle.sync(); } finally { await handle.close(); }
+                writes += 1;
+            }
+            return writes;
+        });
+        await new Promise((r) => setTimeout(r, 300));
+        const { measured } = await settleOnce();
+        hogging = false;
+        const writes = (await Promise.all(hogs)).reduce((a, b) => a + b, 0);
+        console.log(`[#682-probe] ${process.platform} hogWrites4MB=${writes} ${JSON.stringify(measured)}`);
+    }, 120_000);
 
     it('CONTROL: one row emitted alone is written alone, at once', async () => {
         const r = rig();
