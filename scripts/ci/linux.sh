@@ -33,6 +33,7 @@ OUT="$PWD/ci-out"
 
 # The rows, in ci.yml's order: `typecheck + unit`, then `a real window`, then the acceptance jobs.
 ROWS=(
+    deps electron-binary
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag
     trust-step site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
@@ -64,6 +65,18 @@ elif [ -n "$from" ]; then
     for r in "${ROWS[@]}"; do [ "$r" = "$from" ] && seen=1; [ "$seen" = 1 ] && selected+=("$r"); done
 else
     selected=("${ROWS[@]}")
+fi
+# THE SETUP A SHORT RUN STANDS ON, RUN FIRST AND SAID (as windows.ps1; the targeted Azure run failed three rows on a
+# missing Electron binary that the skipped rows used to fetch): deps and electron-binary first, and build when a chosen
+# row needs the built app, each with its own ROW line.
+if [ -n "$only$from" ]; then
+    setup=(deps electron-binary)
+    for r in "${selected[@]}"; do
+        case " deps electron-binary typecheck unit flows zip64 host-plain-node mailpit " in *" $r "*) ;; *) setup+=(build); break ;; esac
+    done
+    rest=()
+    for r in "${selected[@]}"; do case " ${setup[*]} " in *" $r "*) ;; *) rest+=("$r") ;; esac; done
+    selected=("${setup[@]}" "${rest[@]}")
 fi
 
 failed=()
@@ -101,6 +114,25 @@ need_install() {
     installed=ok
 }
 
+# ELECTRON'S BINARY. Electron 44 has no install script: `require('electron')` fetches the binary the first time something
+# asks for its path, and row scripts that start node_modules/electron/dist/electron by its path never ask. Fetched here
+# with the package's own install.js (checksum-checked), and its absence said by name.
+ELECTRON_BIN="$PWD/node_modules/electron/dist/electron"
+electron_ok=''
+electron_why=''
+need_electron() {
+    if [ -n "$electron_ok" ]; then [ "$electron_ok" = ok ] && return 0; blocked="$electron_why"; return 1; fi
+    electron_ok=failed
+    need_install || { electron_why="$blocked"; return 1; }
+    [ -x "$ELECTRON_BIN" ] || node node_modules/electron/install.js >"$OUT/electron-install.log" 2>&1 || tail -5 "$OUT/electron-install.log"
+    if [ ! -x "$ELECTRON_BIN" ]; then
+        electron_why="$ELECTRON_BIN missing (node_modules/electron/install.js did not fetch it: see ci-out/electron-install.log)"
+        block "$electron_why"; return 1
+    fi
+    echo "--- Electron: $ELECTRON_BIN ($(du -m "$ELECTRON_BIN" | cut -f1) MB)"
+    electron_ok=ok
+}
+
 built=''
 built_why=''
 need_build() {
@@ -108,6 +140,7 @@ need_build() {
     built=failed
     built_why='the build failed'
     need_install || { built_why="$blocked"; return 1; }
+    need_electron || { built_why="$blocked"; return 1; }
     echo "--- npm run build"
     npm run build >"$OUT/build.log" 2>&1 || { tail -40 "$OUT/build.log"; block "$built_why"; return 1; }
     built=ok
@@ -261,6 +294,8 @@ trap cleanup EXIT
 
 # --- the rows: each prints nothing itself and returns ci.yml's step status --------------------------------------------
 
+row_deps() { need_install; }
+row_electron-binary() { need_electron; }
 row_typecheck() { need_install && npm run typecheck; }
 # The suite, and every test's time beside it (ci.yml's Windows job does the same): ci-out/slow-tests.tsv is ms, status,
 # file, test, slowest first. The table is observe only; the row's result is the suite's.
@@ -300,7 +335,7 @@ unit_workers() {
     echo "$n"
 }
 row_unit() {
-    need_install || return 1
+    need_install && need_electron || return 1
     local code=0 cores workers sampler
     cores="$(nproc)"
     workers="$(unit_workers "$cores")"

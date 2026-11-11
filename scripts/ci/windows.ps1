@@ -49,6 +49,7 @@ $Repo = (Get-Location).Path
 $Out = Join-Path $Repo 'ci-out'
 
 $Rows = @(
+    'deps', 'electron-binary',
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag',
@@ -78,6 +79,15 @@ if ($Only) {
     $selected = @($Rows[([array]::IndexOf($Rows, $From))..($Rows.Count - 1)])
 } else {
     $selected = $Rows
+}
+# THE SETUP A SHORT RUN STANDS ON, RUN FIRST AND SAID (the targeted Azure run of 2026-11-11: three rows failed in 60 s
+# each with "exit -4058", ENOENT, because nothing had fetched Electron's binary: Electron 44 fetches it on first use, and
+# in a full run the rows before had done that). Every -Only or -From run starts with deps and electron-binary, and with
+# build when a chosen row needs the built app; each prints its own ROW line.
+if ($Only -or $From) {
+    $setup = @('deps', 'electron-binary')
+    if (@($selected | Where-Object { @('deps', 'electron-binary', 'unit-build', 'unit') -notcontains $_ }).Count -gt 0) { $setup += 'build' }
+    $selected = @($setup | Where-Object { $selected -notcontains $_ }) + $selected
 }
 
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -122,11 +132,30 @@ function Need-Install {
     $script:Installed = 'ok'
 }
 
+# ELECTRON'S BINARY. Electron 44 has no install script: `require('electron')` fetches the binary the first time something
+# asks for its path. Row scripts that start node_modules\electron\dist\electron.exe by its path never ask, so it is
+# fetched here (install.js, the package's own fetch, checksum-checked), and its absence is said by name.
+$script:ElectronExe = Join-Path $Repo 'node_modules\electron\dist\electron.exe'
+$script:Electron = ''
+function Need-Electron {
+    if ($script:Electron -eq 'ok') { return }
+    if ($script:Electron) { Block $script:Electron }
+    Need-Install
+    if (-not (Test-Path $script:ElectronExe)) {
+        node node_modules/electron/install.js *> (Join-Path $Out 'electron-install.log')
+        Get-Content (Join-Path $Out 'electron-install.log') -Tail 5
+    }
+    if (-not (Test-Path $script:ElectronExe)) { $script:Electron = "$($script:ElectronExe) missing (node_modules/electron/install.js did not fetch it: see ci-out\electron-install.log)"; Block $script:Electron }
+    Write-Output "--- Electron: $($script:ElectronExe) ($([int]((Get-Item $script:ElectronExe).Length / 1MB)) MB)"
+    $script:Electron = 'ok'
+}
+
 $script:Built = ''
 function Need-Build {
     if ($script:Built -eq 'ok') { return }
     if ($script:Built) { Block $script:Built }
     Need-Install
+    Need-Electron
     $script:Built = 'the build failed'
     npm run build *> (Join-Path $Out 'build.log')
     if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Out 'build.log') -Tail 40; Block $script:Built }
@@ -228,12 +257,14 @@ function Stop-App {
 
 # --- the rows: each throws on failure ---------------------------------------------------------------------------------
 
-function Row-unit-build { Need-Install; Run 'npm run build:main' { npm run build:main } }
+function Row-deps { Need-Install }
+function Row-electron-binary { Need-Electron }
+function Row-unit-build { Need-Install; Need-Electron; Run 'npm run build:main' { npm run build:main } }
 
 # The Windows suite, with its sampler beside it and the 30 s per-test budget ci.yml gives it (the Windows runner is
 # slower to start processes); the slow-test table after it, observe only.
 function Row-unit {
-    Need-Install
+    Need-Install; Need-Electron
     $samples = Join-Path $Out 'proc-samples.log'
     $results = Join-Path $Out 'vitest-results.json'
     $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
