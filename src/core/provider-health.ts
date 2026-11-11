@@ -126,7 +126,7 @@ export function judgeProviderHealth(input: ProviderHealthInput): ProviderHealth 
     const kind = program.head === null ? ({ kind: 'unknown' } as const) : programKind(program.head);
     if (kind.kind === 'placeholder') {
         if (program.nativePackage === false) {
-            return done('native-package-missing', `${name} is installed but cannot run: npm did not download its native package (optional dependencies were left out), so ${program.path} is a placeholder, not the program`);
+            return done('native-package-missing', `${name} is installed but cannot run: its native package was not downloaded (npm left out optional dependencies), so ${program.path} is a placeholder, not the program`);
         }
         return done('placeholder', `${name} is installed but cannot run: npm installed it without running its setup step (npm 12 skips it unless allowed; so does --ignore-scripts), so ${program.path} is a placeholder, not the program`);
     }
