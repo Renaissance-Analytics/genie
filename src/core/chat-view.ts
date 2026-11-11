@@ -61,6 +61,11 @@ export interface ChatMessage {
     queuedForProvider?: boolean;
     /** The agent is still starting (q_04ce323c: its first message started it); it goes the moment it is up. */
     queuedForStart?: boolean;
+    /**
+     * Queued behind a turn: when the agent last showed anything (Tynn #699) — after two minutes of nothing the message
+     * offers "Send now (stop the current turn)". `null`: nothing from the agent in this thread.
+     */
+    silentSince?: number | null;
     /** Its durable queue id, for restarting/sending or discarding an unsent draft. */
     promptId?: string;
     /** A failed Send/Discard press, kept beside the draft so it can be tried again. */
@@ -193,6 +198,9 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
     let lastWasThink = false;
     // The row before, debug notices aside: a compaction repeating it is the same compaction (genie#1249).
     let previous: StreamEvent | undefined;
+    // The agent's last sign of life: any row that is not the person's own message (Tynn #699).
+    let lastOutputAt: number | null = null;
+    for (const row of detail.rows) if (!(row.event.kind === 'message' && row.event.speaker === 'you') && row.at !== null && (lastOutputAt === null || row.at > lastOutputAt)) lastOutputAt = row.at;
     for (const row of detail.rows) {
         const e = row.event;
         if (repeatsCompaction(previous, e)) continue;
@@ -237,7 +245,8 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
             ...(queued && detail.session?.starting === true ? { queuedForStart: true }
-                : queued && detail.session?.turnState === 'idle' ? { queuedForProvider: true } : {}),
+                : queued && detail.session?.turnState === 'idle' && detail.session.inTurn !== true ? { queuedForProvider: true } : {}),
+            ...(queued ? { silentSince: lastOutputAt } : {}),
             ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;

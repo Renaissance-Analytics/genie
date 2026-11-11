@@ -112,7 +112,9 @@ import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import { isOsAgent } from '../core/os-agent.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
-import { execFileText } from './toolchain-runner.js';
+import { execFileRunner, execFileText } from './toolchain-runner.js';
+import { statusCommandFor } from './login-host.js';
+import { accountIdentityFrom } from '../core/provider-login.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
 import { setWin32ProcessReader } from '../core/process-tree.js';
@@ -1086,6 +1088,16 @@ async function main(): Promise<void> {
             return writeGenieInstructions(join(runtime, 'untrusted-agent'), tools, hostTynn?.status().signedIn === true ? 'tynn' : 'files');
         },
         untrustedNow: (record) => hostUntrustedNow(record),
+        // WHICH ACCOUNT A HELD LOGIN IS ON (Tynn #699): the provider's own status command, read while a login is held; a
+        // different account releases the agents held on it. Nothing to tell it by = no change.
+        rateLimit: {
+            accountOf: async (provider) => {
+                const command = statusCommandFor(provider, providerBinary(provider as AgentRecord['provider']) ?? null);
+                if (command === null) return null;
+                const r = await execFileRunner(command, [], { shell: true, cwd: home, timeoutMs: 30_000 });
+                return r.exitCode === 0 ? accountIdentityFrom(r.streams.stdout) : null;
+            },
+        },
         onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
         onHeadroom: (provider, room) => { headroomFeed.offer(provider, room); engineHostOptions.onHeadroom(provider, room); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
