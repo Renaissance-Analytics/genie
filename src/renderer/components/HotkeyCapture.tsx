@@ -10,8 +10,10 @@ import { keycaps } from '../../core/send-key.js';
  * `null` when it was taken. For any hotkey: it knows nothing of what the key is for.
  */
 export interface HotkeyCaptureProps {
-    /** The key now, as an accelerator (`Enter`, `CommandOrControl+Enter`). */
+    /** The key now, as an accelerator (`Enter`, `CommandOrControl+Enter`); empty = none set. */
     readonly value: string;
+    /** Which key this is, on the control and its Reset, for whoever needs to find one of several. */
+    readonly name?: string | undefined;
     /** `darwin` names ⌘; anything else names Ctrl. */
     readonly platform: string;
     /** What the key is for, for a screen reader: "Send message". */
@@ -23,7 +25,7 @@ export interface HotkeyCaptureProps {
 
 const MODIFIERS = new Set(['Control', 'Meta', 'Alt', 'AltGraph', 'Shift', 'OS']);
 
-export function HotkeyCapture({ value, platform, label, onCapture, onReset }: HotkeyCaptureProps) {
+export function HotkeyCapture({ value, name, platform, label, onCapture, onReset }: HotkeyCaptureProps) {
     const [capturing, setCapturing] = useState(false);
     const [refused, setRefused] = useState<string | null>(null);
     const onKeyDown = (e: KeyboardEvent<HTMLElement>): void => {
@@ -40,23 +42,23 @@ export function HotkeyCapture({ value, platform, label, onCapture, onReset }: Ho
         if (accelerator === null) return;
         setRefused(onCapture(accelerator));
     };
-    const caps = keycaps(value, platform);
+    const caps = value === '' ? [] : keycaps(value, platform);
     return (
         <span data-hotkey-control="" className="inline-flex flex-col items-end gap-1">
             <span className="inline-flex items-center gap-2">
                 <Button
                     type="button"
                     size="sm"
-                    data-hotkey-capture=""
+                    data-hotkey-capture={name ?? ''}
                     data-capturing={capturing ? 'true' : 'false'}
-                    aria-label={capturing ? `Press the keys for ${label}` : `${label}: ${caps.join(' + ')}. Press to change`}
+                    aria-label={capturing ? `Press the keys for ${label}` : caps.length === 0 ? `${label}: no key. Press to set one` : `${label}: ${caps.join(' + ')}. Press to change`}
                     onClick={() => { setRefused(null); setCapturing(true); }}
                     onBlur={() => setCapturing(false)}
                     onKeyDown={onKeyDown}
                 >
-                    {capturing ? 'Press the keys…' : caps.map((cap, i) => <Fragment key={`${cap}-${i}`}>{i > 0 ? <span aria-hidden className="px-0.5 text-[var(--fg-4)]">+</span> : null}<Kbd>{cap}</Kbd></Fragment>)}
+                    {capturing ? 'Press the keys…' : caps.length === 0 ? 'Set a key' : caps.map((cap, i) => <Fragment key={`${cap}-${i}`}>{i > 0 ? <span aria-hidden className="px-0.5 text-[var(--fg-4)]">+</span> : null}<Kbd>{cap}</Kbd></Fragment>)}
                 </Button>
-                {onReset ? <Button type="button" size="sm" variant="ghost" data-hotkey-reset="" onClick={() => { setRefused(null); setCapturing(false); onReset(); }}>Reset to default</Button> : null}
+                {onReset ? <Button type="button" size="sm" variant="ghost" data-hotkey-reset={name ?? ''} onClick={() => { setRefused(null); setCapturing(false); onReset(); }}>Reset to default</Button> : null}
             </span>
             {refused !== null ? <span data-hotkey-refused="" role="status" className="text-xs text-[var(--danger,#dc2626)]">{refused}</span> : null}
         </span>

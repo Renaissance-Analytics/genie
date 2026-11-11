@@ -1744,7 +1744,7 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => {
         const onKey = (e: KeyboardEvent): void => {
             // Not in Settings' key recorders — a key pressed there is being assigned.
-            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-binding]')) return;
+            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-hotkey-capture][data-capturing="true"]')) return;
             const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
             const action = hotkeyAction(press, bindings, promptPlatform);
             if (action === 'open-palette') {

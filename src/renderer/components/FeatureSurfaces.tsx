@@ -1859,22 +1859,16 @@ const pressOf = (e: React.KeyboardEvent): { key: string; ctrlKey: boolean; metaK
 function GenieHotkeys({ values, onAction }: { values: Readonly<Record<string, boolean | string>> | null; onAction: SurfaceProps['onAction'] }) {
     const [platform, setPlatform] = useState('generic');
     useEffect(() => { setPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
-    const [refused, setRefused] = useState<{ name: BindingName; reason: string } | null>(null);
     const bindings = bindingsFrom(values);
     const prompts = parsePromptLibrary(typeof values?.['saved_prompts'] === 'string' ? values['saved_prompts'] : undefined);
-    const set = (name: BindingName, value: string): void => { setRefused(null); onAction({ kind: 'settings.set', key: BINDING_SETTING[name], value }); };
-    const record = (name: BindingName, e: React.KeyboardEvent<HTMLInputElement>): void => {
-        if (e.key === 'Tab') return;
-        e.preventDefault();
-        const bare = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
-        if (bare && (e.key === 'Backspace' || e.key === 'Delete')) { set(name, ''); return; }
-        if (bare && e.key === 'Escape') { e.currentTarget.blur(); return; }
-        const accelerator = acceleratorFromPress(pressOf(e), platform);
-        if (accelerator === null) return;
+    const set = (name: BindingName, value: string): void => onAction({ kind: 'settings.set', key: BINDING_SETTING[name], value });
+    // One way to set a key on this page (Tynn issue #697): pressed into the capture control, refused in words there.
+    const capture = (name: BindingName) => (accelerator: string): string | null => {
         const problem = bindingProblem(accelerator, name, bindings, prompts, platform);
-        if (problem !== null) { setRefused({ name, reason: problem }); return; }
+        if (problem !== null) return problem;
         // Genie's default is stored as empty, so it follows Genie's default.
         set(name, accelerator === DEFAULT_HOTKEYS[name] ? '' : accelerator);
+        return null;
     };
     const rows: Array<{ name: BindingName; label: string; desc: string }> = [
         { name: 'commandWindow', label: 'Command Window', desc: 'Search, jump and run — prompts, actions, workspaces, agents.' },
@@ -1910,23 +1904,13 @@ function GenieHotkeys({ values, onAction }: { values: Readonly<Record<string, bo
                     const current = bindings[name];
                     return (
                         <li key={name} className="flex flex-col gap-1 py-2">
-                            <div className="flex items-center gap-4">
+                            <div className="flex items-start gap-4">
                                 <div className="flex-1">
                                     <div className="text-sm">{label}</div>
                                     <div className="text-xs text-[var(--fg-3)]">{current === null ? `“${stored}” is not a key Genie can read — this shortcut is off until you set it again.` : desc}</div>
                                 </div>
-                                <Input
-                                    data-binding={name}
-                                    aria-label={`Key for ${label}`}
-                                    readOnly
-                                    value={current === null ? '' : hotkeyLabel(current, platform)}
-                                    placeholder="Click, then press keys"
-                                    onKeyDown={(e) => record(name, e)}
-                                    className="w-44"
-                                />
-                                {stored !== '' ? <Button data-action={`binding-reset-${name}`} size="sm" variant="ghost" onClick={() => set(name, '')}>Reset</Button> : null}
+                                <HotkeyCapture name={name} value={current ?? ''} platform={platform} label={label} onCapture={capture(name)} onReset={stored !== '' ? () => set(name, '') : undefined} />
                             </div>
-                            {refused?.name === name ? <div data-binding-refused={name} className="text-xs text-[var(--danger,#dc2626)]">{refused.reason}</div> : null}
                         </li>
                     );
                 })}
