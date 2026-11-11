@@ -38,6 +38,12 @@ param(
     [switch]$List
 )
 $ErrorActionPreference = 'Continue'
+# UTF-8 OUT, ALWAYS (the second Azure run: "ROW trust-step PASS 85" arrived as "trust-step PASS 85"). In-Session sends
+# this script's output to a file and relays it as UTF-8; Windows PowerShell 5.1 writes a redirected stream in the
+# console's code page, so a printed em dash became bytes that are not UTF-8 and the relay's count of what it had read
+# drifted past the next line's first four bytes. Set for this process and for the native commands it starts.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Set-Location (Resolve-Path (Join-Path $PSScriptRoot '..\..'))
 $Repo = (Get-Location).Path
 $Out = Join-Path $Repo 'ci-out'
@@ -365,6 +371,7 @@ function Row-packaged-launcher {
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 Write-Output "CI WINDOWS rows: $($selected -join ' ')"
+$script:Results = [ordered]@{}
 foreach ($name in $selected) {
     $started = Get-Date
     $script:Blocked = ''
@@ -372,12 +379,13 @@ foreach ($name in $selected) {
     $log = Join-Path $Out "$name.log"
     $ok = $true
     try {
-        & "Row-$name" *>&1 | Tee-Object -FilePath $log | Out-Null
+        & "Row-$name" *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $log -Encoding utf8
     } catch {
         $ok = $false
         Add-Content -Path $log -Value "THREW: $($_.Exception.Message)"
     }
     $secs = [int]((Get-Date) - $started).TotalSeconds
+    $script:Results[$name] = if ($ok) { 'PASS' } else { 'FAIL' }
     if ($ok) {
         Write-Output "ROW $name PASS $secs"
     } elseif ($script:Blocked) {
@@ -398,6 +406,10 @@ foreach ($name in $selected) {
 if ($script:App) { Stop-App }
 
 foreach ($n in $script:Notes) { Write-Output "NOTE $n" }
+# Every selected row has exactly one result; a row with none is a failure of this script, and fails the run.
+$missing = @($selected | Where-Object { -not $script:Results.Contains($_) })
+foreach ($m in $missing) { $script:Failed += $m }
+Write-Output "ROWS $($script:Results.Count) of $($selected.Count) reported: $(($script:Results.Keys | ForEach-Object { "$_=$($script:Results[$_])" }) -join ' ')$(if ($missing.Count) { "; NO RESULT: $($missing -join ' ')" })"
 if ($script:Failed.Count -gt 0) {
     Write-Output "FAILED ROWS: $($script:Failed -join ' ')"
     Write-Output 'CI WINDOWS FAIL'

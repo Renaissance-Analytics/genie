@@ -290,7 +290,20 @@ try {
     closeSync(fd);
     app.on('error', (error) => log(`launch error: ${error.message}`));
     phase = '1 launch and inspect';
-    const target = await pageFor((t) => t.type === 'page' && /index\.html/.test(t.url));
+    // AN APP THAT NEVER OFFERS ITS PAGE (Tynn #692, the Azure Windows VM: twice its log said only that DevTools and the
+    // inspector were listening, then nothing for 60 s, and the DevTools port answered no request). Said, before the row
+    // fails: whether the app still runs, a request to each port, and what Genie itself logged in this run's home.
+    let target;
+    try { target = await pageFor((t) => t.type === 'page' && /index\.html/.test(t.url)); } catch (error) {
+        const ask = async (port, path) => { try { const r = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(3_000) }); return `HTTP ${r.status} ${(await r.text()).slice(0, 200)}`; } catch (e) { return `${e.name}: ${e.cause?.code ?? e.message}`; } };
+        log(`  1 app process ${app.pid}: ${app.exitCode === null && app.signalCode === null ? 'still running' : `ended (exit ${app.exitCode}, signal ${app.signalCode})`}`);
+        log(`  1 DevTools ${PORT}/json/version: ${await ask(PORT, '/json/version')}; inspector ${INSPECT}/json: ${await ask(INSPECT, '/json')}`);
+        for (const file of [join(root, '.genie', 'runtime', 'lifecycle.log'), join(root, '.genie', 'logs', 'genie-host.log')]) {
+            let text = null; try { text = readFileSync(file, 'utf8'); } catch { /* none */ }
+            log(`  1 ${file}: ${text === null ? 'not written' : text.split(/\r?\n/).filter(Boolean).slice(-15).join(' | ').slice(0, 1800)}`);
+        }
+        throw error;
+    }
     main = await Cdp.connect(target.webSocketDebuggerUrl);
     inspector = await Cdp.connect((await until('main inspector', async () => (await targets(INSPECT))[0], 30_000)).webSocketDebuggerUrl);
     await until('preload/door registration', () => main.evaluate('typeof window.genieLocalProtocol === "object" && typeof window.genie === "object"'), 60_000);
