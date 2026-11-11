@@ -99,7 +99,7 @@ import { staticServer } from './static-page.js';
 import { hostRemoteApi, RemoteAccessHost, RemoteAccessService } from './remote-access-host.js';
 import { RelayHostService } from './relay-host-service.js';
 import { connectOutRefusal, mayBrowse } from '../core/workstation-role.js';
-import { readWorkstationRole } from './workstation-role-reader.js';
+import { readWorkstationRoleOutcome } from './workstation-role-reader.js';
 import { dialFrontDoor } from './relay-site.js';
 import type { HostApi } from './remote-host.js';
 import { hostAloneApi } from './host-alone-api.js';
@@ -877,7 +877,12 @@ async function main(): Promise<void> {
         account: () => tynnAccountNow,
         workstation: workstationService,
         enabled: () => settings.snapshot().remote_access === true,
-        readRole: (request) => readWorkstationRole(request),
+        // Each read says what Tynn answered, in the lifecycle log (beta.61.1).
+        readRole: async (request) => {
+            const outcome = await readWorkstationRoleOutcome(request);
+            say(`tynn role read: ${outcome.words}`);
+            return outcome.role;
+        },
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         start: ({ host, workstationId, fingerprint, onStatus }) => startRelayHost({
             ports: relayHostPorts({ tynnHost: host, workstationId, authHeader: () => workstationService.authHeader(host), fetch: relayFetch }),
