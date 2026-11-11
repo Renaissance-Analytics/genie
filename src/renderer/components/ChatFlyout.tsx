@@ -52,7 +52,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'promptId' | 'draftProblem' | 'carried'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'promptId' | 'draftProblem' | 'carried'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -127,6 +127,34 @@ export function ChatWaiting({ id, agentName, waiting, now, onInterruptAndSend }:
             ) : null}
         </div>
     );
+}
+
+/** A turn with no output this long is worth stopping for what waits behind it (Tynn #699). */
+export const QUEUED_SILENT_MS = 120_000;
+
+/**
+ * QUEUED BEHIND A SILENT TURN (Tynn #699: two messages read "waiting for the current turn to end" for 20 minutes behind
+ * a turn that had said nothing since, and nothing on the row let the person act). Past `QUEUED_SILENT_MS` of silence,
+ * `Send now (stop the current turn)` — the Interrupt-and-send path: the turn ends and what waits goes next, in order.
+ * Without a way to stop the turn, only the words. Hook-free: `now` comes from the caller.
+ */
+export function ChatQueuedNote({ id, agentName, silentSince, now, onSendNow }: { id: string; agentName: string; silentSince: number | null; now: number; onSendNow?: (() => void) | undefined }) {
+    const silent = silentSince !== null && now - silentSince >= QUEUED_SILENT_MS;
+    return (
+        <span data-chat-queued={id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]">
+            <span>Queued · waiting for the current turn to end</span>
+            {silent && onSendNow ? (
+                <Button type="button" size="xs" color="amber" data-action="send-now" data-message={id} title={`${agentName} has shown nothing for ${ago(silentSince, now)}: stop its current turn and send what waits, in order`} onClick={() => onSendNow()} className="shrink-0 font-sans">
+                    Send now (stop the current turn)
+                </Button>
+            ) : null}
+        </span>
+    );
+}
+
+function ChatQueuedNoteLive(props: Omit<Parameters<typeof ChatQueuedNote>[0], 'now'>) {
+    const now = useNow(true);
+    return <ChatQueuedNote {...props} now={now} />;
 }
 
 /** `ChatWaiting` with the time kept current, so how long the step has run appears once it is long. */
@@ -738,7 +766,9 @@ function ChatFlyoutBody({
                             {mailOnly && m.read !== undefined ? (
                                 <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                             ) : null}
-                            {m.queued ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : m.queuedForProvider ? 'Queued · waiting for the provider to resume' : 'Queued · waiting for the current turn to end'}</span> : null}
+                            {m.queued ? (m.queuedForStart || m.queuedForProvider
+                                ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>
+                                : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} onSendNow={onInterruptAndSend} />) : null}
                             {m.delivered || m.queued ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
                                     {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
