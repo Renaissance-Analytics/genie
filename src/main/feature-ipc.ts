@@ -20,7 +20,7 @@ import { importFlowDocument } from './flow-kinds.js';
 import { flowToolDefinitions } from './flow-tools.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
-import { HUMAN } from '../core/inbox.js';
+import { HUMAN, UNNAMED_AGENT } from '../core/inbox.js';
 import { inboxThreads, pairOf, searchThread, threadKeyOfMessage, threadWindow, uncollected } from '../core/inbox-threads.js';
 import { answerDeck } from './deck-answer.js';
 import type { ToolStatus } from '../core/toolchain.js';
@@ -606,7 +606,7 @@ const USER = { kind: 'user' } as const;
 function participantNamer(roster: ReadonlyArray<{ agentId: string; name: string }>, mail: ReadonlyArray<{ from: string; app?: { label: string } }> = []): (participant: string) => string {
     const apps = new Map<string, string>();
     for (const m of mail) if (m.app) apps.set(m.from, m.app.label);
-    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? participant);
+    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? UNNAMED_AGENT);
 }
 
 /** An agent a flow would prompt must be one address on the roster NOW — the same rule the run resolves it by. */

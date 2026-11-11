@@ -3,6 +3,7 @@ import { WorkspaceColorsContext, WorkspaceSwatch } from '../workspace-colors.js'
 import { Badge, Button, ContentRenderer, Drawer, Icon, Input, Modal, Select, Textarea } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import { ago, filterCounts, filterThreads, HUMAN, pairKey, THREAD_FILTERS, type ThreadFilter, type ThreadSummary } from '../../core/inbox-threads.js';
+import { UNNAMED_AGENT } from '../../core/inbox.js';
 import { highlightParts, inViewOrder, mergeWindow, ORDER_ICON, questionRef, scrollAfterInsert, searchSnippet, shortQuestionId, THREAD_BUFFER, type ThreadOrder } from '../../core/inbox-view.js';
 import type { AskedRecord } from '../../main/attention-store.js';
 import type { InboxMessage } from '../../main/inbox-store.js';
@@ -248,7 +249,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
     const summary = p.openKey ? p.threads.find((t) => t.key === p.openKey) ?? null : null;
     const [a, b] = p.openKey ? (p.openKey.split('|') as [string, string]) : ['', ''];
     const withHuman = p.openKey !== null && (a === HUMAN || b === HUMAN);
-    const nameOf = (id: string): string => (id === HUMAN ? 'you' : summary ? (id === summary.a ? summary.aName : summary.bName) : p.peers.find((x) => x.agentId === id)?.name ?? id);
+    const nameOf = (id: string): string => (id === HUMAN ? 'you' : summary ? (id === summary.a ? summary.aName : summary.bName) : p.peers.find((x) => x.agentId === id)?.name ?? UNNAMED_AGENT);
     const agentOfThread = p.openKey ? otherOf(a, b) : null;
     const reachable = p.peers.filter((x) => x.reachable && x.agentId);
     const order: ThreadOrder = p.order ?? 'newest';
