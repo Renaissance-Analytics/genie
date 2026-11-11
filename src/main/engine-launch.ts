@@ -38,7 +38,10 @@ export interface EngineLaunchPorts {
     readonly sleep?: (ms: number) => Promise<void>;
     readonly now?: () => number;
     readonly log?: (line: string) => void;
-    /** How long a started host has to write its record. Default 20 s (the first start builds the Windows supervisor). */
+    /**
+     * How long a started host has to write its record. Absent (a window starting its own host): no fixed time; the wait
+     * ends when the host is ready or when it exits (Tynn #700: a first start on a slow Windows took 20 s).
+     */
     readonly startTimeoutMs?: number;
     /** How long it has waited for a host it started, about once a second (Tynn #700). */
     readonly onWaiting?: (elapsedMs: number) => void;
@@ -238,7 +241,10 @@ export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> 
     const pid = await (ports.spawnHost ?? (() => spawnHostProcess(ports, winLauncherPath(), log)))();
     if (pid === null) throw new Error('the host process could not be started');
     log(`host started pid=${pid} build=${ports.build}`);
-    const until = now() + (ports.startTimeoutMs ?? 20_000);
+    // OUR OWN CHILD (Tynn #700): waited for until it is ready or it exits, never given up on at a fixed time while it lives.
+    const began = now();
+    const until = ports.startTimeoutMs === undefined ? Infinity : began + ports.startTimeoutMs;
+    let said = began;
     while (now() < until) {
         const record = parseHostRecord(read(recordFile));
         // Its own record: another host winning the endpoint race is adopted instead (this one exits on its own).
@@ -251,8 +257,9 @@ export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> 
         }
         if (!alive(pid) && (record === null || record.pid === pid)) throw new Error('the host process exited before it was ready (see logs/genie-host.log)');
         await sleep(100);
+        if (now() - said >= 1_000) { said = now(); try { ports.onWaiting?.(said - began); } catch { /* the wait's words never stop the wait */ } }
     }
-    throw new Error(`the host did not become ready within ${Math.round((ports.startTimeoutMs ?? 20_000) / 1000)} s (see logs/genie-host.log)`);
+    throw new Error(`the host did not become ready within ${Math.round((ports.startTimeoutMs ?? 0) / 1000)} s (see logs/genie-host.log)`);
 }
 
 /**
