@@ -155,6 +155,26 @@ declare_test_machine() {
     return 1
 }
 
+# HOW THIS MACHINE DRAWS, SAID ONCE. ui-lag and artboard have absolute time bounds set on a machine that keeps up at
+# idle. A virtual machine with no GPU does not: omarchy-test's idle pass alone sits at those bounds. There the two rows
+# still run and print every number, and judge their ABSOLUTE bounds against the same run's idle pass (the coordinator's
+# ruling, 2026-11-11); their within-run ratios and byte budgets are judged as everywhere. GENIE_CI_RENDERING=software
+# is that statement: set here when the machine is a VM with no 3D render node, or given by whoever starts the run.
+# A machine with a GPU gets the absolute budgets.
+declare_rendering() {
+    if [ -n "${GENIE_CI_RENDERING:-}" ]; then echo "--- rendering: $GENIE_CI_RENDERING (given)"; return 0; fi
+    local virt nodes
+    virt="$(systemd-detect-virt --vm 2>/dev/null || true)"
+    nodes="$(ls /dev/dri/renderD* 2>/dev/null | tr '\n' ' ')"
+    if [ -n "$virt" ] && [ "$virt" != none ] && [ -z "$nodes" ]; then
+        export GENIE_CI_RENDERING=software
+        notes+=("MEASURED ON A SOFTWARE-RENDERED MACHINE (a $virt VM with no render node): ui-lag and artboard judged their absolute time bounds against this run's idle pass, not the absolute budgets; their idle figures are in ci-out/ui-lag.log and ci-out/artboard.log")
+    else
+        export GENIE_CI_RENDERING=hardware
+    fi
+    echo "--- rendering: $GENIE_CI_RENDERING (virtualisation: ${virt:-none}; render nodes: ${nodes:-none})"
+}
+
 display_ready=''
 display_why=''
 need_display() {
@@ -180,6 +200,7 @@ need_display() {
         fi
         echo "--- windows open on the Hyprland session: XDG_SESSION_TYPE=$XDG_SESSION_TYPE WAYLAND_DISPLAY=$WAYLAND_DISPLAY DISPLAY=${DISPLAY:-} XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-}"
     fi
+    declare_rendering
     display_ready=ok
 }
 
