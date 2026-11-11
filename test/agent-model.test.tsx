@@ -240,6 +240,16 @@ describe('the control', () => {
         expect(render('claude', ops({ models: claudeList() }))).not.toMatch(/it restarts on the same conversation/);
     });
 
+    it('a running agent: the provider\'s list, the session\'s model marked in use; a note when the list is the session\'s own (Tynn #608)', () => {
+        // Cast, so the run reaches these tests before the fields exist (red at run time, not at the type-check).
+        const fresh = { ok: true, provider: 'claude', source: 'provider', current: null, inUse: 'opus', models: [{ modelId: 'opus', name: 'Opus' }, { modelId: 'fable', name: 'Fable' }] } as unknown as ModelChoices;
+        expect(render('claude', ops({ models: fresh }))).toMatch(/<option value="opus"[^>]*>Opus · in use<\/option>/);
+        const old = { ok: true, provider: 'claude', source: 'session', current: 'opus', models: [{ modelId: 'opus', name: 'Opus' }], note: 'Couldn’t ask claude for its models now (signed out): this is the list the running session started with.' } as unknown as ModelChoices;
+        const html = render('claude', ops({ models: old }));
+        expect(html).toMatch(/data-model-note[^>]*>Couldn’t ask claude for its models now \(signed out\)/);
+        expect(render('claude', ops({ models: fresh }))).not.toContain('data-model-note'); // CONTROL.
+    });
+
     it('the list can be asked for again', () => {
         expect(render('claude', ops({ models: claudeList() }))).toContain('data-action="models-refresh"');
     });
