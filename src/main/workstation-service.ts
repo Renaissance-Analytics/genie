@@ -79,7 +79,13 @@ export class WorkstationService implements WorkstationPort {
             const sent = proof ? `proved (${String(proof.workstation_id)})` : 'unproven (nothing on record)';
             try {
                 const res = await this.#options.request(path, init);
-                if (!res.ok) { this.#options.log?.(`tynn registration: ${sent}; Tynn refused it, HTTP ${res.status}`); return res; }
+                if (!res.ok) {
+                    // Tynn's own code and reason when it gives them (tynn.ai#450: 422 `proof_rejected`); read once, handed on as read.
+                    const refused = (await res.json().catch(() => null)) as { code?: unknown; reason?: unknown } | null;
+                    const why = [typeof refused?.code === 'string' ? refused.code : '', typeof refused?.reason === 'string' ? refused.reason : ''].filter(Boolean).join(': ');
+                    this.#options.log?.(`tynn registration: ${sent}; Tynn refused it, HTTP ${res.status}${why ? ` ${why}` : ''}`);
+                    return { ok: res.ok, status: res.status, json: async () => refused };
+                }
                 // Read once here for the log, and handed on as read.
                 const body = (await res.json().catch(() => null)) as { workstation?: { id?: unknown }; enrollment?: unknown } | null;
                 this.#options.log?.(`tynn registration: ${sent}; Tynn answered HTTP ${res.status}, workstation ${String(body?.workstation?.id ?? 'none')}, ${body?.enrollment ? 'a new enrollment' : 'no new enrollment'}`);
