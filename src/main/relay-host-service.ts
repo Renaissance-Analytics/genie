@@ -49,6 +49,8 @@ export class RelayHostService {
      */
     #said: WorkstationRole | null = null;
     #retries = 0;
+    #registerRetries = 0;
+    #registerWaiting = false;
     #retryWaiting = false;
     #cancelRetry: () => void = () => {};
     #relay: RelayHostStatus = { state: 'off' };
@@ -85,6 +87,8 @@ export class RelayHostService {
             const settled = legacy ? await this.#ports.workstation.legacyDone(host).catch(() => null) : null;
             const result = await this.#ports.workstation.ensure({ host, legacy: legacy && legacy.workstationId !== settled ? legacy : null })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
+            // Not registered (a key that could not be read, Tynn not reached): tried again by itself, backing off.
+            if (!result.ok) this.#registerLater(); else { this.#registerRetries = 0; }
             this.#workstation = result.ok ? { registered: true, host, workstationId: result.workstationId, role: this.#said } : { registered: false, reason: result.reason, role: this.#said };
         }
         await this.readRole();
@@ -107,6 +111,14 @@ export class RelayHostService {
         this.#said = role;
         if (this.#workstation) this.#workstation = { ...this.#workstation, role };
         this.#ports.onChange();
+    }
+
+    #registerLater(): void {
+        if (!this.#ports.schedule || this.#registerWaiting) return;
+        this.#registerWaiting = true;
+        const wait = ROLE_RETRY_MS[Math.min(this.#registerRetries, ROLE_RETRY_MS.length - 1)]!;
+        this.#registerRetries += 1;
+        this.#ports.schedule(wait, () => { this.#registerWaiting = false; void this.register().catch(() => {}); });
     }
 
     #readRoleLater(): void {
