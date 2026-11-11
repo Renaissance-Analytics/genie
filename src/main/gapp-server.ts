@@ -5,10 +5,12 @@ import type { Duplex } from 'node:stream';
 import { lstat, readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
-import { APP_CHANNEL_MAX_BYTES, APP_CHANNEL_PATH, appCsp, appHost } from '../core/gapp-origin.js';
+import type { ElementDefinition } from '../core/catalog.js';
+import { APP_CHANNEL_MAX_BYTES, APP_CHANNEL_PATH, appCsp, appHost, previewHost } from '../core/gapp-origin.js';
 import { normalizeHost, type GenRoute } from '../core/gen-router.js';
 import type { GAppBridge } from './gapp-bridge.js';
-import type { GAppBook, GAppEntry } from './gapps-host.js';
+import type { GAppPreviews } from './gapp-previews.js';
+import type { GAppBook } from './gapps-host.js';
 
 /**
  * SERVING AN INSTALLED GAPP (GApps v2, V4, Tynn #569; spec .ai/plans/specs/gapps-v2.md). One loopback listener behind the
@@ -57,21 +59,35 @@ function refuse(res: ServerResponse, status: number, message: string): void {
     res.end(`${message}\n`);
 }
 
+/** What is served at one address: an installed app's copy, or a workspace's preview from its folder. */
+interface Served {
+    readonly packageId: string;
+    readonly preview: boolean;
+    readonly dir: string;
+    readonly app: ElementDefinition;
+    /** The hosts its page may connect to. */
+    readonly network: readonly string[];
+}
+
+type PreviewsView = Pick<GAppPreviews, 'list' | 'previewDir' | 'appElement'>;
+
 export class GAppServer {
     readonly #book: Pick<GAppBook, 'list' | 'installedDir' | 'appElement' | 'verifyInstalled'>;
+    readonly #previews: PreviewsView | null;
     readonly #server: Server;
     readonly #sockets: WebSocketServer;
-    readonly #sessions = new Map<string, { packageId: string; socket: WebSocket | null }>();
+    readonly #sessions = new Map<string, { packageId: string; preview: boolean; socket: WebSocket | null }>();
     readonly #bridge: Pick<GAppBridge, 'handle' | 'onEvent'>;
     readonly #offBridge: () => void;
     #port = 0;
 
-    constructor(input: { book: Pick<GAppBook, 'list' | 'installedDir' | 'appElement' | 'verifyInstalled'>; bridge: Pick<GAppBridge, 'handle' | 'onEvent'> }) {
+    constructor(input: { book: Pick<GAppBook, 'list' | 'installedDir' | 'appElement' | 'verifyInstalled'>; previews?: PreviewsView; bridge: Pick<GAppBridge, 'handle' | 'onEvent'> }) {
         this.#book = input.book;
+        this.#previews = input.previews ?? null;
         this.#bridge = input.bridge;
         this.#offBridge = input.bridge.onEvent((packageId, event, data) => {
             for (const session of this.#sessions.values()) {
-                if (session.packageId === packageId && session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ event, data }));
+                if (session.packageId === packageId && !session.preview && session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ event, data }));
             }
         });
         this.#server = createServer((req, res) => { void this.#onRequest(req, res); });
@@ -99,25 +115,29 @@ export class GAppServer {
         return new Promise((resolve) => { this.#server.close(() => resolve()); });
     }
 
-    /** Each installed, turned-on app's route, for the front door. */
+    /** Each installed, turned-on app's route, and each granted preview's, for the front door. */
     routes(): GenRoute[] {
         if (this.#port === 0) return [];
-        return this.#book.list().filter((e) => e.state === 'installed').map((e) => ({ host: appHost(e.packageId), target: `127.0.0.1:${this.#port}` }));
+        const target = `127.0.0.1:${this.#port}`;
+        return [
+            ...this.#book.list().filter((e) => e.state === 'installed').map((e) => ({ host: appHost(e.packageId), target })),
+            ...(this.#previews?.list() ?? []).filter((p) => p.grant !== null).map((p) => ({ host: previewHost(p.packageId), target })),
+        ];
     }
 
-    /** A session for one window of one app: where it loads, its channel and its token. `null`: not an app that can open. */
-    openSession(packageId: string): GAppSession | null {
-        const entry = this.#book.list().find((e) => e.packageId === packageId && e.state === 'installed');
-        const app = this.#book.appElement(packageId);
-        if (!entry || !app) return null;
+    /** A session for one window of one app (or of its preview): where it loads, its channel and its token. `null`: nothing that can open. */
+    openSession(packageId: string, options: { preview?: boolean } = {}): GAppSession | null {
+        const preview = options.preview === true;
+        const host = preview ? previewHost(packageId) : appHost(packageId);
+        const served = this.#servedAt(host);
+        if (!served) return null;
         const token = randomBytes(32).toString('base64url');
-        this.#sessions.set(token, { packageId, socket: null });
-        const host = appHost(packageId);
+        this.#sessions.set(token, { packageId, preview, socket: null });
         return {
             packageId, token,
-            url: `https://${host}/${String(app.payload.entry)}`,
+            url: `https://${host}/${String(served.app.payload.entry)}`,
             channel: `wss://${host}${APP_CHANNEL_PATH}`,
-            window: { ...DEFAULT_WINDOW, ...(app.payload.window as Record<string, unknown> | undefined) },
+            window: { ...DEFAULT_WINDOW, ...(served.app.payload.window as Record<string, unknown> | undefined) },
             close: () => {
                 const session = this.#sessions.get(token);
                 this.#sessions.delete(token);
@@ -126,18 +146,28 @@ export class GAppServer {
         };
     }
 
-    #appAt(host: string | undefined): GAppEntry | null {
+    #servedAt(host: string | undefined): Served | null {
         const wanted = normalizeHost(host);
-        return this.#book.list().find((e) => e.state === 'installed' && appHost(e.packageId) === wanted) ?? null;
+        const entry = this.#book.list().find((e) => e.state === 'installed' && appHost(e.packageId) === wanted);
+        if (entry) {
+            const dir = this.#book.installedDir(entry.packageId);
+            const app = this.#book.appElement(entry.packageId);
+            return dir && app ? { packageId: entry.packageId, preview: false, dir, app, network: entry.grant.network } : null;
+        }
+        // A preview is served only once the person granted it, from its workspace's folder.
+        const p = this.#previews?.list().find((x) => x.grant !== null && previewHost(x.packageId) === wanted);
+        if (!p || !p.grant) return null;
+        const dir = this.#previews!.previewDir(p.packageId);
+        const app = this.#previews!.appElement(p.packageId);
+        const network = p.unverified && !p.networkAllowed ? [] : p.grant.network;
+        return dir && app ? { packageId: p.packageId, preview: true, dir, app, network } : null;
     }
 
     async #onRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-        const entry = this.#appAt(req.headers.host);
-        const dir = entry ? this.#book.installedDir(entry.packageId) : null;
-        const app = entry ? this.#book.appElement(entry.packageId) : null;
-        if (!entry || !dir || !app) { refuse(res, 404, 'No app is served at this address.'); return; }
+        const served = this.#servedAt(req.headers.host);
+        if (!served) { refuse(res, 404, 'No app is served at this address.'); return; }
         if (req.method !== 'GET' && req.method !== 'HEAD') { res.setHeader('allow', 'GET, HEAD'); refuse(res, 405, 'An app is served with GET and HEAD only.'); return; }
-        const entryPath = String(app.payload.entry);
+        const entryPath = String(served.app.payload.entry);
         const bare = (req.url ?? '/').split(/[?#]/, 1)[0];
         if (bare === '/') {
             res.writeHead(302, { location: `/${entryPath}`, 'cache-control': 'no-store' });
@@ -146,18 +176,18 @@ export class GAppServer {
         }
         const segments = segmentsOf(req.url ?? '/');
         if (!segments) { refuse(res, 404, 'Not found.'); return; }
-        const relative = segments.join('/');
-        if (relative === entryPath) {
-            const problem = await this.#book.verifyInstalled(entry.packageId);
+        // An installed app's copy is checked again as it loads; a preview is the workspace's work in progress, never.
+        if (!served.preview && segments.join('/') === entryPath) {
+            const problem = await this.#book.verifyInstalled(served.packageId);
             if (problem) { refuse(res, 403, problem); return; }
         }
-        const file = join(dir, ...segments);
+        const file = join(served.dir, ...segments);
         try {
             if (!(await lstat(file)).isFile()) { refuse(res, 404, 'Not found.'); return; }
             const body = await readFile(file);
             res.writeHead(200, {
                 'content-type': CONTENT_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
-                'content-security-policy': appCsp(entry.grant.network),
+                'content-security-policy': appCsp(served.network),
                 'x-content-type-options': 'nosniff',
                 'cache-control': 'no-cache',
             });
@@ -168,36 +198,37 @@ export class GAppServer {
     }
 
     #onUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-        const entry = this.#appAt(req.headers.host);
+        const served = this.#servedAt(req.headers.host);
         const path = (req.url ?? '').split(/[?#]/, 1)[0];
         const origin = req.headers.origin;
-        if (!entry || path !== APP_CHANNEL_PATH || (origin !== undefined && origin !== `https://${appHost(entry.packageId)}`)) {
+        const own = served ? `https://${served.preview ? previewHost(served.packageId) : appHost(served.packageId)}` : '';
+        if (!served || path !== APP_CHANNEL_PATH || (origin !== undefined && origin !== own)) {
             socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
             return;
         }
         this.#sockets.handleUpgrade(req, socket, head, (ws) => {
-            ws.once('message', (data) => this.#hello(ws, entry.packageId, data.toString()));
+            ws.once('message', (data) => this.#hello(ws, served.packageId, served.preview, data.toString()));
         });
     }
 
-    #hello(ws: WebSocket, packageId: string, text: string): void {
+    #hello(ws: WebSocket, packageId: string, preview: boolean, text: string): void {
         const refused = (reason: string) => { ws.send(JSON.stringify({ ok: false, reason })); ws.close(); };
         let token: unknown;
         try { token = (JSON.parse(text) as { hello?: unknown }).hello; } catch { token = undefined; }
         const session = typeof token === 'string' ? this.#sessions.get(token) : undefined;
         if (!session) { refused('this token is not a live window of this Genie'); return; }
-        if (session.packageId !== packageId) { refused('this token is not for this app'); return; }
+        if (session.packageId !== packageId || session.preview !== preview) { refused('this token is not for this app'); return; }
         session.socket = ws;
-        ws.on('message', (data) => { void this.#call(ws, packageId, data.toString()); });
+        ws.on('message', (data) => { void this.#call(ws, packageId, preview, data.toString()); });
         ws.send(JSON.stringify({ ok: true, packageId }));
     }
 
     /** One bridge call on a window's channel. The app is the one its token was minted for, never one the message names. */
-    async #call(ws: WebSocket, packageId: string, text: string): Promise<void> {
+    async #call(ws: WebSocket, packageId: string, preview: boolean, text: string): Promise<void> {
         let message: { id?: unknown; method?: unknown; params?: unknown };
         try { message = JSON.parse(text) as typeof message; } catch { return; }
         if (typeof message.id !== 'number' || typeof message.method !== 'string') return;
-        const answer = await this.#bridge.handle({ packageId, preview: false }, message.method, message.params);
+        const answer = await this.#bridge.handle({ packageId, preview }, message.method, message.params);
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id: message.id, ...answer }));
     }
 }

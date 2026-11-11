@@ -191,6 +191,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setOn: (id, on) => read(b => b.gapps!.setOn(id, on)),
             uninstall: id => read(b => b.gapps!.uninstall(id)),
             open: id => read(b => b.gapps!.open(id)),
+            preview: id => read(b => b.gapps!.preview(id)),
+            allowPreviewNetwork: (id, allowed) => read(b => b.gapps!.allowPreviewNetwork(id, allowed)),
             onChanged: listener => subscribe(b => b.gapps!.onChanged(listener)),
         },
         marketplace: {
