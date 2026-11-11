@@ -91,6 +91,7 @@ import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import { addConfirmer } from './add-confirm.js';
+import { failureWords, tynnPlanner } from './tynn-plan.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
 import { applyOutcome, providerSwitchAfter, switchOutcome, type DeletePlan, type ProviderSwitchState } from '../core/agent-ops.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -1112,6 +1113,11 @@ function DesktopApp({ bridge }: AppProps) {
     const [addFromGit, setAddFromGit] = useState(false);
     // From Tynn (§6.1): the person's projects while picking one; `undefined` when not picking.
     const [tynnPick, setTynnPick] = useState<TynnProjectsView | undefined>(undefined);
+    // Import from Tynn, after the folder is picked (Tynn #688): whose plan is being read, and what a failure tries again.
+    const [tynnPlanning, setTynnPlanning] = useState<{ projectId: string; parent: string } | null>(null);
+    const [tynnRetry, setTynnRetry] = useState<{ projectId: string; parent: string } | null>(null);
+    const planTynn = useMemo(() => tynnPlanner<AddPreviewView>(() => ({ setPlanning: setTynnPlanning, setPick: setTynnPick, setPreview: setAddPreview, setRetry: setTynnRetry })), []);
+    const sayAddFailed = (e: unknown) => { setTynnPick(undefined); setAddPreview({ ok: false, reason: failureWords(e) }); };
     // The workspace on screen — its own views, or one of its agents' pages, which sit under its strip (Tynn #805).
     const workspaceId = routeWorkspace(route, snapshot.agents);
     const [wsView, setWsView] = useState<{ removePreview: boolean; lastOutcome: string | null }>({ removePreview: false, lastOutcome: null });
@@ -1206,7 +1212,7 @@ function DesktopApp({ bridge }: AppProps) {
     const primaryWorkspace = typeof features.settings.values?.['primary_workspace'] === 'string' ? (features.settings.values['primary_workspace'] as string) : '';
     const addStart = pickerStart({ primaryWorkspace, home: hostHome });
     const hostSep = /\\/.test(primaryWorkspace || hostHome || '') ? '\\' : '/';
-    const previewAdd = () => { setAddPreview(null); setAddFromGit(false); setTynnPick(undefined); setAddOpen(true); };
+    const previewAdd = () => { setAddPreview(null); setTynnRetry(null); setAddFromGit(false); setTynnPick(undefined); setAddOpen(true); };
     /*
      * OPEN EXISTING FOLDER / IMPORT FROM GIT (Add workspace parity item 7): Genie 1's wizard — the folder (or an import's
      * staging clone) is READ, then a NEW <slug>.agi is built beside it; the source is never written. A host without the
@@ -1253,13 +1259,14 @@ function DesktopApp({ bridge }: AppProps) {
         setGitRepos(null);
         void list().then(setGitRepos, (e: unknown) => setGitRepos({ status: 'failed', message: e instanceof Error ? e.message : String(e) }));
     };
-    const startAddFromGit = () => { setAddOpen(false); setAddPreview(null); setTynnPick(undefined); setAddFromGit(true); loadGitRepos(); };
+    const startAddFromGit = () => { setAddOpen(false); setAddPreview(null); setTynnRetry(null); setTynnPick(undefined); setAddFromGit(true); loadGitRepos(); };
     const startAddFromTynn = () => {
         setAddOpen(false);
         setAddFromGit(false);
         setAddPreview(null);
+        setTynnRetry(null);
         setTynnPick(null);
-        void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r));
+        void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r), (e: unknown) => setTynnPick({ ok: false, reason: failureWords(e) }));
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839, #587): this machine's, or the host's while its owner drives it; a guest has none.
@@ -1929,7 +1936,7 @@ function DesktopApp({ bridge }: AppProps) {
             addPreview={addPreview}
             addBusy={addBusy}
             onConfirmAdd={(path) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAdd(path))}
-            onCancelAdd={() => setAddPreview(null)}
+            onCancelAdd={() => { setAddPreview(null); setTynnRetry(null); }}
             agentDetail={detail}
             agentResolved={resolved}
             selectedRowId={selectedRowId}
@@ -2043,8 +2050,14 @@ function DesktopApp({ bridge }: AppProps) {
             tynnPick={tynnPick}
             onAddWorkspaceFromTynn={startAddFromTynn}
             onPickTynnProject={(projectId) => {
-                void pickFolder('Where should the Tynn envelope be created? Pick the parent folder', addStart).then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromTynn(projectId, parent).then((p) => { setTynnPick(undefined); setAddPreview(p); }); });
+                // Never silent (Tynn #688): progress while the plan is read, then the plan or the failure in words.
+                void pickFolder('Where should the Tynn envelope be created? Pick the parent folder', addStart).then((parent) => { if (parent) planTynn(resolvedBridge?.workspaces.previewAddFromTynn ? () => resolvedBridge.workspaces.previewAddFromTynn(projectId, parent) : undefined, projectId, parent); }, sayAddFailed);
             }}
+            tynnPlanning={tynnPlanning?.projectId ?? null}
+            onRetryAdd={tynnRetry ? () => {
+                const { projectId, parent } = tynnRetry;
+                planTynn(resolvedBridge?.workspaces.previewAddFromTynn ? () => resolvedBridge.workspaces.previewAddFromTynn(projectId, parent) : undefined, projectId, parent);
+            } : undefined}
             onCancelTynnPick={() => setTynnPick(undefined)}
             onConfirmAddTynn={(parent, projectId) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAddFromTynn(parent, projectId))}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
