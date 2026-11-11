@@ -140,7 +140,8 @@ describe('a provider’s model list is asked of genie-host, which has the superv
     it('the window asks no provider itself; genie-host answers from one cache', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         expect(main).not.toMatch(/realListModels/);
-        expect(main).toMatch(/models: \{ get: \(provider, options\) => agentEngineLink\.client\.providerModels\(provider, options\) \}/);
+        expect(main).toMatch(/const hostModels = agentEngineLink\.client;/);
+        expect(main).toMatch(/models: \{ get: \(provider, options\) => hostModels\.providerModels\(provider, options\) \}/);
         const host = readFileSync('src/main/genie-host.ts', 'utf8');
         expect(host.match(/new ProviderModelCache\(realListModels\)/g)).toHaveLength(1);
         expect(host).toMatch(/providerModels: \(provider, refresh\) => providerModels\.get\(provider, \{ refresh \}\)/);

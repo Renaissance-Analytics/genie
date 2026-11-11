@@ -1240,6 +1240,17 @@ export class SessionEngineClient {
         await this.#value('engine.drained', [exitWithinMs], false);
     }
 
+    /**
+     * A PROVIDER'S MODELS, ASKED OF GENIE-HOST (beta.61.1). The window used to launch the provider's CLI itself to ask, and only
+     * genie-host prepares the process supervisor a launch needs on Windows: a new agent's model list failed. Never throws: a
+     * link that is down is a reason, like any other.
+     */
+    async providerModels(provider: string, options: { refresh?: boolean } = {}): Promise<import('../core/provider-models.js').ModelChoices> {
+        const reply = await this.call('engine.providerModels', [provider, options.refresh === true]);
+        if (!reply.ok) return { ok: false, provider, reason: reply.reason };
+        return reply.value as import('../core/provider-models.js').ModelChoices;
+    }
+
     /** `null` when the agent is not running or its driver cannot say (as the host answers); otherwise the host's answer. */
     modelState(agentId: AgentId): Promise<SessionModelState> | null {
         if (!this.#view(agentId).models.state) return null;
