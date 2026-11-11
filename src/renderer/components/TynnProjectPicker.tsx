@@ -13,7 +13,7 @@ export type TynnProjectsView = { ok: true; host: string; projects: readonly Tynn
  * A project already added here stays in the list, marked "— already added" (Genie 1's AddWorkspaceModal), and opens its
  * workspace instead of starting a second clone.
  */
-export function TynnProjectPicker({ state, onPick, onOpen, onCancel }: { state: TynnProjectsView; onPick: (projectId: string) => void; onOpen?: ((workspaceId: string) => void) | undefined; onCancel: () => void }) {
+export function TynnProjectPicker({ state, onPick, onOpen, onCancel }: { state: TynnProjectsView; planning?: string | null | undefined; onPick: (projectId: string) => void; onOpen?: ((workspaceId: string) => void) | undefined; onCancel: () => void }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm';
     return (
         <section data-tynn-picker="" className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-sm">

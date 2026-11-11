@@ -171,7 +171,7 @@ export function AddFromGitForm({ onPreview, onCancel, busy = false, repos, onRel
  * `busy` (parity row 25): the confirmed add is running — the button is disabled and says what is happening, so a double
  * click cannot start a second clone into the same folder (src/renderer/add-confirm.ts refuses it as well).
  */
-export function AddWorkspacePreview({ preview, busy = false, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; busy?: boolean | undefined; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string, projectId: string) => void) | undefined }) {
+export function AddWorkspacePreview({ preview, busy = false, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; busy?: boolean | undefined; onRetry?: (() => void) | undefined; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string, projectId: string) => void) | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm';
     if (!preview.ok) {
         return (
