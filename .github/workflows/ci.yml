@@ -733,6 +733,12 @@ jobs:
           $h = Join-Path $env:RUNNER_TEMP "packaged-home"
           foreach ($d in @("$h\AppData\Roaming", "$h\AppData\Local")) { New-Item -ItemType Directory -Force $d | Out-Null }
           $env:USERPROFILE = $h; $env:HOME = $h; $env:APPDATA = "$h\AppData\Roaming"; $env:LOCALAPPDATA = "$h\AppData\Local"
+          # AS AN INSTALLED GENIE IS (beta.61, measured on an install): the app's archive lists prism-acp's supervisor for both
+          # architectures, and the install holds only this machine's, in an otherwise empty folder for the other. win-unpacked
+          # holds both, so the other is removed here, or this check cannot see what an installed Genie does.
+          $otherArch = "release\win-unpacked\resources\app.asar.unpacked\node_modules\@particle-academy\prism-acp\native\win32-arm64\prism-acp-supervisor.exe"
+          if (-not (Test-Path $otherArch)) { throw "the other architecture's supervisor is not in win-unpacked ($otherArch): this check no longer matches an install" }
+          Remove-Item -Force $otherArch
           $app = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
           $log = "$h\.genie\runtime\lifecycle.log"
           $line = $null
