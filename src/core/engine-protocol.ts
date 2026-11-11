@@ -50,6 +50,9 @@ export const ENGINE_METHODS = [
     'engine.drained',
     'engine.modelState',
     'engine.switchModel',
+    // A provider's model list, for an agent not running yet (beta.61.1): asked of the provider's CLI by genie-host, which has
+    // the process supervisor. `[provider, refresh]`.
+    'engine.providerModels',
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',

@@ -296,6 +296,8 @@ async function main(): Promise<void> {
         say(`agents cannot start contained: ${why}`);
         return null;
     });
+    // Said when it is ready, naming the file (beta.61.1): the packaged CI check reads it.
+    if (supervisor !== null) lifecycleLog(`containment ready supervisor=${supervisor}`);
     // What other supervisor sources left beside it is removed off the start path — never what a running process uses.
     if (supervisor !== null) {
         void removeStaleSupervisorBuilds(runtime, { runningImages: supervisorImagesRunning }).then(
@@ -934,7 +936,10 @@ async function main(): Promise<void> {
         return { signedIn: () => account.status().signedIn === true, projectFor: workspaceTynnProject, request: (path, init) => account.request(path, init) };
     };
     const readHostTynnPage = async (workspaceId: string, page: unknown, query: unknown) => readTynnPage(await hostTynnBoard(), workspaceId, page, query);
+    // ONE cache of each provider's models (core/provider-models.ts): a window's ask and a phone's read the same answer.
+    const providerModels = new ProviderModelCache(realListModels);
     const engine = new SessionEngineServer({
+        providerModels: (provider, refresh) => providerModels.get(provider, { refresh }),
         token,
         build,
         pid: process.pid,
@@ -1218,7 +1223,7 @@ async function main(): Promise<void> {
         terminals: terminalHost,
         takeOver: (id) => takeOverHost.probe(id),
         headroom: headroomFeed,
-        models: new ProviderModelCache(realListModels),
+        models: providerModels,
         providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
         attention: own.attention,
         approvals,

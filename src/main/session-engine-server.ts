@@ -122,6 +122,8 @@ export interface EngineServerOptions {
     /** This host's build: a window of another build replaces it (core/engine-protocol.ts `hostDecision`). */
     readonly build: string;
     readonly pid?: number;
+    /** A provider's model list, from the host's one cache (core/provider-models.ts); `refresh` asks the CLI again. */
+    readonly providerModels?: (provider: string, refresh: boolean) => Promise<import('../core/provider-models.js').ModelChoices>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
     readonly onShutdown?: () => void;
     /** The number of authenticated windows changed (the host's idle exit watches it). */
@@ -698,6 +700,10 @@ export class SessionEngineServer {
             case 'engine.modelState': {
                 const state = host.modelState(id());
                 return state === null ? null : { state: await state };
+            }
+            case 'engine.providerModels': {
+                if (!this.#options.providerModels) throw new Error('This host cannot ask a provider for its models.');
+                return this.#options.providerModels(str(0), args[1] === true);
             }
             case 'engine.switchModel': {
                 const switched = host.switchModel(id(), str(1));

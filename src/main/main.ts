@@ -51,7 +51,6 @@ import { readFile } from 'node:fs/promises';
 import { agentOpsApi, agentOpsPorts } from './agent-ops-api.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
 import { restartAgent, SettingApplier } from './agent-ops-host.js';
-import { ProviderModelCache } from '../core/provider-models.js';
 import type { WatchedReposView } from '../core/issue-watch.js';
 import { isAcpProvider } from '../core/engine.js';
 import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
@@ -116,7 +115,7 @@ import { Session as InspectorSession } from 'node:inspector';
 import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
-import { realListModels, providerBinary } from './session-host.js';
+import { providerBinary } from './session-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
@@ -1842,11 +1841,12 @@ async function boot(): Promise<void> {
      * in" would send people to a login they already have. `linkedSystems` is empty until the
      * Tynn identity layer is wired — so a delete plan lists no external system, honestly.
      */
-    const providerModels = new ProviderModelCache(realListModels);
+    const hostModels = agentEngineLink.client;
     const agentOps = agentOpsPorts({
         registry: () => registry,
         engine: () => host,
-        models: providerModels,
+        // A provider's models are asked of genie-host (beta.61.1): it has the process supervisor a provider launch needs.
+        models: { get: (provider, options) => hostModels.providerModels(provider, options) },
         cwdFor,
         finished: () => services?.attention.finished() ?? [],
         providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
