@@ -12,7 +12,8 @@ import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOu
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
-import { SkillsAndCommands } from './AgentSkills.js';
+import type { McpRow } from '../../core/agent-mcp.js';
+import { McpServerSwitches, SkillsAndCommands } from './AgentSkills.js';
 import { FidelityDot } from './Dashboard.js';
 import { GitReadProblem } from './GitReadProblem.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
@@ -163,6 +164,9 @@ export interface AgentOpsProps {
     /** May drive pages (browser rebuild step 7). */
     readonly drivePages?: boolean;
     readonly onSetDrivePages?: (on: boolean) => void;
+    /** Its MCP servers (Tynn #628): the rows, and the switch. Absent rows = no list; absent setter = a list with no switch. */
+    readonly mcp?: readonly McpRow[];
+    readonly onSetMcpServer?: (name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>;
     /** What it hears from IssueWatch (Tynn #806): how, and which kinds. Absent setter = no section (a window that cannot set it). */
     readonly issueWatch?: IssueWatchPrefs;
     readonly onSetIssueWatch?: (setting: IssueWatchSetting) => Promise<IssueWatchSaved>;
@@ -1124,7 +1128,7 @@ function AgentViewBody({
                             model: ops?.onSetModel !== undefined, tools: ops?.onSetPermissions !== undefined, autonomous: ops?.onSetAutoApprove !== undefined,
                             manageTabs: ops?.onSetManageTabs !== undefined, drivePages: ops?.onSetDrivePages !== undefined,
                             issueWatch: ops?.onSetIssueWatch !== undefined && ops.issueWatch !== undefined,
-                            persona: persona !== null, skills: session?.extensions != null,
+                            persona: persona !== null, skills: session?.extensions != null || ops?.mcp !== undefined,
                         });
                         const shown = settingsSectionShown(sections, settingsSectionProp ?? ownSettingsSection);
                         const has = new Set(sections.find((s) => s.id === shown)?.controls ?? []);
@@ -1457,6 +1461,10 @@ function AgentViewBody({
                                             ) : null}
 
                                             {/* ── SKILLS: what the agent's OWN CLI can run (the owner, 2026-10-14), read-only; run one from the chat's `/` menu. */}
+                                            {/* ── MCP SERVERS: one switch each, kept on the agent, applied at its next session start (Tynn #628). */}
+                                            {ops?.mcp && has.has('skills') ? (
+                                                <McpServerSwitches rows={ops.mcp} agentName={agent.name} onSet={ops.onSetMcpServer} />
+                                            ) : null}
                                             {session?.extensions && has.has('skills') ? (
                                                 <SkillsAndCommands extensions={session.extensions} provider={agent.provider} />
                                             ) : null}

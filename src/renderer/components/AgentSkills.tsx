@@ -1,11 +1,50 @@
-import { Button } from '@particle-academy/react-fancy';
+import { Button, Switch } from '@particle-academy/react-fancy';
 import { useState } from 'react';
-import type { McpRow } from '../../core/agent-mcp.js';
+import { MCP_WORDS, type McpRow } from '../../core/agent-mcp.js';
 import { commandGroups, type ProviderExtensions } from '../../core/provider-commands.js';
 
-/** RED stand-in (Tynn #628, the MCP server switches). */
-export function McpServerSwitches(_props: { rows: readonly McpRow[]; agentName: string; onSet?: ((name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined; initialBusy?: string | undefined; initialOutcome?: { name: string; ok: boolean; text: string } | undefined }) {
-    return null;
+/**
+ * AN AGENT'S MCP SERVERS, EACH WITH ITS SWITCH (Tynn #628; core/agent-mcp.ts). Genie's own are required: said, and no
+ * switch. A change shows progress, then that it is saved and when it applies, or the failure in its words. `onSet` absent
+ * (a window that cannot change them): the list alone.
+ */
+export function McpServerSwitches({ rows, agentName, onSet, initialBusy, initialOutcome }: { rows: readonly McpRow[]; agentName: string; onSet?: ((name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>) | undefined; initialBusy?: string | undefined; initialOutcome?: { name: string; ok: boolean; text: string } | undefined }) {
+    const [busy, setBusy] = useState<string | null>(initialBusy ?? null);
+    const [outcome, setOutcome] = useState<{ name: string; ok: boolean; text: string } | null>(initialOutcome ?? null);
+    const set = (name: string, on: boolean) => {
+        if (!onSet || busy !== null) return;
+        setBusy(name);
+        setOutcome(null);
+        void onSet(name, on)
+            .then((r) => setOutcome({ name, ok: r.ok, text: r.ok ? MCP_WORDS.saved(agentName) : r.reason }), (e: unknown) => setOutcome({ name, ok: false, text: e instanceof Error ? e.message : String(e) }))
+            .finally(() => setBusy(null));
+    };
+    return (
+        <section data-rail="mcp-servers" className="mb-5 min-w-0">
+            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">MCP servers</h3>
+            <p data-mcp-note="" className="mb-2 max-w-[80ch] text-[11px] leading-normal text-[var(--fg-3)]">{MCP_WORDS.note(agentName)}</p>
+            <ul data-mcp-servers={rows.length} className="flex flex-col">
+                {rows.map((row) => (
+                    <li key={row.name} data-mcp-server={row.name} data-mcp-state={row.required ? 'required' : row.on ? 'on' : 'off'} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--border-1)]/50 py-1.5 text-[12px]">
+                        <span className="min-w-0 break-all font-mono text-[var(--fg-1)]">{row.name}</span>
+                        {row.required ? (
+                            <span data-mcp-required="" className="shrink-0 text-[11px] text-[var(--fg-3)]">{MCP_WORDS.required}</span>
+                        ) : onSet ? (
+                            <span className="shrink-0"><Switch checked={row.on} disabled={busy !== null} onCheckedChange={(checked) => set(row.name, checked)} aria-label={`${agentName} may use ${row.name}`} /></span>
+                        ) : (
+                            <span className="shrink-0 text-[11px] text-[var(--fg-3)]">{row.on ? 'On' : 'Off'}</span>
+                        )}
+                        {busy === row.name ? <span data-mcp-busy="" role="status" className="text-[11px] text-[var(--fg-3)]">Saving…</span> : null}
+                        {outcome?.name === row.name && busy !== row.name ? (
+                            outcome.ok
+                                ? <span data-mcp-outcome="saved" role="status" className="min-w-0 text-[11px] text-[var(--fg-2)]">{outcome.text}</span>
+                                : <span data-mcp-outcome="failed" role="alert" className="min-w-0 text-[11px] text-[var(--danger)]">{outcome.text}</span>
+                        ) : null}
+                    </li>
+                ))}
+            </ul>
+        </section>
+    );
 }
 
 /**

@@ -127,6 +127,7 @@ const CALLS: Record<string, (id: string) => unknown[]> = {
     'agents.setAutoApprove': (id) => [id, true],
     'agents.setManageTabs': (id) => [id, true],
     'agents.setDrivePages': (id) => [id, true],
+    'agents.setMcpServer': (id) => [id, 'slack', false],
     'agents.setIssueWatch': (id) => [id, { delivery: 'off', kinds: [] }],
     'agents.setPermissions': (id) => [id, 'edits'],
     'agents.setModel': (id) => [id, 'opus'],
@@ -280,7 +281,7 @@ describe('the wiring', () => {
     it('every write in the adapter refreshes what clients see', () => {
         const whole = src('src/main/agent-ops-api.ts');
         const adapter = whole.slice(whole.indexOf('export function agentOpsApi'));
-        for (const method of ['restart', 'delete', 'switchDriver', 'setBudget', 'setMode', 'setAccessScope', 'setAccessAgents', 'setAutoApprove', 'setManageTabs', 'setDrivePages', 'setIssueWatch', 'setPermissions', 'setModel']) {
+        for (const method of ['restart', 'delete', 'switchDriver', 'setBudget', 'setMode', 'setAccessScope', 'setAccessAgents', 'setAutoApprove', 'setManageTabs', 'setDrivePages', 'setMcpServer', 'setIssueWatch', 'setPermissions', 'setModel']) {
             const line = adapter.split('\n').find((l) => l.trimStart().startsWith(`${method}:`));
             expect(line, method).toBeDefined();
             expect(line, method).toContain('.finally(touch)');

@@ -34,6 +34,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
             setAutoApprove: async (id, autoApprove) => { if (!current || current.id !== id) return null; current = { ...current, autoApprove }; return current; },
             setManageTabs: async (id, manageTabs) => { if (!current || current.id !== id) return null; current = { ...current, manageTabs }; return current; },
             setDrivePages: async (id, drivePages) => { if (!current || current.id !== id) return null; current = { ...current, drivePages }; return current; },
+            setMcpOff: async (id, mcpOff) => { if (!current || current.id !== id) return null; current = { ...current, mcpOff }; return current; },
             setIssueWatch: async (id, issueWatch) => { if (!current || current.id !== id) return null; current = { ...current, issueWatch }; return current; },
             setPermissions: async (id, permissions) => { if (!current || current.id !== id) return null; current = { ...current, permissions }; return current; },
             setModel: async (id, model) => { if (!current || current.id !== id) return null; const { model: _previous, ...rest } = current; current = model === null ? rest : { ...rest, model }; return current; },

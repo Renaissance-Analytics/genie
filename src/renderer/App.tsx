@@ -91,6 +91,7 @@ import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import { addConfirmer } from './add-confirm.js';
+import { mcpRows } from '../core/agent-mcp.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
 import { applyOutcome, providerSwitchAfter, switchOutcome, type DeletePlan, type ProviderSwitchState } from '../core/agent-ops.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -1439,6 +1440,9 @@ function DesktopApp({ bridge }: AppProps) {
               autoApprove: detail?.agent.autoApprove === true,
               manageTabs: detail?.agent.manageTabs === true,
               drivePages: detail?.agent.drivePages === true,
+              // Its MCP servers (Tynn #628): Genie's own, every one a session reported, and the ones switched off.
+              mcp: mcpRows({ mcpOff: detail?.agent.mcpOff, mcpSeen: detail?.agent.mcpSeen }),
+              onSetMcpServer: (name, on) => resolvedBridge.agents.setMcpServer(agentId, name, on).then((r) => (r.ok ? { ok: true as const } : { ok: false as const, reason: r.reason }), (e: unknown) => ({ ok: false as const, reason: e instanceof Error ? e.message : String(e) })),
               ...(detail?.agent.issueWatch ? { issueWatch: detail.agent.issueWatch } : {}),
               permissions: detail?.agent.permissions ?? 'all',
               model: detail?.agent.model ?? null,

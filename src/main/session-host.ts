@@ -17,6 +17,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
+import { mcpOffFor } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 
 /**
@@ -452,9 +453,19 @@ export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(rec
     return untrusted === null ? record : { ...record, autoApprove: false };
 }
 
-/** RED stand-in (Tynn #628): today's rule alone. */
-export function mcpPolicyOptions(_record: { readonly mcpOff?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[]): { disabledMcpServers?: readonly string[] } {
-    return supplied.some((server) => server.name === 'tynn') ? {} : { disabledMcpServers: ['tynn'] };
+/**
+ * THE MCP SERVERS THIS LAUNCH MAY NOT LOAD (prism-acp's `disabledMcpServers`, the same option for Claude Code and Codex):
+ *
+ * - the ones the person switched off for THIS agent (Tynn #628; core/agent-mcp.ts), read from the record being launched,
+ *   so a change applies at the agent's next session start and one agent's switch is never another's;
+ * - an inherited `tynn`, when Genie supplies no private Tynn server: neither provider may recover one from user or
+ *   project config.
+ *
+ * Genie's own servers are never in the first list, whatever the record holds.
+ */
+export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[]): { disabledMcpServers?: readonly string[] } {
+    const disabled = [...new Set([...mcpOffFor(record), ...(supplied.some((server) => server.name === 'tynn') ? [] : ['tynn'])])].sort((a, b) => a.localeCompare(b));
+    return disabled.length > 0 ? { disabledMcpServers: disabled } : {};
 }
 
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
@@ -463,18 +474,16 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
     if (problem !== null) return () => { throw new Error(problem); };
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
-    // Without an explicit private Tynn server, neither provider may recover one from user/project config.
-    const inheritedPolicy = extras?.mcpServers?.some((server) => server.name === 'tynn') ? {} : { disabledMcpServers: ['tynn'] };
     // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
     // The binary (a configured script runs as the runtime + the script) and the workspace's service variables.
     const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? []) }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...mcpPolicyOptions(record, extras?.mcpServers ?? []) }, driverEvents(options.events));
 
         default:
             return null;

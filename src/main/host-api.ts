@@ -238,6 +238,8 @@ export interface HostApiDeps {
         setAutoApprove(agentId: string, on: boolean): Promise<unknown>;
         setManageTabs(agentId: string, on: boolean): Promise<unknown>;
         setDrivePages(agentId: string, on: boolean): Promise<unknown>;
+        /** One MCP server on or off for this agent (Tynn #628); checked by the operation itself, which refuses in words. */
+        setMcpServer(agentId: string, name: unknown, on: unknown): Promise<unknown>;
         setIssueWatch(agentId: string, setting: unknown): Promise<unknown>;
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<unknown>;
         setModel(agentId: string, model: string | null): Promise<unknown>;
@@ -465,6 +467,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setDrivePages':
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'driving pages is on or off' };
                 return deps.agentOps.setDrivePages(args[0], args[1]);
+            case 'agents.setMcpServer':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'Name the MCP server, and say on or off.' };
+                return deps.agentOps.setMcpServer(args[0], args[1], args[2]);
             case 'agents.setIssueWatch':
                 if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
                 return deps.agentOps.setIssueWatch(args[0], args[1]);

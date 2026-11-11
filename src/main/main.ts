@@ -1477,7 +1477,11 @@ async function boot(): Promise<void> {
         // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
         // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
         // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
-        onMcpServers: (agentId: AgentId, reports: readonly McpServerReport[]) => recoverMissingMcp(agentId, reports),
+        onMcpServers: (agentId: AgentId, reports: readonly McpServerReport[]) => {
+            recoverMissingMcp(agentId, reports);
+            // Kept on the agent's record, so its Settings can list its servers while it is not running (Tynn #628).
+            void registry?.noteMcpSeen(agentId, reports.map((r) => r.name)).catch(() => undefined);
+        },
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
         serviceEnvFor: (workspaceId: string) => services?.engines.envFor(workspaceId) ?? {},
         /**

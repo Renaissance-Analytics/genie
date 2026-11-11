@@ -440,6 +440,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setAutoApprove: (agentId, on) => answer('agents.setAutoApprove', agentId, on),
             setManageTabs: (agentId, on) => answer('agents.setManageTabs', agentId, on),
             setDrivePages: (agentId, on) => answer('agents.setDrivePages', agentId, on),
+            setMcpServer: (agentId, name, on) => answer('agents.setMcpServer', agentId, name, on),
             setIssueWatch: (agentId, setting) => answer('agents.setIssueWatch', agentId, setting),
             setPermissions: (agentId, permissions) => answer('agents.setPermissions', agentId, permissions),
             setModel: (agentId, model) => model === undefined

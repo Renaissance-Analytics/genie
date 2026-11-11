@@ -54,6 +54,9 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
             autoApprove: record.autoApprove === true,
             manageTabs: record.manageTabs === true,
             drivePages: record.drivePages === true,
+            // Its MCP servers (Tynn #628): the ones switched off, and every one a session reported.
+            ...(record.mcpOff && record.mcpOff.length > 0 ? { mcpOff: record.mcpOff } : {}),
+            ...(record.mcpSeen && record.mcpSeen.length > 0 ? { mcpSeen: record.mcpSeen } : {}),
             // What it hears from IssueWatch now: its own setting, or the default its place in the workspace gives it (Tynn #806).
             issueWatch: issueWatchPrefsFor(record, ports.registry.listAgents(), ports.registry.defaultAgentOf(record.workspaceId)),
             permissions: record.permissions ?? 'all',

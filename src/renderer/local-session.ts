@@ -286,6 +286,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setAutoApprove: (id, on) => requestAgent((agents) => agents.setAutoApprove(id, on)),
             setManageTabs: (id, on) => requestAgent((agents) => agents.setManageTabs(id, on)),
             setDrivePages: (id, on) => requestAgent((agents) => agents.setDrivePages(id, on)),
+            setMcpServer: (id, name, on) => requestAgent((agents) => agents.setMcpServer(id, name, on)),
             setIssueWatch: (id, setting) => requestAgent((agents) => agents.setIssueWatch(id, setting)),
             setPermissions: (id, permissions) => requestAgent((agents) => agents.setPermissions(id, permissions)),
             setModel: (id, model) => requestAgent((agents) => agents.setModel(id, model)),

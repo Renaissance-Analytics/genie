@@ -41,7 +41,7 @@ export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
  */
 export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
     'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope',
-    'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions',
+    'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions',
     'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput',
 ]);
 

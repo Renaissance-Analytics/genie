@@ -41,7 +41,7 @@ export function protocolContractDeps(root: string): HostApiDeps {
             switchDriver: async () => ({ ok: false, reason: 'the driver is not installed' }),
             setBudget: async () => ({ ok: true, decision: { kind: 'proceed', remainingUsd: null } }),
             setMode: async () => ({ ok: true }), setAccessScope: async () => ({ ok: true }), setAccessAgents: async () => ({ ok: true }),
-            setAutoApprove: async () => ({ ok: true }), setManageTabs: async () => ({ ok: true }), setDrivePages: async () => ({ ok: true }),
+            setAutoApprove: async () => ({ ok: true }), setManageTabs: async () => ({ ok: true }), setDrivePages: async () => ({ ok: true }), setMcpServer: async () => ({ ok: true }),
             setIssueWatch: async () => ({ ok: true }), setPermissions: async () => ({ ok: true }), setModel: async () => ({ ok: true }),
             models: async () => ({ ok: true }),
             diagnose: async () => ({ ok: true, diagnosis: { state: 'healthy', fault: false, cause: null, repair: null } }),

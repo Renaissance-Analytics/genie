@@ -13,6 +13,7 @@ import { Store, type WorkspaceRecord } from './store.js';
  * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
  */
 export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
+import { withMcpSeen } from '../core/agent-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
@@ -684,9 +685,16 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, drivePages }));
     }
 
-    /** RED stand-in (Tynn #628). */
-    async noteMcpSeen(_agentId: AgentId, _names: readonly string[]): Promise<AgentRecord | null> {
-        return null;
+    /** The MCP servers switched off for this agent (Tynn #628); read when its next session starts. */
+    async setMcpOff(agentId: AgentId, mcpOff: readonly string[]): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, mcpOff: [...mcpOff] }));
+    }
+
+    /** What one of its sessions reported, added to what its Settings can list. Writes only when it adds a name. */
+    async noteMcpSeen(agentId: AgentId, names: readonly string[]): Promise<AgentRecord | null> {
+        const existing = this.#agents.find((a) => a.id === agentId);
+        if (!existing || withMcpSeen(existing, names) === null) return existing ?? null;
+        return this.#update(agentId, (a) => withMcpSeen(a, names) ?? a);
     }
 
     /** What it hears from IssueWatch (Tynn #806); kept on the record like every other setting of the agent. */
