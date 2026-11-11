@@ -14,7 +14,7 @@ describe('main.ts wires the error policy', () => {
 
     it('the policy is installed exactly once, on `process`, with the book the Deck reads', () => {
         const src = main();
-        expect(src).toMatch(/^import \{ MainErrorBook, installMainErrorPolicy \} from '\.\.\/core\/main-errors\.js';$/m);
+        expect(src).toMatch(/^import \{ MainErrorBook, installMainErrorPolicy, retryHostCopy \} from '\.\.\/core\/main-errors\.js';$/m);
         expect(src.match(/installMainErrorPolicy\(/g) ?? []).toHaveLength(1);
         expect(src).toMatch(/^const mainErrors = new MainErrorBook\(\);\ninstallMainErrorPolicy\(process, mainErrors\);$/m);
         // Nothing else in main.ts listens for these: one listener each, and it is the policy's.
@@ -39,6 +39,8 @@ describe('main.ts wires the error policy', () => {
         expect(src).toMatch(/registry\.setDeckSource\(\(\) => \[\.\.\.mainErrors\.deckItems\(\), \.\.\.composed\.deckItems\(\)\]\);/);
         expect(src).toMatch(/mainErrors\.onChange\(\(\) => registry\?\.touch\(\)\);/);
         const ports = src.slice(src.indexOf('const featurePorts: FeaturePorts = {'), src.indexOf('\n    };', src.indexOf('const featurePorts: FeaturePorts = {')));
-        expect(ports).toMatch(/^\s*mainErrors,$/m);
+        expect(ports).toMatch(/^\s*mainErrors: \{$/m);
+        expect(ports).toMatch(/^\s*dismiss: \(id\) => mainErrors\.dismiss\(id\),$/m);
+        expect(ports).toMatch(/^\s*retryHostCopy: \(id\) => retryHostCopy\(mainErrors, id, \(\) => remakeHostCopy\(\)\),$/m);
     });
 });
