@@ -30,7 +30,6 @@ set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 OUT="$PWD/ci-out"
-mkdir -p "$OUT"
 
 # The rows, in ci.yml's order: `typecheck + unit`, then `a real window`, then the acceptance jobs.
 ROWS=(
@@ -72,34 +71,46 @@ failed=()
 notes=()
 
 # --- what a row needs, prepared once, and only when a selected row needs it -------------------------------------------
+#
+# A need that failed says why ONCE, in `blocked`, and every row that needed it carries those words on its ROW line:
+# `ROW layout FAIL 0 (not run: ...)`. A row that could not run is not a row that ran and failed.
+blocked=''
+blocked_here=''
+block() { blocked="$1"; blocked_here=1; echo "--- $1"; return 1; }
 
 # A command the rows shell out to, and the Arch package that has it. Installed only when the command is missing.
 need_cmd() {
     local cmd="$1" pkg="$2"
     command -v "$cmd" >/dev/null 2>&1 && return 0
     echo "--- $cmd is missing: installing $pkg with pacman"
-    sudo pacman -S --needed --noconfirm "$pkg" >"$OUT/pacman-$pkg.log" 2>&1 || { tail -20 "$OUT/pacman-$pkg.log"; return 1; }
+    sudo pacman -S --needed --noconfirm "$pkg" >"$OUT/pacman-$pkg.log" 2>&1 && return 0
+    tail -20 "$OUT/pacman-$pkg.log"
+    block "$cmd is missing and pacman could not install $pkg"
 }
 
 installed=''
+installed_why=''
 need_install() {
-    [ -n "$installed" ] && { [ "$installed" = ok ]; return; }
+    if [ -n "$installed" ]; then [ "$installed" = ok ] && return 0; blocked="$installed_why"; return 1; fi
     installed=failed
+    installed_why='npm ci failed'
     echo "--- node $(node --version 2>&1), npm $(npm --version 2>&1), $(grep -m1 PRETTY_NAME /etc/os-release 2>/dev/null)"
-    need_cmd git git || return 1
+    need_cmd git git || { installed_why="$blocked"; return 1; }
     # `npm ci`, with scripts: Electron's binary is the point of the window rows.
     echo "--- npm ci"
-    npm ci --no-audit --no-fund >"$OUT/npm-ci.log" 2>&1 || { tail -40 "$OUT/npm-ci.log"; return 1; }
+    npm ci --no-audit --no-fund >"$OUT/npm-ci.log" 2>&1 || { tail -40 "$OUT/npm-ci.log"; block "$installed_why"; return 1; }
     installed=ok
 }
 
 built=''
+built_why=''
 need_build() {
-    [ -n "$built" ] && { [ "$built" = ok ]; return; }
+    if [ -n "$built" ]; then [ "$built" = ok ] && return 0; blocked="$built_why"; return 1; fi
     built=failed
-    need_install || return 1
+    built_why='the build failed'
+    need_install || { built_why="$blocked"; return 1; }
     echo "--- npm run build"
-    npm run build >"$OUT/build.log" 2>&1 || { tail -40 "$OUT/build.log"; return 1; }
+    npm run build >"$OUT/build.log" 2>&1 || { tail -40 "$OUT/build.log"; block "$built_why"; return 1; }
     built=ok
 }
 
@@ -112,46 +123,75 @@ on_display() {
     fi
 }
 
+# THE SESSION'S OWN DISPLAY VARIABLES. Genie passes Electron no platform flag: Electron opens a Wayland window when the
+# session says it is one (XDG_SESSION_TYPE=wayland), and an X11 one otherwise. A person's Hyprland session says so; a
+# shell that came in over ssh says `tty`, and Electron then looks for an X server (omarchy-test, 2026-11-11: "Missing X
+# server or $DISPLAY", with WAYLAND_DISPLAY set). So a shell that is not in the session takes these from the session
+# itself, where uwsm put them for every app it starts: the user manager's environment. Only what picks and finds the
+# display; not the session bus, so the app's keyring is what each row gives it, as before.
+SESSION_VARS=(XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP WAYLAND_DISPLAY DISPLAY HYPRLAND_INSTANCE_SIGNATURE)
+take_session_display() {
+    [ "${XDG_SESSION_TYPE:-}" = wayland ] && [ -n "${WAYLAND_DISPLAY:-}" ] && return 0
+    local env line name
+    env="$(systemctl --user show-environment 2>&1)" || { echo "--- the session's environment could not be read: $env"; return 0; }
+    for name in "${SESSION_VARS[@]}"; do
+        line="$(grep -m1 "^$name=" <<<"$env" || true)"
+        [ -n "$line" ] || continue
+        if [ "${!name:-}" != "${line#*=}" ]; then
+            echo "--- from the session: $line (this shell had '${!name:-}')"
+            export "$name=${line#*=}"
+        fi
+    done
+}
+
 display_ready=''
+display_why=''
 need_display() {
-    [ -n "$display_ready" ] && { [ "$display_ready" = ok ]; return; }
+    if [ -n "$display_ready" ]; then [ "$display_ready" = ok ] && return 0; blocked="$display_why"; return 1; fi
     display_ready=failed
-    need_cmd pgrep procps-ng || return 1
-    need_cmd ss iproute2 || return 1
-    need_cmd curl curl || return 1
+    need_cmd pgrep procps-ng && need_cmd ss iproute2 && need_cmd curl curl || { display_why="$blocked"; return 1; }
     if [ "${CI_DISPLAY:-hyprland}" = xvfb ]; then
-        need_cmd xvfb-run xorg-server-xvfb || return 1
-        need_cmd xauth xorg-xauth || return 1
+        need_cmd xvfb-run xorg-server-xvfb && need_cmd xauth xorg-xauth || { display_why="$blocked"; return 1; }
         echo "--- windows open on Xvfb, 1440x900 (CI_DISPLAY=xvfb)"
     else
+        take_session_display
         if [ -z "${WAYLAND_DISPLAY:-}" ] || [ ! -S "${XDG_RUNTIME_DIR:-/nonexistent}/$WAYLAND_DISPLAY" ]; then
-            echo "no Hyprland session here: WAYLAND_DISPLAY='${WAYLAND_DISPLAY:-}' XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR:-}' (run through omarchy-run.sh, or CI_DISPLAY=xvfb)"
-            return 1
+            display_why="no Hyprland session: WAYLAND_DISPLAY='${WAYLAND_DISPLAY:-}', XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR:-}'"
+            block "$display_why"; return 1
         fi
-        echo "--- windows open on the Hyprland session ($WAYLAND_DISPLAY)"
+        if [ "${XDG_SESSION_TYPE:-}" != wayland ]; then
+            display_why="the session does not say it is Wayland (XDG_SESSION_TYPE='${XDG_SESSION_TYPE:-}'), so Electron would look for an X server"
+            block "$display_why"; return 1
+        fi
+        echo "--- windows open on the Hyprland session: XDG_SESSION_TYPE=$XDG_SESSION_TYPE WAYLAND_DISPLAY=$WAYLAND_DISPLAY DISPLAY=${DISPLAY:-} XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-}"
     fi
     display_ready=ok
 }
 
 keyring_ready=''
+keyring_why=''
 need_keyring() {
-    [ -n "$keyring_ready" ] && { [ "$keyring_ready" = ok ]; return; }
+    if [ -n "$keyring_ready" ]; then [ "$keyring_ready" = ok ] && return 0; blocked="$keyring_why"; return 1; fi
     keyring_ready=failed
-    need_cmd gnome-keyring-daemon gnome-keyring || return 1
-    need_cmd dbus-run-session dbus || return 1
+    need_cmd gnome-keyring-daemon gnome-keyring && need_cmd dbus-run-session dbus || { keyring_why="$blocked"; return 1; }
     keyring_ready=ok
 }
 
 # THE APP, OPENED ONCE, as ci.yml's "open the app and drive it" does: the rows from `no-pty` to `ui-lag` drive this one
-# window over the Chrome DevTools Protocol on port 9222. It stays open until the run ends.
+# window over the Chrome DevTools Protocol on port 9222. It stays open until the run ends. The `seed` row is this: the
+# seed written and the app answering on its debugger port. An app that ended, or never answered, is said here once, with
+# its own last words, and the rows that drive it are not run.
 APP_PID=''
 app=''
+app_why=''
 need_app() {
-    [ -n "$app" ] && { [ "$app" = ok ]; return; }
+    if [ -n "$app" ]; then [ "$app" = ok ] && return 0; blocked="$app_why"; return 1; fi
     app=failed
-    need_build || return 1
-    need_display || return 1
-    [ -f "$OUT/seed.done" ] || { node scripts/smoke-seed.mjs >"$OUT/seed.log" 2>&1 && : >"$OUT/seed.done"; } || { tail -20 "$OUT/seed.log"; return 1; }
+    need_build && need_display || { app_why="$blocked"; return 1; }
+    if [ ! -f "$OUT/seed.done" ]; then
+        node scripts/smoke-seed.mjs >"$OUT/seed.out" 2>&1 || { tail -20 "$OUT/seed.out"; app_why='the seed could not be written'; block "$app_why"; return 1; }
+        : >"$OUT/seed.done"
+    fi
     chmod +x scripts/stub-codex.mjs
     # Ordinary provider configuration, exactly as ci.yml sets it for this launch: codex is the stub, so a REAL parked
     # approval reaches the screen on a machine with no codex.
@@ -159,6 +199,20 @@ need_app() {
         on_display npx electron . --no-sandbox --remote-debugging-port=9222 >"$OUT/electron.log" 2>&1 &
     APP_PID=$!
     echo "--- the app is starting (pid $APP_PID); its output is in ci-out/electron.log"
+    local waited=0
+    until curl -fsS -m 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; do
+        if ! kill -0 "$APP_PID" 2>/dev/null; then
+            app_why="the app ended before it opened a window: $(grep -v '^$' "$OUT/electron.log" | tail -1 | cut -c1-200)"
+            block "$app_why"; return 1
+        fi
+        if [ "$waited" -ge 90 ]; then
+            app_why='the app did not answer on its debugger port (9222) within 90 s'
+            block "$app_why"; return 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    echo "--- the app answers on 9222 after ${waited} s"
     app=ok
 }
 
@@ -262,12 +316,28 @@ row_zip64() { need_install && npm run verify:zip64; }
 
 # --- run them ---------------------------------------------------------------------------------------------------------
 
+mkdir -p "$OUT"
+# THE MACHINE'S TWO CLOCKS, read before and after: a test VM restored from a snapshot has its wall clock corrected while
+# it runs, and a row that times something by the wall clock can then read a time that never passed. Said, not judged.
+clock_wall() { date +%s.%N; }
+clock_mono() { cut -d' ' -f1 /proc/uptime; }
+wall0="$(clock_wall)"; mono0="$(clock_mono)"
 echo "CI LINUX rows: ${selected[*]}"
 for name in "${selected[@]}"; do
     started=$SECONDS
     echo "=== $name"
+    blocked=''
+    blocked_here=''
     if "row_$name" >"$OUT/$name.log" 2>&1; then
         echo "ROW $name PASS $((SECONDS - started))"
+    elif [ -n "$blocked" ]; then
+        # It could not run: what it needed failed, and the words are that need's, said once in the first row that met it.
+        if [ -n "$blocked_here" ]; then
+            echo "--- the end of ci-out/$name.log"
+            tail -40 "$OUT/$name.log"
+        fi
+        echo "ROW $name FAIL $((SECONDS - started)) (not run: $blocked)"
+        failed+=("$name")
     else
         echo "--- the end of ci-out/$name.log"
         tail -60 "$OUT/$name.log"
@@ -281,6 +351,7 @@ for name in "${selected[@]}"; do
 done
 
 for n in "${notes[@]}"; do echo "NOTE $n"; done
+echo "CLOCK $(awk -v w0="$wall0" -v w1="$(clock_wall)" -v m0="$mono0" -v m1="$(clock_mono)" 'BEGIN { printf "the wall clock advanced %.1f s while %.1f s passed (a difference of %+.1f s)", w1 - w0, m1 - m0, (w1 - w0) - (m1 - m0) }')"
 # TEST FILES THE UNIT SUITE DID NOT RUN HERE, each with its own reason: a file that runs on Windows only carries
 # `// CI: WINDOWS ONLY (<reason>)` (test/ci-windows-only-files.test.ts holds that), and scripts/ci/windows.ps1 runs it.
 while IFS= read -r line; do
