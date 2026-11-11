@@ -93,7 +93,9 @@ describe('7E host-owned bounded draft attachment reads', () => {
         onTestFinished(() => { if (performance.now() - t0 > 1_000) console.log(`DRAFTS_BOUNDED_STEPS ${marks.join(' ')}`); });
         const f = await rig({ size: 512 * 1024 + 7 }); mark('rig'); const c = await f.connect(); mark('connect'); const info = (await f.open(c))!; mark('open');
         const first = await f.call(c, 'engine.drafts.fileRead', [info.handle, 0, 512 * 1024]); mark('read-512KiB'); expect(first).toMatchObject({ ok: true });
-        if (!first.ok) throw new Error(first.reason); expect(Buffer.from((first.value as { base64: string }).base64, 'base64')).toEqual(Buffer.from(f.bytes.subarray(0, 512 * 1024))); mark('compare');
+        // By hash, as its 2 MiB sibling compares (Tynn #692, measured on omarchy-test: the engine read took 5 ms and a deep
+        // equality of the two 512 KiB buffers 4,042 ms, element by element). Length first, so a short read says so plainly.
+        if (!first.ok) throw new Error(first.reason); const got = Buffer.from((first.value as { base64: string }).base64, 'base64'); expect(got.length).toBe(512 * 1024); expect(hash(got)).toBe(hash(f.bytes.subarray(0, 512 * 1024))); mark('compare');
         for (const range of [[0, 512 * 1024 + 1], [-1, 1], [0.5, 1], [info.size, 1]]) { expect(await f.call(c, 'engine.drafts.fileRead', [info.handle, ...range])).toMatchObject({ ok: false }); mark(`refused-${range.join(',')}`); }
         expect(await f.call(c, 'engine.drafts.fileRead', [info.handle, info.size, 0])).toEqual({ ok: true, value: { base64: '' } }); mark('read-empty');
         expect(await f.call(c, 'engine.drafts.fileClose', [info.handle])).toMatchObject({ ok: true }); expect(f.closed).toHaveLength(1); mark('close');
