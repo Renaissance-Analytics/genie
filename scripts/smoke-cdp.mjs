@@ -1309,18 +1309,26 @@ if (ch.overlay) {
         const want = () => hex(getComputedStyle(document.documentElement).getPropertyValue('--bg-1'));
         const settle = async (expected) => { for (let i = 0; i < 40; i += 1) { const cur = await window.genie.windowChrome.current(); if (cur && cur.color === expected) return cur.color; await new Promise((r) => setTimeout(r, 100)); } const cur = await window.genie.windowChrome.current(); return cur ? cur.color : null; };
         const html = document.documentElement;
-        const startDark = html.classList.contains('dark');
-        // WHAT MAKES THE PAGE DARK, at each step (printed only when 59 fails; Tynn #692): on omarchy-test the page starts
-        // dark and toggling the class changed no colour, where GitHub's runner starts light and it does.
+        // THE THEME IS CHANGED THE WAY A PERSON CHANGES IT (Tynn #692): the theme setting (Settings, Appearance), which
+        // the page applies through react-fancy as BOTH the dark class and data-theme. This row used to toggle the class
+        // alone: from a light start that adds darkness, but from a dark start (omarchy-test, whose desktop prefers dark)
+        // data-theme="dark" stayed and no colour changed, so the row could only ever pass on a light desktop.
+        const isDark = () => html.classList.contains('dark') || html.getAttribute('data-theme') === 'dark';
+        const startDark = isDark();
+        const act = (action) => (window.genieTest ?? window.genie).features.act(action);
+        const pick = async (theme) => { await act({ kind: 'settings.set', key: 'theme', value: theme }); for (let i = 0; i < 50 && isDark() !== (theme === 'dark'); i += 1) await new Promise((r) => setTimeout(r, 100)); };
+        // What makes the page dark, at each step (printed only when 59 fails).
         const how = () => ({ cls: html.className, dataTheme: html.getAttribute('data-theme'), body: document.body.className, bodyTheme: document.body.getAttribute('data-theme'), scheme: getComputedStyle(html).colorScheme, prefersDark: matchMedia('(prefers-color-scheme: dark)').matches });
         const states = [how()];
         const first = { want: want(), got: await settle(want()) };
-        html.classList.toggle('dark');
+        await pick(startDark ? 'light' : 'dark');
         states.push(how());
         const flipped = { want: want(), got: await settle(want()) };
-        html.classList.toggle('dark', startDark);
+        await pick(startDark ? 'dark' : 'light');
         states.push(how());
         const back = { want: want(), got: await settle(want()) };
+        // The setting goes back to its default (follow the system), which is what this window started with.
+        await act({ kind: 'settings.reset', key: 'theme' });
         return JSON.stringify({ first, flipped, back, states });
     })()`);
     const t = JSON.parse(themed);
