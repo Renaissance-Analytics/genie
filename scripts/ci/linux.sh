@@ -269,7 +269,8 @@ row_typecheck() { need_install && npm run typecheck; }
 # a different test fell over its 5 s limit in three of four runs (5.0 s, 5.8 s; its neighbours took 4 to 567 ms), with
 # 18 to 36 s tests running beside it, and the row took 340 s one run and 556 s another. A worker here is more than one
 # core's work: these tests start git by the hundred, real ptys, hosts on Electron's binary and 512 MB files of their own.
-# THE RULE: half the machine's cores, and never fewer than two. CI_UNIT_WORKERS=<n> overrides it for a measurement.
+# THE RULE: three eighths of the machine's cores, and never fewer than two (3 on omarchy-test's 8: measured green at 3,
+# 608 s, where 4 failed in three runs of five). CI_UNIT_WORKERS=<n> overrides it for a measurement.
 # No test's time limit is touched. The row prints the machine, the count it used, and the load it saw (a 1-minute load
 # above the core count is a machine with more to run than cores to run it on), so the rule is checked by every run.
 # DOCKER, AS GitHub'S RUNNER HAD IT: its daemon running and this user allowed to talk to it. Some unit tests read a real
@@ -294,16 +295,16 @@ say_docker() {
 unit_workers() {
     local cores="$1"
     if [ -n "${CI_UNIT_WORKERS:-}" ]; then echo "$CI_UNIT_WORKERS"; return; fi
-    local half=$((cores / 2))
-    [ "$half" -lt 2 ] && half=2
-    echo "$half"
+    local n=$((cores * 3 / 8))
+    [ "$n" -lt 2 ] && n=2
+    echo "$n"
 }
 row_unit() {
     need_install || return 1
     local code=0 cores workers sampler
     cores="$(nproc)"
     workers="$(unit_workers "$cores")"
-    echo "UNIT machine: $cores cores, $(awk '/MemTotal/ { printf "%d MB", $2 / 1024 }' /proc/meminfo); vitest's own count would be $((cores > 1 ? cores - 1 : 1)) workers; running with $workers (${CI_UNIT_WORKERS:+CI_UNIT_WORKERS, }half the cores, at least 2)"
+    echo "UNIT machine: $cores cores, $(awk '/MemTotal/ { printf "%d MB", $2 / 1024 }' /proc/meminfo); vitest's own count would be $((cores > 1 ? cores - 1 : 1)) workers; running with $workers (${CI_UNIT_WORKERS:+CI_UNIT_WORKERS, }3/8 of the cores, at least 2)"
     say_docker
     : >"$OUT/unit-load.tsv"
     ( while :; do echo "$(date +%s) $(cut -d' ' -f1-4 /proc/loadavg)" >>"$OUT/unit-load.tsv"; sleep 5; done ) &
