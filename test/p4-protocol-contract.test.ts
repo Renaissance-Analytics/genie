@@ -78,6 +78,8 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'features.snapshot': [], 'features.soundData': ['sound_question'], 'features.picked': [['/picked.txt']], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
     'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'], 'host.home': [],
     'updates.check': [], 'updates.download': [], 'updates.install': [], 'updates.notes': [],
+    // Tynn #616: "Quit now" / "Upgrade now" during the safe-point wait. No wait in flight here: false, both ways.
+    'updates.forceDrain': [],
     headroom: [], accountRetry: ['agent_a'],
     'inbox.sendFile': ['agent_a', 'hello', 'sample.txt', 'b2s='],
     'files.children': ['work', ''], 'files.open': ['work', 'missing.txt'],
