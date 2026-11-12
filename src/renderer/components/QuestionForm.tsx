@@ -90,7 +90,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                 : e.key === 'Home' ? 0 : e.key === 'End' ? cards.length - 1 : -1;
         if (next < 0) return;
         e.preventDefault();
-        cards[next]!.focus();
+        cards[next]!.focus({ preventScroll: true });
     };
     const submit = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
