@@ -182,6 +182,8 @@ export interface ShellProps {
     onAnswerDeckForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     /** The last refused form answer, said beside that item's Answer button. */
     deckFormRefusal?: { itemId: string; reason: string } | null | undefined;
+    /** The action running on one of Genie's own Deck items (Tynn #693). */
+    deckBusy?: { itemId: string; optionId: string } | null | undefined;
     /** NOT USED since 2026-10-19: the chat cannot be closed. Removed with the pin model's cleanup row. */
     onCloseChat?: (() => void) | undefined;
     /** The chat's `Restart` (or `Send now`) on an undelivered draft (§4.4, genie#1238). */
@@ -286,6 +288,10 @@ export interface ShellProps {
     tynnPick?: TynnProjectsView | undefined;
     onAddWorkspaceFromTynn?: (() => void) | undefined;
     onPickTynnProject?: ((projectId: string) => void) | undefined;
+    /** The project whose plan is being read after its folder was picked (Tynn #688); `null` = none. */
+    tynnPlanning?: string | null | undefined;
+    /** Try a failed import from Tynn again, same project and folder (Tynn #688); `undefined` = nothing to try again. */
+    onRetryAdd?: (() => void) | undefined;
     onCancelTynnPick?: (() => void) | undefined;
     onConfirmAddTynn?: ((parent: string, projectId: string) => void) | undefined;
     onCancelAddGit?: (() => void) | undefined;
@@ -401,6 +407,7 @@ export function Shell({
     onAnswerDeckItem,
     onAnswerDeckForm,
     deckFormRefusal,
+    deckBusy,
     remote,
     remoteConnect,
     onShareWorkstation,
@@ -419,6 +426,8 @@ export function Shell({
     onConfirmAddTynn,
     tynnPick,
     onPickTynnProject,
+    tynnPlanning,
+    onRetryAdd,
     onCancelTynnPick,
     onCancelAddGit,
     onConfirmAdd,
@@ -697,9 +706,9 @@ export function Shell({
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true || Boolean(tynnPlanning)} onRetry={onRetryAdd} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
                     {addFromGit && !addPreview ? <AddFromGitForm busy={addBusy === true} onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} repos={gitRepos} onReloadRepos={onReloadGitRepos} onGithub={onGitGithub} /> : null}
-                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
+                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} planning={tynnPlanning} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
                     {/*
                      * ONE first-run invitation. With no workspaces the Onboarding above IS the first run (§6.9's two
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
@@ -761,6 +770,7 @@ export function Shell({
                             onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
                             onAnswerForm={onAnswerDeckForm}
                             formRefusal={deckRefusal ?? deckFormRefusal ?? null}
+                            busy={deckBusy}
                             // Dismiss without an answer — one (with the notes written in its form), every stale one shown, or
                             // every question older than a day; the agents are told (main).
                             onDismiss={(item, notes) => deckAct(item.id, { kind: 'deck.dismiss', item, notes })}
@@ -814,6 +824,7 @@ export function Shell({
                                 agent={agentDetail.agent}
                                 session={agentDetail.session}
                                 startRefusal={agentDetail.refusal}
+                                providerSignedOut={agentDetail.providerSignedOut === true}
                                 rows={agentDetail.rows}
                                 tab={parsed.tab}
                                 lanes={parseLanes(parsed.lane)}

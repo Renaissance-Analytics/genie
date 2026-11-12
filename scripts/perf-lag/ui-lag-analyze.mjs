@@ -222,7 +222,34 @@ export function heldVerdict({ floodBytes, growthBytes }, { capChars = 2_000_000,
     return { ok: reasons.length === 0, floodBytes, growthBytes, boundBytes: bound, reasons };
 }
 
-export function capVerdict({ below, past }, { minRatio = 0.9, maxFrameGapMs = 100, maxScriptOverMsPerS = 50, minSlices = 3 } = {}) {
+/**
+ * PAST THE CAP, BY PAIR (Tynn #692): `past[k]` against `below[k]`, its control taken next to it in time (the same terminal
+ * still streaming past the cap, its pane hidden). The mouse ratio is the median of the pairs' ratios and the script time
+ * the median of the pairs' differences, so a machine that slows down during the phase moves both sides of every pair.
+ * The bounds are the unpaired verdict's.
+ */
+function pairedCapVerdict(control, past, { minRatio, maxFrameGapMs, maxScriptOverMsPerS, minSlices, name }) {
+    const reasons = [], r2 = (v) => (v === null ? null : Math.round(v * 100) / 100);
+    const pairs = past.map((x, k) => [x, control[k]]).filter(([a, b]) => a && b);
+    const pastCount = median(past.map((x) => x.count)), controlCount = median(control.map((x) => x.count)), pastGap = median(past.map((x) => x.worstGapMs));
+    const ratios = pairs.filter(([, b]) => b.count > 0).map(([a, b]) => a.count / b.count);
+    const ratio = ratios.length ? median(ratios) : null;
+    const pastScript = median(past.map((x) => x.scriptMsPerS)), controlScript = median(control.map((x) => x.scriptMsPerS));
+    if (pairs.length < minSlices || control.length !== past.length) reasons.push(`too few pairs: ${pairs.length} past slices with a control beside them (need ${Math.max(minSlices, past.length)})`);
+    else {
+        if (ratio === null || ratio < minRatio) reasons.push(`mouse events acknowledged past the output cap: ${r2(ratio)} of ${name}, median of ${pairs.length} pairs (bound ${minRatio}; past ${pastCount}, control ${controlCount})`);
+        if (pastGap > maxFrameGapMs) reasons.push(`worst frame gap past the output cap, median of ${past.length} slices: ${pastGap} ms (bound ${maxFrameGapMs})`);
+        if (![...control, ...past].every((x) => Number.isFinite(x.scriptMsPerS))) reasons.push('page script time not measured in every slice');
+        else {
+            const over = median(pairs.map(([a, b]) => a.scriptMsPerS - b.scriptMsPerS));
+            if (over > maxScriptOverMsPerS) reasons.push(`page script time past the output cap: ${Math.round(over)} ms per second over ${name}, median of ${pairs.length} pairs (bound ${maxScriptOverMsPerS}; past ${pastScript}, control ${controlScript})`);
+        }
+    }
+    return { ok: reasons.length === 0, paired: true, control: name, minRatio, maxFrameGapMs, maxScriptOverMsPerS, ratio: r2(ratio), ratios: ratios.map(r2), belowCount: controlCount, pastCount, pastWorstGapMs: pastGap, pastScriptMsPerS: pastScript, belowScriptMsPerS: controlScript, reasons };
+}
+
+export function capVerdict({ below, past }, { minRatio = 0.9, maxFrameGapMs = 100, maxScriptOverMsPerS = 50, minSlices = 3, paired = false, control = 'its control' } = {}) {
+    if (paired) return pairedCapVerdict(below, past, { minRatio, maxFrameGapMs, maxScriptOverMsPerS, minSlices, name: control });
     const reasons = [], r2 = (v) => (v === null ? null : Math.round(v * 100) / 100);
     const belowCount = median(below.map((x) => x.count)), pastCount = median(past.map((x) => x.count)), pastGap = median(past.map((x) => x.worstGapMs));
     const ratio = belowCount ? pastCount / belowCount : null;

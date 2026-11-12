@@ -156,11 +156,13 @@ export class GenCa {
             log(`[gen-ca] adopted Genie 1's CA from ${from} (${ca.thumbprint})`);
             return ca;
         }
+        const making = Date.now();
         const material = (options.issuer ?? x509Issuer).ca(now);
+        const madeIn = Date.now() - making;
         writeFileSync(certPath, material.certPem, 'utf8');
         writePrivate(keyPath, material.keyPem);
         const ca = new GenCa(options, 'created', material);
-        log(`[gen-ca] created a new CA (${ca.thumbprint}): ${choice.why}`);
+        log(`[gen-ca] created a new CA in ${madeIn} ms (${ca.thumbprint}): ${choice.why}`);
         return ca;
     }
 

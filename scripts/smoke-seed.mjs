@@ -15,7 +15,8 @@
  * unreachable for three releases because one condition decided it should not render. Every test
  * of that feature passed. The only check that would have caught it is a click.
  */
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -107,13 +108,26 @@ writeFileSync(
  * workspace's own manifest, as an `.agi` envelope carries it: its name is the folder's, so every surface names the
  * workspace exactly as before. Never written over a project.json that is already there.
  */
+//
+// THE SEED'S OWN, AND ONLY ITS OWN (Tynn #692: a second `--only smoke` in one session failed here, "seed refuses to
+// overwrite .../project.json", because the first run's seed had written it). The workspace must be the checkout: the
+// smoke opens its real src/ in the Files panel. So what this seed writes is recorded beside it, by its SHA-256, in
+// project.json.smoke-seed, and a manifest whose bytes are exactly that record is this seed's and is written again. Any
+// other project.json is somebody's, and is refused as before.
 const manifestPath = join(workspacePath, 'project.json');
-if (existsSync(manifestPath)) throw new Error(`seed refuses to overwrite ${manifestPath}`);
+const seedRecord = `${manifestPath}.smoke-seed`;
+const sha = (text) => createHash('sha256').update(text).digest('hex');
+if (existsSync(manifestPath)) {
+    const ours = existsSync(seedRecord) && readFileSync(seedRecord, 'utf8').trim() === sha(readFileSync(manifestPath, 'utf8'));
+    if (!ours) throw new Error(`seed refuses to overwrite ${manifestPath}: no seed of this script wrote it (no ${basename(seedRecord)} matching its bytes)`);
+}
 const repoNames = ['genie', 'tynn-claude-tooling', 'tynn-mcp-testing', 'shared-schemas', 'api', 'web', 'docs', 'cli', 'infra', 'design', 'marketing'];
-writeFileSync(manifestPath, JSON.stringify({
+const manifest = JSON.stringify({
     name: basename(workspacePath),
     repos: [{ name: basename(workspacePath), slug: 'host', path: '.' }, ...repoNames.map((n) => ({ name: n, slug: n, path: `repos/${n}` }))],
-}, null, 2));
+}, null, 2);
+writeFileSync(manifestPath, manifest);
+writeFileSync(seedRecord, `${sha(manifest)}\n`);
 
 writeFileSync(
     join(runtime, 'agents.json'),

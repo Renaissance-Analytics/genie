@@ -19,6 +19,7 @@ export interface AgentDetailPorts {
         find(id: AgentId): AgentRecord | null;
         listAgents(): readonly AgentRecord[];
         defaultAgentOf(workspaceId: string): string | null;
+        workspaceMcpOff?(workspaceId: string): readonly string[];
     };
     /** The session host: genie-host's own, or a window's link to it. */
     readonly engine: Pick<AgentEngine, 'probe' | 'ledgerFor' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'> | null;
@@ -27,6 +28,8 @@ export interface AgentDetailPorts {
     readonly takeOver?: (id: AgentId) => TakeOverProbe | null;
     /** Its AgentInbox mail; absent = none known here. */
     readonly mail?: (id: AgentId, limit: number) => readonly InboxMessage[];
+    /** Whether the provider's CLI last said it is signed in (Tynn #698, the health book); absent = not measured here. */
+    readonly providerSignedIn?: (provider: string) => boolean;
 }
 
 export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): AgentDetail | null {
@@ -54,6 +57,12 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
             autoApprove: record.autoApprove === true,
             manageTabs: record.manageTabs === true,
             drivePages: record.drivePages === true,
+            // Its MCP servers (Tynn #628): the ones switched off, and every one a session reported.
+            ...(record.mcpOff && record.mcpOff.length > 0 ? { mcpOff: record.mcpOff } : {}),
+            ...(record.mcpSeen && record.mcpSeen.length > 0 ? { mcpSeen: record.mcpSeen } : {}),
+            ...(record.mcpOn && record.mcpOn.length > 0 ? { mcpOn: record.mcpOn } : {}),
+            // What its workspace has off by default, which it inherits where it made no choice.
+            ...((ports.registry.workspaceMcpOff?.(record.workspaceId) ?? []).length > 0 ? { workspaceMcpOff: ports.registry.workspaceMcpOff!(record.workspaceId) } : {}),
             // What it hears from IssueWatch now: its own setting, or the default its place in the workspace gives it (Tynn #806).
             issueWatch: issueWatchPrefsFor(record, ports.registry.listAgents(), ports.registry.defaultAgentOf(record.workspaceId)),
             permissions: record.permissions ?? 'all',
@@ -75,9 +84,11 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
         // there is no Cost row — never a `$0.00`, which would claim the work was free.
         cost: sessionCostOf(host.rowsFor(record.id)),
         refusal: host.refusals.get(record.id) ?? null,
+        // Its provider's CLI is signed out (Tynn #698): the Agent view offers Log in beside Start.
+        ...(ports.providerSignedIn && !ports.providerSignedIn(record.provider) ? { providerSignedOut: true } : {}),
         takeOver,
         // Its AgentInbox mail — with other agents AND the person (an FTQ answer is the person's) — for the mail rows in its
         // chat (core/chat-view.ts `chatCommsOf`).
-        comms: ports.mail ? chatCommsOf(ports.mail(record.id, 50)) : null,
+        comms: ports.mail ? chatCommsOf(ports.mail(record.id, 50), (id) => ports.registry.listAgents().find((a) => a.id === id)?.name ?? null) : null,
     };
 }

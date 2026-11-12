@@ -1,3 +1,4 @@
+import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * THE SMOKE PATH — a real Electron window, driven over the Chrome DevTools Protocol.
@@ -71,7 +72,7 @@ async function findTarget() {
         try {
             const response = await fetch(`http://127.0.0.1:${PORT}/json/list`);
             const targets = await response.json();
-            const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+            const page = mainWindow(targets);
             if (page) return page;
             lastError = `no page target yet (${targets.length} targets)`;
         } catch (error) {
@@ -1019,6 +1020,29 @@ if (!approvalEnabled) {
     await cdp.evaluate(`(() => {
         const rows = document.querySelector('[data-terminal-pane] .xterm-rows');
         const watch = window.__smokeTerminal = { mountedAt: performance.now(), firstOutputMs: null, firstText: '' };
+        // THE DOOR'S SIDE (beta.61.1): what the host answered this window from here on — each result (a write's true or
+        // false, a watch's snapshot: its scrollback's end and its position, a refusal's reason) and each terminal event
+        // (its offset and bytes). Read only on the 37 failure path; recording it costs one parse per frame.
+        const wire = window.__smokeWire = [];
+        const short = (v) => typeof v === 'string' ? JSON.stringify(v.slice(-80)) : v;
+        window.genieLocalProtocol?.onFrame((action, _connection, text) => {
+            const at = Math.round(performance.now() - watch.mountedAt);
+            if (action !== 'frame') { wire.push(at + ' ' + action); return; }
+            let m; try { m = JSON.parse(text); } catch { return; }
+            let line = null;
+            if (m.kind === 'result') {
+                const v = m.value;
+                if (!m.ok) line = 'refused ' + String(m.reason).slice(0, 160);
+                else if (v === true || v === false || v === null) line = 'result ' + v;
+                else if (v && typeof v === 'object' && v.value && typeof v.value.scrollback === 'string') line = 'snapshot id=' + v.value.id + ' pid=' + v.value.pid + ' tail=' + short(v.value.scrollback) + ' position=' + JSON.stringify(v.position ?? null);
+                else if (v && typeof v === 'object' && v.terminalContent) line = 'snapshot (blob)';
+                else if (v && typeof v === 'object' && typeof v.id === 'string' && 'pid' in v) line = 'opened id=' + v.id + ' pid=' + v.pid + ' tail=' + short(v.scrollback ?? '');
+            } else if (m.kind === 'event' && typeof m.channel === 'string' && m.channel.startsWith('terminal-')) {
+                const e = m.payload?.event ?? m.value?.event ?? null;
+                line = m.channel + ' ' + (m.payload?.view ?? '') + ' ' + (e ? (e.kind + ' offset=' + (e.offset ?? e.endOffset) + ' data=' + short(e.data ?? '') + (e.reason ? ' reason=' + e.reason : '')) : JSON.stringify(m).slice(0, 160));
+            }
+            if (line !== null) { wire.push(at + ' ' + line); if (wire.length > 300) wire.splice(0, wire.length - 300); }
+        });
         if (!rows) return true;
         const seen = () => {
             const text = (rows.innerText ?? '').trim();
@@ -1048,6 +1072,39 @@ if (!approvalEnabled) {
     const typed = await waitFor(cdp, `${rowsText}.split('${token}').length - 1 === 1`, 'the typed token to show once');
     check(typed, '37. CONTROL: the typed command shows in the terminal, once, before Enter', token);
     if (!typed) console.log(`  TERMINAL_AT_37 ${await terminalDump()}`);
+    // WHERE THE TYPING WENT (said only when 37 fails; Tynn #692, omarchy-test: the prompt drew at 1.2 s, as the token was
+    // typed, and the token never showed). Which of three it is: the page had no focus for the keys, the keys came before
+    // the shell could take them, or the terminal takes no keys at all. A SECOND token, typed 5 s after the first with the
+    // prompt long drawn, tells the last two apart; it is typed only on this failing path, where 38 has already failed.
+    if (!typed) {
+        const focus = await cdp.evaluate(`JSON.stringify({ hasFocus: document.hasFocus(), visibility: document.visibilityState, active: (document.activeElement?.tagName ?? '') + '.' + (document.activeElement?.className ?? ''), inPane: !!document.activeElement?.closest?.('[data-terminal-pane]') })`).catch((e) => `(unread: ${e?.message ?? e})`);
+        const again = `retype-${Math.random().toString(16).slice(2, 10)}`;
+        await new Promise((r) => setTimeout(r, 5000));
+        await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
+        await cdp.send('Input.insertText', { text: again });
+        await new Promise((r) => setTimeout(r, 2000));
+        const shown = await cdp.evaluate(`${rowsText}.includes('${again}')`).catch(() => null);
+        console.log(`  TERMINAL_RETYPE ${JSON.stringify({ focusAtFailure: focus, secondTokenShown: shown })} ${await terminalDump()}`);
+        // INPUT OR OUTPUT (beta.61.1): the second token not showing means the keys never reached the shell OR the pane
+        // stopped drawing what the shell printed. The workspace's terminal error says why a pane's stream ended, and a
+        // REMOUNT (away to the Dashboard and back: a new watch, a fresh snapshot from the host) shows what the shell has
+        // printed: the tokens in it = the keys arrived and only the pane's stream died; not in it = the keys were lost.
+        const alerts = await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[role="alert"]')].map((a) => (a.textContent ?? '').trim()).filter(Boolean).slice(0, 5))`).catch((e) => `(unread: ${e?.message ?? e})`);
+        const tabId = await cdp.evaluate(`[...document.querySelectorAll('[data-workspace-tab]')].map((t) => t.getAttribute('data-workspace-tab')).find((id) => id && id !== 'home' && id !== 'add') ?? null`).catch(() => null);
+        let remount = '(no designed tab to come back to)';
+        if (typeof tabId === 'string') {
+            await cdp.evaluate(`document.querySelector('[data-workspace-tab="home"]')?.click(); true`);
+            await new Promise((r) => setTimeout(r, 1000));
+            await cdp.evaluate(`document.querySelector('[data-workspace-tab="${tabId}"]')?.click(); true`);
+            await new Promise((r) => setTimeout(r, 4000));
+            await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
+            remount = await cdp.evaluate(`JSON.stringify({ firstToken: ${rowsText}.split('${token}').length - 1, secondToken: ${rowsText}.includes('${again}') })`).catch((e) => `(unread: ${e?.message ?? e})`);
+        }
+        console.log(`  TERMINAL_STREAM_OR_KEYS ${JSON.stringify({ alerts, remount })} ${await terminalDump()}`);
+        const wire = await cdp.evaluate(`JSON.stringify(window.__smokeWire ?? null)`).catch((e) => `(unread: ${e?.message ?? e})`);
+        const panes = await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-terminal-pane]')].map((p) => { const r = p.getBoundingClientRect(); return { pane: p.getAttribute('data-terminal-pane'), w: Math.round(r.width), h: Math.round(r.height), rows: p.querySelectorAll('.xterm-rows > *').length }; }))`).catch((e) => `(unread: ${e?.message ?? e})`);
+        console.log(`  TERMINAL_WIRE ${JSON.stringify({ panes })} ${wire}`);
+    }
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
@@ -1295,18 +1352,33 @@ if (ch.overlay) {
         const want = () => hex(getComputedStyle(document.documentElement).getPropertyValue('--bg-1'));
         const settle = async (expected) => { for (let i = 0; i < 40; i += 1) { const cur = await window.genie.windowChrome.current(); if (cur && cur.color === expected) return cur.color; await new Promise((r) => setTimeout(r, 100)); } const cur = await window.genie.windowChrome.current(); return cur ? cur.color : null; };
         const html = document.documentElement;
-        const startDark = html.classList.contains('dark');
+        // THE THEME IS CHANGED THE WAY A PERSON CHANGES IT (Tynn #692): the theme setting (Settings, Appearance), which
+        // the page applies through react-fancy as BOTH the dark class and data-theme. This row used to toggle the class
+        // alone: from a light start that adds darkness, but from a dark start (omarchy-test, whose desktop prefers dark)
+        // data-theme="dark" stayed and no colour changed, so the row could only ever pass on a light desktop.
+        const isDark = () => html.classList.contains('dark') || html.getAttribute('data-theme') === 'dark';
+        const startDark = isDark();
+        const act = (action) => (window.genieTest ?? window.genie).features.act(action);
+        const pick = async (theme) => { await act({ kind: 'settings.set', key: 'theme', value: theme }); for (let i = 0; i < 50 && isDark() !== (theme === 'dark'); i += 1) await new Promise((r) => setTimeout(r, 100)); };
+        // What makes the page dark, at each step (printed only when 59 fails).
+        const how = () => ({ cls: html.className, dataTheme: html.getAttribute('data-theme'), body: document.body.className, bodyTheme: document.body.getAttribute('data-theme'), scheme: getComputedStyle(html).colorScheme, prefersDark: matchMedia('(prefers-color-scheme: dark)').matches });
+        const states = [how()];
         const first = { want: want(), got: await settle(want()) };
-        html.classList.toggle('dark');
+        await pick(startDark ? 'light' : 'dark');
+        states.push(how());
         const flipped = { want: want(), got: await settle(want()) };
-        html.classList.toggle('dark', startDark);
+        await pick(startDark ? 'dark' : 'light');
+        states.push(how());
         const back = { want: want(), got: await settle(want()) };
-        return JSON.stringify({ first, flipped, back });
+        // The setting goes back to its default (follow the system), which is what this window started with.
+        await act({ kind: 'settings.reset', key: 'theme' });
+        return JSON.stringify({ first, flipped, back, states });
     })()`);
     const t = JSON.parse(themed);
     check(t.first.got === t.first.want && t.flipped.got === t.flipped.want && t.back.got === t.back.want && t.first.want !== t.flipped.want,
         '59. the native window buttons wear the theme\u2019s bar colour, and follow a theme change both ways',
         `first ${t.first.got}/${t.first.want} · flipped ${t.flipped.got}/${t.flipped.want} · back ${t.back.got}/${t.back.want}`);
+    if (t.first.want === t.flipped.want) console.log(`  THEME_AT_59 ${JSON.stringify(t.states)}`);
 } else {
     console.log('  (48–50 skipped: this window has no native button overlay — macOS)');
 }

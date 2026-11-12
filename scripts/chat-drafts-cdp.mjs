@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** CI/test VM only. Copy both draft scripts to the pinned 7D baseline and add --baseline there. */
+import { mainWindow } from './cdp-main-window.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
@@ -67,7 +68,7 @@ try {
     const xvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY, launchStarted = Date.now();
     app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd); app.on('error', e => console.error(e.message));
     // Startup is measured separately (#1587); it is not part of any content row's elapsed time.
-    const target = await until('owned app page', async () => (await targets(PORT)).find(t => t.type === 'page' && /index\.html/.test(t.url)), 240000);
+    const target = await until('owned app page', async () => mainWindow(await targets(PORT)), 240000);
     startup.pageTargetMs = Date.now() - launchStarted;
     page = await Cdp.connect(target.webSocketDebuggerUrl); main = await Cdp.connect((await until('owned main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
     startup.inspectorsConnectedMs = Date.now() - launchStarted;

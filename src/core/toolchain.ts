@@ -138,7 +138,7 @@ export interface ToolProbe {
     readonly choices?: { readonly patch: string | null; readonly upgrade: string | null };
 }
 
-export type Tone = 'security-update' | 'update-available' | 'up-to-date' | 'unknown' | 'not-installed';
+export type Tone = 'security-update' | 'update-available' | 'up-to-date' | 'unknown' | 'not-installed' | 'broken';
 
 export interface ToolStatus {
     readonly tool: string;
@@ -155,6 +155,27 @@ export interface ToolStatus {
     readonly patch?: string;
     /** …and a NEWER LINE (8.5.12), a separate, secondary choice. Absent when there is none. */
     readonly upgrade?: string;
+    /** `broken` only (Tynn #698): what the health check found, in words. */
+    readonly problem?: string;
+    /** An agent CLI that runs and says it is signed out (Tynn #698): "Not signed in" and Log in, never Broken. */
+    readonly signedOut?: boolean;
+}
+
+/** The Toolchain row each agent provider's CLI is. */
+const PROVIDER_TOOL: Readonly<Record<string, string>> = { claude: 'claude-code', codex: 'codex' };
+
+/**
+ * AN AGENT CLI'S ROW, FROM ITS HEALTH (Tynn #698): a CLI the health check found cannot run reads `broken`, with why, whatever
+ * its version print said (an npm placeholder answers nothing; another copy on PATH answered 2.1.316). Signed out is a login
+ * matter, not the tool's state: that row keeps its tone and is marked `signedOut` ("Not signed in", Log in).
+ */
+export function withProviderHealth<T extends ToolStatus>(statuses: readonly T[], health: ReadonlyArray<{ readonly provider: string; readonly installed: boolean; readonly signedIn: boolean | null; readonly words: string | null } | null>): T[] {
+    return statuses.map((status) => {
+        const found = health.find((h) => h !== null && PROVIDER_TOOL[h.provider] === status.tool) ?? null;
+        if (found === null) return status;
+        if (found.installed) return found.signedIn === false ? { ...status, signedOut: true } : status;
+        return { ...status, tone: 'broken', ...(found.words ? { problem: found.words } : {}) };
+    });
 }
 
 /** What is known to be unsafe, per tool. Only PHP has a floor today (core/php-advisories.ts); the shape takes more. */
@@ -330,6 +351,8 @@ export function toneLabel(tone: Tone): string | null {
             return 'Up to date';
         case 'not-installed':
             return 'Not installed';
+        case 'broken':
+            return 'Broken';
         default:
             return null;
     }

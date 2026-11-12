@@ -220,6 +220,8 @@ export interface HostApiDeps {
         onSettingsChanged?(listener: (workspaceId: string) => void): () => void;
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<unknown>;
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<unknown>;
+        /** One MCP server on or off as this workspace's default (Tynn #628); checked by the registry, which refuses in words. */
+        setMcpServer(workspaceId: string, name: unknown, on: unknown): Promise<unknown>;
         /** A workspace's colour (genie#1300). Optional: a host without it refuses. */
         setColor?(workspaceId: string, color: string): Promise<unknown>;
     };
@@ -238,6 +240,8 @@ export interface HostApiDeps {
         setAutoApprove(agentId: string, on: boolean): Promise<unknown>;
         setManageTabs(agentId: string, on: boolean): Promise<unknown>;
         setDrivePages(agentId: string, on: boolean): Promise<unknown>;
+        /** One MCP server on or off for this agent (Tynn #628); checked by the operation itself, which refuses in words. */
+        setMcpServer(agentId: string, name: unknown, on: unknown): Promise<unknown>;
         setIssueWatch(agentId: string, setting: unknown): Promise<unknown>;
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<unknown>;
         setModel(agentId: string, model: string | null): Promise<unknown>;
@@ -465,6 +469,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setDrivePages':
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'driving pages is on or off' };
                 return deps.agentOps.setDrivePages(args[0], args[1]);
+            case 'agents.setMcpServer':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'Name the MCP server, and say on or off.' };
+                return deps.agentOps.setMcpServer(args[0], args[1], args[2]);
             case 'agents.setIssueWatch':
                 if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
                 return deps.agentOps.setIssueWatch(args[0], args[1]);
@@ -615,6 +622,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.setGoverns(str(args[0]), Array.isArray(args[1]) ? args[1].map(str) : []);
             case 'workspaces.setDefaultAgent':
                 return deps.workspaceOps.setDefaultAgent(str(args[0]), typeof args[1] === 'string' && args[1] !== '' ? args[1] : null);
+            case 'workspaces.setMcpServer':
+                return deps.workspaceOps.setMcpServer(str(args[0]), args[1], args[2]);
             case 'workspaces.setColor':
                 return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
             case 'addWorkspace':

@@ -6,8 +6,10 @@ import { MarketplacePane } from './MarketplacePane.js';
 import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, Kbd, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
+import { DEFAULT_SEND_KEY, SEND_KEY_SETTING, keycaps, newlineKeyFor, sendKeyFrom, sendKeyProblem } from '../../core/send-key.js';
+import { HotkeyCapture } from './HotkeyCapture.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
@@ -1135,8 +1137,17 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                     {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
                                     {t.tone === 'security-update' ? (
                                         <span data-tool-security={t.tool} className="rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{word}</span>
-                                    ) : word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{word}</Badge> : null}
+                                    ) : word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : t.tone === 'broken' ? { color: 'red' as const } : {})}>{word}</Badge> : null}
                                     {t.advisory ? <span data-tool-advisory={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.advisory}</span> : null}
+                                    {/* Tynn #698: an agent CLI the health check found cannot run says why; an Update cannot fix it (the repair is its own action). */}
+                                    {t.problem ? <span data-tool-problem={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.problem}</span> : null}
+                                    {/* It runs and is signed out: a login matter, never Broken. The provider's own login, as the Agent view's Log in opens it. */}
+                                    {t.signedOut ? (
+                                        <>
+                                            <Badge variant="soft" size="sm" color="amber" data-tool-signed-out={t.tool}>Not signed in</Badge>
+                                            <Button type="button" size="sm" color="blue" disabled={busy !== null} data-action="toolchain-login" onClick={() => onAction({ kind: 'toolchain.login', tool: t.tool })}>Log in</Button>
+                                        </>
+                                    ) : null}
                                     {/* Update from here (genie#1306): real buttons — a language's patch first, another line second; the step while it runs; the end, either way. */}
                                     {t.installed !== null ? <ToolUpdateActions t={t} busy={busy !== null} updating={updating} updated={tc.updated ?? null} refusal={refusal} onAction={onAction} /> : null}
                                     {plan && 'label' in plan ? (
@@ -1857,30 +1868,44 @@ const pressOf = (e: React.KeyboardEvent): { key: string; ctrlKey: boolean; metaK
 function GenieHotkeys({ values, onAction }: { values: Readonly<Record<string, boolean | string>> | null; onAction: SurfaceProps['onAction'] }) {
     const [platform, setPlatform] = useState('generic');
     useEffect(() => { setPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
-    const [refused, setRefused] = useState<{ name: BindingName; reason: string } | null>(null);
     const bindings = bindingsFrom(values);
     const prompts = parsePromptLibrary(typeof values?.['saved_prompts'] === 'string' ? values['saved_prompts'] : undefined);
-    const set = (name: BindingName, value: string): void => { setRefused(null); onAction({ kind: 'settings.set', key: BINDING_SETTING[name], value }); };
-    const record = (name: BindingName, e: React.KeyboardEvent<HTMLInputElement>): void => {
-        if (e.key === 'Tab') return;
-        e.preventDefault();
-        const bare = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
-        if (bare && (e.key === 'Backspace' || e.key === 'Delete')) { set(name, ''); return; }
-        if (bare && e.key === 'Escape') { e.currentTarget.blur(); return; }
-        const accelerator = acceleratorFromPress(pressOf(e), platform);
-        if (accelerator === null) return;
+    const set = (name: BindingName, value: string): void => onAction({ kind: 'settings.set', key: BINDING_SETTING[name], value });
+    // One way to set a key on this page (Tynn issue #697): pressed into the capture control, refused in words there.
+    const capture = (name: BindingName) => (accelerator: string): string | null => {
         const problem = bindingProblem(accelerator, name, bindings, prompts, platform);
-        if (problem !== null) { setRefused({ name, reason: problem }); return; }
+        if (problem !== null) return problem;
         // Genie's default is stored as empty, so it follows Genie's default.
         set(name, accelerator === DEFAULT_HOTKEYS[name] ? '' : accelerator);
+        return null;
     };
     const rows: Array<{ name: BindingName; label: string; desc: string }> = [
         { name: 'commandWindow', label: 'Command Window', desc: 'Search, jump and run — prompts, actions, workspaces, agents.' },
         { name: 'ftqNudge', label: 'ForceTheQuestion nudge', desc: 'Tells the agent in front of you to ask its question through ForceTheQuestion, where you will see it.' },
     ];
+    // THE COMPOSER'S SEND KEY (Tynn issue #697): pressed, never typed; the new-line key follows from it.
+    const sendKey = sendKeyFrom(values);
+    const captureSendKey = (accelerator: string): string | null => {
+        const problem = sendKeyProblem(accelerator, bindings, prompts, platform);
+        if (problem !== null) return problem;
+        // Genie's default is stored as empty, so it follows Genie's default.
+        onAction({ kind: 'settings.set', key: SEND_KEY_SETTING, value: accelerator === DEFAULT_SEND_KEY ? '' : accelerator });
+        return null;
+    };
     return (
         <section data-genie-hotkeys className="border-b border-[var(--border-1)] px-5 py-3">
-            <div className="text-sm font-medium">Keyboard shortcuts</div>
+            <div className="text-sm font-medium">Writing to an agent</div>
+            <div data-send-key-setting="" className="flex items-start gap-4 py-2">
+                <div className="flex-1">
+                    <div className="text-sm">Send message</div>
+                    <div className="text-xs text-[var(--fg-3)]">
+                        New line: <span data-newline-key="" className="inline-flex items-center gap-1 align-middle">{keycaps(newlineKeyFor(sendKey), platform).map((cap, i) => <Fragment key={cap}>{i > 0 ? '+' : null}<Kbd>{cap}</Kbd></Fragment>)}</span>
+                    </div>
+                </div>
+                <HotkeyCapture value={sendKey} platform={platform} label="Send message" onCapture={captureSendKey}
+                    onReset={sendKey === DEFAULT_SEND_KEY ? undefined : () => onAction({ kind: 'settings.set', key: SEND_KEY_SETTING, value: '' })} />
+            </div>
+            <div className="mt-2 text-sm font-medium">Keyboard shortcuts</div>
             <ul className="mt-1 flex flex-col">
                 {rows.map(({ name, label, desc }) => {
                     const raw = values?.[BINDING_SETTING[name]];
@@ -1888,23 +1913,13 @@ function GenieHotkeys({ values, onAction }: { values: Readonly<Record<string, bo
                     const current = bindings[name];
                     return (
                         <li key={name} className="flex flex-col gap-1 py-2">
-                            <div className="flex items-center gap-4">
+                            <div className="flex items-start gap-4">
                                 <div className="flex-1">
                                     <div className="text-sm">{label}</div>
                                     <div className="text-xs text-[var(--fg-3)]">{current === null ? `“${stored}” is not a key Genie can read — this shortcut is off until you set it again.` : desc}</div>
                                 </div>
-                                <Input
-                                    data-binding={name}
-                                    aria-label={`Key for ${label}`}
-                                    readOnly
-                                    value={current === null ? '' : hotkeyLabel(current, platform)}
-                                    placeholder="Click, then press keys"
-                                    onKeyDown={(e) => record(name, e)}
-                                    className="w-44"
-                                />
-                                {stored !== '' ? <Button data-action={`binding-reset-${name}`} size="sm" variant="ghost" onClick={() => set(name, '')}>Reset</Button> : null}
+                                <HotkeyCapture name={name} value={current ?? ''} platform={platform} label={label} onCapture={capture(name)} onReset={stored !== '' ? () => set(name, '') : undefined} />
                             </div>
-                            {refused?.name === name ? <div data-binding-refused={name} className="text-xs text-[var(--danger,#dc2626)]">{refused.reason}</div> : null}
                         </li>
                     );
                 })}

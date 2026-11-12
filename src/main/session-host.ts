@@ -17,6 +17,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
+import { mcpOffFor } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 
 /**
@@ -158,7 +159,7 @@ import { sessionsDir } from './paths.js';
 
 /** Injected so a test can run this host without spawning a provider CLI. */
 /** `extras.mcpServers`: the MCP servers this session starts with (Genie's own, with the agent's caller key). */
-export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>> }) => SessionDriverFactory | null;
+export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>>; /** The MCP servers its workspace has off by default (Tynn #628). */ workspaceMcpOff?: readonly string[] }) => SessionDriverFactory | null;
 
 /**
  * THE AGENT'S SERVICE VARIABLES, AS PRISM-ACP TAKES THEM (the owner, 2026-10-16: "ONLY let through Genie-managed
@@ -452,24 +453,40 @@ export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(rec
     return untrusted === null ? record : { ...record, autoApprove: false };
 }
 
+/**
+ * THE MCP SERVERS THIS LAUNCH MAY NOT LOAD (prism-acp's `disabledMcpServers`, the same option for Claude Code and Codex):
+ *
+ * - the ones the person switched off for THIS agent (Tynn #628; core/agent-mcp.ts), read from the record being launched,
+ *   so a change applies at the agent's next session start and one agent's switch is never another's;
+ * - an inherited `tynn`, when Genie supplies no private Tynn server: neither provider may recover one from user or
+ *   project config.
+ *
+ * Genie's own servers are never in the first list, whatever the record holds.
+ *
+ * `workspaceOff`: what the agent's workspace has off by default. The agent inherits it where it made no choice of its own;
+ * a server it switched on is launched with it.
+ */
+export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] | undefined; readonly mcpOn?: readonly string[] | undefined }, supplied: readonly { readonly name: string }[], workspaceOff: readonly string[] = []): { disabledMcpServers?: readonly string[] } {
+    const disabled = [...new Set([...mcpOffFor(record, workspaceOff), ...(supplied.some((server) => server.name === 'tynn') ? [] : ['tynn'])])].sort((a, b) => a.localeCompare(b));
+    return disabled.length > 0 ? { disabledMcpServers: disabled } : {};
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     // Said in Genie's words, naming the file, before the driver refuses in its own.
     const problem = providerStartProblem(record.provider);
     if (problem !== null) return () => { throw new Error(problem); };
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
-    // Without an explicit private Tynn server, neither provider may recover one from user/project config.
-    const inheritedPolicy = extras?.mcpServers?.some((server) => server.name === 'tynn') ? {} : { disabledMcpServers: ['tynn'] };
     // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
     // The binary (a configured script runs as the runtime + the script) and the workspace's service variables.
     const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
 
         default:
             return null;
@@ -524,6 +541,7 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
+    readonly #workspaceMcpOffFor: ((record: AgentRecord) => readonly string[]) | undefined;
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
@@ -615,6 +633,8 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
+        /** The MCP servers this agent's workspace has off by default (Tynn #628). Asked before each launch. Absent = none. */
+        workspaceMcpOffFor?: (record: AgentRecord) => readonly string[];
         /** Genie's own words are in this agent's thread now (`AgentRecord.genieWordsInThread`). */
         markGenieWords?: (agentId: AgentId) => void;
         /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
@@ -659,7 +679,16 @@ export class SessionHost {
          * agent on that provider is held; a timer (`schedule`, no polling) wakes the host at the gate's resume time.
          * Defaults: a 2-minute margin, the real setTimeout.
          */
-        rateLimit?: { gate?: RateLimitGate; schedule?: (ms: number, fn: () => void) => () => void };
+        rateLimit?: {
+            gate?: RateLimitGate;
+            schedule?: (ms: number, fn: () => void) => () => void;
+            /**
+             * The provider's signed-in account now (`accountIdentityFrom` of its status command), `null` when there is
+             * nothing to tell it by. Asked for a HELD login only, when the hold begins and at each re-read: a different
+             * account releases every agent held on it (Tynn #699). Absent = an account switch is noticed only by a Log in.
+             */
+            accountOf?: (provider: string) => Promise<string | null>;
+        };
         /** Where the threads are kept. Default: the durable file store under `userData` — a test may hand in its own. */
         store?: () => SessionStore;
         /** A graceful stop's grace for a provider that has one (`gracefulEndFor`). Default `STOP_GRACE_MS`. */
@@ -677,6 +706,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
+        this.#workspaceMcpOffFor = options.workspaceMcpOffFor;
         this.#untrustedNow = options.untrustedNow;
         this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
@@ -699,6 +729,27 @@ export class SessionHost {
         this.#heldElsewhere = options.heldElsewhere;
         this.#gate = options.rateLimit?.gate ?? new RateLimitGate();
         this.#schedule = options.rateLimit?.schedule ?? ((ms, fn) => { const t = setTimeout(fn, Math.max(0, ms)); t.unref?.(); return () => clearTimeout(t); });
+        this.#accountOf = options.rateLimit?.accountOf;
+    }
+
+    readonly #accountOf: ((provider: string) => Promise<string | null>) | undefined;
+    /** The account each held login was signed in to when its hold began (`null`: not known yet). Forgotten when it opens. */
+    readonly #heldAccount = new Map<string, string | null>();
+    /** When each held login's account was last read: its own interval, so a login no session can read limits for is read too. */
+    readonly #lastAccountRead = new Map<string, number>();
+
+    /** Read a held login's account: the first read is the one it is held on; a different one later releases it (Tynn #699). */
+    #readAccount(provider: string): void {
+        const read = this.#accountOf;
+        if (!read) return;
+        void read(provider).then((account) => {
+            if (account === null || !this.#heldAccount.has(provider)) return;
+            const was = this.#heldAccount.get(provider) ?? null;
+            if (was === null) { this.#heldAccount.set(provider, account); return; }
+            if (was === account) return;
+            this.#heldAccount.delete(provider);
+            this.resumeLimit(provider);
+        }, () => {});
     }
 
     readonly #currentRecord: ((agentId: AgentId) => AgentRecord | null) | undefined;
@@ -795,7 +846,17 @@ export class SessionHost {
         const ask: Array<() => void> = [];
         for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
             const state = this.#gate.view(this.#loginOf(provider), now).state;
-            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(provider); continue; }
+            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(provider); this.#heldAccount.delete(provider); this.#lastAccountRead.delete(provider); continue; }
+            // The account it is held on, read when the hold begins and every LIMIT_REREAD_MS after (Tynn #699).
+            if (this.#accountOf) {
+                if (!this.#heldAccount.has(provider)) this.#heldAccount.set(provider, null);
+                const lastAccount = this.#lastAccountRead.get(provider);
+                if (lastAccount === undefined || now >= lastAccount + LIMIT_REREAD_MS) {
+                    ask.push(() => this.#readAccount(provider));
+                    this.#lastAccountRead.set(provider, now);
+                    next = Math.min(next, now + LIMIT_REREAD_MS);
+                } else next = Math.min(next, lastAccount + LIMIT_REREAD_MS);
+            }
             // The session that will be asked: the first on this login whose driver can read. None — nothing to wait for.
             const reader = [...this.#running.values()].find((e) => e.provider === provider && e.session.canReadRateLimits);
             if (!reader) { this.#lastLimitRead.delete(provider); continue; }
@@ -936,7 +997,7 @@ export class SessionHost {
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, ...(untrusted ? { untrusted } : {}) });
+            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);
             if (current) {
@@ -952,7 +1013,7 @@ export class SessionHost {
             waitingFor = 'the provider to answer';
             startPhase('handshake');
             return factory;
-        }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
+        }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [] });
         if (!driverFactory) {
             const reason = `Genie cannot run a "${record.provider}" agent. It stays registered and idle.`;
             this.refusals.set(record.id, reason);

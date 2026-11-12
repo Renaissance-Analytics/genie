@@ -3,7 +3,10 @@ import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
 import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
-import { Button, Icon, PromptInput } from '@particle-academy/react-fancy';
+import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { sendKeyHint } from '../../core/send-key.js';
+import { useSendKey } from '../send-key-store.js';
+import { SendKeyBoundary } from './SendKeyBoundary.js';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
@@ -52,7 +55,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'promptId' | 'draftProblem' | 'carried'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'promptId' | 'draftProblem' | 'carried'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -127,6 +130,34 @@ export function ChatWaiting({ id, agentName, waiting, now, onInterruptAndSend }:
             ) : null}
         </div>
     );
+}
+
+/** A turn with no output this long is worth stopping for what waits behind it (Tynn #699). */
+export const QUEUED_SILENT_MS = 120_000;
+
+/**
+ * QUEUED BEHIND A SILENT TURN (Tynn #699: two messages read "waiting for the current turn to end" for 20 minutes behind
+ * a turn that had said nothing since, and nothing on the row let the person act). Past `QUEUED_SILENT_MS` of silence,
+ * `Send now (stop the current turn)` — the Interrupt-and-send path: the turn ends and what waits goes next, in order.
+ * Without a way to stop the turn, only the words. Hook-free: `now` comes from the caller.
+ */
+export function ChatQueuedNote({ id, agentName, silentSince, now, onSendNow }: { id: string; agentName: string; silentSince: number | null; now: number; onSendNow?: (() => void) | undefined }) {
+    const silent = silentSince !== null && now - silentSince >= QUEUED_SILENT_MS;
+    return (
+        <span data-chat-queued={id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]">
+            <span>Queued · waiting for the current turn to end</span>
+            {silent && onSendNow ? (
+                <Button type="button" size="xs" color="amber" data-action="send-now" data-message={id} title={`${agentName} has shown nothing for ${ago(silentSince, now)}: stop its current turn and send what waits, in order`} onClick={() => onSendNow()} className="shrink-0 font-sans">
+                    Send now (stop the current turn)
+                </Button>
+            ) : null}
+        </span>
+    );
+}
+
+function ChatQueuedNoteLive(props: Omit<Parameters<typeof ChatQueuedNote>[0], 'now'>) {
+    const now = useNow(true);
+    return <ChatQueuedNote {...props} now={now} />;
 }
 
 /** `ChatWaiting` with the time kept current, so how long the step has run appears once it is long. */
@@ -454,6 +485,10 @@ function ChatFlyoutBody({
      */
     const elsewhere = scope?.kind === 'elsewhere' ? scope.workspace : null;
     const blocked = scope?.kind === 'blocked' ? scope.reason : null;
+    const sendKey = useSendKey();
+    // Resolved after mount, as the title bar's hint is: reading `navigator` while rendering is a hydration mismatch.
+    const [keysPlatform, setKeysPlatform] = useState('generic');
+    useEffect(() => { setKeysPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
     const addressee = thread ? (elsewhere ? `${thread.name} — in ${elsewhere}` : thread.name) : null;
     // The agent's workspace COLOUR (genie#1300): beside its name in the header, and down the composer's edge.
     const color = useAgentColor(thread?.agentId);
@@ -738,7 +773,9 @@ function ChatFlyoutBody({
                             {mailOnly && m.read !== undefined ? (
                                 <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                             ) : null}
-                            {m.queued ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : m.queuedForProvider ? 'Queued · waiting for the provider to resume' : 'Queued · waiting for the current turn to end'}</span> : null}
+                            {m.queued ? (m.queuedForStart || m.queuedForProvider
+                                ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>
+                                : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} onSendNow={onInterruptAndSend} />) : null}
                             {m.delivered || m.queued ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
                                     {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
@@ -850,6 +887,7 @@ function ChatFlyoutBody({
                  * start empty, and react-fancy reads `defaultDraft` only at mount.
                  */}
                 {drafts !== 'loading' ? (
+                <SendKeyBoundary>
                 <ChatComposers chats={keptChats} active={activeChat}>
                     {(chat) => (
                     <PromptInput
@@ -894,7 +932,11 @@ function ChatFlyoutBody({
                     />
                     )}
                 </ChatComposers>
+                </SendKeyBoundary>
                 ) : null}
+                {/* The keys as they are now (Tynn issue #697), in Genie's own line: the send button's tooltip is the
+                    component's and names only its built-in key, which still sends as well. */}
+                {!blocked ? <div data-composer-keys="" className="px-1 pt-1 text-[10px] text-[var(--fg-4)]">{sendKeyHint(sendKey, keysPlatform)}</div> : null}
                 <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
         </aside>
