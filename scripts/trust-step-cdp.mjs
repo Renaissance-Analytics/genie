@@ -97,7 +97,8 @@ class Cdp {
         let last = 'no attempt';
         while (Date.now() < until && !page) {
             try {
-                const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+                // Bounded (Tynn #692: on the Azure Windows VM this row printed its title and nothing for 60 minutes).
+                const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: AbortSignal.timeout(5_000) })).json();
                 page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl) ?? null;
                 last = `no page yet (${targets.length})`;
             } catch (error) { last = String(error); }
@@ -108,14 +109,20 @@ class Cdp {
         c.#ws = new WebSocket(page.webSocketDebuggerUrl);
         c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (typeof r === 'function') { c.#pending.delete(f.id); r(f); } });
         await new Promise((res, rej) => {
-            c.#ws.addEventListener('open', res, { once: true });
-            c.#ws.addEventListener('error', () => rej(new Error('CDP socket error')), { once: true });
+            const timer = setTimeout(() => rej(new Error(`the page's debugger socket did not open within 15 s (${page.url?.slice(0, 80)})`)), 15_000);
+            c.#ws.addEventListener('open', () => { clearTimeout(timer); res(); }, { once: true });
+            c.#ws.addEventListener('error', () => { clearTimeout(timer); rej(new Error('CDP socket error')); }, { once: true });
         });
         return c;
     }
+    /** Every request is answered or fails within 120 s, naming what it asked: a page that stops answering is a failure. */
     send(method, params = {}) {
         const id = this.#id++;
-        return new Promise((r) => { this.#pending.set(id, r); this.#ws.send(JSON.stringify({ id, method, params })); });
+        return new Promise((r, rej) => {
+            const timer = setTimeout(() => { this.#pending.delete(id); rej(new Error(`no answer to ${method} within 120 s${params.expression ? `: ${String(params.expression).slice(0, 120)}` : ''}`)); }, 120_000);
+            this.#pending.set(id, (f) => { clearTimeout(timer); r(f); });
+            this.#ws.send(JSON.stringify({ id, method, params }));
+        });
     }
     async evaluate(expression) {
         const f = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -146,7 +153,7 @@ function workspaceFolder(name, hook) {
     const folder = join(root, name);
     mkdirSync(join(folder, '.claude'), { recursive: true });
     writeFileSync(join(folder, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: hook }] }] } }));
-    execFileSync('git', ['init', '-q'], { cwd: folder, windowsHide: true, stdio: 'ignore' });
+    execFileSync('git', ['init', '-q'], { cwd: folder, windowsHide: true, stdio: 'ignore', timeout: 30_000 });
     return folder;
 }
 /** A workspace id, as text in an expression: only a word, or this stops here. */

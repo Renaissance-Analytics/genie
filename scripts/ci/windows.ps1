@@ -429,6 +429,37 @@ function Row-packaged-launcher {
     }
 }
 
+# EVERY ROW HAS A CEILING (Tynn #692: trust-step printed its title and then nothing until the Azure job's 90 minutes ran
+# out; no row after it ran). In seconds: the row script's own timeout (as linux.sh gives it, ci.yml's Windows job had
+# none) plus 60 s, or the job's limit, or a stated one. On expiry a watchdog process marks the row and ends every
+# process this script started except the shared app (each with its tree, taskkill /T), so the row's command returns,
+# the row prints `(timed out after N s)`, and the run goes on.
+function Ceiling([string]$name) {
+    switch ($name) {
+        { $_ -in 'deps', 'packaged-launcher' } { return 900 }
+        { $_ -in 'electron-binary', 'package-fuse', 'sign-plan', 'packed-tree', 'update-metadata', 'host-late-ready', 'seed' } { return 300 }
+        { $_ -in 'unit-build', 'build' } { return 600 }
+        'unit' { return 1800 }
+        { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
+        { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
+        'files-watch' { return 240 }
+        { $_ -in 'chat-drafts', 'artboard' } { return 420 }
+        { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
+        { $_ -in 'safe-mode', 'hang' } { return 600 }
+        'package' { return 1500 }
+        default { return 600 }
+    }
+}
+function Start-Watchdog([int]$limit, [string]$mark) {
+    $keep = if ($script:App) { $script:App.Id } else { 0 }
+    $cmd = "Start-Sleep -Seconds $limit; Set-Content -Path '$mark' -Value timed-out; " +
+        "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$PID' | Where-Object { `$_.ProcessId -ne `$PID -and `$_.ProcessId -ne $keep } | " +
+        "ForEach-Object { taskkill /PID `$_.ProcessId /T /F *> `$null }"
+    # Encoded, so no quoting between here and the child can change a character of it.
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($cmd))
+    Start-Process powershell -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded -WindowStyle Hidden -PassThru
+}
+
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 Write-Output "CI WINDOWS rows: $($selected -join ' ')"
@@ -439,16 +470,30 @@ foreach ($name in $selected) {
     Write-Output "=== $name"
     $log = Join-Path $Out "$name.log"
     $ok = $true
+    $limit = Ceiling $name
+    $mark = Join-Path $Setup "timed-out-$name"
+    Remove-Item -Force -ErrorAction SilentlyContinue $mark
+    $watch = Start-Watchdog $limit $mark
     try {
         & "Row-$name" *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $log -Encoding utf8
     } catch {
         $ok = $false
         Add-Content -Path $log -Value "THREW: $($_.Exception.Message)"
+    } finally {
+        # The watchdog and its tree; not what it already ended.
+        if (-not $watch.HasExited) { taskkill /PID $watch.Id /T /F *> $null }
     }
+    $timedOut = Test-Path $mark
+    if ($timedOut) { $ok = $false }
     $secs = [int]((Get-Date) - $started).TotalSeconds
     $script:Results[$name] = if ($ok) { 'PASS' } else { 'FAIL' }
     if ($ok) {
         Write-Output "ROW $name PASS $secs"
+    } elseif ($timedOut) {
+        Write-Output "--- the end of ci-out\$name.log"
+        Get-Content $log -Tail 40
+        Write-Output "ROW $name FAIL $secs (timed out after $limit s)"
+        $script:Failed += $name
     } elseif ($script:Blocked) {
         Write-Output "ROW $name FAIL $secs (not run: $($script:Blocked))"
         $script:Failed += $name

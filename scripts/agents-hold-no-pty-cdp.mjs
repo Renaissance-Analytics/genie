@@ -112,6 +112,14 @@ let terminalId = null;
 let codexId = null;
 try {
     await cdp.evaluate('document.readyState');
+    // THE BRIDGE BEFORE IT IS USED (Tynn #692, the Azure Windows gate: "Cannot read properties of undefined (reading
+    // 'snapshot')": the first page target was there before window.genie was). Waited for, bounded; when it never comes the
+    // failure says which page this was and what it had.
+    const bridgeBy = Date.now() + 60_000;
+    while (Date.now() < bridgeBy && !(await cdp.evaluate("typeof window.genie?.snapshot === 'function'"))) await new Promise((r) => setTimeout(r, 250));
+    if (!(await cdp.evaluate("typeof window.genie?.snapshot === 'function'"))) {
+        throw new Error(`the page never had window.genie.snapshot within 60 s: ${await cdp.evaluate("JSON.stringify({ url: location.href.slice(0, 120), readyState: document.readyState, genie: typeof window.genie, keys: window.genie ? Object.keys(window.genie).slice(0, 20) : null })")}`);
+    }
     const base = ptys();
     const baseStubs = stubProcesses();
     console.log(`  baseline: ptys ${base.total} (${base.detail}); provider processes ${baseStubs}`);

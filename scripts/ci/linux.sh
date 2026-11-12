@@ -605,6 +605,46 @@ machine_line() {
         "$(pgrep -c -x electron 2>/dev/null || true)" "$(pgrep -c -f 'genie-host|dist/main/host.js' 2>/dev/null || true)" "$(pgrep -c -x node 2>/dev/null || true)"
 }
 
+# EVERY ROW HAS A CEILING (Tynn #692: on the Azure Windows VM trust-step printed its title and then nothing until the
+# job's 90 minutes ran out, and no row after it ran). In seconds: the row script's own timeout from ci.yml plus 60 s for
+# the row's own steps, or its ci.yml job's time limit, or a stated one. On expiry the row's processes are ended (every
+# process under this script, except the shared app's), the row prints `(timed out after N s)`, and the run goes on.
+ceiling() {
+    case "$1" in
+        deps|host-plain-node|mailpit) echo 900 ;;
+        electron-binary|package-fuse) echo 300 ;;
+        typecheck|build) echo 600 ;;
+        unit) echo 1800 ;;
+        bundles|sounds|spawn-host) echo 60 ;;
+        seed) echo 300 ;;
+        no-pty|smoke|layout|local-door-break|local-door|gapp-open|trust-step) echo 360 ;;
+        files-watch) echo 240 ;;
+        chat-drafts|artboard) echo 420 ;;
+        ui-lag|renderer-crash) echo 480 ;;
+        site-panel) echo 340 ;;
+        site-panel-locked) echo 180 ;;
+        browser-process) echo 320 ;;
+        safe-mode|hang) echo 600 ;;
+        flows|zip64) echo 1200 ;;
+        package) echo 1500 ;;
+        *) echo 600 ;;
+    esac
+}
+# The watchdog: after the ceiling, it marks the row timed out and ends every process under this script but itself and
+# the shared app's tree. The row's command then returns, failing, and the loop reads the mark.
+watchdog() {
+    local name="$1" limit="$2" mark="$3"
+    sleep "$limit"
+    : >"$mark"
+    local keep p
+    keep=" $BASHPID $(app_tree | tr '\n' ' ') "
+    for p in $(tree_of $$); do
+        [ "$p" = "$$" ] && continue
+        case "$keep" in *" $p "*) continue ;; esac
+        kill -9 "$p" 2>/dev/null || true
+    done
+}
+
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 mkdir -p "$OUT" "$SETUP"
@@ -624,7 +664,13 @@ for name in "${selected[@]}"; do
     blocked=''
     blocked_here=''
     skip_reason=''
-    if "row_$name" >"$OUT/$name.log" 2>&1; then
+    limit="$(ceiling "$name")"
+    mark="$SETUP/timed-out-$name"
+    rm -f -- "$mark"
+    watchdog "$name" "$limit" "$mark" &
+    watch_pid=$!
+    if "row_$name" >"$OUT/$name.log" 2>&1 && [ ! -e "$mark" ]; then
+        kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
         grep -E '^(UNIT|DOCKER|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
         if [ -n "$skip_reason" ]; then
             # Not needed by this change: said as such, and neither a pass nor a fail.
@@ -632,7 +678,14 @@ for name in "${selected[@]}"; do
         else
             echo "ROW $name PASS $((SECONDS - started))"
         fi
+    elif [ -e "$mark" ]; then
+        wait "$watch_pid" 2>/dev/null
+        echo "--- the end of ci-out/$name.log"
+        tail -40 "$OUT/$name.log"
+        echo "ROW $name FAIL $((SECONDS - started)) (timed out after $limit s)"
+        failed+=("$name")
     elif [ -n "$blocked" ]; then
+        kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
         # It could not run: what it needed failed, and the words are that need's, said once in the first row that met it.
         if [ -n "$blocked_here" ]; then
             echo "--- the end of ci-out/$name.log"
@@ -641,6 +694,7 @@ for name in "${selected[@]}"; do
         echo "ROW $name FAIL $((SECONDS - started)) (not run: $blocked)"
         failed+=("$name")
     else
+        kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
         echo "--- the end of ci-out/$name.log"
         tail -60 "$OUT/$name.log"
         if [ "$app" = ok ] && [ -f "$OUT/electron.log" ]; then
