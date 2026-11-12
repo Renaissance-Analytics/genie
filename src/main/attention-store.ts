@@ -97,7 +97,7 @@ export interface Finished {
     readonly agentName: string | null;
     readonly handoff: string | null;
     readonly at: string;
-    readonly seen: boolean;
+    readonly seen?: boolean;
 }
 
 export interface AskInput {

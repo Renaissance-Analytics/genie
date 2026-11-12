@@ -42,7 +42,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     cancelTurn: ['agent_a'], resumeLimit: ['agent_a'], providerLogin: ['agent_a'],
     prompt: ['agent_a', 'hello'], resolvePrompt: ['agent_a', 'draft_1', 'send'],
     addAgent: ['work', { name: 'new', purpose: 'contract', provider: 'claude' }],
-    answerApproval: ['agent_a', 'allow', 'note'], restartWithHandoff: ['agent_a', 'missing'],
+    answerApproval: ['agent_a', 'allow', 'note'],
     'agents.restart': ['agent_a', 'graceful'], 'agents.previewDelete': ['agent_a', 'unmount', []],
     'agents.delete': ['agent_a', 'unmount', [], false], 'agents.switchDriver': ['agent_a', 'codex'],
     'agents.setBudget': ['agent_a', null], 'agents.setMode': ['agent_a', 'manual'],

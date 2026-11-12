@@ -33,7 +33,6 @@ describe('the capability table', () => {
         expect(capabilityOf('prompt')).toBe('write');
         expect(capabilityOf('features.act')).toBe('write');
         expect(capabilityOf('terminals.write')).toBe('write');
-        expect(capabilityOf('restartWithHandoff')).toBe('write');
         // Tynn #845: the upgrade is the owner's, all of it — no baton.
         expect(capabilityOf('updates.check')).toBe('upgrade');
         expect(capabilityOf('updates.download')).toBe('upgrade');

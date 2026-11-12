@@ -69,34 +69,21 @@ describe('imDone', () => {
         expect(r.checklist.map((i) => i.text)).toEqual(['write the VM probe']);
     });
 
-    it('records the finish so the Deck’s finished-with-handoff source can show it', async () => {
+    it('records the finish for agents (Tynn #658): its handoff and when, nothing for a person to mark read', async () => {
         await store.imDone({ agentId: agent, agentName: 'atlas', workspacePath: workspace, handoff: 'all done' });
         const finished = store.finished();
         expect(finished).toHaveLength(1);
-        expect(finished[0]).toMatchObject({ agentId: agent, handoff: 'all done', seen: false });
-        // markSeen saves in the background. Wait for its completed write before reopening the store or removing this
-        // test's directory: CI run 39903987765 removed runtime/ while that write was still creating a temp file.
-        const flushed = new Promise<void>((resolve) => {
-            const off = store.onChange(() => { off(); resolve(); });
-        });
-        store.markSeen(finished[0]!.id);
-        expect(store.finished().filter((f) => !f.seen)).toHaveLength(0);
-        await flushed;
+        expect(finished[0]).toMatchObject({ agentId: agent, handoff: 'all done' });
+        expect(finished[0]).not.toHaveProperty('seen');
         const saved = await AttentionStore.open(dir, inbox, now);
-        expect(saved.finished()).toMatchObject([{ id: finished[0]!.id, seen: true }]);
+        expect(saved.finished()).toEqual(finished);
     });
 
-    it("an agent's LAST handoff, for the workspace dashboard — read or not, its first line, with its time; none = null", async () => {
+    it("an agent's LAST handoff, for the workspace dashboard — its first line, with its time; none = null", async () => {
         await store.imDone({ agentId: agent, agentName: 'atlas', workspacePath: workspace, handoff: 'old run' });
         await store.imDone({ agentId: other, agentName: 'wren', workspacePath: workspace, handoff: 'not atlas' });
         await store.imDone({ agentId: agent, agentName: 'atlas', workspacePath: workspace, handoff: '\nDrawer merged.\nNext: the dashboard' });
         await store.imDone({ agentId: agent, agentName: 'atlas', workspacePath: workspace });
-        // Read on the Deck still counts: the dashboard lists the last finished turns, not the unread ones.
-        // markSeen writes in the background; each mark is awaited through the store's own change notice, so no write is
-        // still landing when the test's folder is removed.
-        const seen = (id: string) => new Promise<void>((resolve) => { const off = store.onChange(() => { off(); resolve(); }); store.markSeen(id); });
-        for (const f of [...store.finished()]) await seen(f.id);
-        expect(store.finished().every((f) => f.seen)).toBe(true);
         const at = (handoff: string) => Date.parse(store.finished().find((f) => f.handoff?.includes(handoff))!.at);
         expect(store.lastHandoff(agent)).toEqual({ text: 'Drawer merged.', at: at('Drawer merged.') });
         expect(store.lastHandoff(other)).toEqual({ text: 'not atlas', at: at('not atlas') });

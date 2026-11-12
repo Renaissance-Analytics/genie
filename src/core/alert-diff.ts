@@ -51,3 +51,8 @@ export function alertsBetween(prev: AlertSnapshot | null, next: AlertSnapshot): 
     }
     return alerts;
 }
+
+/** STUB (tests first, Tynn #658): the finish alert's own high-water mark per agent. */
+export function finishAlerts(seen: ReadonlyMap<string, number | null>, _agents: AlertSnapshot['agents']): { alerts: Alert[]; seen: ReadonlyMap<string, number | null> } {
+    return { alerts: [], seen };
+}

@@ -117,9 +117,8 @@ describe('invoke', () => {
         // An approval's note crosses the wire too (beta.33 item 16): a remote window's rejection reaches the agent.
         expect(await api.invoke('answerApproval', ['agent_a', 'deny', 'not that file'])).toEqual({ ok: true });
         expect(await api.invoke('addAgent', ['tynn', { name: 'scout', purpose: 'Triage', provider: 'codex' }])).toEqual({ ok: true, id: 'agent_new' });
-        expect(await api.invoke('restartWithHandoff', ['agent_a', 'fin_1'])).toEqual({ ok: true });
         // Opening starts nothing any more (q_04ce323c): no `start:` before the stop.
-        expect(f.calls).toEqual(['stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'approve:agent_a:deny:not that file', 'register:tynn:scout:codex', 'agent-restart:agent_a:graceful', expect.stringMatching(/^prompt:agent_a:You are restarting/), 'seen:fin_1']);
+        expect(f.calls).toEqual(['stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'approve:agent_a:deny:not that file', 'register:tynn:scout:codex']);
         expect(api.workspaceOfAgent('agent_a')).toBe('tynn');
         expect(api.workspaceOfAgent('nope')).toBeNull();
     });

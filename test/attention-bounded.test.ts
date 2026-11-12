@@ -127,12 +127,11 @@ describe('the finished history is bounded (Tynn #549)', () => {
         expect(finished.map((f) => Date.parse(f.at))).toEqual([...finished.map((f) => Date.parse(f.at))].sort((a, b) => a - b));
     });
 
-    it('a new handoff over 8 KB is stored cut; an imDone on a full agent drops its oldest seen one', async () => {
+    it('a new handoff over 8 KB is stored cut; an imDone on a full agent drops its oldest one', async () => {
         const store = await AttentionStore.open(dir, await InboxStore.open(dir, now), now);
         const a = agents[0]!;
         for (let i = 0; i < 25; i += 1) {
             await store.imDone({ agentId: a, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: `run ${i} ${'z'.repeat(i === 24 ? 20_000 : 10)}` });
-            store.markSeen(store.finished().at(-1)!.id);
             clock += 1_000;
         }
         await store.imDone({ agentId: a, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: 'the last' });
@@ -212,16 +211,14 @@ describe('the archive: every byte the bound drops or cuts', () => {
         expect((await archiveOf()).some((x) => x.id === short.id)).toBe(false);
     });
 
-    it('a handoff over the cap, and a seen one dropped at an imDone, are archived whole before they go', async () => {
+    it('a handoff over the cap, and one dropped at an imDone, are archived whole before they go', async () => {
         const store = await AttentionStore.open(dir, await InboxStore.open(dir, now), now);
         const a = agents[0]!;
         const long = `run long ${'z'.repeat(20_000)}`;
         for (let i = 0; i < 22; i += 1) {
             await store.imDone({ agentId: a, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: i === 0 ? long : `run ${i}` });
-            store.markSeen(store.finished().at(-1)!.id);
             clock += 1_000;
         }
-        // markSeen writes without waiting: one more awaited change, so nothing is still writing when the folder is removed.
         await store.imDone({ agentId: a, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: 'the last' });
         await (store as unknown as { archived(): Promise<void> }).archived?.();
         const archive = await archiveOf();
