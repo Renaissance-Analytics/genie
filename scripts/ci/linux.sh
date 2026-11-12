@@ -24,7 +24,9 @@
 #     face. An Omarchy desktop has its own fonts, and they are what a person sees.
 #   - Nothing is installed with apt. A command a row needs and the machine lacks is installed with pacman, that package
 #     only (never -Syu: Omarchy refuses a direct system upgrade).
-#   - flows and zip64 always run: ci.yml skips them when a change touches neither, and here there is no base to compare.
+#   - flows and zip64 run only when the change touches them (the owner: Flows acceptance "only when we make changes to
+#     flows"), read from ci-changed.txt: the changed paths, one per line, as `git diff --name-only <base>...HEAD` prints
+#     them, written by the caller (the shipped tree has no .git). With no ci-changed.txt both run: the safe default.
 
 set -uo pipefail
 
@@ -427,8 +429,32 @@ row_safe-mode() { need_build && need_display && on_display timeout 540 node scri
 row_hang() { need_build && need_display && on_display timeout 540 node scripts/hang-cdp.mjs; }
 row_renderer-crash() { need_build && need_display && on_display timeout 420 node scripts/renderer-crash-cdp.mjs; }
 
-row_flows() { need_install && npm run verify:flows; }
-row_zip64() { need_install && npm run verify:zip64; }
+# WHETHER THE CHANGE TOUCHES A SUITE. scripts/flows-paths.mjs and scripts/zip64-paths.mjs decide, from the code (every
+# file the suite's subject is made of, by import, plus the suite, its config and the deciding script itself): the same
+# decision ci.yml made. The list holds names only, so a changed package.json or package-lock.json counts as touching
+# both (ci.yml read the diff for the fancy-flow and yazl lines; a name cannot say which line changed). No list: run.
+CHANGED="$PWD/ci-changed.txt"
+skip_reason=''
+touches() {
+    local script="$1" what="$2" hits
+    if [ ! -f "$CHANGED" ]; then echo "--- no ci-changed.txt: $what runs (the safe default)"; return 0; fi
+    echo "--- ci-changed.txt lists $(grep -c . "$CHANGED") changed path(s)"
+    if grep -qxE 'package(-lock)?\.json' "$CHANGED"; then echo "--- package.json or package-lock.json changed: $what runs"; return 0; fi
+    hits="$(node "$script" --touched "$CHANGED")" || { echo "--- $script could not decide: $what runs"; return 0; }
+    if [ -n "$hits" ]; then echo "--- touches $what:"; echo "$hits"; return 0; fi
+    skip_reason="no $what changes"
+    return 1
+}
+row_flows() {
+    need_install || return 1
+    touches scripts/flows-paths.mjs Flows || return 0
+    npm run verify:flows
+}
+row_zip64() {
+    need_install || return 1
+    touches scripts/zip64-paths.mjs 'zip writer' || return 0
+    npm run verify:zip64
+}
 
 # GENIE-HOST ON PLAIN NODE, as ci.yml's job runs it: Node 22.16.0 exactly (the oldest whose node:sqlite has FTS5) and NO
 # Electron binary, so anything in the host that reaches for Electron fails here instead of finding one. Its own copy of
@@ -509,9 +535,15 @@ for name in "${selected[@]}"; do
     machine_line "$name"
     blocked=''
     blocked_here=''
+    skip_reason=''
     if "row_$name" >"$OUT/$name.log" 2>&1; then
         grep -E '^(UNIT|DOCKER|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
-        echo "ROW $name PASS $((SECONDS - started))"
+        if [ -n "$skip_reason" ]; then
+            # Not needed by this change: said as such, and neither a pass nor a fail.
+            echo "ROW $name SKIP ($skip_reason)"
+        else
+            echo "ROW $name PASS $((SECONDS - started))"
+        fi
     elif [ -n "$blocked" ]; then
         # It could not run: what it needed failed, and the words are that need's, said once in the first row that met it.
         if [ -n "$blocked_here" ]; then
