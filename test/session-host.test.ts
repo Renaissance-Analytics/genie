@@ -2,14 +2,13 @@ import { writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FileSessionStore, MemorySessionStore } from '@particle-academy/prism-harness';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fileLockIdentityStatus, warmLockIdentity } from '@particle-academy/prism-harness';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import { agentRowFor } from '../src/core/roster.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { SessionHost, driverEvents, providerBinary, type DriverFor } from '../src/main/session-host.js';
-import { ThreadStore } from '../src/core/thread-store.js';
 
 /**
  * THE RUNNING AGENTS.
@@ -59,14 +58,12 @@ const noProcessTree: ProcessTree = {
     killTree: (pids) => { reaped = [...reaped, pids]; return { killed: pids.length, refused: false }; },
 };
 
-/** Real disk ledger, with only its lock confined to this test process. */
-class LocalLockThreadStore extends ThreadStore {
-    readonly #locks = new MemorySessionStore();
-
-    override withLock<T>(key: string, callback: () => T | Promise<T>, ttlSeconds?: number, waitSeconds?: number): Promise<T> {
-        return this.#locks.withLock(key, callback, ttlSeconds, waitSeconds);
-    }
-}
+// Match genie-host startup and the thread-write suites: pay the cold Windows PowerShell/CIM
+// identity read before the test, retaining the real file lock and the unchanged 5 s test budget.
+beforeAll(async () => {
+    await warmLockIdentity();
+    console.log(`[#616] ${process.platform} lock identity read once: ${Math.round(fileLockIdentityStatus().sample_duration_ms)} ms`);
+}, 30_000);
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-host-'));
@@ -80,7 +77,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-    vi.restoreAllMocks();
     host.stopAll();
 
     /**
@@ -103,15 +99,10 @@ const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}): AgentRec
 
 describe('starting', () => {
     it('shutdown holds new work and new starts without cancelling the current turn, and the next run re-delivers the held message (Tynn #616)', async () => {
-        // The first awaited disk write otherwise samples Windows' boot identity through PowerShell/CIM
-        // (prism-harness permits 15 s), before the 5 s test can read what is owed. This is a shutdown
-        // unit test: keep the actual disk writes/reads, but inject its lock just like its process tree.
-        const nativeLock = vi.spyOn(FileSessionStore.prototype, 'withLock').mockRejectedValue(new Error('This unit test must not acquire a native machine lock.'));
-        const store = new LocalLockThreadStore(join(dir, 'threads'));
-        const localLock = vi.spyOn(store, 'withLock');
+        expect(fileLockIdentityStatus().sampled, 'the real lock identity is sampled before the test, as at host startup').toBe(true);
         const prompts: unknown[] = [];
         host = new SessionHost({
-            userData: dir, processTree: noProcessTree, clock: () => now, store: () => store,
+            userData: dir, processTree: noProcessTree, clock: () => now,
             driverFor: () => (options) => {
                 events = options.events;
                 return { start: () => {}, prompt: (text) => { prompts.push(text); }, kill: () => { killed += 1; }, cliSessionId: null };
@@ -137,8 +128,6 @@ describe('starting', () => {
         expect(await host.deliverOwed(r.id)).toBe(1);
         expect(prompts).toEqual(['current turn', 'next turn']);
         expect(await host.deliverOwed(r.id)).toBe(0);
-        expect(localLock).toHaveBeenCalled();
-        expect(nativeLock).not.toHaveBeenCalled();
         host.stopAll();
         await host.settled();
     });
