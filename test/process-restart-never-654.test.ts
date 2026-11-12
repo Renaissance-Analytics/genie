@@ -149,10 +149,13 @@ describe('restart:never across a host launch (Tynn #654)', () => {
     it('the host replica and processes tool expose stopped-by-restart without launching anything', async () => {
         const r = await rig();
         const book = await r.open();
-        book.restore();
+        // genie-host attaches the service BEFORE restore, so its already-subscribed replicas must
+        // receive the stopped explanation even when restore starts no supervisor process at all.
         const service = new ProcessesService({ book, supervisor: r.after });
         const replica = new ProcessBookReplica((method, args) => service.call(method, args));
         replica.rebase(service.dump());
+        service.onEvent((dump) => replica.rebase(dump));
+        book.restore();
         const [tool] = processTools({
             resolveCaller: () => ({ agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'ws', workspacePath: r.home }),
             approve: async () => 'denied',
@@ -162,6 +165,18 @@ describe('restart:never across a host launch (Tynn #654)', () => {
         expect(response.isError).toBe(false);
         expect(JSON.parse(response.text).processes).toEqual([expect.objectContaining({ id: r.process.id, state: 'stopped', kept: true, reason: expect.stringMatching(/stopped by restart/i) })]);
         expect(replica.list('ws')).toEqual(book.list('ws'));
+        expect(r.after.started).toEqual([]);
+    });
+
+    it('an enabled schedule with restart:never keeps its schedule and is not labelled stopped by restart', async () => {
+        const r = await rig();
+        const scheduled = await r.first.create({ workspaceId: 'ws', workspacePath: r.home, name: 'nightly', command: 'report', restart: 'never', schedule: { cron: '0 3 * * *', kind: 'command' } });
+        const book = await r.open();
+        book.restore();
+        const row = book.list('ws').find((p) => p.id === scheduled.id);
+        expect(row).toMatchObject({ state: 'stopped', schedule: { enabled: true, cron: '0 3 * * *' } });
+        expect(row?.reason).toBeUndefined();
+        expect(row?.schedule?.nextRunAt).not.toBeNull();
         expect(r.after.started).toEqual([]);
     });
 });
