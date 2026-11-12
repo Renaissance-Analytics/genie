@@ -128,6 +128,11 @@ interface Entry {
 }
 
 export class ProcessSupervisor {
+    /** Host command observation seam (#633); inert at the tests-first checkpoint. Never spawns a second process. */
+    trackExternal(_spec: Omit<ProcessSpec, 'restart' | 'env'>, _control: { pid: number | null; stop: () => void }): { output(data: string): void; finish(exitCode: number | null, stopped?: boolean): void } {
+        return { output: () => {}, finish: () => {} };
+    }
+
     readonly #pty: PtyPort;
     readonly #clock: SupervisorClock;
     readonly #liveness: SupervisorLiveness;
