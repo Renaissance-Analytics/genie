@@ -71,6 +71,11 @@ interface Served {
 
 type PreviewsView = Pick<GAppPreviews, 'list' | 'previewDir' | 'appElement'>;
 
+/** RED stand-in (CodeQL alert #106). */
+export function servedPath(dir: string, segments: readonly string[]): string | null {
+    return join(dir, ...segments);
+}
+
 export class GAppServer {
     readonly #book: Pick<GAppBook, 'list' | 'installedDir' | 'appElement' | 'verifyInstalled'>;
     readonly #previews: PreviewsView | null;
