@@ -1,4 +1,4 @@
-import { HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS, UNKNOWN_HEADER, mainStalls, parseBeat, toMb, type CrashHeader, type CrashRecord, type RssSample, type RunningAgentNote } from '../core/crash-record.js';
+import { EXIT_UNSEEN, HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS, UNKNOWN_HEADER, mainStalls, parseBeat, toMb, type CrashHeader, type CrashRecord, type LostExit, type RssSample, type RunningAgentNote } from '../core/crash-record.js';
 
 /**
  * GENIE-HOST'S HANG WATCHDOG (Tynn story #386; spec `.ai/plans/genie-crash-safe-mode-reporting-spec.md` §1).
@@ -71,6 +71,13 @@ export interface HangWatchdogOptions {
     readonly released?: (pid: number) => Promise<boolean>;
     /** Each hang: when, how many within the window of {@link RELAUNCH_WINDOW_MS}, and whether a new window was started. */
     readonly onHang?: (hang: { at: number; hangs: number; relaunched: boolean }) => void;
+    /**
+     * How a window genie-host STARTED itself ended (after a hang, or an update): its exit code and signal, or `null` for
+     * a pid it did not start (#711). Absent = none known.
+     */
+    readonly exitOf?: (pid: number) => { code: number | null; signal: string | null } | null;
+    /** The window's OWN exit record for `pid`, written at or after `since` (its first beat), or `null` (#711). */
+    readonly ownExit?: (pid: number, since: number) => { reason: string; code: number | null } | null;
     readonly hangMs?: number;
     readonly lostMs?: number;
     readonly rssEveryMs?: number;
@@ -78,8 +85,14 @@ export interface HangWatchdogOptions {
 
 interface Watched {
     pid: number;
+    /** Its first beat on this connection: which window, by when it came (#711). */
+    firstBeatAt: number;
     lastBeatAt: number;
     rss: number;
+    route: string | null;
+    heap: { used: number; limit: number } | null;
+    /** How long it had been silent when its link dropped. */
+    silentBeforeDrop: number | null;
     bye: boolean;
     /** The watchdog ended it for a hang: recorded once, and never again as lost. */
     ended: boolean;
@@ -130,13 +143,16 @@ export class HangWatchdog {
         if (beat === null) return;
         const now = this.#now();
         const known = this.#windows.get(connId);
+        const heap = beat.heapUsed !== undefined && beat.heapLimit !== undefined ? { used: beat.heapUsed, limit: beat.heapLimit } : null;
         if (known) {
             known.pid = beat.pid;
             known.lastBeatAt = now;
             known.rss = beat.rss;
+            if (beat.route !== undefined) known.route = beat.route;
+            if (heap !== null) known.heap = heap;
             if (beat.bye) known.bye = true;
         } else {
-            this.#windows.set(connId, { pid: beat.pid, lastBeatAt: now, rss: beat.rss, bye: beat.bye === true, ended: false, droppedAt: null });
+            this.#windows.set(connId, { pid: beat.pid, firstBeatAt: now, lastBeatAt: now, rss: beat.rss, route: beat.route ?? null, heap, silentBeforeDrop: null, bye: beat.bye === true, ended: false, droppedAt: null });
         }
         this.#newestRss = { at: now, rss: beat.rss, ...(beat.rendererRss !== undefined ? { pageRss: beat.rendererRss } : {}) };
     }
@@ -147,6 +163,7 @@ export class HangWatchdog {
         if (!w) return;
         if (w.bye || w.ended || this.#shuttingDown) { this.#windows.delete(connId); return; }
         w.droppedAt = this.#now();
+        w.silentBeforeDrop = w.droppedAt - w.lastBeatAt;
     }
 
     /** This host is ending (it writes the clean-exit marker last): no window that drops with it is lost, and none is ended. */
@@ -251,6 +268,11 @@ export class HangWatchdog {
     }
 
     #lost(w: Watched, now: number): void {
+        // HOW IT ENDED, as far as anyone saw (#711): the exit genie-host saw for a window it started, else the window's own
+        // exit record (an exit path it caught), else nothing — and the record says what that leaves.
+        const child = this.#safe(() => this.#o.exitOf?.(w.pid) ?? null, null);
+        const own = child === null ? this.#safe(() => this.#o.ownExit?.(w.pid, w.firstBeatAt) ?? null, null) : null;
+        const exit: LostExit | null = child !== null ? { code: child.code, signal: child.signal, seenBy: 'genie-host' } : own !== null ? { code: own.code, signal: null, seenBy: 'window', reason: own.reason } : null;
         const record: CrashRecord = {
             ...this.#safe(() => this.#o.header(), UNKNOWN_HEADER),
             kind: 'lost',
@@ -260,9 +282,20 @@ export class HangWatchdog {
             lastRssMb: toMb(w.rss),
             lifecycle: this.#safe(() => this.#o.lifecycle(), []),
             memory: [...this.#samples],
+            window: {
+                pid: w.pid,
+                firstBeatAt: new Date(w.firstBeatAt).toISOString(),
+                route: w.route,
+                heapMb: w.heap === null ? null : toMb(w.heap.used),
+                heapLimitMb: w.heap === null ? null : toMb(w.heap.limit),
+                silentMsBeforeDrop: w.silentBeforeDrop,
+            },
+            exit,
+            ...(exit === null ? { exitUnseen: EXIT_UNSEEN } : {}),
         };
         this.#safe(() => this.#o.write(record), undefined);
-        this.#o.log(`lost window pid=${w.pid}: its link dropped with no goodbye and the process is gone`);
+        const how = exit === null ? 'its exit was not seen' : `exit code=${exit.code ?? '-'} signal=${exit.signal ?? '-'} seen by ${exit.seenBy}`;
+        this.#o.log(`lost window pid=${w.pid} since=${new Date(w.firstBeatAt).toISOString()} silent_ms=${w.silentBeforeDrop ?? '-'} heap_mb=${w.heap === null ? '-' : `${toMb(w.heap.used)}/${toMb(w.heap.limit)}`}: its link dropped with no goodbye and the process is gone; ${how}`);
     }
 
     #safe<T>(fn: () => T, fallback: T): T {

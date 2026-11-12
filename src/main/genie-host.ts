@@ -21,7 +21,7 @@ import type { TynnBoardPorts } from './tynn-board-client.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
-import { crashHeader, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
+import { crashHeader, exitRecordOf, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
 import { providerBinary, realListModels, SessionHost } from './session-host.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
@@ -53,7 +53,7 @@ import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
-import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
+import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess, windowExitOf } from './engine-launch.js';
 import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
 import { AgentShutdownDrain } from '../core/agent-shutdown-drain.js';
 import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
@@ -776,6 +776,9 @@ async function main(): Promise<void> {
         // The new window after the ended one has let go of its process and sockets (Tynn #400), bounded at 10 s.
         released: (pid) => windowReleased(pid, { alive: pidAlive, sockets: tcpSocketsOwnedByAsync }),
         alive: pidAlive,
+        // HOW A LOST WINDOW ENDED (Tynn issue #711): the exit this host saw for a window it started, else the window's own record.
+        exitOf: windowExitOf,
+        ownExit: (pid, since) => exitRecordOf(join(runtime, 'crash'), pid, since),
         hostRss: () => process.memoryUsage.rss(),
         cpuMs: () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; },
         agents: () => {

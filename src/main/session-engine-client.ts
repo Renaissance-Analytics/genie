@@ -75,7 +75,7 @@ import type { UpdateFailedRecord } from './updates-host.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
 import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
-import type { CrashStateView } from '../core/crash-record.js';
+import type { CrashStateView, WindowBeatPayload } from '../core/crash-record.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -1307,7 +1307,7 @@ export class SessionEngineClient {
     }
 
     /** Window main's heartbeat to genie-host's hang watchdog (Tynn #386): a notification (call id 0), no reply. Nothing while not linked. */
-    heartbeat(beat: { pid: number; rss: number; bye?: true }): void {
+    heartbeat(beat: WindowBeatPayload): void {
         const t = this.#transport;
         if (t === null || this.#welcome === null) return;
         t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.heartbeat', args: [beat] }));
