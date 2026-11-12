@@ -956,6 +956,9 @@ export class SessionHost {
      * a second. §6.2 is explicit about it, and the alternative is two provider processes
      * answering as one agent — which is how a user ends up unable to stop something.
      */
+    /** Test-first stub: allow the current turns to finish, holding subsequent work for restart. */
+    holdForShutdown(): void {}
+
     start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };

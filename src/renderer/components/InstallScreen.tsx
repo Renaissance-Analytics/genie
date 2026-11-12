@@ -5,7 +5,7 @@ import type { InstallScreen as InstallScreenModel } from '../../core/install-scr
  * that time"). Covers the window from the "Restart to install" click until Genie is gone, saying what it waits for —
  * the words come from core/install-screen.ts. Nothing on it can be clicked: there is nothing left to do but wait.
  */
-export function InstallScreen({ screen }: { screen: InstallScreenModel }) {
+export function InstallScreen({ screen }: { screen: InstallScreenModel; onForce?: (() => void) | undefined }) {
     return (
         <div
             data-install-screen

@@ -7,12 +7,13 @@
 export interface InstallScreenInput {
     readonly phase: string;
     readonly version: string | null;
-    readonly installing?: { readonly step: 'agents' | 'processes' | 'restarting'; readonly agents: number; readonly left: number };
+    readonly installing?: { readonly step: 'waiting' | 'agents' | 'processes' | 'restarting'; readonly agents: number; readonly left: number; readonly reason?: 'upgrade' | 'quit'; readonly waiting?: readonly { id: string; name: string }[]; readonly deadline?: number; readonly interrupted?: readonly { id: string; name: string }[] };
 }
 
 export interface InstallScreen {
     readonly title: string;
     readonly detail: string;
+    readonly forceLabel?: string;
 }
 
 export function installScreen(state: InstallScreenInput | null, asked: boolean): InstallScreen | null {

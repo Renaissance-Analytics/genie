@@ -1,6 +1,7 @@
 import { orphanReport, orphansUnder, type RunningProcess } from './upgrade.js';
 import { changelogBetween, type ReleaseLike, type UpdateChangelog } from '../core/update-notes.js';
 import { DEFAULT_UPDATE_CHANNEL, updaterConfigFor, type UpdateChannel } from '../core/update-channel.js';
+import type { AgentDrainOutcome, AgentDrainProgress, ShutdownReason } from '../core/agent-shutdown-drain.js';
 
 /**
  * THE UPDATE HOST — §7, wired.
@@ -62,9 +63,13 @@ export interface UpdateState {
 }
 
 export interface InstallProgress {
-    step: 'agents' | 'processes' | 'restarting';
+    step: 'waiting' | 'agents' | 'processes' | 'restarting';
     agents: number;
     left: number;
+    reason?: ShutdownReason;
+    waiting?: AgentDrainProgress['waiting'];
+    deadline?: number;
+    interrupted?: AgentDrainOutcome['interrupted'];
 }
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
@@ -96,6 +101,8 @@ export interface DrainAgentsPort {
     live(): ReadonlyArray<{ id: string; name: string }>;
     /** End every session; resolves once each stop has ended, reporting how many are still stopping as they do. */
     stopAll(onLeft?: (left: number) => void): Promise<void> | void;
+    waitForSafe?(reason: ShutdownReason, progress: (state: AgentDrainProgress) => void): Promise<AgentDrainOutcome>;
+    force?(): boolean;
 }
 
 
@@ -194,6 +201,10 @@ export class UpdateHost {
     state(): UpdateState {
         return this.current;
     }
+
+    /** Test-first stub: quit shares the upgrade's safe-point wait. */
+    prepareQuit(): Promise<AgentDrainOutcome> { return Promise.resolve({ interrupted: [], forced: false, timedOut: false }); }
+    forceDrain(): boolean { return false; }
 
     /**
      * Arm the automatic checks: one after `initialMs`, then one every `intervalMs`, each only

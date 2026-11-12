@@ -90,6 +90,29 @@ const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}): AgentRec
     agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas', ...over });
 
 describe('starting', () => {
+    it('shutdown holds new work and new starts without cancelling the current turn (Tynn #616)', () => {
+        const prompts: unknown[] = [];
+        host = new SessionHost({
+            userData: dir, processTree: noProcessTree,
+            driverFor: () => (options) => {
+                events = options.events;
+                return { start: () => {}, prompt: (text) => { prompts.push(text); }, kill: () => { killed += 1; }, cliSessionId: null };
+            },
+        });
+        const r = record();
+        expect(host.start(r, dir)).toEqual({ ok: true });
+        expect(host.prompt(r.id, 'current turn')).toBe(true);
+        expect(prompts).toHaveLength(1);
+        host.holdForShutdown();
+        expect(killed).toBe(0);
+        expect(host.probe(r.id)?.inTurn).toBe(true);
+        expect(host.prompt(r.id, 'next turn')).toBe(true); // held, never silently discarded
+        events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+        expect(prompts).toHaveLength(1);
+        expect(host.probe(r.id)?.inTurn).toBe(false);
+        expect(host.start(record({ name: 'new worker' }), dir)).toMatchObject({ ok: false, reason: expect.stringMatching(/shutting down/i) });
+    });
+
     it('REATTACHES rather than creating a second session', () => {
         /**
          * §6.2. The alternative is two provider processes answering as one agent, which is how
