@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * A HOST THAT IS READY LATE (Tynn #700). Run from a built tree on a test VM or CI runner only, never the owner's desktop:
+ * A HOST THAT IS READY LATE (Tynn #700). Run from a built tree on a test machine only (GENIE_TEST_MACHINE=1, which both
+ * gates set; it refuses otherwise), never the owner's desktop:
  *   node scripts/host-late-ready-cdp.mjs
  * Own temporary home and profile. genie-host is started 25 s late on purpose (GENIE_TEST_HOST_READY_DELAY_MS, read only by
  * the host just before it writes its record), past the 20 s the window used to give up at. PASS only when the window
@@ -55,6 +56,9 @@ async function cleanup() {
 }
 
 try {
+    // A TEST MACHINE ONLY: both gates set GENIE_TEST_MACHINE=1 on one (scripts/ci/linux.sh, windows.ps1). Anywhere else
+    // this starts nothing: it would launch Genie on someone's desktop.
+    if (process.env.GENIE_TEST_MACHINE !== '1') throw new Error('refused: not a test machine (GENIE_TEST_MACHINE=1 says one is); nothing was launched');
     let busy = false;
     try { await fetch(`http://127.0.0.1:${PORT}/json/version`, { signal: AbortSignal.timeout(1_000) }); busy = true; } catch (e) { if (e.name === 'TimeoutError') busy = true; }
     if (busy) throw new Error(`debugger port ${PORT} is occupied; no existing app was touched`);
