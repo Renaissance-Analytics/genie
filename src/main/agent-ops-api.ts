@@ -97,7 +97,7 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
 }
 
 /** The host API's `agents.*`, over those ports. Every write refreshes what clients see the moment it ends (`touch`). */
-export function agentOpsApi(ops: AgentOpsPorts, touch: () => void, engine: () => Pick<AgentEngine, 'toolOutput'> | null): HostApiDeps['agentOps'] {
+export function agentOpsApi(ops: AgentOpsPorts, touch: () => void, engine: () => Pick<AgentEngine, 'toolOutput' | 'attachment'> | null): HostApiDeps['agentOps'] {
     return {
         restart: (id, kind) => restartAgent(ops, id, kind).finally(touch),
         previewDelete: (id, outcome, also) => previewDelete(ops, id, outcome, also),
@@ -118,5 +118,6 @@ export function agentOpsApi(ops: AgentOpsPorts, touch: () => void, engine: () =>
         diagnose: (id) => diagnose(ops, id),
         // A tool row's whole output, read by the agent host from its own store (Tynn story #386).
         toolOutput: (id, toolCallId) => engine()?.toolOutput(id as AgentId, toolCallId) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s agents are not running yet' }),
+        attachment: (id, attachmentId) => engine()?.attachment(id as AgentId, attachmentId) ?? Promise.resolve({ ok: false as const, reason: 'Genie’s agents are not running yet' }),
     };
 }

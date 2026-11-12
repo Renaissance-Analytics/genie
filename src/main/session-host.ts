@@ -130,6 +130,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
@@ -1791,6 +1792,23 @@ export class SessionHost {
             return kept === null ? { ok: false, reason: 'the whole output of this call was not kept' } : { ok: true, ...kept };
         } catch (error) {
             return { ok: false, reason: `the output file could not be read (${error instanceof Error ? error.message : String(error)})` };
+        }
+    }
+
+    /**
+     * ONE IMAGE A THREAD KEPT (Tynn #642): what a sent message's pill shows, read from this host's own store beside the
+     * agent's ledger when the pill asks. An id this host did not make, or one no longer kept (the thread's bounds let the
+     * oldest go), is a refusal with its reason.
+     */
+    async attachment(agentId: AgentId, attachmentId: string): Promise<AttachmentReply> {
+        await this.settled();
+        const store = this.#store();
+        if (!(store instanceof ThreadStore)) return { ok: false, reason: 'this agent’s history keeps no images' };
+        try {
+            const kept = await store.readAttachment(threadKeyFor(agentId), attachmentId);
+            return kept === null ? { ok: false, reason: 'this image is no longer kept' } : { ok: true, ...kept };
+        } catch (error) {
+            return { ok: false, reason: `the image could not be read (${error instanceof Error ? error.message : String(error)})` };
         }
     }
 

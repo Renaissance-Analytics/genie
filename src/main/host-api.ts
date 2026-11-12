@@ -30,6 +30,7 @@ import { isLocalDraftMethod } from '../core/local-drafts.js';
 import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js';
 import { isLocalArtboardMethod } from '../core/local-artboard.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import { invokeLocalArtboard, type LocalArtboardPort } from './local-artboard-api.js';
 import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js';
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
@@ -248,6 +249,8 @@ export interface HostApiDeps {
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
         /** A tool row's whole output, from the host's store, bounded (Tynn story #386). Absent = previews only. */
         toolOutput?(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
+        /** One image a thread kept (Tynn #642), for a sent message's pill. */
+        attachment?(agentId: string, attachmentId: string): Promise<AttachmentReply>;
     };
     /** Every agent's activity feed (the Dashboard's lanes, beta.33 item 10): one workspace's, and each as it changes. */
     activity?: {
@@ -488,6 +491,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.toolOutput':
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'toolOutput names an agent and a tool call' };
                 return deps.agentOps.toolOutput ? deps.agentOps.toolOutput(args[0], args[1]) : { ok: false, reason: 'this host keeps no tool outputs' };
+            case 'agents.attachment':
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'attachment names an agent and an image' };
+                return deps.agentOps.attachment ? deps.agentOps.attachment(args[0], args[1]) : { ok: false, reason: 'this host keeps no images' };
             case 'workspaces.previewAdd':
                 // Preserve the retired native wizard's early refusals before any coercion or disk operation.
                 if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };

@@ -694,6 +694,8 @@ export class SessionEngineServer {
             }
             case 'engine.toolOutput':
                 return host.toolOutput(id(), typeof args[1] === 'string' ? args[1] : '');
+            case 'engine.attachment':
+                return host.attachment(id(), typeof args[1] === 'string' ? args[1] : '');
             case 'engine.settled':
                 await host.settled();
                 return true;

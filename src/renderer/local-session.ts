@@ -292,6 +292,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             models: (id, refresh) => requestAgent((agents) => agents.models!(id, refresh)),
             diagnose: (id) => requestAgent((agents) => agents.diagnose(id)),
             toolOutput: (id, toolCallId) => requestAgent((agents) => agents.toolOutput(id, toolCallId)),
+            attachment: (id, attachmentId) => requestAgent((agents) => agents.attachment(id, attachmentId)),
         },
         workspaces: {
             previewAdd: (path) => request((ws) => ws.previewAdd(path)),

@@ -99,7 +99,10 @@ describe('the capability table', () => {
         // 158 with a preview's run and its network (V8, Tynn #573).
         // 159 with `agents.setMcpServer` (one MCP server on or off for one agent, Tynn #628): a write, agent-scoped.
         // 160 with `workspaces.setMcpServer` (a workspace's default for its agents' MCP servers, Tynn #628): a write, workspace-scoped.
-        expect(REMOTE_METHODS.length).toBe(160);
+        // 161 with `agents.attachment` (one image a thread kept, read when a sent pill asks, Tynn #642): a read, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(161);
+        expect(capabilityOf('agents.attachment')).toBe('read');
+        expect(AGENT_SCOPED_METHODS).toContain('agents.attachment');
         for (const method of ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const) expect(capabilityOf(method)).toBe('local');
         expect(capabilityOf('features.soundData')).toBe('local');
         expect(capabilityOf('features.picked')).toBe('local');

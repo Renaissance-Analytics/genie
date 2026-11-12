@@ -175,6 +175,19 @@ describe('invoke', () => {
         expect(capabilityOf('agents.toolOutput' as never)).toBe('read');
     });
 
+    it('agents.attachment (Tynn #642): one image a thread kept, on demand, from the host; a read, agent-scoped; its arguments narrowed', async () => {
+        const f = fakes();
+        const asked: string[] = [];
+        const attachment = async (agentId: string, id: string) => { asked.push(`${agentId}:${id}`); return { ok: true as const, mimeType: 'image/png', data: 'iVBORw0K', bytes: 6 }; };
+        const api = buildHostApi({ ...f.deps, agentOps: { ...f.deps.agentOps, attachment } } as typeof f.deps);
+        expect(await api.invoke('agents.attachment' as never, ['agent_a', 'abc'])).toEqual({ ok: true, mimeType: 'image/png', data: 'iVBORw0K', bytes: 6 });
+        expect(asked).toEqual(['agent_a:abc']);
+        expect(await api.invoke('agents.attachment' as never, ['agent_a', 7])).toMatchObject({ ok: false });
+        expect(await api.invoke('agents.attachment' as never, ['agent_a', ''])).toMatchObject({ ok: false });
+        expect(asked).toHaveLength(1);
+        expect(capabilityOf('agents.attachment' as never)).toBe('read');
+    });
+
     it('host-only methods throw with where to do them — the RemoteHost refuses them earlier; this is the backstop', async () => {
         const api = buildHostApi(fakes().deps);
         await expect(api.invoke('addWorkspace', [])).rejects.toThrow(/folder picker/);
