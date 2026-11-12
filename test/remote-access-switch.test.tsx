@@ -123,26 +123,28 @@ describe('Settings → Remote access', () => {
     const render = (remote: RemoteSection) => renderToStaticMarkup(<RemoteAccess remote={remote} workspaces={[]} onAction={() => {}} />);
 
     /*
-     * CONNECTED TO A DRONE (Azure pair gp-11102252): the window draws the Drone's Remote access, whose role is `drone`, and
-     * "Drive another machine" was hidden by THAT role, so the Pilot had no Disconnect and no remembered hosts.
+     * CONNECTED TO A DRONE (Azure pair gp-11102252): the window draws the Drone's Remote access, whose role is `drone`.
+     * Since Tynn #640 the page is the Drone's own settings alone; the Pilot's Disconnect is the title bar's host badge
+     * (test/remote-settings-own-only.test.tsx), so no role can take it away.
      */
-    it('connected to a drone: Disconnect and the remembered hosts are still there', () => {
+    it('connected to a drone: the page is the drone’s own, with nothing to drive another machine', () => {
         const connect = { state: { connected: true, host: 'drone', isOwner: true, workspaceId: null, driver: 'pilot', driving: true, locked: false, lastRefusal: null, needsBaton: false } as never, remembered: [], onConnect: () => {}, onDisconnect: () => {}, known: [{ url: 'wss://drone:7421/genie', name: 'drone', lastConnectedAt: 1 }] as never };
         const html = renderToStaticMarkup(<RemoteAccess remote={{ ...base, tynnWorkstation: { role: 'drone' } as never }} workspaces={[]} onAction={() => {}} connect={connect as never} />);
-        expect(html).toContain('data-remote-connected');
-        expect(html).toMatch(/>Disconnect</);
+        expect(html).toContain('data-remote-enabled');
+        expect(html).not.toContain('data-remote-connected');
+        expect(html).not.toContain('data-drive-another');
     });
 
     /*
      * A DRONE WITH NO WINDOW OPEN (Azure pair gp-11102335, beta.61): it answers no feature snapshot, so the page it draws has
-     * no Remote access section yet (`remote: null`, the skeleton). "Drive another machine" is this window's, not the
-     * host's: it was inside the skeleton's gate, so for 150 s the Pilot drove the Drone with no Disconnect.
+     * no Remote access section yet (`remote: null`, the skeleton): for 150 s the Pilot drove the Drone with no Disconnect.
+     * Disconnect is the title bar's host badge now (Tynn #640); the page says the host has sent nothing yet.
      */
-    it('connected to a host that has sent no Remote access yet: Disconnect is there', () => {
+    it('connected to a host that has sent no Remote access yet: the page says so, and offers nothing else', () => {
         const connect = { state: { connected: true, host: 'drone', isOwner: true, workspaceId: null, driver: 'pilot', driving: true, locked: false, lastRefusal: null, needsBaton: false } as never, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
         const html = renderToStaticMarkup(<RemoteAccess remote={null} workspaces={[]} onAction={() => {}} connect={connect as never} />);
-        expect(html).toContain('data-remote-connected');
-        expect(html).toMatch(/>Disconnect</);
+        expect(html).toContain('to see its settings');
+        expect(html).not.toContain('data-remote-connected');
     });
 
     it('connected and the host has sent no Remote access: it says so, in words, naming the host, never an endless skeleton', () => {
@@ -156,7 +158,7 @@ describe('Settings → Remote access', () => {
         const connect = { state: { connected: true, host: 'drone', isOwner: true, workspaceId: null, driver: 'pilot', driving: true, locked: false, lastRefusal: null, needsBaton: false } as never, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
         const html = renderToStaticMarkup(<RemoteAccess remote={base} workspaces={[]} onAction={() => {}} connect={connect as never} />);
         expect(html).not.toContain('to see its settings');
-        expect(html).toContain('data-remote-connected');
+        expect(html).toContain('data-remote-enabled');
     });
 
     it('CONTROL: not connected and nothing read yet, there is only the skeleton', () => {

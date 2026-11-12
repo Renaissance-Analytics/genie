@@ -53,7 +53,7 @@ describe('the popover', () => {
     });
 });
 
-describe('the role switch stays reachable: Settings → Remote access', () => {
+describe('the role switch stays reachable: the host picker’s Other ways (Tynn #640; it was Settings → Remote access)', () => {
     it('a pilot gets it there, on one line', () => {
         const html = renderToStaticMarkup(<ConnectRemote state={null} remembered={[]} onConnect={() => {}} onDisconnect={() => {}} tynnWorkstations={LIST} onOpenWorkstation={() => {}} onSetRole={setRole} />);
         expect(control(row(html, 'ws_found'), 'data-action="change-role"')!.open).toMatch(/\sclass="[^"]*\bwhitespace-nowrap\b/);
