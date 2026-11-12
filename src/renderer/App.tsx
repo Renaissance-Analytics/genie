@@ -87,6 +87,7 @@ import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
 import { deviceLabelFromUserAgent, fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
+import { answerDeckForm } from './deck-answer.js';
 import { MobileAgent, MobileConnecting, MobileFileView, MobileFiles, MobilePair, MobileShell, type MobilePreview } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
@@ -727,6 +728,8 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const go = (next: Parameters<typeof mobileHash>[0]) => { window.location.hash = mobileHash(next); };
     const agentId = visibleAgentSubject(snapshot, view.kind === 'agent' ? view.agentId : null);
     const { detail } = useAgentDetail(bridge, agentId);
+    // A tool row's whole output, from the host, as the desktop Stream asks for it — one function per agent, so rows keep theirs.
+    const toolOutput = useMemo(() => (bridge && agentId !== null ? (toolCallId: string) => bridge.agents.toolOutput(agentId, toolCallId) : undefined), [bridge, agentId]);
     const [sending, setSending] = useState(false);
     const [sendRefusal, setSendRefusal] = useState<string | null>(null);
 
@@ -760,12 +763,27 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                 return;
         }
     };
+    // A QUESTION FORM answered on the phone (Tynn #652): the desktop Deck's own call, and its refusal said in words.
+    const answerForm = (item: DeckItem, selections: string[][], notes: string[]): void => {
+        setNote(null);
+        setInFlight(item.id);
+        void answerDeckForm(bridge.features, item, selections, notes)
+            .catch((error: unknown) => setNote((error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '')))
+            .finally(() => setInFlight(null));
+    };
+    const agentList = { rows: snapshot.workspaces === null ? null : snapshot.agents.filter((a) => !snapshot.workspaces?.some((w) => w.id === a.workspaceId && w.asleep === true)), onOpen: (id: string) => go({ kind: 'agent', agentId: id }) };
 
-    // ONE AGENT: its chat stream, what it waits on you for, and a composer that takes photos. Back is the browser's back.
+    // ONE AGENT: its panels (the agents, its chat, its work), what it waits on you for, and a composer that takes photos.
+    // Back is the browser's back.
     if (agentId !== null) {
         return (
             <MobileAgent
+                key={agentId}
                 detail={detail}
+                agents={agentList}
+                workspaces={snapshot.workspaces}
+                onAnswerForm={answerForm}
+                loadToolOutput={toolOutput}
                 sending={sending}
                 reconnecting={reconnecting}
                 needs={(snapshot.deckItems ?? []).filter((i) => i.agentId === agentId)}
@@ -800,6 +818,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
             items={snapshot.deckItems}
             answering={inFlight}
             onAnswer={answer}
+            onAnswerForm={answerForm}
             onDisconnect={remote.disconnect}
             workspaces={snapshot.workspaces}
             selectedWorkspace={view.kind === 'home' ? view.workspaceId : null}
@@ -807,7 +826,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
             onOpenFiles={(workspaceId) => go({ kind: 'files', workspaceId, path: '' })}
             agents={{
                 rows: snapshot.workspaces === null ? null : snapshot.agents,
-                onOpen: (id) => go({ kind: 'agent', agentId: id }),
+                onOpen: agentList.onOpen,
             }}
         />
     );
@@ -1997,7 +2016,7 @@ function DesktopApp({ bridge }: AppProps) {
                 // no overall note. A refusal (a question with neither an option nor a note, a label that is not an
                 // option) comes back as the reason and is said beside the Answer button, never only in the console.
                 setDeckFormRefusal(null);
-                void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'deck.answerForm', item, selections, notes, note: '' }).then(setFeatures).catch((error: unknown) => {
+                void answerDeckForm(resolvedBridge?.features ?? NO_FEATURES, item, selections, notes).then(setFeatures).catch((error: unknown) => {
                     // Electron wraps a handler's throw as "Error invoking remote method '<channel>': Error: <reason>".
                     const reason = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
                     console.error('[genie] deck form refused:', reason);

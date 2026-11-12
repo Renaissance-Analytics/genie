@@ -230,12 +230,17 @@ export const MOBILE_PANELS: readonly MobilePanel[] = ['agents', 'chat', 'work'];
 /** How far a finger must travel sideways for a swipe to change the panel. */
 export const SWIPE_MIN_PX = 60;
 
-/** TODO(#652): stub — a swipe's step. */
-export function swipeStep(_dx: number, _dy: number): -1 | 0 | 1 {
-    return 0;
+/**
+ * A SWIPE'S STEP: a finger that travelled at least SWIPE_MIN_PX sideways, and more sideways than down, moves one panel —
+ * left (dx < 0) to the next, right to the one before. A scroll down the chat that drifts sideways is still a scroll.
+ */
+export function swipeStep(dx: number, dy: number): -1 | 0 | 1 {
+    if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) <= Math.abs(dy)) return 0;
+    return dx < 0 ? 1 : -1;
 }
 
-/** TODO(#652): stub — the panel a step lands on. */
-export function panelAfter(panel: MobilePanel, _step: -1 | 0 | 1): MobilePanel {
-    return panel;
+/** The panel a step lands on; at either end it stays. */
+export function panelAfter(panel: MobilePanel, step: -1 | 0 | 1): MobilePanel {
+    const at = MOBILE_PANELS.indexOf(panel);
+    return MOBILE_PANELS[Math.max(0, Math.min(MOBILE_PANELS.length - 1, at + step))] ?? panel;
 }
