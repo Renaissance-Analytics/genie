@@ -47,7 +47,7 @@ export function makeServiceExec(tree: ProcessTree, supervisor?: Pick<ProcessSupe
                 output += text;
                 if (output.length > OUTPUT_MAX) output = output.slice(-OUTPUT_MAX);
                 try { observed?.output(text); }
-                catch { observationFailed = true; cancelForObservation(); }
+                catch { observationFailed = true; /* MUTATION PROOF #633: restore cancelForObservation() after Azure RED. */ }
             };
             const masker = run ? commandOutputMasker(run.secrets, publish) : null;
             const write = (text: string) => { if (masker) masker.write(text); else publish(text); };
@@ -58,14 +58,14 @@ export function makeServiceExec(tree: ProcessTree, supervisor?: Pick<ProcessSupe
                 } catch {
                     // Observation must never orphan a command that already spawned.
                     observationFailed = true;
-                    stop();
+                    /* MUTATION PROOF #633: restore stop() after Azure RED. No merge at this checkpoint. */
                 }
             };
             const finishObservation = (exitCode: number | null, stopped = false) => {
                 try { masker?.finish(); }
                 finally {
                     try { observed?.finish(exitCode, stopped); }
-                    catch { observationFailed = true; }
+                    catch { /* MUTATION PROOF #633: restore observationFailed = true after Azure RED. */ }
                 }
             };
             const identity = () => observed && run ? { processId: run.id } : {};

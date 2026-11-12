@@ -31,6 +31,67 @@ beforeEach(() => {
 afterEach(async () => {
     for (const child of commands) child.emit('close', 0);
     await Promise.allSettled(pending);
+    vi.restoreAllMocks();
+});
+
+describe('service command observation failures never orphan the actual command (#633)', () => {
+    // The injected tree's read/reap and fake child's close need only microtasks, never a real timeout.
+    const settleMicrotasks = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); };
+
+    it('ends the existing child if its visible entry could not be created, without printing observer error data', async () => {
+        const w = rig();
+        vi.spyOn(w.supervisor, 'trackExternal').mockImplementation(() => { throw new Error(`fixture observer failed ${SECRET}`); });
+        const result = w.start();
+        await settleMicrotasks();
+        expect(commands[0]!.kill).toHaveBeenCalledTimes(1);
+        const answer = await result;
+        expect(answer.aborted).toBe(true);
+        expect(answer.output).toContain('Genie could not publish all command activity.');
+        expect(answer.output).not.toContain(SECRET);
+        expect(spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('ends the existing child if sanitized live publication fails; the observer never receives the secret', async () => {
+        const w = rig();
+        const output = vi.fn((_data: string) => { throw new Error(`fixture output failed ${SECRET}`); });
+        vi.spyOn(w.supervisor, 'trackExternal').mockReturnValue({ output, finish: () => {} });
+        const result = w.start(); commands[0]!.stdout.write(`${SECRET}\n`);
+        await settleMicrotasks();
+        expect(commands[0]!.kill).toHaveBeenCalledTimes(1);
+        expect(output.mock.calls[0]?.[0]).toBe('********\n');
+        const answer = await result;
+        expect(answer.aborted).toBe(true); expect(answer.output).not.toContain(SECRET);
+        expect(answer.output).toContain('Genie could not publish all command activity.');
+    });
+
+    it('settles once and reports an observer completion failure without printing its error data', async () => {
+        const w = rig();
+        const finish = vi.fn(() => { throw new Error(`fixture completion failed ${SECRET}`); });
+        vi.spyOn(w.supervisor, 'trackExternal').mockReturnValue({ output: () => {}, finish });
+        const result = w.start(); commands[0]!.emit('close', 0); commands[0]!.emit('close', 0);
+        const answer = await result;
+        expect(finish).toHaveBeenCalledTimes(1); expect(answer.exitCode).toBe(0);
+        expect(answer.output).toContain('Genie could not publish all command activity.');
+        expect(answer.output).not.toContain(SECRET);
+    });
+
+    it('CONTROL: a healthy observer does not cancel the command and retains its output/result', async () => {
+        const w = rig(); const result = w.start(); commands[0]!.stdout.write('ordinary output\n');
+        await settleMicrotasks();
+        expect(commands[0]!.kill).not.toHaveBeenCalled();
+        expect(w.supervisor.log('command-one')).toBe('ordinary output');
+        commands[0]!.emit('close', 0);
+        expect(await result).toMatchObject({ exitCode: 0, output: 'ordinary output\n' });
+    });
+
+    it('CONTROL: an optional absent observation port still masks metadata-bearing execution without cancelling it', async () => {
+        const w = rig();
+        const execute = makeServiceExec({ snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) });
+        const result = execute(w.input); pending.push(result);
+        commands[0]!.stdout.write(`${SECRET}\n`); commands[0]!.emit('close', 0);
+        expect(await result).toMatchObject({ exitCode: 0, output: '********\n' });
+        expect(commands[0]!.kill).not.toHaveBeenCalled(); expect(w.supervisor.list()).toEqual([]);
+    });
 });
 
 function rig() {
