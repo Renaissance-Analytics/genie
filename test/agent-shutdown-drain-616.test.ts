@@ -12,6 +12,57 @@ function rig(initial: ShutdownAgent[] = [{ id: 'a', name: 'atlas', running: true
 }
 
 describe('bounded safe-point wait before quit or upgrade (#616)', () => {
+    it('a completed drain does not cache its outcome for the next shutdown', async () => {
+        const r = rig([{ id: 'a', name: 'atlas', running: true, inTurn: false }]);
+        const first = r.begin(); await first;
+        r.set([{ id: 'a', name: 'atlas', running: true, inTurn: true }]);
+        let done = false; const second = r.begin().then((value) => { done = true; return value; });
+        await settle(); expect(done).toBe(false);
+        expect(r.notify).toHaveBeenCalledTimes(1);
+        r.drain.force(); await second;
+    });
+
+    it('an early force click is consumed by the next begin, without waiting for a timer', async () => {
+        const r = rig();
+        expect(r.drain.force()).toBe(true);
+        expect(await r.begin()).toEqual({ interrupted: [{ id: 'a', name: 'atlas' }], forced: true, timedOut: false });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each(['tick', 'finish', 'begin'] as const)('a roster/probe throw in %s resolves safely instead of losing the bound', async (where) => {
+        vi.useFakeTimers();
+        let broken = where === 'begin';
+        const drain = new AgentShutdownDrain({ agents: () => { if (broken) throw new Error('probe unavailable'); return [{ id: 'a', name: 'atlas', running: true, inTurn: true }]; }, notify: () => {} });
+        let pending!: ReturnType<AgentShutdownDrain['begin']>;
+        expect(() => { pending = drain.begin('upgrade', () => {}); }).not.toThrow();
+        broken = true;
+        if (where === 'finish') expect(() => drain.force()).not.toThrow();
+        else expect(() => vi.advanceTimersByTime(120_000)).not.toThrow();
+        const outcome = await Promise.race([pending, Promise.resolve('still pending')]);
+        expect(outcome).toMatchObject({ interrupted: [] });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('a throwing progress observer cannot strand the shutdown promise', async () => {
+        vi.useFakeTimers();
+        const drain = new AgentShutdownDrain({ agents: () => [{ id: 'a', name: 'atlas', running: true, inTurn: true }], notify: () => {} });
+        let pending!: ReturnType<AgentShutdownDrain['begin']>;
+        expect(() => { pending = drain.begin('upgrade', () => { throw new Error('window gone'); }); }).not.toThrow();
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(await pending).toMatchObject({ timedOut: true });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('explicit recovery releases the hold and allows a fresh wait, without releasing before record/stop', async () => {
+        vi.useFakeTimers();
+        const release = vi.fn();
+        const drain = new AgentShutdownDrain({ agents: () => [], notify: () => {}, release });
+        await drain.begin('quit', () => {});
+        expect(release).not.toHaveBeenCalled(); // Keep queued work held until the caller commits or abandons shutdown.
+        drain.release();
+        expect(release).toHaveBeenCalledTimes(1);
+    });
+
     it.each(['upgrade', 'quit'] as const)('%s notifies working agents once and waits; idle agents are safe immediately', async (reason) => {
         const r = rig([{ id: 'a', name: 'atlas', running: true, inTurn: true }, { id: 'b', name: 'bolt', running: true, inTurn: false }]);
         let done = false; const result = r.begin(reason).then((outcome) => { done = true; return outcome; });

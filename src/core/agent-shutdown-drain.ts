@@ -11,6 +11,7 @@ export interface AgentDrainDeps {
     readonly agents: () => readonly ShutdownAgent[];
     readonly notify: (id: string, text: string) => void;
     readonly hold?: () => void;
+    readonly release?: () => void;
     readonly now?: () => number;
 }
 export const AGENT_DRAIN_WAIT_MS = 120_000;
@@ -27,6 +28,9 @@ export class AgentShutdownDrain {
     } | null = null;
 
     constructor(deps: AgentDrainDeps) { this.#deps = deps; }
+
+    /** Test-first recovery seam: the shutdown did not take this host down. */
+    release(): void {}
 
     begin(reason: ShutdownReason, progress: (state: AgentDrainProgress) => void): Promise<AgentDrainOutcome> {
         if (this.#result) return this.#result;

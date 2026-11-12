@@ -90,7 +90,7 @@ const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}): AgentRec
     agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas', ...over });
 
 describe('starting', () => {
-    it('shutdown holds new work and new starts without cancelling the current turn (Tynn #616)', () => {
+    it('shutdown holds new work and new starts without cancelling the current turn, and the next run re-delivers the held message (Tynn #616)', async () => {
         const prompts: unknown[] = [];
         host = new SessionHost({
             userData: dir, processTree: noProcessTree,
@@ -111,6 +111,28 @@ describe('starting', () => {
         expect(prompts).toHaveLength(1);
         expect(host.probe(r.id)?.inTurn).toBe(false);
         expect(host.start(record({ name: 'new worker' }), dir)).toMatchObject({ ok: false, reason: expect.stringMatching(/shutting down/i) });
+        host.stop(r.id, { graceful: false }); await host.ended(r.id);
+        // A setting/crash replacement of an agent present at hold entry is allowed, so it cannot
+        // disappear from the final restore record merely because its old run ended during the wait.
+        expect(host.start(r, dir)).toEqual({ ok: true });
+        host.releaseAfterShutdown();
+        expect(await host.deliverOwed(r.id)).toBe(1);
+        expect(prompts).toEqual(['current turn', 'next turn']);
+        expect(await host.deliverOwed(r.id)).toBe(0);
+    });
+
+    it('abandoning shutdown releases held input in the current run and permits fresh agent starts', () => {
+        const prompts: unknown[] = [];
+        host = new SessionHost({ userData: dir, processTree: noProcessTree, driverFor: () => (options) => {
+            events = options.events;
+            return { start: () => {}, prompt: (text) => { prompts.push(text); }, kill: () => {}, cliSessionId: null };
+        } });
+        const r = record(); host.start(r, dir); host.holdForShutdown();
+        expect(host.prompt(r.id, 'held during quit')).toBe(true);
+        expect(prompts).toEqual([]);
+        host.releaseAfterShutdown();
+        expect(prompts).toEqual(['held during quit']);
+        expect(host.start(record({ name: 'new worker' }), dir)).toEqual({ ok: true });
     });
 
     it('REATTACHES rather than creating a second session', () => {

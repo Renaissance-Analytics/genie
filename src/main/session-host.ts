@@ -960,6 +960,8 @@ export class SessionHost {
 
     /** Let current turns finish; keep queued/new work for the next run, without cancelling a tool. */
     holdForShutdown(): void { this.#shutdownPending = true; }
+    /** Test-first recovery seam: resume held work if shutdown is abandoned. */
+    releaseAfterShutdown(): void {}
 
     start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);

@@ -103,6 +103,7 @@ export interface DrainAgentsPort {
     stopAll(onLeft?: (left: number) => void): Promise<void> | void;
     waitForSafe?(reason: ShutdownReason, progress: (state: AgentDrainProgress) => void): Promise<AgentDrainOutcome>;
     force?(): boolean;
+    release?(): void;
 }
 
 
@@ -205,6 +206,8 @@ export class UpdateHost {
     /** Quit shares the host's safe-point gate. The caller records/stops only after this resolves. */
     prepareQuit(): Promise<AgentDrainOutcome> { return this.waitForAgents('quit'); }
     forceDrain(): boolean { return this.options.agents?.force?.() ?? false; }
+    /** Test-first recovery seam for a host which stays up. */
+    cancelDrain(): void {}
 
     private waitForAgents(reason: ShutdownReason): Promise<AgentDrainOutcome> {
         const agents = this.options.agents;
