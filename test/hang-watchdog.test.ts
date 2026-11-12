@@ -125,6 +125,52 @@ describe('genie-host hears window main beat, and records a hang', () => {
         expect(r.lines.find((l) => /clock jumped/.test(l))).toMatch(/the window waits pause/);
     });
 
+    /*
+     * THE SECOND HOLD ON A LOADED MACHINE (omarchy-test, the 61.2 gate's hang row, 2026-11-12: H2 failed twice). In a 40 s
+     * hold genie-host's loop came 3.5, 8.4 and 11.6 s late (lifecycle.log `host stall main`), so taking the host's stalled
+     * time off left about 16 s of silence and the hang was never recorded, though the window was silent all 40 s. A stall
+     * says nothing about the window: beats it sent meanwhile wait in the socket and land just after the late tick. So a
+     * late tick holds judgment for a few seconds, for those beats; then the window's real silence is what counts.
+     */
+    it('(c) the 61.2 gate\'s second hold: stalls of 3.5, 8.4 and 11.6 s inside a 40 s silence still end in a hang', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(7);
+        r.jump(3_500); r.second(1);
+        r.second(8);
+        r.jump(8_400); r.second(1);
+        r.second(3);
+        r.jump(11_600); r.second(1);
+        // About 40 s since the last beat, 16 s of it with the host awake.
+        r.second(4);
+        expect(r.records.map((x) => x.kind)).toEqual(['hang']);
+        expect(r.killed).toEqual([4242]);
+    });
+
+    it('CONTROL for (c): a host stall with the window\'s beats queued behind it is not a hang', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(5);
+        for (const held of [3_500, 8_400, 11_600, 25_000]) {
+            // The late tick comes first; the beats the window sent meanwhile are read just after it.
+            r.jump(held); r.second(1);
+            r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+            r.second(4, () => r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB }));
+        }
+        expect(r.records).toEqual([]);
+    });
+
+    it('(d) after a sleep, a window that beats within a couple of seconds of waking is not ended', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(20);
+        r.jump(600_000);
+        r.second(2);
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(20, () => r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB }));
+        expect(r.records).toEqual([]);
+    });
+
     it('CONTROL for (a): the same jumps with the window beating between them: no hang', () => {
         const r = rig();
         r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
