@@ -20,6 +20,8 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
     let current: AgentRecord | null = over.record ?? record();
     const calls: string[] = [];
     const asked: string[] = [];
+    /** The agents whose shown rows the host was told to drop (`SessionHost.forgetShown`, Tynn #647). */
+    const unshown: string[] = [];
     let clock = 1_000;
     const ports: AgentOpsPorts = {
         registry: {
@@ -45,6 +47,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
             ended: async (id) => { calls.push(`ended:${id}`); return null; },
             probe: () => over.probe ?? null,
             deliverOwed: async (id) => { calls.push(`deliverOwed:${id}`); return 0; },
+            forgetShown: (id) => { unshown.push(id); },
         },
         startRefusal: () => null,
         ...(over.models ? { models: { get: async (provider: string) => over.models![provider] ?? { ok: false, provider, reason: 'no list' } } } : {}),
@@ -68,7 +71,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
         providerInstalled: () => over.installed ?? true,
         signedIn: () => over.signedIn ?? true,
     };
-    return { ports, calls, asked, current: () => current, clock: () => clock };
+    return { ports, calls, asked, unshown, current: () => current, clock: () => clock };
 }
 
 describe('restart', () => {
@@ -108,11 +111,14 @@ describe('delete', () => {
         expect(await deleteAgent(u.ports, 'agent_a', 'unmount', [])).toMatchObject({ ok: true, plan: { outcome: 'unmount' } });
         expect(u.calls).toEqual(['stop:agent_a', 'forget:agent_a']);
         expect(u.current()).toBeNull();
+        // What its ledger last showed goes with it (Tynn #647): nothing stands in for a deleted agent's history.
+        expect(u.unshown).toEqual(['agent_a']);
 
         const d = fakes({ linked: ['tynn'] });
         expect(await deleteAgent(d.ports, 'agent_a', 'delete', ['tynn'])).toMatchObject({ ok: true, plan: { outcome: 'delete', external: [{ system: 'tynn', action: 'removed' }] } });
         // The host joins the persona folder with the OS's separator; on Windows that is backslashes.
         expect(d.calls).toEqual(['stop:agent_a', 'forget:agent_a', `rmdir:${join('/w/tynn', '.agents', 'atlas')}`, 'rmhandoff:atlas']);
+        expect(d.unshown).toEqual(['agent_a']);
     });
 });
 
@@ -183,6 +189,7 @@ describe('delete only ever removes a folder inside the workspace’s .agents/', 
         expect(await previewDelete(f.ports, 'agent_a', 'delete', [])).toMatchObject({ ok: false, reason: expect.stringMatching(/not inside .*[.]agents/) });
         expect(await deleteAgent(f.ports, 'agent_a', 'delete', [])).toMatchObject({ ok: false, reason: expect.stringMatching(/not inside .*[.]agents/) });
         expect(f.calls).toEqual([]);
+        expect(f.unshown).toEqual([]);
         expect(f.current()).not.toBeNull();
     });
 

@@ -54,6 +54,7 @@ function engine(state: { probe: Probe | null } = { probe: IDLE }) {
         settleParked: (_id: string, decision: string) => { calls.push(`settleParked ${decision}`); return true; },
         historyRows: async () => ({ rows: [], truncated: false }),
         toolOutput: async (_id: string, callId: string) => { calls.push(`toolOutput ${callId}`); return { ok: true, output: 'the whole output' }; },
+        forgetShown: () => { calls.push('forgetShown'); },
         emit: (id: string) => { for (const l of subscribers) l(id); },
     };
     return fake as unknown as HostAloneEngine & { emit(id: string): void };
@@ -196,7 +197,8 @@ describe('they do what the window\'s do', () => {
         expect(await api.invoke('agents.previewDelete', [atlas.id, 'delete', []])).toMatchObject({ ok: true, plan: {} });
         expect(registry.find(atlas.id)).not.toBeNull();
         expect(await api.invoke('agents.delete', [atlas.id, 'delete', [], false])).toMatchObject({ ok: true });
-        expect(calls).toEqual(['stop']);
+        // Stopped, and what its ledger last showed dropped (Tynn #647): nothing of it stands in again.
+        expect(calls).toEqual(['stop', 'forgetShown']);
         expect(registry.find(atlas.id)).toBeNull();
         await expect(stat(join(workspace, '.agents', 'atlas'))).rejects.toThrow();
     });

@@ -683,6 +683,9 @@ export class SessionEngineServer {
                 return true;
             case 'engine.deliverOwed':
                 return host.deliverOwed(id(), (args[1] as { text: string; by: string } | undefined) ?? undefined);
+            case 'engine.forgetShown':
+                host.forgetShown(id());
+                return true;
             case 'engine.ended':
                 return host.ended(id());
             case 'engine.historyRows': {
