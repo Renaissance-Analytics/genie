@@ -636,9 +636,9 @@ ceiling() {
 # The watchdog: after the ceiling, it marks the row timed out and ends every process under this script but itself and
 # the shared app's tree. The row's command then returns, failing, and the loop reads the mark.
 watchdog() {
-    local name="$1" limit="$2" mark="$3"
+    local name="$1" limit="$2" mark="$3" token="$4"
     sleep "$limit"
-    : >"$mark"
+    printf '%s\n' "$token" >"$mark"
     local keep p
     keep=" $BASHPID $(app_tree | tr '\n' ' ') "
     for p in $(tree_of $$); do
@@ -669,10 +669,17 @@ for name in "${selected[@]}"; do
     skip_reason=''
     limit="$(ceiling "$name")"
     mark="$SETUP/timed-out-$name"
+    # This row's own token (windows.ps1 read a list as a timeout once): a mark that is not this row's is not a timeout.
+    token="$name-$$-$RANDOM-$SECONDS"
     rm -f -- "$mark"
-    watchdog "$name" "$limit" "$mark" &
+    watchdog "$name" "$limit" "$mark" "$token" &
     watch_pid=$!
-    if "row_$name" >"$OUT/$name.log" 2>&1 && [ ! -e "$mark" ]; then
+    row_status=0
+    "row_$name" >"$OUT/$name.log" 2>&1 || row_status=$?
+    # A ROW THAT ENDS BEFORE ITS CEILING CANNOT READ AS TIMED OUT: the mark holds this row's token, and the time passed.
+    timed_out=''
+    if [ -f "$mark" ] && [ "$(cat -- "$mark")" = "$token" ] && [ $((SECONDS - started)) -ge $((limit - 5)) ]; then timed_out=1; fi
+    if [ "$row_status" = 0 ] && [ -z "$timed_out" ]; then
         kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
         grep -E '^(UNIT|DOCKER|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
         if [ -n "$skip_reason" ]; then
@@ -681,7 +688,7 @@ for name in "${selected[@]}"; do
         else
             echo "ROW $name PASS $((SECONDS - started))"
         fi
-    elif [ -e "$mark" ]; then
+    elif [ -n "$timed_out" ]; then
         wait "$watch_pid" 2>/dev/null
         echo "--- the end of ci-out/$name.log"
         tail -40 "$OUT/$name.log"
