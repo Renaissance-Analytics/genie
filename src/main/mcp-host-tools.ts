@@ -8,9 +8,9 @@ import { NO_PAGES_HERE, notAvailableHere, type HostCapabilities } from '../core/
  *
  * Genie's MCP server lives in genie-host, so an agent keeps its tools when the window closes. The tools whose world is
  * the host's own — the stores agents write to, the sessions, the processes, flows, terminals, sites and services — run
- * here. The others (pages, workspace tabs, createAgent, checkIssues, openFileForUser, the plugins' tools) still need
+ * here, including the enabled plugins' tools. The others (pages, workspace tabs, createAgent, checkIssues, openFileForUser) still need
  * what only the window has, so their calls are FORWARDED to it whole, with the caller the host resolved; the window runs
- * today's handler. So are `sites open` and `services exec` (WINDOW_ACTIONS). With no window the agent is told at once,
+ * today's handler. So is `sites open` (WINDOW_ACTIONS). With no window the agent is told at once,
  * in words; a window that closes mid-call answers the same way.
  */
 
@@ -23,11 +23,10 @@ export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'Fo
 
 /**
  * The actions of a host tool that still need the WINDOW: forwarded to it like a window tool, the rest answered here.
- * `sites open` shows the site in Genie's browser in front of the person; `services exec` runs its command in the window.
+ * `sites open` shows the site in Genie's browser in front of the person. Service commands run in the host.
  */
 export const WINDOW_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
     sites: new Set(['open']),
-    services: new Set(['exec']),
 };
 
 /** Whether this call runs in the window: every window tool's, and a host tool's window action. */

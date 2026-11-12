@@ -150,7 +150,7 @@ describe('window tools on a host with no window and no browser', () => {
         expect(await r.byName('services').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: 'services ran here', isError: false });
     });
 
-    it.each([['sites', 'open'], ['services', 'exec']])('%s %s needs a window: not available on this host, and nothing is forwarded or run', async (name, action) => {
+    it.each([['sites', 'open']])('%s %s needs a window: not available on this host, and nothing is forwarded or run', async (name, action) => {
         const r = rigHere(true, NONE);
         expect(await r.byName(name).handler({ action } as JsonObject, ctx())).toEqual({ text: notAvailableHere(name, 'a Genie window'), isError: true });
         expect(r.forwarded).toEqual([]);
@@ -180,7 +180,7 @@ describe('window tools on a host with no window and no browser', () => {
 describe('sites and services run in the host; only their window actions are forwarded', () => {
     it.each([
         ['sites', 'list'], ['sites', 'status'], ['sites', 'add'], ['sites', 'update'], ['sites', 'remove'],
-        ['services', 'list'], ['services', 'add'], ['services', 'remove'],
+        ['services', 'list'], ['services', 'exec'], ['services', 'add'], ['services', 'remove'],
     ])('%s %s runs in the host with NO window, and nothing is forwarded', async (name, action) => {
         const r = rig({ connected: false });
         expect(await r.byName(name).handler({ action } as JsonObject, ctx())).toEqual({ text: `${name} ran here`, isError: false });
@@ -188,14 +188,14 @@ describe('sites and services run in the host; only their window actions are forw
         expect(r.forwarded).toEqual([]);
     });
 
-    it.each([['sites', 'open'], ['services', 'exec']])('%s %s is forwarded to the window with the caller, and the window\'s answer is the answer', async (name, action) => {
+    it.each([['sites', 'open']])('%s %s is forwarded to the window with the caller, and the window\'s answer is the answer', async (name, action) => {
         const r = rig({ connected: true, answer: async (c) => ({ text: `window ran ${c.name} ${String(c.args.action)}`, isError: false }) });
         expect(await r.byName(name).handler({ action } as JsonObject, ctx())).toEqual({ text: `window ran ${name} ${action}`, isError: false });
         expect(r.forwarded).toEqual([{ name, args: { action }, headers: { 'genie-session': 'session-1' }, caller: CALLER, callId: expect.stringMatching(/^fwd-/) }]);
         expect(r.ran).toEqual([]);
     });
 
-    it.each([['sites', 'open'], ['services', 'exec']])('%s %s with no window says the window is closed, at once', async (name, action) => {
+    it.each([['sites', 'open']])('%s %s with no window says the window is closed, at once', async (name, action) => {
         const r = rig({ connected: false });
         expect(await r.byName(name).handler({ action } as JsonObject, ctx())).toEqual({ text: windowClosedRefusal(name), isError: true });
         expect(r.forwarded).toEqual([]);
@@ -214,16 +214,16 @@ describe('the window runs only the window actions of the host\'s tools', () => {
         handler: async (args) => { ran.push(`${n} ${String(args.action)}`); return { text: `window ran ${n}`, isError: false }; },
     }));
 
-    it('windowToolRunner: sites open and services exec run here; sites list and services list are refused as the host\'s', async () => {
+    it('windowToolRunner: sites open runs here; services exec, sites list and services list are refused as the host\'s', async () => {
         const ran: string[] = [];
         const run = windowToolRunner(() => windowRegs(ran), new Map());
         const asked = (name: string, action: string) => run({ name, args: { action }, headers: { 'genie-session': 'session-1' }, caller: CALLER });
         expect(await asked('sites', 'open')).toEqual({ text: 'window ran sites', isError: false });
-        expect(await asked('services', 'exec')).toEqual({ text: 'window ran services', isError: false });
+        expect((await asked('services', 'exec')).isError).toBe(true);
         expect((await asked('sites', 'list')).isError).toBe(true);
         expect((await asked('services', 'list')).isError).toBe(true);
         expect(await asked('checkIssues', 'list')).toEqual({ text: 'window ran checkIssues', isError: false });
-        expect(ran).toEqual(['sites open', 'services exec', 'checkIssues list']);
+        expect(ran).toEqual(['sites open', 'checkIssues list']);
     });
 
     it('withHostTools: sites list goes to the host with the caller; sites open runs here', async () => {
@@ -233,8 +233,8 @@ describe('the window runs only the window actions of the host\'s tools', () => {
         const byName = (n: string) => regs.find((r) => r.definition.name === n)!;
         expect(await byName('sites').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: 'host ran sites', isError: false });
         expect(await byName('sites').handler({ action: 'open' } as JsonObject, ctx())).toEqual({ text: 'window ran sites', isError: false });
-        expect(await byName('services').handler({ action: 'exec' } as JsonObject, ctx())).toEqual({ text: 'window ran services', isError: false });
-        expect(toHost.map((c) => [c.name, c.args.action, c.caller])).toEqual([['sites', 'list', CALLER]]);
-        expect(ran).toEqual(['sites open', 'services exec']);
+        expect(await byName('services').handler({ action: 'exec' } as JsonObject, ctx())).toEqual({ text: 'host ran services', isError: false });
+        expect(toHost.map((c) => [c.name, c.args.action, c.caller])).toEqual([['sites', 'list', CALLER], ['services', 'exec', CALLER]]);
+        expect(ran).toEqual(['sites open']);
     });
 });

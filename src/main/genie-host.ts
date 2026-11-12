@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
 import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
+import { makeServiceExec } from './service-exec.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
@@ -1471,6 +1472,7 @@ async function main(): Promise<void> {
         probe: (id) => host.probe(id),
         lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,
         reportPlan: (id, steps) => host.reportPlan(id, steps),
+        serviceExec: makeServiceExec(systemProcessTree),
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         capabilities,
@@ -1490,7 +1492,7 @@ async function main(): Promise<void> {
         // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.
         ...(hostingStack?.mail ? { mail: hostingStack.mail } : {}),
         // THE AGENTS' `sites` AND `services` (Tynn #444): this host's own hosting (P5a) under its own supervisor — what the
-        // Hosting and Services tabs show. Only `sites open` and `services exec` still go to a window.
+        // Hosting and Services tabs show. Only `sites open` still goes to a window.
         ...(hostingStack ? {
             hosting: {
                 sites: hostingStack.sites,
