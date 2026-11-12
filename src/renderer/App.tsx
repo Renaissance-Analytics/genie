@@ -25,7 +25,7 @@ import { arrive, NO_PULSES, pulse, pulsingIds, type Pulses } from '../core/view-
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { takeOverTerminalOf } from '../core/take-over-route.js';
-import { chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
+import { chatPickAfter, chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
 import { rewrittenAddress, routeFor, windowBridge } from './window-address.js';
@@ -1054,12 +1054,13 @@ function DesktopApp({ bridge }: AppProps) {
     const [openedThreads, setOpenedThreads] = useState<readonly string[]>(() => {
         try { const v: unknown = JSON.parse(window.localStorage.getItem(THREADS_KEY) ?? '[]'); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
     });
-    // ALWAYS a chat, and the VIEW decides whose (the owner, 2026-10-19): an agent's tab → that agent; a workspace → its
-    // default agent; anything else → genie (core/chat-scope.ts chatSubjectFor).
-    // The agent picked on the Dashboard (genie#1209): the window's, never the address's; gone once the Dashboard is left.
-    const [dashboardChat, setDashboardChat] = useState<string | null>(null);
-    useEffect(() => { if (parsed.surface !== 'dashboard') setDashboardChat(null); }, [parsed.surface]);
-    const chatSubject = visibleAgentSubject(snapshot, chatSubjectFor(parsed, snapshot.agents, snapshot.workspaces ?? [], dashboardChat));
+    // ALWAYS a chat, and the PERSON decides whose (Tynn #639, core/chat-scope.ts chatSubjectFor): the agent they last
+    // picked — a Dashboard row, an agent's tab — kept by the window, never the address's, and never changed by navigating.
+    const chatRoster = snapshot.agents;
+    const [chatPick, setChatPick] = useState<string | null>(null);
+    const routeAgent = parsed.surface === 'agent' ? parsed.agentId : null;
+    useEffect(() => { setChatPick((pick) => chatPickAfter(parsed, chatRoster, pick)); }, [routeAgent, chatRoster]);
+    const chatSubject = visibleAgentSubject(snapshot, chatSubjectFor(parsed, chatRoster, chatPick));
     // The chat SUBJECT's detail — never the route's `chat=` alone (the owner, 2026-10-19, three times: "THE CHAT DOES NOT
     // EVER CLOSE"). The subject is permanent (the route's, else the agent the view says); loading only for `chat=` left
     // every page reached without it showing an empty chat, which reads as a closed one. The flyout's transcript is derived
@@ -2044,7 +2045,7 @@ function DesktopApp({ bridge }: AppProps) {
                 const next = route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '');
                 navigate(next);
             }}
-            onChatAgent={(id) => setDashboardChat(id)}
+            onChatAgent={(id) => setChatPick(id)}
             onOpenAgent={(id) => {
                 // OPENING SHOWS IT (q_04ce323c, 2026-11-01): main starts nothing here — a running agent's session is the
                 // one shown, a stopped one stays stopped with its Start, and its first message starts it.
