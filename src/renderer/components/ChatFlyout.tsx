@@ -716,91 +716,14 @@ function ChatFlyoutBody({
                         {windowStart > 0 ? `${windowStart.toLocaleString('en-US')} earlier ${windowStart === 1 ? 'message' : 'messages'} · show more` : 'Earlier messages · show more'}
                     </Button>
                 ) : null}
-                {shown.map((m) => {
-                    const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
-                    const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
-                    // The agent's mail with another agent (the board): one mono line, the arrows icon — no bubble, no speaker.
-                    // A STOPPED TURN (the composer's `Stop this turn`): one plain line where the reply ends.
-                    if (who === 'stopped') {
-                        return (
-                            <div key={m.id} data-chat-message={m.id} data-who="stopped" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
-                                <Icon name="square" size="xs" />
-                                <span>{m.text}</span>
-                                {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
-                            </div>
-                        );
-                    }
-                    // THE AGENT'S THINKING (the owner, 2026-10-20): in its place among the replies, closed until you open it.
-                    if (who === 'thinking') {
-                        return (
-                            <details key={m.id} data-chat-message={m.id} data-who="thinking" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
-                                <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
-                                    <Icon name="sparkles" size="xs" />
-                                    {/* Underlined on hover so it reads as something to open (the owner, 2026-10-23: "I did not realize I could click the thinking row to expand it"). */}
-                                    <span className="group-hover:underline">{m.from}’s thinking</span>
-                                    {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
-                                </summary>
-                                <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
-                                    <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
-                                </div>
-                            </details>
-                        );
-                    }
-                    if (who === 'mail') return <ChatMailRow key={m.id} m={m} onOpenMail={onOpenMail} />;
-                    if (who === 'delivery') return <ChatDeliveryRow key={m.id} m={m} onOpenMail={onOpenMail} />;
-                    if (who === 'system' && m.carried !== undefined) return <ChatCarriedRow key={m.id} m={m} />;
-                    if (who === 'system') {
-                        return (
-                            <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
-                                <span className="text-[var(--violet-400)]"><Icon name="arrow-right-left" size="xs" /></span>
-                                <span>{m.text}</span>
-                            </div>
-                        );
-                    }
-                    return who === 'you' ? (
-                        <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
-                            <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
-                            {/* As you typed it (the owner, 2026-10-21): your newlines kept, a long word or URL broken rather than overflowing. */}
-                            <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
-                            {m.attachments ? (
-                                <div data-chat-attachments={m.id} className="flex flex-wrap justify-end gap-1">
-                                    {m.attachments.map((name) => (
-                                        <span key={name} className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-3)]"><Icon name="paperclip" size="xs" />{name}</span>
-                                    ))}
-                                </div>
-                            ) : null}
-                            {/*
-                             * An undelivered message is KEPT and MARKED, with the route to send it:
-                             * the agent is not running. Dropping it loses what someone wrote, and
-                             * showing it as sent is worse — they would wait for an answer that
-                             * cannot come.
-                             */}
-                            {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
-                            {m.waiting && m.delivered ? <ChatWaitingLive id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} /> : null}
-                            {mailOnly && m.read !== undefined ? (
-                                <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
-                            ) : null}
-                            {m.queued ? (m.queuedForStart || m.queuedForProvider
-                                ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>
-                                : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} />) : null}
-                            {m.delivered || m.queued ? null : (
-                                <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
-                                    {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
-                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
-                                    {m.draftProblem ? <span role="alert" className="text-[12px] text-[var(--danger)]">{m.draftProblem}</span> : null}
-                                    {/* One message sent by mistake comes out here; sending is the queue bar's one action (Tynn #702). */}
-                                    {onDiscardDraft ? <Button size="xs" variant="ghost" type="button" data-action="remove-draft" data-draft={m.id} aria-label="Remove this message" title="Remove this message" onClick={() => onDiscardDraft(m.id)} className="h-auto px-1 py-0 text-[13px] leading-none text-[var(--fg-3)] hover:text-[var(--fg-1)]">×</Button> : null}
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
-                            <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
-                            {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
-                            <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
-                        </div>
-                    );
-                })}
+                <ChatMessages
+                    messages={shown}
+                    thread={thread}
+                    refs={replyRefs}
+                    mailOnly={mailOnly}
+                    onOpenMail={onOpenMail}
+                    onDiscardDraft={onDiscardDraft}
+                />
                 {/* ONE QUEUE, ONE ACTION (Tynn #702): what waits and what was not delivered, counted, with one Send all now. */}
                 <ChatQueueBar
                     agentName={thread?.name ?? 'the agent'}
@@ -954,6 +877,113 @@ function ChatFlyoutBody({
                 <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
         </aside>
+    );
+}
+
+export interface ChatMessagesProps {
+    readonly messages: readonly ChatThreadMessage[];
+    readonly thread: ChatThread | null;
+    readonly refs: ChatRefs;
+    /** An observed agent (a Take Over window): your mail shows whether it was read. */
+    readonly mailOnly: boolean;
+    readonly onOpenMail?: ((messageId: string) => void) | undefined;
+    readonly onDiscardDraft?: ((draftId: string) => void) | undefined;
+}
+
+/**
+ * THE CHAT'S ROWS, one per message — the desktop chat's, and the phone's (Tynn #652: "full chat stream" on the phone, the
+ * same rows as here, never a phone summary). The scroller, the history window, the queue bar and the composer are the
+ * surface's own.
+ */
+export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOpenMail, onDiscardDraft }: ChatMessagesProps) {
+    return (
+        <>
+            {messages.map((m) => {
+                const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
+                const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
+                // The agent's mail with another agent (the board): one mono line, the arrows icon — no bubble, no speaker.
+                // A STOPPED TURN (the composer's `Stop this turn`): one plain line where the reply ends.
+                if (who === 'stopped') {
+                    return (
+                        <div key={m.id} data-chat-message={m.id} data-who="stopped" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
+                            <Icon name="square" size="xs" />
+                            <span>{m.text}</span>
+                            {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
+                        </div>
+                    );
+                }
+                // THE AGENT'S THINKING (the owner, 2026-10-20): in its place among the replies, closed until you open it.
+                if (who === 'thinking') {
+                    return (
+                        <details key={m.id} data-chat-message={m.id} data-who="thinking" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
+                            <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
+                                <Icon name="sparkles" size="xs" />
+                                {/* Underlined on hover so it reads as something to open (the owner, 2026-10-23: "I did not realize I could click the thinking row to expand it"). */}
+                                <span className="group-hover:underline">{m.from}’s thinking</span>
+                                {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
+                            </summary>
+                            <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
+                                <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
+                            </div>
+                        </details>
+                    );
+                }
+                if (who === 'mail') return <ChatMailRow key={m.id} m={m} onOpenMail={onOpenMail} />;
+                if (who === 'delivery') return <ChatDeliveryRow key={m.id} m={m} onOpenMail={onOpenMail} />;
+                if (who === 'system' && m.carried !== undefined) return <ChatCarriedRow key={m.id} m={m} />;
+                if (who === 'system') {
+                    return (
+                        <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
+                            <span className="text-[var(--violet-400)]"><Icon name="arrow-right-left" size="xs" /></span>
+                            <span>{m.text}</span>
+                        </div>
+                    );
+                }
+                return who === 'you' ? (
+                    <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
+                        <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
+                        {/* As you typed it (the owner, 2026-10-21): your newlines kept, a long word or URL broken rather than overflowing. */}
+                        <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
+                        {m.attachments ? (
+                            <div data-chat-attachments={m.id} className="flex flex-wrap justify-end gap-1">
+                                {m.attachments.map((name) => (
+                                    <span key={name} className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-3)]"><Icon name="paperclip" size="xs" />{name}</span>
+                                ))}
+                            </div>
+                        ) : null}
+                        {/*
+                         * An undelivered message is KEPT and MARKED, with the route to send it:
+                         * the agent is not running. Dropping it loses what someone wrote, and
+                         * showing it as sent is worse — they would wait for an answer that
+                         * cannot come.
+                         */}
+                        {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
+                        {m.waiting && m.delivered ? <ChatWaitingLive id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} /> : null}
+                        {mailOnly && m.read !== undefined ? (
+                            <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
+                        ) : null}
+                        {m.queued ? (m.queuedForStart || m.queuedForProvider
+                            ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>
+                            : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} />) : null}
+                        {m.delivered || m.queued ? null : (
+                            <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
+                                {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
+                                <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
+                                {m.draftProblem ? <span role="alert" className="text-[12px] text-[var(--danger)]">{m.draftProblem}</span> : null}
+                                {/* One message sent by mistake comes out here; sending is the queue bar's one action (Tynn #702). */}
+                                {onDiscardDraft ? <Button size="xs" variant="ghost" type="button" data-action="remove-draft" data-draft={m.id} aria-label="Remove this message" title="Remove this message" onClick={() => onDiscardDraft(m.id)} className="h-auto px-1 py-0 text-[13px] leading-none text-[var(--fg-3)] hover:text-[var(--fg-1)]">×</Button> : null}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
+                        <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
+                        {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
+                        <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
+                    </div>
+                );
+            })}
+        </>
     );
 }
 

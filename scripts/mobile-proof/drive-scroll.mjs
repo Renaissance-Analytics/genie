@@ -280,20 +280,20 @@ async function runProfile(g, profile, device) {
         if (await page.locator('[data-action="start-agent"]').count()) await page.tap('[data-action="start-agent"]');
         await page.waitForSelector('[data-mobile-composer]', { timeout: 60_000 });
         for (let i = 0; i < 10; i++) {
-            const tall = await page.evaluate(() => { const rows = document.querySelectorAll('[data-mobile-row]'); const r = rows[rows.length - 1]; return r ? r.getBoundingClientRect().bottom > window.innerHeight : false; });
+            const tall = await page.evaluate(() => { const rows = document.querySelectorAll('[data-chat-message]'); const r = rows[rows.length - 1]; return r ? r.getBoundingClientRect().bottom > window.innerHeight : false; });
             if (tall) break;
-            const n = await page.locator('[data-mobile-row]').count();
+            const n = await page.locator('[data-chat-message]').count();
             await page.fill('textarea[name="text"]', `Message ${i + 1} from the ${profile}: keep going with the plan, and tell me what is next.`);
             await page.tap('[data-action="send-prompt"]');
-            await page.waitForFunction((k) => document.querySelectorAll('[data-mobile-row]').length > k + 2, n, { timeout: 30_000 }).catch(() => {});
+            await page.waitForFunction((k) => document.querySelectorAll('[data-chat-message]').length >= k + 2, n, { timeout: 30_000 }).catch(() => {});
             await sleep(1500);
         }
         // The chat opens at its top (it does not follow the newest message — listed for the owner); the oldest rows are
         // on screen, the newest below: scroll to them.
         await page.reload();
-        await page.waitForSelector('[data-mobile-row]', { timeout: 30_000 });
-        await page.evaluate(() => { const s = document.querySelector('[data-mobile-activity]'); if (s) s.scrollTop = 0; });
-        await proveScreen(page, cdp, profile, 'chat', '[data-mobile-row]');
+        await page.waitForSelector('[data-chat-message]', { timeout: 30_000 });
+        await page.evaluate(() => { const s = document.querySelector('[data-mobile-panel="chat"]'); if (s) s.scrollTop = 0; });
+        await proveScreen(page, cdp, profile, 'chat', '[data-chat-message]');
         const composer = await page.evaluate(() => { const t = document.querySelector('textarea[name="text"]'); return t ? t.getBoundingClientRect().bottom <= window.innerHeight : false; });
         check(`${profile} chat: the composer stays on screen with a long stream`, composer);
 
