@@ -2179,8 +2179,13 @@ export class AgentSession {
         this.#changed();
     }
 
-    /** Tests-first live-command publication seam (#633); implementation follows measured RED. */
-    commandStarted(_run: CommandRunRef): void {}
+    /** A host-authored link to the command's existing Processes entry, published before it finishes (#633). */
+    commandStarted(run: CommandRunRef): void {
+        // Internal executor metadata includes credentials; only these safe fields belong in the ledger.
+        const commandRun = { processId: run.processId, workspaceId: run.workspaceId, command: run.command };
+        void this.#emitRow({ kind: 'notice', level: 'info', message: `Started ${commandRun.command} via services`, commandRun });
+        this.#changed();
+    }
 
     /** A warning Genie says in this agent's chat (the plan keepalive's stop, core/plan-keepalive.ts). Not a prompt. */
     notice(message: string): void {

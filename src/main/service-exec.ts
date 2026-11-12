@@ -29,7 +29,7 @@ const EXIT_CHECK_MS = 100;
  * another command's tree — another agent's migration running beside it — is never in it. The shell itself is killed
  * as well, so a refused or failed reading still ends the command Genie started.
  */
-export function makeServiceExec(tree: ProcessTree, supervisor?: Pick<ProcessSupervisor, 'trackExternal'>, _onRun?: (agentId: string, run: CommandRunRef) => void): ServiceExec {
+export function makeServiceExec(tree: ProcessTree, supervisor?: Pick<ProcessSupervisor, 'trackExternal'>, onRun?: (agentId: string, run: CommandRunRef) => void): ServiceExec {
     return ({ command, cwd, env, timeoutMs, signal, progress, run }) =>
         new Promise((resolve) => {
             if (signal?.aborted) {
@@ -55,7 +55,9 @@ export function makeServiceExec(tree: ProcessTree, supervisor?: Pick<ProcessSupe
             const observe = (pid: number | null, stop: () => void) => {
                 if (!run || !supervisor) return;
                 try {
-                    observed = supervisor.trackExternal({ id: run.id, workspaceId: run.workspaceId, name: run.name, command: maskSecrets(command, run.secrets), cwd }, { pid, stop });
+                    const label = maskSecrets(command, run.secrets);
+                    observed = supervisor.trackExternal({ id: run.id, workspaceId: run.workspaceId, name: run.name, command: label, cwd }, { pid, stop });
+                    onRun?.(run.agentId, { processId: run.id, workspaceId: run.workspaceId, command: label });
                 } catch {
                     // Observation must never orphan a command that already spawned.
                     observationFailed = true;
