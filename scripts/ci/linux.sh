@@ -625,6 +625,7 @@ ceiling() {
         ui-lag|renderer-crash) echo 480 ;;
         site-panel) echo 340 ;;
         site-panel-locked) echo 180 ;;
+        host-late-ready) echo 240 ;;
         browser-process) echo 320 ;;
         safe-mode|hang) echo 600 ;;
         flows|zip64) echo 1200 ;;
