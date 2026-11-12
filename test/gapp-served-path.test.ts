@@ -22,8 +22,8 @@ describe('servedPath', () => {
         expect(servedPath(DIR, ['.'])).toBeNull();
     });
 
-    it('CONTROL: a name that only starts with dots is a file of the folder', () => {
-        expect(servedPath(DIR, ['..config'])).toBe(join(DIR, '..config'));
+    it('CONTROL: a file deeper in the folder is served from where it is', () => {
+        expect(servedPath(DIR, ['app', 'assets', 'app.js'])).toBe(join(DIR, 'app', 'assets', 'app.js'));
     });
 });
 
