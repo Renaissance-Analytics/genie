@@ -75,6 +75,8 @@ export interface ProcessStatus {
     readonly restarts: number;
     readonly since: number;
     readonly reason?: string;
+    /** A one-shot command already owned by its executor: observed here, never kept or restarted. */
+    readonly commandRun?: true;
 }
 
 export interface SupervisorClock {
@@ -125,12 +127,37 @@ interface Entry {
     log: OutputTail;
     /** When `recheck` first found this run gone; null while it is there (P2). */
     suspectAt: number | null;
+    external?: { stop: () => void; stopping: boolean; finished: boolean };
 }
 
 export class ProcessSupervisor {
-    /** Host command observation seam (#633); inert at the tests-first checkpoint. Never spawns a second process. */
-    trackExternal(_spec: Omit<ProcessSpec, 'restart' | 'env'>, _control: { pid: number | null; stop: () => void }): { output(data: string): void; finish(exitCode: number | null, stopped?: boolean): void } {
-        return { output: () => {}, finish: () => {} };
+    /** Observe an existing command through the ordinary Processes protocol. The executor owns spawn, reap and exit. */
+    trackExternal(spec: Omit<ProcessSpec, 'restart' | 'env'>, control: { pid: number | null; stop: () => void }): { output(data: string): void; finish(exitCode: number | null, stopped?: boolean): void } {
+        if (this.#entries.has(spec.id) || this.#adopted.has(spec.id)) throw new Error(`process ${spec.id} already exists`);
+        const external = { stop: control.stop, stopping: false, finished: false };
+        const entry: Entry = {
+            spec: { ...spec, restart: 'never' }, ptyId: null, pid: control.pid,
+            state: 'running', exitCode: null, restarts: 0, consecutiveFailures: 0,
+            startedAt: this.#clock.now(), since: this.#clock.now(), wanted: false,
+            cancelRestart: null, log: new OutputTail(), suspectAt: null, external,
+        };
+        this.#entries.set(spec.id, entry);
+        this.#transition(entry, 'running');
+        const current = () => this.#entries.get(spec.id) === entry && !external.finished;
+        return {
+            output: (data) => {
+                if (!current() || data === '') return;
+                entry.log.append(data);
+                for (const listener of this.#outputListeners) listener(spec.id, data);
+            },
+            finish: (exitCode, stopped = false) => {
+                if (!current()) return;
+                external.finished = true;
+                entry.pid = null;
+                entry.exitCode = exitCode;
+                this.#transition(entry, stopped ? 'stopped' : exitCode === 0 ? 'exited' : 'failed');
+            },
+        };
     }
 
     readonly #pty: PtyPort;
@@ -193,6 +220,7 @@ export class ProcessSupervisor {
 
     start(spec: ProcessSpec): ProcessStatus {
         const existing = this.#entries.get(spec.id);
+        if (existing?.external) throw new Error('a command run cannot be started again; request a new approved command');
         if (existing && existing.state === 'running') return this.#status(existing);
         if (existing?.cancelRestart) existing.cancelRestart();
         const entry: Entry = {
@@ -224,6 +252,7 @@ export class ProcessSupervisor {
      */
     adopt(pty: ListedPty): void {
         if (pty.tag?.kind !== 'process') return;
+        if (this.#entries.get(pty.tag.processId)?.external) return;
         if (this.#entries.get(pty.tag.processId)?.state === 'running') return;
         this.#adopted.set(pty.tag.processId, { ptyId: pty.id, pid: pty.pid, output: pty.scrollback });
         this.#adoptedByPty.set(pty.id, pty.tag.processId);
@@ -259,6 +288,14 @@ export class ProcessSupervisor {
     stop(id: string): boolean {
         const entry = this.#entries.get(id);
         if (!entry) return false;
+        if (entry.external) {
+            if (!entry.external.finished && !entry.external.stopping) {
+                entry.external.stopping = true;
+                entry.external.stop();
+            }
+            // Do not claim the command ended before its executor confirms exit/reap.
+            return true;
+        }
         entry.wanted = false;
         if (entry.cancelRestart) {
             entry.cancelRestart();
@@ -280,6 +317,11 @@ export class ProcessSupervisor {
      * visible; a process that was REMOVED must not linger as a stopped row whose Restart revives it.
      */
     forget(id: string): boolean {
+        const entry = this.#entries.get(id);
+        if (entry?.external) {
+            if (!entry.external.finished) return false;
+            return this.#entries.delete(id);
+        }
         if (!this.stop(id)) return false;
         this.#entries.delete(id);
         return true;
@@ -288,7 +330,7 @@ export class ProcessSupervisor {
     /** Stop the current run and start a new one, by hand: the failure count starts over. */
     restart(id: string): ProcessStatus | null {
         const entry = this.#entries.get(id);
-        if (!entry) return null;
+        if (!entry || entry.external) return null;
         this.stop(id);
         return this.start(entry.spec);
     }
@@ -483,6 +525,7 @@ export class ProcessSupervisor {
             restarts: entry.restarts,
             since: entry.since,
             ...(entry.reason === undefined ? {} : { reason: entry.reason }),
+            ...(entry.external ? { commandRun: true as const } : {}),
         };
     }
 }
