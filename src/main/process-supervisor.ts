@@ -108,6 +108,8 @@ const HEALTHY_AFTER_MS = 60_000;
 export const LIVENESS_INTERVAL_MS = 30_000;
 /** How long a process seen gone may still deliver its own exit before it is declared lost. */
 export const LOST_GRACE_MS = 5_000;
+/** Completed transient commands retained per host. Active and ordinary supervised processes are excluded. */
+export const COMPLETED_COMMAND_HISTORY_MAX = 100;
 
 interface Entry {
     spec: ProcessSpec;

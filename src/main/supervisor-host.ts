@@ -79,6 +79,9 @@ export class SupervisorService {
  * answer arriving as the next status. A start the host has not answered yet reads `restarting`, never `running`.
  */
 export class SupervisorReplica {
+    /** Tests-first removal notification seam (#633); the implementation follows measured RED. */
+    onForget(_listener: (id: string) => void): () => void { return () => {}; }
+
     readonly #statuses = new Map<string, ProcessStatus>();
     readonly #commands = new Map<string, string>();
     readonly #logs = new Map<string, OutputTail>();
