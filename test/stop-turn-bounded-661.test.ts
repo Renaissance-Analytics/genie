@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { mintAgentId } from '../src/core/identity.js';
 import { RATE_LIMIT_META } from '../src/core/headroom.js';
 import { promptDeliveries } from '../src/core/prompt-delivery.js';
+import type { ProcessInfo, ProcessTree } from '../src/core/process-tree.js';
 import { AgentSession, type DriverEvents, type TurnOutcomeLike } from '../src/core/session.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import { openDurableStore, readWholeHistory } from '../src/core/thread-store.js';
@@ -26,7 +27,7 @@ afterEach(async () => {
 
 const CANCELLED: TurnOutcomeLike = { stopReason: 'cancelled', isError: false, raw: 'cancelled' };
 type Cancel = 'silent' | 'receipt-only' | 'refused';
-function rig(cancel: Cancel = 'silent', folds = false) {
+function rig(cancel: Cancel = 'silent', folds = false, machine?: { tree: ProcessTree; start: () => void }) {
     const id = mintAgentId();
     const store = openDurableStore(dir);
     const rows: StreamEvent[] = [];
@@ -38,13 +39,13 @@ function rig(cancel: Cancel = 'silent', folds = false) {
     let rejectCancel: (reason: Error) => void = () => {};
     const session = new AgentSession({
         agentId: id, cwd: dir, store, onEvent: (row) => rows.push(row),
-        processTree: { snapshot: () => [], killTree: () => { calls.reaps += 1; return { killed: 0, refused: false }; } },
+        processTree: machine?.tree ?? { snapshot: () => [], killTree: () => { calls.reaps += 1; return { killed: 0, refused: false }; } },
         onRestartForQueue: () => { calls.restarts += 1; },
         onRateLimit: (readings) => { if (readings.some((r) => r.status !== 'allowed')) session.hold(); },
         driverFactory: (options) => {
             events = options.events;
             return {
-                start: () => { alive = true; },
+                start: () => { alive = true; machine?.start(); },
                 prompt: (text) => { if (busy && !folds) throw new Error('turn already in flight'); busy = true; prompts.push(text); },
                 cancel: () => {
                     calls.cancels += 1;
@@ -165,5 +166,42 @@ describe('Stop has its own bound even when the provider never answers (Tynn #661
         w.session.cancel();
         w.end();
         expect(w.rows.filter((r) => r.kind === 'stopped').at(-1)).toEqual({ kind: 'stopped', n: 2, by: 'you' });
+    });
+
+    it.each([false, true])('Genie itself ends the owned CLI and tool tree; a refused reap stays visible (refused: %s)', async (refuses) => {
+        const cli = process.pid + 2_000_001, tool = cli + 1, sibling = cli + 10;
+        let table: ProcessInfo[] = [
+            { pid: process.pid, ppid: 1, started: 1, name: 'genie-fixture' },
+            { pid: sibling, ppid: process.pid, started: 2, name: 'other-agent-fixture' },
+        ];
+        const targets: number[][] = [];
+        const w = rig('silent', false, {
+            start: () => { table.push({ pid: cli, ppid: process.pid, started: 3, name: 'provider-fixture' }); },
+            tree: {
+                snapshot: () => [...table],
+                killTree: (owned) => {
+                    targets.push(owned.map((p) => p.pid));
+                    if (refuses) return { killed: 0, refused: true, reason: 'fixture refuses reap' };
+                    const ids = new Set(owned.map((p) => p.pid));
+                    table = table.filter((p) => !ids.has(p.pid));
+                    return { killed: owned.length, refused: false };
+                },
+            },
+        });
+        w.session.prompt('work', 'you');
+        table.push({ pid: tool, ppid: cli, started: 4, name: 'tool-fixture' });
+        w.session.cancel();
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(targets.some((ids) => ids.includes(cli) && ids.includes(tool))).toBe(true);
+        expect(targets.every((ids) => !ids.includes(sibling))).toBe(true);
+        expect(table.some((p) => p.pid === sibling)).toBe(true);
+        if (refuses) {
+            expect(w.session.stopVerdict).toMatchObject({ verified: false });
+            expect(w.rows.some((r) => r.kind === 'notice' && /fixture refuses reap/.test(r.message))).toBe(true);
+        } else {
+            expect(table.map((p) => p.pid)).not.toContain(cli);
+            expect(table.map((p) => p.pid)).not.toContain(tool);
+            expect(w.session.stopVerdict).toMatchObject({ verified: true });
+        }
     });
 });
