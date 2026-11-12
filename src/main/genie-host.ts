@@ -123,6 +123,7 @@ import { sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
 import { mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
+import { AgentToolCalls } from './mcp-interrupt.js';
 import { testReadyDelayMs } from './host-wait-window.js';
 import { RemoteBrowsers } from './remote-browsers.js';
 import { siteDoor } from './relay-site.js';
@@ -225,6 +226,9 @@ const say = (line: string): void => {
 // A fault in one agent's handling never takes every agent down with the process (main.ts's policy, the same here).
 process.on('uncaughtException', (error) => say(`uncaught: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
 process.on('unhandledRejection', (error) => say(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
+
+/** The Genie tool calls running for each agent, ended by its Interrupt (Tynn #702; mcp-interrupt.ts). */
+const toolCalls = new AgentToolCalls();
 
 const sleepFor = (ms: number): Promise<void> => (ms > 0 ? new Promise((done) => setTimeout(done, ms)) : Promise.resolve());
 
@@ -1100,6 +1104,8 @@ async function main(): Promise<void> {
     const host = new SessionHost({
         userData: home,
         ...engineHostOptions,
+        // Interrupt or Stop this turn ends the agent's own Genie tool calls at once (Tynn #702).
+        endToolCalls: (agentId, intent) => toolCalls.end(agentId, intent),
         // What the agent's workspace has off by default (Tynn #628), read from the registry at each launch.
         workspaceMcpOffFor: (record) => hostRegistry.workspaceMcpOff(record.workspaceId),
         // A WORKSPACE NOT TRUSTED (genie#1519): its agent gets Genie's own words, never the folder's — and with no hosting
@@ -1434,6 +1440,7 @@ async function main(): Promise<void> {
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     bootStep('sessions', stepAt);
     mcp = startHostMcp({
+        toolCalls,
         stores: stores.stores,
         settings,
         records: () => hostRegistry.listAgents(),

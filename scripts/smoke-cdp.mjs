@@ -1085,6 +1085,33 @@ if (!approvalEnabled) {
         await new Promise((r) => setTimeout(r, 2000));
         const shown = await cdp.evaluate(`${rowsText}.includes('${again}')`).catch(() => null);
         console.log(`  TERMINAL_RETYPE ${JSON.stringify({ focusAtFailure: focus, secondTokenShown: shown })} ${await terminalDump()}`);
+        // EACH LAYER OF THE PANE (beta.61.2: the host delivered both tokens to this window's view and the pane drew neither).
+        // Read from React's own records of the mounted pane, nothing changed: what the WORKSPACE holds for it (the output,
+        // its end and epoch, as TerminalPane's props), what XTERM's buffer holds (written to it or not), and what the DOM
+        // rows show (rendered or not). The token in the props and not the buffer = the pane never wrote it; in the buffer and
+        // not the rows = xterm did not render it; in none = the workspace never kept it.
+        const layers = await cdp.evaluate(`(() => {
+            const out = [];
+            for (const el of document.querySelectorAll('[data-terminal-pane]')) {
+                const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+                let f = key ? el[key] : null, termRef = null, paneProps = null;
+                for (let i = 0; f && i < 40; i++, f = f.return) {
+                    const props = f.memoizedProps;
+                    if (!termRef && f.ref && typeof f.ref === 'object' && f.ref.current && 'xterm' in f.ref.current) termRef = f.ref;
+                    if (props && typeof props === 'object' && 'paneId' in props && 'output' in props) { paneProps = props; break; }
+                }
+                const x = termRef?.current?.xterm ?? null, lines = [];
+                if (x) { const b = x.buffer.active; for (let i = 0; i < b.length; i++) { const t = b.getLine(i)?.translateToString(true) ?? ''; if (t.trim()) lines.push(i + ': ' + t.slice(0, 120)); } }
+                out.push({
+                    pane: el.getAttribute('data-terminal-pane'), connected: el.isConnected,
+                    props: paneProps ? { outputTail: String(paneProps.output).slice(-160), outputLength: String(paneProps.output).length, outputEnd: paneProps.outputEnd ?? null, outputEpoch: paneProps.outputEpoch ?? null, readOnly: paneProps.readOnly } : null,
+                    xterm: x ? { rows: x.rows, cols: x.cols, disposed: !x.element?.isConnected, lines: lines.slice(-8) } : null,
+                    domRows: (el.querySelector('.xterm-rows')?.innerText ?? '').trim().slice(-160),
+                });
+            }
+            return JSON.stringify(out);
+        })()`).catch((e) => `(unread: ${e?.message ?? e})`);
+        console.log(`  TERMINAL_LAYERS ${layers}`);
         // INPUT OR OUTPUT (beta.61.1): the second token not showing means the keys never reached the shell OR the pane
         // stopped drawing what the shell printed. The workspace's terminal error says why a pane's stream ended, and a
         // REMOUNT (away to the Dashboard and back: a new watch, a fresh snapshot from the host) shows what the shell has

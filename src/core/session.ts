@@ -295,6 +295,8 @@ export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last
  * them to the installed package's own error.
  */
 export const CANCEL_STATE_UNCERTAIN = 'cancel state uncertain; driver stopped';
+/** What the chat says when an interrupt the provider never confirmed restarted the agent for its queue (Tynn #702). */
+export const RESTARTED_FOR_QUEUE = 'The provider did not confirm the interrupt in time, so Genie restarted the agent on the same conversation; your messages are sent now.';
 export const CANCEL_STATE_UNCERTAIN_CODE = 'claude_cancel_state_uncertain';
 
 /**
@@ -406,6 +408,11 @@ export interface AgentSessionOptions {
     /** Each MCP server's state as the provider reports it (prism-acp 0.27.0, genie#1202): what a missing server is told by. */
     onMcpServers?: (reports: readonly McpServerReport[]) => void;
     /**
+     * An interrupt the provider never confirmed ended this run (Tynn #702): what waited is kept (`carried`), and the host
+     * starts the agent again on the same conversation and sends it. Absent = nothing restarts it on its own.
+     */
+    onRestartForQueue?: () => void;
+    /**
      * A turn the provider ended on its rate limit with NO reading before it (Tynn #791): the gate has no reset to wait
      * for and holds the login on its stated backoff. `reason` is the provider's own.
      */
@@ -493,6 +500,10 @@ export class AgentSession {
      * message starts a new driver on the same conversation (`SessionHost.needsNewDriver`, main/start-on-demand.ts).
      */
     #needsNewDriver = false;
+    /** An Interrupt is pending or was the last cancel asked of this run (Tynn #702): its queue is never dropped. */
+    #interruptAsked = false;
+    /** This run ended on an interrupt it could not confirm: what waits is kept for the next run (`carried`), never undelivered. */
+    #carryQueue = false;
     /**
      * Who asked to stop the running turn (`cancel`'s `by`), until that turn ends. The cancelled turn's end is then
      * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
@@ -1188,12 +1199,19 @@ export class AgentSession {
      * (`sent`, or `undelivered` again if this run breaks before it goes) settles THAT message. Sent in queue order once the
      * run can take a turn: at once, at `ready`, or when the current turn ends. Already waiting here: nothing is added.
      */
-    redeliver(id: string, text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+    redeliver(id: string, text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}, options: { hold?: boolean } = {}): void {
         if (!this.running) throw new Error('session is not running');
         if (this.hasQueuedPrompt(id)) return;
         this.#afterTurn.push({ id, text, by, sent, context });
         this.#changed();
+        // `hold`: more are being handed over (`deliverOwed`); `flushOwed` sends them all together, in order (Tynn #702).
+        if (options.hold !== true) this.#flushAfterTurn();
+    }
+
+    /** Send what `redeliver` held, all of it in order, as the queue sends (Tynn #702: a restart's owed messages go together). */
+    flushOwed(): void {
         this.#flushAfterTurn();
+        this.#changed();
     }
 
     discardPrompt(id: string): void {
@@ -1217,9 +1235,10 @@ export class AgentSession {
      * What a prompt leaving the queue unsent is recorded as. One steered with no answer yet may have been taken, so it
      * is never told again; one accepted and not seen settles as before (an interrupted turn leaves accepted input unseen).
      */
-    #leftStatus(p: { context: PromptContext; steer?: string }): 'discarded' | 'undelivered' | 'unconfirmed' {
+    #leftStatus(p: { context: PromptContext; steer?: string }): 'discarded' | 'undelivered' | 'unconfirmed' | 'carried' {
         if (p.steer !== undefined && this.#steers.get(p.steer)?.acceptance === 'pending') return 'unconfirmed';
-        return p.context.retold === true ? 'discarded' : 'undelivered';
+        if (p.context.retold === true) return 'discarded';
+        return this.#carryQueue ? 'carried' : 'undelivered';
     }
 
     /**
@@ -1252,7 +1271,8 @@ export class AgentSession {
         if (this.#needsNewDriver || !this.running || (this.#stoppedByYou && p.by !== 'you')) {
             const row = promptRow(p.text, p.by, p.sent, p.context);
             if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: p.sent?.content ?? null } });
-            void this.#emitRow({ kind: 'prompt_delivery', id, status: 'undelivered' });
+            // Kept for the next run after an unconfirmed interrupt (Tynn #702), never "Not delivered".
+            void this.#emitRow({ kind: 'prompt_delivery', id, status: this.#carryQueue ? 'carried' : 'undelivered' });
             return;
         }
         if (p.by === 'you') this.#stoppedByYou = false;
@@ -1268,7 +1288,14 @@ export class AgentSession {
         if (this.#needsNewDriver) return;
         this.#needsNewDriver = true;
         this.#stopCooling();
-        void this.#emitRow({ kind: 'notice', level: 'warning', message: 'The Stop could not be confirmed, so this run was ended to be sure nothing kept going. Your next message starts the agent again on the same conversation.' });
+        // AN INTERRUPT NEVER DROPS THE QUEUE (Tynn #702): the agent starts again on the same conversation and what waited goes.
+        if (this.#interruptAsked) {
+            this.#carryQueue = true;
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: RESTARTED_FOR_QUEUE });
+            this.#options.onRestartForQueue?.();
+        } else {
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: 'The Stop could not be confirmed, so this run was ended to be sure nothing kept going. Your next message starts the agent again on the same conversation.' });
+        }
         this.#changed();
         void this.#endStoppedTools();
     }
@@ -1552,7 +1579,10 @@ export class AgentSession {
                     // message is the next work, so Genie's notices are not held for them to type again (Tynn #672 part 3).
                     const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you' && intent === 'stop';
                     if (stoppedByYou) this.#stoppedByYou = true;
-                    if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
+                    // A turn that ends cleanly closes the interrupt; one ended by its run's own stop keeps it (Tynn #702).
+                    if (!this.#needsNewDriver) this.#interruptAsked = false;
+                    // No "Stopped" for a run an unconfirmed interrupt ended: the agent starts again at once, and says so.
+                    if (outcome.stopReason === 'cancelled' && !outcome.isError && !this.#carryQueue) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
                     // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
                     // never the agent's last handoff, which a session answering in chat never files.
                     if (this.#lastTurnEnd === 'replied') void this.#emitRow({ kind: 'finished', n: Math.max(this.#marked, this.#turns) });
@@ -2192,6 +2222,7 @@ export class AgentSession {
 
         this.#stopAskedBy = by;
         this.#stopIntent = intent;
+        if (intent === 'interrupt') this.#interruptAsked = true;
         this.#stopWindow = true;
         this.#captureForStop();
         const refused = (cause: unknown): void => {

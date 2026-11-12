@@ -10,6 +10,7 @@
  * proving the script fails when no page comes.
  * Exit 0 pass; 1 fail.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -77,7 +78,7 @@ try {
     closeSync(fd);
     log(`launched; the host is started ${Number(env.GENIE_TEST_HOST_READY_DELAY_MS) / 1000} s late`);
     // The wait itself shows while the host is late: its window is a page too, so the main window is found by its file.
-    const page = await until('page target', async () => (await targets()).find((t) => t.type === 'page' && /index\.html/.test(t.url) && t.webSocketDebuggerUrl), 90_000);
+    const page = await until('page target', async () => mainWindow(await targets()), 90_000);
     log(`page target after ${((Date.now() - started) / 1000).toFixed(1)} s: ${page.url.split('#')[0]}`);
     await until('preload answers', () => evaluate(page.webSocketDebuggerUrl, 'typeof window.genie === "object"'), 30_000);
     const lifecycle = readText(join(root, '.genie', 'runtime', 'lifecycle.log'));

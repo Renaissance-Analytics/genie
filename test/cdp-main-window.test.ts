@@ -35,7 +35,7 @@ describe('the main window, picked by its URL', () => {
 });
 
 describe('every CI row script picks it through the helper', () => {
-    const rows = ['agents-hold-no-pty-cdp', 'smoke-cdp', 'trust-step-cdp', 'crash-cdp-lib', 'local-door-cdp', 'files-watch-cdp', 'chat-drafts-cdp', 'gapp-open-cdp', 'artboard-cdp', 'ui-lag-cdp', 'site-panel-cdp', 'browser-process-cdp', 'layout-sweep'];
+    const rows = ['agents-hold-no-pty-cdp', 'smoke-cdp', 'trust-step-cdp', 'crash-cdp-lib', 'local-door-cdp', 'files-watch-cdp', 'chat-drafts-cdp', 'gapp-open-cdp', 'artboard-cdp', 'ui-lag-cdp', 'site-panel-cdp', 'browser-process-cdp', 'layout-sweep', 'host-late-ready-cdp'];
     it.each(rows)('%s imports the picker and never takes the first page target', (name) => {
         const code = readFileSync(`scripts/${name}.mjs`, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
         expect(code).toMatch(/from '\.\/cdp-main-window\.mjs'/);
