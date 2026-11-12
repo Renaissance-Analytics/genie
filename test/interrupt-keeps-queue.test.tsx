@@ -159,8 +159,11 @@ describe('SessionHost: an interrupt keeps the agent and sends the queue', () => 
         await vi.waitFor(() => expect(w.drivers).toHaveLength(2), { timeout: 3_000 });
         expect(w.resumedWith).toEqual([THREAD, THREAD]);
         await vi.waitFor(() => expect(w.drivers[1]!.prompts).toEqual(['do not run tests as services', 'and read this']), { timeout: 3_000 });
-        const said = w.events().filter((e) => e.kind === 'notice').map((e) => (e as { message: string }).message);
-        expect(said.filter((m) => m === RESTARTED_FOR_QUEUE)).toHaveLength(1);
+        // The notice is the OLD run's row: `rowsFor` holds only the run now in the map, so it is read from the agent's stored
+        // thread, once every run's writes have landed (`settled`).
+        await w.host.settled();
+        const stored = readFileSync(join(dir, readdirOne(dir)), 'utf8').split(/\r?\n/).filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as { message?: { kind?: string; message?: string } });
+        expect(stored.filter((row) => row.message?.kind === 'notice' && row.message.message === RESTARTED_FOR_QUEUE)).toHaveLength(1);
         expect(RESTARTED_FOR_QUEUE).toBe('The provider did not confirm the interrupt in time, so Genie restarted the agent on the same conversation; your messages are sent now.');
     });
 
