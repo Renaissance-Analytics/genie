@@ -633,6 +633,8 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
+        /** RED stand-in (Tynn #702). */
+        endToolCalls?: (agentId: AgentId, intent: CancelIntent) => number;
         /** The MCP servers this agent's workspace has off by default (Tynn #628). Asked before each launch. Absent = none. */
         workspaceMcpOffFor?: (record: AgentRecord) => readonly string[];
         /** Genie's own words are in this agent's thread now (`AgentRecord.genieWordsInThread`). */

@@ -295,6 +295,8 @@ export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last
  * them to the installed package's own error.
  */
 export const CANCEL_STATE_UNCERTAIN = 'cancel state uncertain; driver stopped';
+/** RED stand-in (Tynn #702). */
+export const RESTARTED_FOR_QUEUE = '';
 export const CANCEL_STATE_UNCERTAIN_CODE = 'claude_cancel_state_uncertain';
 
 /**
