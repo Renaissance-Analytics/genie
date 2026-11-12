@@ -101,6 +101,8 @@ describe('the capability table', () => {
         // 160 with `workspaces.setMcpServer` (a workspace's default for its agents' MCP servers, Tynn #628): a write, workspace-scoped.
         // 159 without `restartWithHandoff` (Tynn #658: a handoff is for agents; the person's Restart with handoff is gone).
         // 160 with `agents.attachment` (one image a thread kept, read when a sent pill asks, Tynn #642): a read, agent-scoped.
+        // 161 with `updates.forceDrain` (Tynn #616's graceful upgrade, its drain forced): the owner's, as every upgrade.
+        expect(capabilityOf('updates.forceDrain')).toBe('upgrade');
         expect(REMOTE_METHODS.length).toBe(161);
         expect(capabilityOf('agents.attachment')).toBe('read');
         expect(AGENT_SCOPED_METHODS).toContain('agents.attachment');
