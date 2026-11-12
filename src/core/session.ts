@@ -4,7 +4,7 @@ import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-s
 import { boundToolEvent, utf8Bytes } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
-import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
+import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type AttachmentRef, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import { threadKeyFor, type AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
@@ -640,7 +640,7 @@ export class AgentSession {
      * Rows waiting for the next write on the chain (Tynn #550): rows emitted together go to the thread together, as one
      * `record`, in order — one lock, one append, one sync — never one each.
      */
-    #pendingRows: Array<{ event: StreamEvent; whole: string | null }> = [];
+    #pendingRows: Array<{ event: StreamEvent; whole: string | null; images: readonly KeptImage[] }> = [];
     /** The chained write that will take `#pendingRows`, while it has not started. */
     #pendingWrite: Promise<void> | null = null;
     /**
@@ -1156,8 +1156,9 @@ export class AgentSession {
     #queuePrompt(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, context: PromptContext): string {
         const id = randomUUID();
         this.#afterTurn.push({ id, text, by, sent, context });
-        const row = promptRow(text, by, sent, context);
-        if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: sent?.content ?? null } });
+        const kept = this.#keptImages(sent);
+        const row = promptRow(text, by, sent, context, kept.refs);
+        if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: sent?.content ?? null } }, kept.files);
         this.#changed();
         return id;
     }
@@ -1269,8 +1270,9 @@ export class AgentSession {
         if (p.context.retold === true) return;
         const id = randomUUID();
         if (this.#needsNewDriver || !this.running || (this.#stoppedByYou && p.by !== 'you')) {
-            const row = promptRow(p.text, p.by, p.sent, p.context);
-            if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: p.sent?.content ?? null } });
+            const kept = this.#keptImages(p.sent);
+            const row = promptRow(p.text, p.by, p.sent, p.context, kept.refs);
+            if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: p.sent?.content ?? null } }, kept.files);
             // Kept for the next run after an unconfirmed interrupt (Tynn #702), never "Not delivered".
             void this.#emitRow({ kind: 'prompt_delivery', id, status: this.#carryQueue ? 'carried' : 'undelivered' });
             return;
@@ -1916,7 +1918,7 @@ export class AgentSession {
         // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
         // Instruction text is never drawn: one line says it was sent (Tynn #615).
         if (held !== null) void this.#emitRow(heldShownAs !== null ? { kind: 'notice', level: 'info', message: heldShownAs } : promptRow(held, 'genie', null, {}));
-        if (record) void this.#emitRow(promptRow(text, by, sent, context));
+        if (record) { const kept = this.#keptImages(sent); void this.#emitRow(promptRow(text, by, sent, context, kept.refs), kept.files); }
         // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
         this.#echo = `${above}${handed}`;
         this.#echoSeen = '';
@@ -2347,8 +2349,8 @@ export class AgentSession {
      * cannot be saved is counted (`unpersistedEvents`) AND said in the ledger, once per run (`#sayNotSaved`).
      */
     /** `whole`: a tool's output that did not fit its row's preview, kept beside the ledger first (Tynn story #386). */
-    #record(event: StreamEvent, whole: string | null = null): Promise<void> {
-        this.#pendingRows.push({ event, whole });
+    #record(event: StreamEvent, whole: string | null = null, images: readonly KeptImage[] = []): Promise<void> {
+        this.#pendingRows.push({ event, whole, images });
         // A write already waiting on the chain takes this row too; otherwise one is chained for it.
         if (this.#pendingWrite !== null) return this.#pendingWrite;
         const write = async (): Promise<void> => {
@@ -2373,9 +2375,16 @@ export class AgentSession {
     }
 
     /** One batch of rows to the thread, in order, as ONE record — retried as a row was (genie#1315). */
-    async #writeBatch(rows: ReadonlyArray<{ event: StreamEvent; whole: string | null }>): Promise<void> {
+    async #writeBatch(rows: ReadonlyArray<{ event: StreamEvent; whole: string | null; images: readonly KeptImage[] }>): Promise<void> {
         const store = this.#options.store;
-        for (const { event, whole } of rows) {
+        for (const { event, whole, images } of rows) {
+            // Before the row that names them, as a tool's whole output is. An image that cannot be kept leaves the row: its
+            // pill then says the image was not kept, and the conversation is still saved.
+            if (images.length > 0 && store instanceof ThreadStore) {
+                for (const image of images) {
+                    try { await store.writeAttachment(threadKeyFor(this.agentId), image.id, image.mimeType, image.data); } catch { /* the name stands */ }
+                }
+            }
             if (whole !== null && event.kind === 'tool' && store instanceof ThreadStore) {
                 // Before the row that names it. A sidecar that cannot be written leaves the row and its preview: the
                 // whole is then "not kept" when a person opens it, and the conversation is still saved.
@@ -2614,10 +2623,29 @@ export class AgentSession {
     }
 
     /**
+     * THE IMAGES A MESSAGE SENDS, KEPT (Tynn #642): one id each, for the row to name and the store to keep them under. The
+     * blocks after the message's own text are its attachments, in order, so each image block is matched to its name. A store
+     * that keeps no files beside its log (a test's memory store) keeps none, and the row names none.
+     */
+    #keptImages(sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null): { refs: readonly AttachmentRef[]; files: readonly KeptImage[] } {
+        if (!sent || sent.attachments.length === 0 || !(this.#options.store instanceof ThreadStore)) return { refs: [], files: [] };
+        const blocks = sent.content.length > sent.attachments.length ? sent.content.slice(sent.content.length - sent.attachments.length) : sent.content;
+        const refs: AttachmentRef[] = [], files: KeptImage[] = [];
+        blocks.forEach((block, i) => {
+            if (block.type !== 'image') return;
+            const id = randomUUID().replace(/-/g, '');
+            const name = sent.attachments[i] ?? 'image';
+            refs.push({ id, name, mimeType: block.mimeType, bytes: Buffer.byteLength(block.data, 'base64') });
+            files.push({ id, mimeType: block.mimeType, data: block.data });
+        });
+        return { refs, files };
+    }
+
+    /**
      * One row that is not a message chunk — from the wire or minted here (a turn marker): closes the open message,
      * reaches the renderer synchronously, and is written to the thread after the message it closed.
      */
-    async #emitRow(raw: StreamEvent): Promise<void> {
+    async #emitRow(raw: StreamEvent, images: readonly KeptImage[] = []): Promise<void> {
         this.#closeMessage();
 
         /*
@@ -2632,9 +2660,12 @@ export class AgentSession {
         // ON THE SAME CHAIN as the message writes: waiting for the chain and then writing outside it let two rows
         // emitted together (a turn marker and your message) reach the thread in either order. A storage fault must not
         // take the turn down with it — and must not vanish either (`#record`).
-        await this.#record(event, whole);
+        await this.#record(event, whole, images);
     }
 }
+
+/** An image a message sent, to be kept under the id its row names (Tynn #642). */
+interface KeptImage { readonly id: string; readonly mimeType: string; readonly data: string }
 
 /**
  * Why a command did not run, in words: prism-acp's `CommandUnsupported` carries a fixed `reason`
@@ -2676,8 +2707,8 @@ function replayOf(update: Record<string, unknown>): { summary: string | null } |
     return { summary: `Resumed the thread: the provider replayed ${count(turns, 'turn')} (${count(items, 'item')}) of its history${ended}; not recorded again (already in this history).` };
 }
 
-function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext): StreamEvent {
-    const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
+function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext, kept: readonly AttachmentRef[] = []): StreamEvent {
+    const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments, ...(kept.length > 0 ? { attachmentRefs: kept } : {}) } : {};
     const mail = context.mail && context.mail.length > 0 ? { mail: context.mail } : {};
     return by === null || by === 'you'
         ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments }

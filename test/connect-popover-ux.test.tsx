@@ -53,7 +53,7 @@ describe('the popover', () => {
     });
 });
 
-describe('the role switch stays reachable: Settings → Remote access', () => {
+describe('the role switch stays reachable: the host picker’s Other ways (Tynn #640; it was Settings → Remote access)', () => {
     it('a pilot gets it there, on one line', () => {
         const html = renderToStaticMarkup(<ConnectRemote state={null} remembered={[]} onConnect={() => {}} onDisconnect={() => {}} tynnWorkstations={LIST} onOpenWorkstation={() => {}} onSetRole={setRole} />);
         expect(control(row(html, 'ws_found'), 'data-action="change-role"')!.open).toMatch(/\sclass="[^"]*\bwhitespace-nowrap\b/);
@@ -76,9 +76,16 @@ describe('wired: the title bar and ⌘K hand the popover no role switch', () => 
         expect(connect).not.toContain('onSetRole');
     });
 
-    it('the ⌘K dialog is given no onSetRole', () => {
-        const dialog = /<ConnectDialog([^]*?)\/>/.exec(app)?.[1] ?? '';
-        expect(dialog).toContain('onOpenWorkstation');
-        expect(dialog).not.toContain('onSetRole');
+    it('the ⌘K dialog is given no onSetRole; only its Other ways view (a ConnectRemote) carries it, for a pilot', () => {
+        // To the dialog's own closing `/>` on a line of its own: since Tynn #640 its `other={<ConnectRemote … />}` prop
+        // closes a tag first, and a lazy match to the first `/>` stopped inside it.
+        const dialog = /<ConnectDialog([^]*?)\n\s*\/>/.exec(app)?.[1] ?? '';
+        const other = /\n\s*other=\{<ConnectRemote [^\n]*\/>\}/.exec(dialog)?.[0] ?? '';
+        const own = dialog.replace(other, '');
+        // CONTROL: both parts were found, so the absence below is read from the dialog's own props.
+        expect(other).not.toBe('');
+        expect(own).toContain('onOpenWorkstation');
+        expect(own).not.toContain('onSetRole');
+        expect(other).toContain("onSetRole={features.remote?.tynnWorkstation?.role === 'pilot' ? setWorkstationRole : undefined}");
     });
 });

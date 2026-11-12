@@ -97,7 +97,7 @@ export interface Finished {
     readonly agentName: string | null;
     readonly handoff: string | null;
     readonly at: string;
-    readonly seen: boolean;
+    // No `seen` (Tynn #658): a handoff is for agents, and nobody marks one read. A record written with it still loads.
 }
 
 export interface AskInput {
@@ -199,9 +199,10 @@ export type AttentionData = AttentionFile;
 
 /**
  * HOW MUCH FINISHED HISTORY IS KEPT (Tynn #549; settings `finished_kept_per_agent`, `finished_seen_days`, `handoff_kept_kb`).
- * The owner's history on 2026-11-08 was 713 handoffs, 8.1 MB, rewritten whole on every question asked. An unseen handoff
- * is always kept; a seen one goes past the agent's newest `keptPerAgent` or `seenDays` old; a handoff's text is kept up to
- * `handoffKb` (the whole text is the agent's handoff file, `.ai/handoff/<agent>.md`).
+ * The owner's history on 2026-11-08 was 713 handoffs, 8.1 MB, rewritten whole on every question asked. A handoff goes
+ * past the agent's newest `keptPerAgent`, or `seenDays` old — except each agent's newest HANDOFF, which its next run reads; a
+ * handoff's text is kept up to `handoffKb` (the whole text is the agent's handoff file, `.ai/handoff/<agent>.md`). There
+ * is no "seen" (Tynn #658): a handoff is for agents, never read by the person, so "unseen is always kept" kept all.
  */
 export interface AttentionLimits {
     readonly keptPerAgent: number;
@@ -232,7 +233,7 @@ export function cutHandoff(text: string | null, kb: number): string | null {
     return `${kept}\n… (cut at ${kb} KB; the whole handoff is in the agent's handoff file)`;
 }
 
-/** The finished history within the limits: unseen always kept; a seen one only among its agent's newest, and not too old. */
+/** The finished history within the limits: an agent's newest HANDOFF always; the rest only among its agent's newest, and not too old. */
 export function boundFinished(finished: readonly Finished[], limits: AttentionLimits, nowMs: number): Finished[] {
     return boundWithArchive(finished, limits, nowMs).kept;
 }
@@ -256,16 +257,24 @@ export function boundWithArchive(finished: readonly Finished[], limits: Attentio
 function boundKept(finished: readonly Finished[], limits: AttentionLimits, nowMs: number): Finished[] {
     const rank = new Map<string, number>();
     const perAgent = new Map<string, number>();
+    // Each agent's newest record that CARRIES a handoff: what its next run reads. A newer finish with none (imDone
+    // without a note) must not push it out.
+    const newestHandoff = new Set<string>();
+    const hasHandoff = new Set<string>();
     for (let i = finished.length - 1; i >= 0; i -= 1) {
         const f = finished[i]!;
         const n = perAgent.get(f.agentId) ?? 0;
         rank.set(f.id, n);
         perAgent.set(f.agentId, n + 1);
+        if (f.handoff !== null && !hasHandoff.has(f.agentId)) {
+            hasHandoff.add(f.agentId);
+            newestHandoff.add(f.id);
+        }
     }
     const maxAge = limits.seenDays * 86_400_000;
     const kept: Finished[] = [];
     for (const f of finished) {
-        const keep = !f.seen || ((rank.get(f.id) ?? 0) < limits.keptPerAgent && nowMs - Date.parse(f.at) <= maxAge);
+        const keep = newestHandoff.has(f.id) || ((rank.get(f.id) ?? 0) < limits.keptPerAgent && nowMs - Date.parse(f.at) <= maxAge);
         if (!keep) continue;
         const handoff = cutHandoff(f.handoff, limits.handoffKb);
         kept.push(handoff === f.handoff ? f : { ...f, handoff });
@@ -400,7 +409,6 @@ export class AttentionStore {
             agentName: input.agentName,
             handoff: input.handoff ?? null,
             at: this.#now(),
-            seen: false,
         }]);
         await this.#flush();
 
@@ -416,7 +424,7 @@ export class AttentionStore {
         return allUserItemsOf(this.#data);
     }
 
-    /** Every finish, oldest first — the Deck's "Since you looked" band reads the unseen ones. */
+    /** Every finish, oldest first — for agents (Tynn #658): the agent row's "Last finished", a delete's landed handoff. */
     finished(): readonly Finished[] {
         return finishedOf(this.#data);
     }
@@ -427,12 +435,6 @@ export class AttentionStore {
      */
     lastHandoff(agentId: AgentId): { text: string; at: number } | null {
         return lastHandoffOf(this.#data, agentId);
-    }
-
-    markSeen(id: string): void {
-        const seen = this.#data.finished.map((f) => (f.id === id ? { ...f, seen: true } : f));
-        this.#data.finished = this.#boundArchiving(seen);
-        reportFlush(this.#flush(), 'the attention store');
     }
 
     async ask(input: AskInput, context: { userActive: boolean; dnd?: { on: boolean; reply: string } | undefined }): Promise<AskResult> {

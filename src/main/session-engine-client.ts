@@ -1,5 +1,7 @@
+import { decodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
@@ -531,7 +533,7 @@ export class SessionEngineClient {
             }
             if (method === 'client.remoteInvoke') {
                 if (!this.#options.onRemoteInvoke) throw new Error('this window answers no remote calls');
-                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), Array.isArray(args[1]) ? args[1] : [], forwardedCallContext(args[2])) };
+                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), decodeRemoteInvokeArgs(String(args[0]), Array.isArray(args[1]) ? args[1] : []), forwardedCallContext(args[2])) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
@@ -1218,6 +1220,11 @@ export class SessionEngineClient {
         return this.#value('engine.deliverOwed', [agentId, then ?? null], 0);
     }
 
+    /** A deleted agent's last shown rows go with it, on the host (`SessionHost.forgetShown`, Tynn #647). */
+    async forgetShown(agentId: AgentId): Promise<void> {
+        await this.#value('engine.forgetShown', [agentId], false);
+    }
+
     ended(agentId: AgentId): Promise<StopVerdict | null> {
         return this.#value<StopVerdict | null>('engine.ended', [agentId], null);
     }
@@ -1230,6 +1237,11 @@ export class SessionEngineClient {
     /** A tool row's whole output, read by the host from its own store, bounded (`SessionHost.toolOutput`, Tynn story #386). */
     toolOutput(agentId: AgentId, toolCallId: string): Promise<ToolOutputReply> {
         return this.#value<ToolOutputReply>('engine.toolOutput', [agentId, toolCallId], { ok: false, reason: 'Genie’s agents are not running yet' });
+    }
+
+    /** One image a thread kept, read by the host from its own store (`SessionHost.attachment`, Tynn #642). */
+    attachment(agentId: AgentId, attachmentId: string): Promise<AttachmentReply> {
+        return this.#value<AttachmentReply>('engine.attachment', [agentId, attachmentId], { ok: false, reason: 'Genie’s agents are not running yet' });
     }
 
     async settled(): Promise<void> {

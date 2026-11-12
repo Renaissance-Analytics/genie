@@ -41,7 +41,7 @@ function ports(tab: Record<string, unknown> = {}): HostAlonePorts {
         takeOver: () => null,
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {} },
         headroom: { view: () => ({}), subscribe: () => () => {} },
-        attention: { finished: () => [], markSeen: () => {}, answer: async () => true, lists: { done: async () => true } },
+        attention: { finished: () => [], answer: async () => true, lists: { done: async () => true } },
         approvals: { resolve: () => true }, inbox: { unread: () => [], receive: async () => [], involving: () => [] }, deliverToAgent: async () => true,
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
         workspaceLifecycle: { terminals: () => null, supervisor: () => null, engines: () => null, reverifyTrust: async () => {}, github: () => null, tynn: () => null, defaultEnvFile: () => '', stagingDirectory: () => '' },

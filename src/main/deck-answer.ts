@@ -15,7 +15,7 @@ import type { InboxStore } from './inbox-store.js';
 export type DeckAnswerAction = Extract<FeatureAction, { kind: 'deck.answer' | 'deck.answerForm' }>;
 
 export interface DeckAnswerPorts {
-    readonly attention: Pick<AttentionStore, 'answer' | 'markSeen' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
+    readonly attention: Pick<AttentionStore, 'answer' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
     /** As the window's approvals API types it (a replica may answer later); read exactly as the feature action always did. */
     readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean> };
     readonly inbox: Pick<InboxStore, 'unread' | 'receive'>;
@@ -68,9 +68,6 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             await ports.inbox.receive({ participant: HUMAN, limit: unread.filter((m) => m.seq < target.seq).length + 1 });
             break;
         }
-        case 'mark-seen':
-            ports.attention.markSeen(command.finishedId);
-            break;
         case 'trust-certificate': {
             // The same Trust as Hosting's line: one elevation, and a failure comes back with its reason.
             if (!ports.trustCertificate) throw new Error(NEEDS_WINDOW('trusting Genie’s certificate'));
@@ -108,9 +105,7 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             break;
         }
         case 'answer-provider-approval':
-        case 'restart-with-handoff':
-        case 'navigate':
-            // Session-layer and renderer concerns: main.ts routes these to the session host and the window.
+            // A session-layer concern: main.ts routes it to the session host.
             throw new Error(`${command.kind} is handled by the session host, not the feature IPC`);
     }
 }

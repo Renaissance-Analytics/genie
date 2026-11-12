@@ -2,7 +2,7 @@ import type { AgentOpsPorts } from './agent-ops-host.js';
 import type { AgentEngine } from './agent-engine.js';
 
 /** The session host's calls this port makes: a window's link to it, or genie-host's own. */
-export type AgentOpsHostEngine = Pick<AgentEngine, 'start' | 'stop' | 'ended' | 'probe' | 'modelState' | 'switchModel' | 'settleParked' | 'deliverOwed'>;
+export type AgentOpsHostEngine = Pick<AgentEngine, 'start' | 'stop' | 'ended' | 'probe' | 'modelState' | 'switchModel' | 'settleParked' | 'deliverOwed' | 'forgetShown'>;
 
 /**
  * THE SESSION HOST AS AGENT OPERATIONS SEE IT — the one place the real `SessionHost` is wired into `AgentOpsPorts.host`.
@@ -26,5 +26,7 @@ export function sessionHostPort(host: () => AgentOpsHostEngine | null): AgentOps
         settleParked: (id, decision) => host()?.settleParked(id, decision) ?? false,
         // What a restart owes the new run (genie#1238): the undelivered resume prompt and drafts, in order, once.
         deliverOwed: (id, then) => host()!.deliverOwed(id, then),
+        // A deleted agent's last shown rows go with it (Tynn #647).
+        forgetShown: async (id) => { await host()?.forgetShown(id); },
     };
 }

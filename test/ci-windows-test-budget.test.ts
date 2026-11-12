@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { windowsFunction } from './helpers/ci-scripts.js';
 
 /**
  * THE WINDOWS TEST BUDGET IN CI (2026-10-22). vitest's default budget is 5 s per test, and the real-I/O suites earn it
@@ -19,18 +20,15 @@ const BUDGET = '--testTimeout=30000';
 // Comments are stripped BY LINE first: a budget mentioned in a comment is not a budget (the source-guard rule).
 const code = (yaml: string) => yaml.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
 
-describe('the Windows test jobs run vitest with a 30 s budget', () => {
-    it("CI's unit (windows) job", () => {
-        const ci = code(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
-        const job = ci.slice(ci.indexOf('name: unit (windows)'), ci.indexOf('\n  smoke:'));
-        expect(job).toContain('runs-on: windows-latest');
-        expect(job).toContain(`npm test -- ${BUDGET}`);
+describe('the Windows unit row runs vitest with a 30 s budget', () => {
+    it("scripts/ci/windows.ps1's unit row", () => {
+        expect(windowsFunction('Row-unit')).toContain(`npm test -- ${BUDGET}`);
     });
-
-    it("the release's Windows publish job — and only on Windows: Linux keeps the default", () => {
+    it('the release runs no tests at all: GitHub builds, signs and publishes (the owner, 2026-11-11)', () => {
         const release = code(readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'));
-        const line = release.split('\n').find((l) => /run: npm test\b/.test(l)) ?? '';
-        expect(line).toContain(BUDGET);
-        expect(line).toMatch(/runner\.os == 'Windows'/);
+        expect(release).not.toMatch(/run: npm test\b/);
+        expect(release).not.toMatch(/run: npm run verify:/);
+        // CONTROL: the release is read, and it still builds.
+        expect(release).toMatch(/run: npm run build\b/);
     });
 });

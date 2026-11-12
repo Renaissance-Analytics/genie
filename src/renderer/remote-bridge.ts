@@ -9,9 +9,11 @@ import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type 
 import type { FeatureAction, FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
+import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
 import { heldLimiter, localPageClient, localUploadClient } from './local-content-client.js';
@@ -46,6 +48,10 @@ export interface RemoteState {
     readonly token: string | null;
     /** The PIN was right and the host's screen asks "Pair this device?" until `expiresAt` (q_8c07b142); `null` otherwise. */
     readonly pairing?: { readonly expiresAt: number } | null;
+    /** The build the host said in its welcome (P10.1e); absent/`null` = it said none. */
+    readonly hostBuild?: string | null;
+    /** The host runs a Genie older than this client needs (Tynn #651); the link was closed for it. */
+    readonly skew?: DroneSkew | null;
 }
 
 export interface RemoteClient {
@@ -58,7 +64,7 @@ export interface RemoteClient {
     /** Share links on the host this client is connected to (Tynn #587): that host makes them, for itself. */
     readonly shares: NonNullable<import('./relay-transport.js').TynnNetworkBridge['shares']>;
     readonly bridge: GenieBridge;
-    readonly ready: Promise<{ ok: true } | { ok: false; reason: string }>;
+    readonly ready: Promise<{ ok: true } | { ok: false; reason: string; skew?: DroneSkew }>;
     state(): RemoteState;
     onState(listener: (state: RemoteState) => void): () => void;
     /** `force`: Take control from whoever drives (Tynn #529); without it, a take never takes control from someone driving. */
@@ -99,6 +105,12 @@ export interface RemoteOptions {
      * types into that one terminal while that window drives, and is told why when it may not any more. Never `drive`.
      */
     readonly companion?: string;
+    /**
+     * THE OLDEST HOST BUILD THIS CLIENT CAN DRIVE (Tynn #651; core/drone-version.ts). A welcome from an older host, or one
+     * that says no build, is not a connection: `ready` says the skew and the link closes, before anything is asked of a
+     * host that cannot answer it. A call it refuses as "not a bridge method" is the same skew. Absent = any host, as before.
+     */
+    readonly minBuild?: string;
 }
 
 /**
@@ -152,16 +164,27 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         return () => { set.delete(listener); };
     };
 
-    let resolveReady: (r: { ok: true } | { ok: false; reason: string }) => void = () => {};
-    const ready = new Promise<{ ok: true } | { ok: false; reason: string }>((r) => { resolveReady = r; });
+    let resolveReady: (r: { ok: true } | { ok: false; reason: string; skew?: DroneSkew }) => void = () => {};
+    const ready = new Promise<{ ok: true } | { ok: false; reason: string; skew?: DroneSkew }>((r) => { resolveReady = r; });
+    /** The host is older than `minBuild`: said, and the link closed (Tynn #651). Never the host's protocol words. */
+    const skewed = (skew: DroneSkew): void => {
+        const reason = skew.build === null ? 'that machine runs an older Genie' : `that machine runs Genie ${skew.build}`;
+        if (!state.connected) resolveReady({ ok: false, reason, skew });
+        setState({ skew });
+        transport.close();
+    };
 
     transport.onMessage((text) => {
         const parsed = parseMessage(text);
         if (!parsed.ok) return;
         const m: WireMessage = parsed.message;
         switch (m.kind) {
-            case 'welcome':
-                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null });
+            case 'welcome': {
+                const hostBuild = typeof m.build === 'string' ? m.build : null;
+                // An older host than this client needs is not a connection (Tynn #651): nothing is asked of it.
+                const tooOld = options.minBuild !== undefined ? welcomeSkew(m, options.minBuild) : null;
+                if (tooOld) { setState({ hostBuild }); skewed(tooOld); return; }
+                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null, hostBuild, skew: null });
                 resolveReady({ ok: true });
                 // A window that drives hears who drives, and drives at once (Tynn #529). Others ask nothing more than before.
                 if (options.drive === true && options.companion === undefined && auth.kind !== 'local') {
@@ -169,14 +192,19 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                     void control('baton.take');
                 }
                 return;
+            }
             case 'pairing':
                 setState({ pairing: { expiresAt: m.expiresAt } });
                 return;
-            case 'refused':
+            case 'refused': {
+                // A call the host does not know: an older host than this client needs, said as such (Tynn #651).
+                const unknown = options.minBuild !== undefined ? refusalSkew(m.reason) : null;
+                if (unknown) { skewed({ build: state.hostBuild ? shownBuild(state.hostBuild) : null, method: unknown.method }); return; }
                 if (state.pairing) setState({ pairing: null });
                 if (!state.connected) resolveReady({ ok: false, reason: m.reason });
                 else setState({ lastRefusal: m.reason });
                 return;
+            }
             case 'result': {
                 const waiter = pending.get(m.id);
                 pending.delete(m.id);
@@ -378,7 +406,6 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         resolvePrompt: (agentId, promptId, action) => answer<{ ok: true }>('resolvePrompt', agentId, promptId, action),
         // The host's reply ends the answer's flight and a refusal is said on the card (core/approval-answering.ts).
         answerApproval: (agentId, optionId, note) => answer<{ ok: true }>('answerApproval', agentId, optionId, note ?? ''),
-        restartWithHandoff: (agentId, finishedId) => answer<{ ok: true }>('restartWithHandoff', agentId, finishedId),
         addAgent: (workspaceId, input) => answer<{ ok: true; id: string }>('addAgent', workspaceId, input),
         addWorkspace: () => fire('addWorkspace'),
         // A Take over the host refused is said to the person, never dropped (Tynn #529).
@@ -450,6 +477,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             models: (agentId, refresh) => answer('agents.models', agentId, refresh === true),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
             toolOutput: (agentId, toolCallId) => answer('agents.toolOutput', agentId, toolCallId),
+            // Inline when it fits a frame; this machine's own window takes a larger image as a blob (below, Tynn #642).
+            attachment: (agentId, attachmentId) => answer('agents.attachment', agentId, attachmentId),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: phone ? {
@@ -508,6 +537,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             check: () => read<UpdateState>('updates.check'),
             download: () => read<boolean>('updates.download'),
             install: () => read<{ report: string } | null>('updates.install'),
+            forceDrain: () => read<boolean>('updates.forceDrain'),
             ...(local ? { notes: () => read<UpdateState | null>('updates.notes') } : {}),
         },
     };
@@ -636,6 +666,13 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             picked: async (paths: readonly string[]) => {
                 if (tooLargeForFrame([paths])) throw new Error('too many files were picked to report in one piece');
                 await read('features.picked', paths);
+            },
+        });
+        // ONE KEPT IMAGE (Tynn #642): inline when small, one blob when not (RemoteHost's jsonResult); a refusal is an answer.
+        Object.assign(bridge.agents, {
+            attachment: async (agentId: string, attachmentId: string): Promise<AttachmentReply> => {
+                try { return await decodeJson<AttachmentReply>(() => read('agents.attachment', agentId, attachmentId)); }
+                catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
             },
         });
         terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });

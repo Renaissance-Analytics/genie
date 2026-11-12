@@ -67,6 +67,7 @@ import { RendererNoticeBar } from './components/RendererNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 import type { GAppListing, GAppsApi } from '../core/gapps.js';
+import { dndHeader, dndToggleAction } from '../core/dnd-header.js';
 
 
 /**
@@ -267,6 +268,8 @@ export interface ShellProps {
     remoteConnect?: RemoteConnectProps | undefined;
     /** Share this workstation through Tynn (Tynn #587); absent for a guest. */
     onShareWorkstation?: (() => void) | undefined;
+    /** The host picker's other ways to another machine, in a dialog (Tynn #640). */
+    onOpenConnectOther?: (() => void) | undefined;
     /** Agent operations (§6.2) for the Agent view; absent when this window cannot operate agents. */
     agentOps?: AgentOpsProps | undefined;
     /** Workspace operations (§6.1) for the Workspace surface; absent when this window cannot operate workspaces. */
@@ -323,6 +326,8 @@ export type ShellRemote = {
     host: string; driver: string | null; driving: boolean; locked: boolean;
     lostTo?: string | null; onTakeControl?: () => void;
     refusal?: string | null; needsBaton?: boolean; onDismissRefusal?: () => void;
+    /** The host badge's Disconnect (Tynn #640). */
+    onDisconnect?: () => void;
 } | null;
 
 /** The dock's panels, as the notice names them (§4.4). */
@@ -411,6 +416,7 @@ export function Shell({
     remote,
     remoteConnect,
     onShareWorkstation,
+    onOpenConnectOther,
     agentOps,
     workspaceOps,
     addPreview,
@@ -561,6 +567,8 @@ export function Shell({
         actions: { api: gapps, pickFolder: pickGappFolder, refresh: refreshGapps, workspace: onScreenId !== null && onScreenName !== null ? { id: onScreenId, name: onScreenName } : null },
     } : { apps: [] as readonly GAppListing[] }), [gapps, pickGappFolder, gappList, refreshGapps, onScreenId, onScreenName]);
 
+    const dndView = dndHeader(features.settings.values);
+
     return (
         <WorkspaceColorsContext.Provider value={colorMap}>
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
@@ -581,9 +589,12 @@ export function Shell({
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
-                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh }}
+                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
                 // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it, over the host's book (V7) in a local window.
                 gapps={gappStore}
+                // DO NOT DISTURB (Tynn #655): Settings → General's own setting, read from this window's host snapshot and
+                // written through its feature channel — so a window on another machine shows and sets that machine's.
+                dnd={dndView ? { view: dndView, onToggle: () => onFeature(dndToggleAction(dndView.on)) } : undefined}
             />
             {remote?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />
@@ -599,7 +610,7 @@ export function Shell({
                     }}
                 />
             ) : null}
-            {restartScreen ? <InstallScreen screen={restartScreen} /> : null}
+            {restartScreen ? <InstallScreen screen={restartScreen} onForce={() => { void updates.forceDrain?.(); }} /> : null}
             {/* A workspace's background processes or sites, from its row's indicator (Genie 1's modals). */}
             {runtimeModal && runtimeWorkspace ? (
                 <WorkspaceRuntimeModal kind={runtimeModal.kind} workspace={runtimeWorkspace} data={features} onAction={onFeature} onClose={() => setRuntimeModal(null)} />

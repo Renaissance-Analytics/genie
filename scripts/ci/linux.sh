@@ -11,7 +11,7 @@
 # `scripts/omarchy-run.sh <repo-dir> 'bash scripts/ci/linux.sh'` does exactly that on the omarchy-test VM. NEVER on a
 # person's desktop: the rows open real windows, start real hosts and write to ~/.genie.
 #
-# Each row is a step of a Linux job in .github/workflows/ci.yml, run with the same command and the same time limit, and
+# Each row is a step of a Linux job of the removed .github/workflows/ci.yml, run with the same command and time limit, and
 # it passes or fails on the same thing. One line per row, `ROW <name> PASS|FAIL <seconds>`, then `CI LINUX PASS|FAIL`;
 # the exit status is non-zero when any row failed. A row's whole output is in ci-out/<name>.log, and the end of it is
 # printed when the row fails. A failed row does not stop the run: every later row still reports.
@@ -636,8 +636,13 @@ ceiling() {
 # The watchdog: after the ceiling, it marks the row timed out and ends every process under this script but itself and
 # the shared app's tree. The row's command then returns, failing, and the loop reads the mark.
 watchdog() {
-    local name="$1" limit="$2" mark="$3" token="$4"
-    sleep "$limit"
+    local name="$1" limit="$2" mark="$3" token="$4" s
+    # Its sleep ends with it, and never holds the gate's output (Tynn issue #709): a sleep left behind by a killed
+    # watchdog kept an SSH-run gate open until the longest ceiling had passed.
+    sleep "$limit" >/dev/null 2>&1 </dev/null &
+    s=$!
+    trap 'kill "$s" 2>/dev/null; exit 0' TERM
+    wait "$s" || return 0
     printf '%s\n' "$token" >"$mark"
     local keep p
     keep=" $BASHPID $(app_tree | tr '\n' ' ') "

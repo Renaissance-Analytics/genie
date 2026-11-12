@@ -6,7 +6,6 @@ import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity
 import type { DriverEvents, SessionDriver, SessionDriverFactory } from '../src/core/session.js';
 import { restartAgent, switchDriver, type AgentOpsPorts } from '../src/main/agent-ops-host.js';
 import { sessionHostPort } from '../src/main/agent-ops-host-port.js';
-import { restartWithHandoff } from '../src/main/restart-with-handoff.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { processTable } from './support/process-table.js';
 
@@ -133,22 +132,6 @@ describe('restart through the port main.ts builds waits for the old run to end',
 });
 
 describe('the other stop-then-start paths wait too', () => {
-    it('"Restart with this" (the handoff) inside the stop grace starts the agent and hands it the note', async () => {
-        const w = world();
-        expect(w.host.start(w.record(), w.dir)).toEqual({ ok: true });
-        const fin = { id: 'fin_1', agentId: w.record().id, agentName: 'fancy', handoff: 'next: merge #50', at: 't', seen: false };
-        const seen: string[] = [];
-
-        // main.ts hands in the one restart and the real host's prompt (genie:restart-with-handoff, genie#1238).
-        const result = await restartWithHandoff({ restart: (id) => restartAgent(w.ports, id, 'graceful'), prompt: (id, text, by) => w.host.prompt(id, text, by) }, { finished: () => [fin], markSeen: (id) => { seen.push(id); } }, w.record(), 'fin_1');
-
-        expect(result).toEqual({ ok: true });
-        expect(w.host.refusals.get(w.record().id)).toBeUndefined();
-        expect(w.spawned()).toBe(2);
-        expect(seen).toEqual(['fin_1']);
-        w.host.stop(w.record().id, { graceful: false });
-    }, 10_000);
-
     it('a provider switch returns only once the old run has ended, so "Start it when ready" is true when it is said', async () => {
         const w = world();
         expect(w.host.start(w.record(), w.dir)).toEqual({ ok: true });
