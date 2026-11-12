@@ -38,3 +38,5 @@ ci-out/
 ci-rows.txt
 # The changed paths the CI caller writes before a run, read by scripts/ci/linux.sh (Tynn #692)
 ci-changed.txt
+# What scripts/smoke-seed.mjs records of the project.json it writes, to know it again on the next run (Tynn #692)
+project.json.smoke-seed
