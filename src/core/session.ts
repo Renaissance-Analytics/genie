@@ -2301,7 +2301,11 @@ export class AgentSession {
             void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn ended, but Genie could not confirm its processes stopped: ${error instanceof Error ? error.message : String(error)}` });
             this.#changed();
         };
-        try { void this.stop('SIGTERM', { graceMs: 0 }).catch(failed); } catch (error) { failed(error); }
+        try {
+            void this.stop('SIGTERM', { graceMs: 0 }).then((verdict) => {
+                if (!verdict.verified) failed(new Error(`${verdict.reason}${verdict.survivors.length > 0 ? ` Still running: ${describeProcesses(verdict.survivors)}.` : ''}`));
+            }).catch(failed);
+        } catch (error) { failed(error); }
         this.#changed();
     }
 
