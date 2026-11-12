@@ -1,7 +1,8 @@
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, isAbsolute } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fileLockIdentityStatus, warmLockIdentity } from '@particle-academy/prism-harness';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chatMessages } from '../src/core/chat-view.js';
 import { agentRecord, mintAgentId, threadKeyFor, type AgentId } from '../src/core/identity.js';
 import { memoryPair } from '../src/core/line-transport.js';
@@ -28,6 +29,14 @@ type Reply = { ok: true; mimeType: string; data: string; bytes: number } | { ok:
 type Ref = { id: string; name: string; mimeType: string; bytes: number };
 
 let dir: string;
+// As genie-host's boot does (genie-host.ts awaits warmLockIdentity before its session host takes work): the FIRST thread
+// write in a process takes prism-harness's file lock, which reads this machine's lock identity once — on Windows a
+// PowerShell + CIM query, billed to whichever test wrote first (on genie#1879's Azure Windows run the first test took 6.3-7.0 s). Paid
+// here, and what it cost is said, so each test below measures keeping and reading images and nothing else.
+beforeAll(async () => {
+    await warmLockIdentity();
+    console.log(`[#642] ${process.platform} lock identity read once: ${Math.round(fileLockIdentityStatus().sample_duration_ms)} ms`);
+}, 30_000);
 let hosts: SessionHost[] = [];
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-attachments-642-')); hosts = []; });
 afterEach(async () => { await Promise.all(hosts.map((h) => h.settled())); await rm(dir, { recursive: true, force: true }); });
