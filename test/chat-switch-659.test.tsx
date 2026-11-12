@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileLockIdentityStatus, warmLockIdentity } from '@particle-academy/prism-harness';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRow } from '../src/core/dashboard-view.js';
 import { chatThreadFrom, type MailLike } from '../src/core/chat-view.js';
 import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
@@ -54,6 +55,13 @@ const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: p
 const fakeDriverFor: DriverFor = () => ((() => ({ start: () => {}, prompt: () => {}, kill: () => {}, get running() { return true; }, get cliSessionId() { return null; } })) as unknown as SessionDriverFactory);
 
 let dir: string;
+// As genie-host's boot does (genie-host.ts awaits warmLockIdentity before its session host takes work): the one-time
+// lock-identity read (on Windows a PowerShell/CIM query, seconds when cold) is paid here, not inside the first test that
+// writes a thread — on the Azure Windows VM it took that test past its 5 s (#1897), the cold read and not the claim.
+beforeAll(async () => {
+    await warmLockIdentity();
+    console.log(`[#659] ${process.platform} lock identity read once: ${Math.round(fileLockIdentityStatus().sample_duration_ms)} ms`);
+}, 30_000);
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-659-')); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
 
