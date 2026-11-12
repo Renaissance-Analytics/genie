@@ -73,7 +73,7 @@ function clickRow(agentId: string, deckItems: readonly DeckItem[]) {
     const route = navigated.at(-1) ?? ROUTE;
     const picked = chatted.at(-1) ?? null;
     const parsed = parseRoute(route);
-    const subject = chatSubjectFor(parsed, snapshot.agents.concat(snapshot.osAgent!), [], parsed.surface === 'dashboard' ? picked : null);
+    const subject = chatSubjectFor(parsed, snapshot.agents.concat(snapshot.osAgent!), picked);
     return { navigated, opened, surface: parsed.surface, subject };
 }
 
