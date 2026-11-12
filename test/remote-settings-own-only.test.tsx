@@ -1,4 +1,7 @@
+// @vitest-environment happy-dom
 import { readFileSync } from 'node:fs';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { RemoteSection } from '../src/renderer/features.js';
@@ -72,9 +75,22 @@ describe('the host picker holds every way to another machine', () => {
     });
 
     it('that dialog shows what it is given: the host and PIN form, your machines, the ones remembered', () => {
-        const html = renderToStaticMarkup(<ConnectDialog mode="other" onClose={() => {}} workstations={null} onOpenSurface={() => {}} onSwitch={() => {}} other={<p data-other-ways="">form</p>} />);
-        expect(html).toContain('Connect to another machine');
-        expect(html).toContain('data-other-ways=""');
+        // MOUNTED, not rendered to a string: Fancy's Modal draws through a portal, which a server render leaves out — it
+        // read '' (62a gate). The dialog is found in the document, where the portal puts it.
+        const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+        g.IS_REACT_ACT_ENVIRONMENT = true;
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const root = createRoot(host);
+        try {
+            act(() => { root.render(<ConnectDialog mode="other" onClose={() => {}} workstations={null} onOpenSurface={() => {}} onSwitch={() => {}} other={<p data-other-ways="">form</p>} />); });
+            const dialog = document.querySelector('[role="dialog"]');
+            expect(dialog?.textContent ?? '').toContain('Connect to another machine');
+            expect(dialog?.querySelector('[data-connect-other] [data-other-ways]')?.textContent).toBe('form');
+        } finally {
+            act(() => { root.unmount(); });
+            host.remove();
+        }
     });
 
     it('the window wires it: the picker and the Command Window open that dialog; nothing navigates to the settings page to connect', () => {
