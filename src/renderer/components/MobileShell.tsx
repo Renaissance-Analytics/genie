@@ -13,7 +13,7 @@ import { workspaceLabel } from '../../core/workspace-label.js';
 import type { DeckItem } from '../../core/deck.js';
 import { ledgerRow } from '../../core/stream-view.js';
 import type { AgentDetail } from '../bridge.js';
-import { deviceLabelFromUserAgent } from '../../core/mobile.js';
+import { deviceLabelFromUserAgent, type MobilePanel } from '../../core/mobile.js';
 import { timeLeftWords } from '../../core/pair-confirm.js';
 import { useNow } from '../use-now.js';
 import { ApprovalCard } from './ApprovalCard.js';
@@ -54,6 +54,8 @@ export interface MobileShellProps {
     items: readonly DeckItem[] | null;
     answering: string | null;
     onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
+    /** A question with options, multi-select or free text, answered on the phone: the desktop's own form and call. */
+    onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     onDisconnect: () => void;
     /** The agents (dashboard); absent when the app does not offer it. */
     agents?: MobileAgentsSection | undefined;
@@ -297,6 +299,13 @@ export interface MobileAgentProps {
     /** Why the last send did not land, in words (the message and its files are kept to send again). */
     sendRefusal?: string | null | undefined;
     reconnecting?: boolean | undefined;
+    /** A question form answered here (the desktop's QuestionForm and call). */
+    onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
+    /** The agent list, the first panel. */
+    agents?: MobileAgentsSection | undefined;
+    workspaces?: readonly Workspace[] | null | undefined;
+    /** The panel it opens on; absent = the chat. */
+    initialPanel?: MobilePanel | undefined;
 }
 
 /** A picked photo or file before it is sent: a chip, removable. */

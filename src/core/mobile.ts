@@ -223,3 +223,19 @@ export function bytesToBase64(bytes: Uint8Array): string {
     for (let i = 0; i < bytes.length; i += CHUNK) binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
     return btoa(binary);
 }
+
+/** The phone's panels for one agent, left to right (Tynn #652): the agent list, its chat, its work stream. */
+export type MobilePanel = 'agents' | 'chat' | 'work';
+export const MOBILE_PANELS: readonly MobilePanel[] = ['agents', 'chat', 'work'];
+/** How far a finger must travel sideways for a swipe to change the panel. */
+export const SWIPE_MIN_PX = 60;
+
+/** TODO(#652): stub — a swipe's step. */
+export function swipeStep(_dx: number, _dy: number): -1 | 0 | 1 {
+    return 0;
+}
+
+/** TODO(#652): stub — the panel a step lands on. */
+export function panelAfter(panel: MobilePanel, _step: -1 | 0 | 1): MobilePanel {
+    return panel;
+}
