@@ -378,7 +378,6 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         resolvePrompt: (agentId, promptId, action) => answer<{ ok: true }>('resolvePrompt', agentId, promptId, action),
         // The host's reply ends the answer's flight and a refusal is said on the card (core/approval-answering.ts).
         answerApproval: (agentId, optionId, note) => answer<{ ok: true }>('answerApproval', agentId, optionId, note ?? ''),
-        restartWithHandoff: (agentId, finishedId) => answer<{ ok: true }>('restartWithHandoff', agentId, finishedId),
         addAgent: (workspaceId, input) => answer<{ ok: true; id: string }>('addAgent', workspaceId, input),
         addWorkspace: () => fire('addWorkspace'),
         // A Take over the host refused is said to the person, never dropped (Tynn #529).

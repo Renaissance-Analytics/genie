@@ -32,7 +32,7 @@ function ports(over: Record<string, unknown> = {}, life: Record<string, unknown>
         takeOver: () => null,
         settings: { snapshotFor: () => ({}), workspaceValues: () => ({}), setFor: async () => {}, resetFor: async () => {} },
         headroom: { view: () => ({}), subscribe: () => () => {} },
-        attention: { finished: () => [], markSeen: () => {}, answer: async () => true, lists: { done: async () => true } },
+        attention: { finished: () => [], answer: async () => true, lists: { done: async () => true } },
         approvals: { resolve: () => true }, inbox: { unread: () => [], receive: async () => [], involving: () => [] }, deliverToAgent: async () => true,
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
         workspaceLifecycle: {

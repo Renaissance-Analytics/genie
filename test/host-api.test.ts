@@ -36,7 +36,6 @@ function fakes() {
             subscribe: (cb) => { listeners.agent.add(cb); return () => listeners.agent.delete(cb); },
         },
         registerAgent: async (workspaceId, input) => { calls.push(`register:${workspaceId}:${input.name}:${input.provider}`); return { ok: true, id: 'agent_new', name: input.name }; },
-        attention: { finished: () => [{ id: 'fin_1', agentId: 'agent_a', agentName: 'atlas', handoff: 'carry on', at: 't', seen: false }] as never, markSeen: (id) => { calls.push(`seen:${id}`); } },
         terminals: {
             open: (o) => { calls.push(`term-open:${o.workspaceId}:${o.cwd}:${o.cols ?? '-'}:${o.env?.DB_PORT ?? '-'}`); return { id: 'term_1', pid: 7, shell: 'sh', scrollback: '' }; },
             write: (id, d) => { calls.push(`term-write:${id}:${d}`); return true; },

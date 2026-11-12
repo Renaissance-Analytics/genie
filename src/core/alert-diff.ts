@@ -4,10 +4,10 @@ import type { DeckItem } from './deck.js';
 /**
  * WHICH ALERTS JUST HAPPENED (§6.3) — derived from two consecutive snapshots, never from a timer. A
  * Deck item that was not there before is an alert by its origin prefix (`q_` question, `appr_` /
- * `approval:` approval, `msg_` mail); an agent row that TURNED broken is a broken alert; an agent row
- * whose handoff is NEWER than before is a finish — a handoff is for agents and is no Deck item (Tynn
- * #658), so the person hears an agent finish and has nothing left to read or clear. What persists
- * alerts nobody twice; the first snapshot after boot alerts nobody at all, nor does an agent newly listed.
+ * `approval:` approval, `msg_` mail); an agent row that TURNED broken is a broken alert. A finish is
+ * `finishAlerts` below: a handoff is for agents and is no Deck item (Tynn #658), so the person hears an
+ * agent finish and has nothing left to read or clear. What persists alerts nobody twice; the first
+ * snapshot after boot alerts nobody at all.
  */
 
 export interface Alert {
@@ -43,16 +43,29 @@ export function alertsBetween(prev: AlertSnapshot | null, next: AlertSnapshot): 
     for (const a of next.agents) {
         if (a.state === 'broken' && !wasBroken.has(a.id)) alerts.push({ kind: 'broken', workspace: a.workspaceId, agent: a.name, detail: a.reason ?? 'broken' });
     }
-    const handoffAt = new Map(prev.agents.map((a) => [a.id, a.handoff?.at ?? null]));
-    for (const a of next.agents) {
-        if (!a.handoff || !handoffAt.has(a.id)) continue;
-        const before = handoffAt.get(a.id) ?? null;
-        if (before === null || a.handoff.at > before) alerts.push({ kind: 'finished', workspace: a.workspaceId, agent: a.name, detail: `${a.name} finished: ${a.handoff.text}` });
-    }
     return alerts;
 }
 
-/** STUB (tests first, Tynn #658): the finish alert's own high-water mark per agent. */
-export function finishAlerts(seen: ReadonlyMap<string, number | null>, _agents: AlertSnapshot['agents']): { alerts: Alert[]; seen: ReadonlyMap<string, number | null> } {
-    return { alerts: [], seen };
+/**
+ * AN AGENT FINISHED (Tynn #658): its row's handoff is newer than the LAST one seen for it. `seen` is the caller's own
+ * high-water mark per agent (App.tsx keeps it in a ref), never the previous row: a row can lose its handoff and get the
+ * same one back (the replica rehydrating, a remote reconnecting), and read from the previous row that was a second
+ * alert for one finish. An agent not seen before is recorded and alerts nobody — the first look after boot, or an agent
+ * newly listed with an old handoff.
+ */
+export function finishAlerts(seen: ReadonlyMap<string, number | null>, agents: AlertSnapshot['agents']): { alerts: Alert[]; seen: ReadonlyMap<string, number | null> } {
+    const next = new Map(seen);
+    const alerts: Alert[] = [];
+    for (const a of agents) {
+        const at = a.handoff?.at ?? null;
+        if (!next.has(a.id)) {
+            next.set(a.id, at);
+            continue;
+        }
+        const last = next.get(a.id) ?? null;
+        if (at === null || (last !== null && at <= last)) continue;
+        next.set(a.id, at);
+        alerts.push({ kind: 'finished', workspace: a.workspaceId, agent: a.name, detail: `${a.name} finished: ${a.handoff!.text}` });
+    }
+    return { alerts, seen: next };
 }

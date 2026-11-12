@@ -68,7 +68,6 @@ function ports(e: HostAloneEngine, over: Record<string, unknown> = {}): HostAlon
         startRefusal: () => null,
         attention: {
             finished: () => [],
-            markSeen: () => {},
             answer: async () => true as never,
             lists: { done: async () => true },
         },

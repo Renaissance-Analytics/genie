@@ -258,7 +258,7 @@ describe('the Pilot\'s Take Over window with no window here', () => {
     const ports = (terminalsApi: unknown, over: Record<string, unknown> = {}) => ({
         hostName: 'alphar', registry, engine: () => engine, cwdFor: () => '/w', startRefusal: () => null,
         models: { get: async () => ({ models: [] }) }, providerInstalled: () => true, windowConnected: () => false, headroom: { view: () => ({}), subscribe: () => () => {} },
-        attention: { finished: () => [], markSeen: () => {}, answer: async () => true, lists: { done: async () => true } },
+        attention: { finished: () => [], answer: async () => true, lists: { done: async () => true } },
         approvals: { resolve: () => true }, inbox: { unread: () => [], receive: async () => [], involving: () => [] }, deliverToAgent: async () => true,
         files: { children: async () => null, open: async () => ({ ok: false }), readBytes: async () => ({ ok: false }), upload: async () => ({ ok: false }) },
         terminals: terminalsApi,

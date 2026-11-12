@@ -13,9 +13,7 @@ import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
 import { LOCAL_EVENTS, RESTRICTED_CALL_CONTEXT, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
-import type { Finished } from './attention-store.js';
 import type { HostApi } from './remote-host.js';
-import { restartWithHandoff, type RestartPorts } from './restart-with-handoff.js';
 import type { PtyOpened, TerminalOptions } from './terminal-host.js';
 import type { StartForWork as StartForWorkAnswer } from './start-on-demand.js';
 import type { Attachment } from '../core/prompt-content.js';
@@ -109,7 +107,8 @@ export interface HostApiDeps {
      * conversation when the run's own stopped itself (prism-acp 0.37.0). Absent = `startForWork`.
      */
     startForYourMessage?(record: AgentRecord): Promise<StartForWorkAnswer>;
-    host: Pick<RestartPorts, 'prompt'> & {
+    host: {
+        prompt(agentId: AgentRecord['id'], text: string, by?: string | null): boolean | Promise<boolean>;
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
         resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -124,7 +123,6 @@ export interface HostApiDeps {
     };
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
     registerAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
-    attention: { finished(): readonly Finished[]; markSeen(id: string): void };
     /**
      * TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): the TUI started here with NO window here (main/take-over-host.ts
      * `window: false`); the person's machine opens its own window on it. `ended`: that window closed. Absent = Take over
@@ -433,14 +431,6 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const raw = (typeof args[1] === 'object' && args[1] !== null ? args[1] : {}) as Record<string, unknown>;
                 const created = await deps.registerAgent(str(args[0]), { name: str(raw['name']), purpose: str(raw['purpose']), provider: str(raw['provider']) });
                 return created.ok ? { ok: true, id: created.id } : created;
-            }
-            case 'restartWithHandoff': {
-                const r = agent(args[0]);
-                if (!r) return { ok: false, reason: 'unknown agent' };
-                // The one restart (genie#1238), then the note.
-                const restarted = await restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
-                deps.rosterChanged?.();
-                return restarted;
             }
             case 'agents.restart':
                 if (typeof args[0] !== 'string' || (args[1] !== 'graceful' && args[1] !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };

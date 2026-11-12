@@ -101,7 +101,6 @@ import { mkdir, readdir, readFile as readFileText, writeFile as writeFileText } 
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
-import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
@@ -2491,7 +2490,6 @@ async function boot(): Promise<void> {
             },
             registerAgent: (workspaceId, input) => createAgent(agentCreatePorts(), workspaceId, input),
             rosterChanged: () => registry?.touch(),
-            attention: { finished: () => services!.attention.finished(), markSeen: (id) => services!.attention.markSeen(id) },
             terminals: {
                 open: (options) => terminals!.open(options),
                 write: (id, data) => terminals!.write(id, data),
