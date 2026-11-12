@@ -541,6 +541,7 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
+    readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
     readonly #workspaceMcpOffFor: ((record: AgentRecord) => readonly string[]) | undefined;
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
@@ -633,7 +634,7 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
-        /** RED stand-in (Tynn #702). */
+        /** Ends every Genie tool call still running for the agent whose turn is cancelled (Tynn #702; main/mcp-interrupt.ts). */
         endToolCalls?: (agentId: AgentId, intent: CancelIntent) => number;
         /** The MCP servers this agent's workspace has off by default (Tynn #628). Asked before each launch. Absent = none. */
         workspaceMcpOffFor?: (record: AgentRecord) => readonly string[];
@@ -708,6 +709,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
+        this.#endToolCalls = options.endToolCalls;
         this.#workspaceMcpOffFor = options.workspaceMcpOffFor;
         this.#untrustedNow = options.untrustedNow;
         this.#markGenieWords = options.markGenieWords;
@@ -1113,6 +1115,7 @@ export class SessionHost {
             onRateLimit: (readings, message) => this.#limitReport(record.provider, readings, message),
             ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
+            onRestartForQueue: () => this.#restartForQueue(record, cwd),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
             // Autonomous answers the same questions, at the same moment (Tynn #439): Claude's shell calls, and what Codex asks.
             // Where it does not apply, the card says why (`askedWhy`).
@@ -1463,7 +1466,7 @@ export class SessionHost {
             for (const { event: e } of rows) {
                 if (e.kind !== 'message' || !e.pending) continue;
                 const status = states.get(e.pending.id);
-                if (status !== 'queued' && status !== 'undelivered') continue;
+                if (status !== 'queued' && status !== 'undelivered' && status !== 'carried') continue;
                 if (entry.session.hasQueuedPrompt(e.pending.id)) continue;
                 try {
                     entry.session.redeliver(e.pending.id, e.text, e.speaker === 'you' ? 'you' : e.peerName,
@@ -1621,8 +1624,31 @@ export class SessionHost {
 
         // `intent`: a Stop latches the session until the person acts; an interrupt-and-send does not (Tynn #672 part 3).
         const outcome = entry.session.cancel(by, intent);
+        // GENIE'S OWN TOOL CALLS END WITH THE TURN (Tynn #702): a call of Genie's the provider waits on (a long `services exec`)
+        // returns at once with the reason, so the provider can answer the cancel before prism-acp gives up on it.
+        if (outcome.ok) { try { this.#endToolCalls?.(agentId, intent); } catch { /* the cancel itself stands */ } }
         this.#emit(agentId);
         return outcome;
+    }
+
+    /**
+     * AN INTERRUPT THE PROVIDER NEVER CONFIRMED (Tynn #702): prism-acp ended that run. The agent is started again on the same
+     * conversation, and what waited (kept `carried`) is sent, in order. After prism's own events for the run it ended, which
+     * come in one go; a run that will not end, or a start refused, leaves what waited owed to the next Restart.
+     */
+    #restartForQueue(record: AgentRecord, cwd: string): void {
+        const id = record.id;
+        setTimeout(() => {
+            void (async () => {
+                if (!this.#running.get(id)?.session.needsNewDriver) return;
+                this.stop(id, { graceful: false });
+                const verdict = await this.ended(id);
+                if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
+                const started = this.start(this.#currentRecord?.(id) ?? record, cwd);
+                if (!started.ok) return;
+                await this.deliverOwed(id);
+            })().catch(() => { /* what waited stays owed: the chat offers Send all now */ });
+        }, 0);
     }
 
     /**

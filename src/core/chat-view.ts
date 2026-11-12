@@ -240,7 +240,8 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
         const delivered = delivery === undefined || delivery === 'sent';
-        const queued = delivery === 'queued' && detail.session?.running === true;
+        // `carried` (Tynn #702): kept across the restart an unconfirmed interrupt made, waiting for the new run like a queued one.
+        const queued = (delivery === 'queued' || delivery === 'carried') && detail.session?.running === true;
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),

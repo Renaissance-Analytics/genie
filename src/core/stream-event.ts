@@ -54,7 +54,7 @@ export type StreamEvent =
      * A queued message's receipt. Separate rows preserve the original message, time and append-only wire. `unconfirmed`:
      * steered into a running turn with an uncertain outcome (Codex, Tynn #440) — maybe delivered, so never sent again.
      */
-    | { kind: 'prompt_delivery'; id: string; status: 'sent' | 'undelivered' | 'discarded' | 'unconfirmed' }
+    | { kind: 'prompt_delivery'; id: string; status: 'sent' | 'undelivered' | 'discarded' | 'unconfirmed' | 'carried' }
     | {
           kind: 'think';
           text: string;

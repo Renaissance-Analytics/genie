@@ -142,7 +142,8 @@ describe('SessionHost: an interrupt keeps the agent and sends the queue', () => 
         w.drivers[0]!.events.onTurnEnd?.(DROPPED);
         w.drivers[0]!.events.onTurnEnd?.(DROPPED);
         await w.host.settled();
-        await vi.waitFor(() => expect(w.drivers[0]!.prompts.slice(3)).toEqual(['do not run tests as services']));
+        // What waited goes next, in order, as Genie's queue sends it: all of it, one after another.
+        await vi.waitFor(() => expect(w.drivers[0]!.prompts.slice(3)).toEqual(['do not run tests as services', 'and read this']));
         expect(w.drivers).toHaveLength(1);
         expect(w.events().filter((e) => e.kind === 'prompt_delivery' && e.status === 'undelivered')).toEqual([]);
     });
@@ -224,6 +225,7 @@ describe('the chat: one queue, one action', () => {
         expect(chat).toMatch(/<ChatQueueBar /);
         expect(chat).toMatch(/data-action="remove-draft"[^>]*aria-label="Remove this message"/);
         expect(chat).not.toMatch(/data-action="send-draft"/);
-        expect(chat).not.toMatch(/data-action="send-now" data-message=\{id\}/);
+        expect(chat).not.toMatch(/onSendNow=\{onInterruptAndSend\}/);
+        expect(chat).not.toMatch(/<ChatWaitingLive [^>]*onInterruptAndSend=/);
     });
 });
