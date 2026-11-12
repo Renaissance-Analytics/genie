@@ -18,7 +18,7 @@ import { HangWatchdog } from '../src/main/hang-watchdog.js';
 const MB = 1024 * 1024;
 const HEADER: CrashHeader = { schema: 1, version: '2.0.0-beta.60', build: '2.0.0-beta.60+abc123def456', os: 'linux', osRelease: '6.1.0', arch: 'x64', uptimeS: 42 };
 
-function rig(options: { agents?: () => RunningAgentNote[]; alive?: (pid: number) => boolean; lifecycle?: () => string[] } = {}) {
+function rig(options: { agents?: () => RunningAgentNote[]; alive?: (pid: number) => boolean; lifecycle?: () => string[]; exitOf?: (pid: number) => { code: number | null; signal: string | null } | null; ownExit?: (pid: number, since: number) => { reason: string; code: number | null } | null } = {}) {
     let t = 1_700_000_000_000;
     let tick: (() => void) | null = null;
     const records: CrashRecord[] = [];
@@ -35,6 +35,8 @@ function rig(options: { agents?: () => RunningAgentNote[]; alive?: (pid: number)
         lifecycle: options.lifecycle ?? (() => ['2026-11-06T10:00:00.000Z boot pid=4242 version=t', '2026-11-06T10:00:01.000Z stall main ms=1800 route=/', '2026-11-06T10:00:02.000Z host stall main ms=1200 route=-']),
         log: (line) => lines.push(line),
         header: () => HEADER,
+        ...(options.exitOf ? { exitOf: options.exitOf } : {}),
+        ...(options.ownExit ? { ownExit: options.ownExit } : {}),
     });
     dog.start();
     /** One second of the clock, with the watchdog's own tick (as its 1 s interval would). */
@@ -370,5 +372,72 @@ describe('a window connection that drops without a clean goodbye is LOST', () =>
         r.dog.dropped('conn-1');
         r.second(60);
         expect(r.records.map((x) => x.kind)).toEqual(['hang']);
+    });
+});
+
+/**
+ * A LOST RECORD SAYS WHICH WINDOW, AND HOW IT ENDED (Tynn issue #711). The owner's 61.2, 2026-11-12: two windows connected,
+ * one stopped beating at 14:40:58 and its link dropped 10 s later; the record said its pid, its last beat and 368 MB, and
+ * nothing that told the two windows apart or why the process ended. Now: the window (when it first beat, the route it
+ * showed, its V8 heap against its limit, and how long it was silent before its link dropped), and its exit: the code and
+ * signal genie-host saw for a window it started itself, else the window's own exit record, else plainly that neither was
+ * seen and what that leaves (its exit handlers never ran: ended from outside, a native crash, or out of memory).
+ */
+describe('a lost record names the window and its exit (Tynn issue #711)', () => {
+    const beat = { pid: 4242, rss: 700 * MB, route: 'genie://AlphaR/liftpoint/lift', heapUsed: 3_100 * MB, heapLimit: 4_096 * MB };
+
+    it('the window: its first beat, the route it showed, its heap against its limit, and its silence before the drop', () => {
+        const r = rig({ alive: () => false });
+        r.dog.beat('conn-1', beat);
+        const first = r.now();
+        r.second(5, () => r.dog.beat('conn-1', beat));
+        const lastBeat = r.now();
+        r.second(9);
+        r.dog.dropped('conn-1');
+        const droppedAt = r.now();
+        r.second(10);
+        expect(r.records).toHaveLength(1);
+        expect(r.records[0]).toMatchObject({
+            kind: 'lost',
+            windowPid: 4242,
+            window: { pid: 4242, firstBeatAt: new Date(first).toISOString(), route: 'genie://AlphaR/liftpoint/lift', heapMb: 3100, heapLimitMb: 4096, silentMsBeforeDrop: droppedAt - lastBeat },
+        });
+    });
+
+    it('a window genie-host started itself: the exit code and signal it saw', () => {
+        const r = rig({ alive: () => false, exitOf: (pid) => (pid === 4242 ? { code: null, signal: 'SIGKILL' } : null) });
+        r.dog.beat('conn-1', beat);
+        r.dog.dropped('conn-1');
+        r.second(10);
+        expect(r.records[0]).toMatchObject({ kind: 'lost', exit: { code: null, signal: 'SIGKILL', seenBy: 'genie-host' } });
+    });
+
+    it('a window the person started: its own exit record, written since it first beat', () => {
+        const since: number[] = [];
+        const r = rig({ alive: () => false, ownExit: (pid, from) => { since.push(from); return pid === 4242 ? { reason: 'exit', code: 7 } : null; } });
+        r.dog.beat('conn-1', beat);
+        const first = r.now();
+        r.dog.dropped('conn-1');
+        r.second(10);
+        expect(r.records[0]).toMatchObject({ kind: 'lost', exit: { code: 7, signal: null, seenBy: 'window', reason: 'exit' } });
+        expect(since).toEqual([first]);
+    });
+
+    it('CONTROL: neither seen: no exit, and the record says what that leaves', () => {
+        const r = rig({ alive: () => false, exitOf: () => null, ownExit: () => null });
+        r.dog.beat('conn-1', beat);
+        r.dog.dropped('conn-1');
+        r.second(10);
+        const record = r.records[0] as Extract<CrashRecord, { kind: 'lost' }>;
+        expect(record.exit).toBeNull();
+        expect(record.exitUnseen).toMatch(/exit handlers never ran/);
+    });
+
+    it('an older window’s beat (pid and RSS only) still makes a lost record, its window fields unknown', () => {
+        const r = rig({ alive: () => false });
+        r.dog.beat('conn-1', { pid: 4242, rss: 700 * MB });
+        r.dog.dropped('conn-1');
+        r.second(10);
+        expect(r.records[0]).toMatchObject({ kind: 'lost', window: { pid: 4242, route: null, heapMb: null, heapLimitMb: null } });
     });
 });

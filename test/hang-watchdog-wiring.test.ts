@@ -59,4 +59,11 @@ describe('the entries are wired', () => {
         // A quit that ran to its end is clean: its record is taken back and the host told goodbye.
         expect(main).toMatch(/\.finally\(\(\) => \{ crashRecorder\.cleanQuit\(\); heartbeatNow\?\.bye\(\); app\.quit\(\); \}\);/);
     });
+
+    it('a lost window is named and its exit looked for (Tynn issue #711): main beats its route and heap; the host reads the exit it saw, else the window’s record', () => {
+        const main = src('src/main/main.ts');
+        expect(main).toMatch(/route: mainRoute,\n\s*heap: \(\) => \{ const h = getHeapStatistics\(\); return \{ used: h\.used_heap_size, limit: h\.heap_size_limit \}; \},/);
+        const host = src('src/main/genie-host.ts');
+        expect(host).toMatch(/exitOf: windowExitOf,\n\s*ownExit: \(pid, since\) => exitRecordOf\(join\(runtime, 'crash'\), pid, since\),/);
+    });
 });
