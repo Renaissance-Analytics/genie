@@ -126,6 +126,7 @@ import {
 } from '../core/session.js';
 import type { NativeStopVerdict } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
+import type { CommandRunRef } from '../core/command-run.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
@@ -1609,6 +1610,9 @@ export class SessionHost {
     needsNewDriver(agentId: AgentId): boolean {
         return this.#running.get(agentId)?.session.needsNewDriver ?? false;
     }
+
+    /** Tests-first #633 forwarding seam; implementation follows the measured RED. */
+    commandStarted(_agentId: AgentId, _run: CommandRunRef): boolean { return false; }
 
     /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */
     notice(agentId: AgentId, message: string): boolean {

@@ -496,6 +496,44 @@ describe('the provider’s thread id — captured, guarded, and handed back', ()
     });
 });
 
+describe('live command forwarding (#633)', () => {
+    it('publishes the exact run immediately to its owning agent without a window or a new driver', () => {
+        const owner = record();
+        const neighbor = record({ name: 'neighbor' });
+        expect(host.start(owner, dir)).toEqual({ ok: true });
+        expect(host.start(neighbor, dir)).toEqual({ ok: true });
+        const changed: string[] = [];
+        const unsubscribe = host.subscribe((id) => { changed.push(id); });
+        const run = { processId: 'command-owner', workspaceId: 'tynn', command: 'php artisan test' };
+        try {
+            expect(host.commandStarted(owner.id, run)).toBe(true);
+            expect(host.rowsFor(owner.id)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'notice', level: 'info', commandRun: run }) }));
+            expect(host.rowsFor(neighbor.id)).toEqual([]);
+            expect(changed).toContain(owner.id);
+            expect(changed).not.toContain(neighbor.id);
+            expect(host.count).toBe(2);
+            expect(killed).toBe(0);
+        } finally { unsubscribe(); }
+    });
+
+    it('keeps identical labels linked to distinct run IDs in the ledger a window reconnects to', () => {
+        const owner = record(); host.start(owner, dir);
+        const run = { processId: 'command-one', workspaceId: 'tynn', command: 'php artisan test' };
+        host.commandStarted(owner.id, run);
+        host.commandStarted(owner.id, { ...run, processId: 'command-two' });
+        const refs = host.rowsFor(owner.id).flatMap(({ event }) => event.kind === 'notice' && event.commandRun ? [event.commandRun] : []);
+        expect(refs).toEqual([run, { ...run, processId: 'command-two' }]);
+    });
+
+    it('CONTROL: an absent agent stays absent and receives no invented command row', () => {
+        const absent = record();
+        expect(host.commandStarted(absent.id, { processId: 'command-absent', workspaceId: 'tynn', command: 'php artisan test' })).toBe(false);
+        expect(host.count).toBe(0);
+        expect(host.rowsFor(absent.id)).toEqual([]);
+        expect(killed).toBe(0);
+    });
+});
+
 describe('the ledger', () => {
     it('timestamps rows AS THEY ARRIVE, because the wire carries no time', () => {
         const r = record();
