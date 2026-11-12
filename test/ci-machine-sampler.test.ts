@@ -29,7 +29,7 @@ function sample(cmd: string, args: (out: string, parent: number) => string[]): P
             clearTimeout(limit);
             resolve({ text: existsSync(out) ? readFileSync(out, 'utf8') : '', outlivedMs: killedAt ? Date.now() - killedAt : -1 });
         });
-        setTimeout(() => { killedAt = Date.now(); parent.kill(); }, 7000);
+        setTimeout(() => { killedAt = Date.now(); parent.kill(); }, 15000);
     });
 }
 
@@ -49,10 +49,11 @@ describe.skipIf(process.platform !== 'win32')('machine-sampler.ps1', () => {
     it('writes MACHINE lines stall.mjs reads (time, gap, disk queue, CPU) and ends within ~6 s of its gate', async () => {
         const { text, outlivedMs } = await sample('powershell', (out, parent) => ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/ci/machine-sampler.ps1', '-Out', out, '-ParentId', String(parent), '-Interval', '1']);
         const s = parseSamples(text);
-        expect(s.length).toBeGreaterThanOrEqual(2);
+        // The first reads can be slow (a counter source that fails, then the CIM one), so ~15 s and at least three.
+        expect(s.length, text).toBeGreaterThanOrEqual(3);
         const last = s[s.length - 1];
-        expect(last.f).toHaveProperty('disk_q');
-        expect(last.f).toHaveProperty('cpu');
+        expect(last.f, text).toHaveProperty('disk_q');
+        expect(last.f, text).toHaveProperty('cpu');
         expect(last.gap).toBeGreaterThan(500);
         expect(outlivedMs).not.toBeNull();
         expect(outlivedMs!).toBeLessThan(6000);
