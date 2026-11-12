@@ -770,7 +770,7 @@ const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.in
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
 /** The updater as this window reads and drives it: genie-host's, through a replica (P5b). */
-let updates: (Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> & { prepareQuit?: () => Promise<unknown>; forceDrain?: () => boolean | Promise<boolean> }) | null = null;
+let updates: (Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> & { prepareQuit?: () => Promise<unknown>; forceDrain?: () => boolean | Promise<boolean>; cancelDrain?: () => void | Promise<void> }) | null = null;
 /** Repeated quit requests cannot skip the pending safe-point wait or overwrite its final record. */
 let quitPreparation: Promise<unknown> | null = null;
 let updateQuitReady = false;
@@ -3640,7 +3640,7 @@ app.on('before-quit', (event) => {
     // runQuit runs to its end: the drain bounded inside it, then the host ended, itself bounded (agent-engine.ts). A race
     // around the whole of it let the window exit before the host was told to end (ss-repeat5, 2026-11-05).
     void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
-        .catch(() => { /* an unwritten row never blocks a quit */ })
+        .catch(async () => { try { await updates?.cancelDrain?.(); } catch { /* the host may already be gone */ } })
         // No host: this window was the run, and its clean end writes the marker, last (Tynn #386). With a host: nothing.
         .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); app.quit(); });
 });

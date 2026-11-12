@@ -700,6 +700,7 @@ async function main(): Promise<void> {
         // A queued shutdown notice is no longer relevant after restart; it must not become owed work.
         notify: (id, text) => { host.handOff(id as AgentId, text, 'genie', { retold: true }); },
         hold: () => host.holdForShutdown(),
+        release: () => host.releaseAfterShutdown(),
     });
     const updatesService = new UpdatesService({
         ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
@@ -729,6 +730,7 @@ async function main(): Promise<void> {
                     return outcome;
                 }),
                 force: () => agentShutdown.force(),
+                release: () => agentShutdown.release(),
                 writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
                 writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
                 stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
@@ -740,7 +742,7 @@ async function main(): Promise<void> {
         startHelper: (launch) => { startOwnDetached('updater', helperLaunch(launch), updaterHelperEnv(process.env, home), 'genie-updater.log', true, () => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); }); },
         defaultLaunch: updaterDefaultLaunch(process.env, process.execPath),
         windowConnected: () => engineRef?.windowConnected() ?? false,
-        exit: () => { void shutdown('an update is installing'); },
+        exit: () => shutdown('an update is installing'),
         log: (line) => { say(line); lifecycleLog(line); },
         // A failed install's reason, for the first window after it, once.
         failed: readUpdateFailed(home),
@@ -1583,36 +1585,43 @@ async function main(): Promise<void> {
     async function shutdown(why: string): Promise<void> {
         if (shuttingDown) return;
         shuttingDown = true;
-        hangWatchdog.shuttingDown();
-        say(`shutting down: ${why}`);
-        if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
-        lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
-        browserService.quit();
-        const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
-        // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
-        // host nobody wants.
-        await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
-        files?.close();
-        issueWatch.stop();
-        await mcp?.stop();
-        approvals.cancelAll('Genie is shutting down');
-        own.knowledge.close();
-        // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
-        // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
-        // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
-        await stopHostedOnce();
-        await appInboxDoor.close().catch(() => undefined);
-        await gappServer?.close().catch(() => undefined);
-        server.close();
-        // Only this host's record: a newer host may already have written its own.
-        const current = parseHostRecord(readOrNull(recordFile));
-        if (current?.pid === process.pid) {
-            rmSync(recordFile, { force: true });
-            rmSync(tokenFile, { force: true });
+        try {
+            hangWatchdog.shuttingDown();
+            say(`shutting down: ${why}`);
+            if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
+            lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
+            browserService.quit();
+            const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
+            // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
+            // host nobody wants.
+            await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
+            files?.close();
+            issueWatch.stop();
+            await mcp?.stop();
+            approvals.cancelAll('Genie is shutting down');
+            own.knowledge.close();
+            // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
+            // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
+            // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
+            await stopHostedOnce();
+            await appInboxDoor.close().catch(() => undefined);
+            await gappServer?.close().catch(() => undefined);
+            server.close();
+            // Only this host's record: a newer host may already have written its own.
+            const current = parseHostRecord(readOrNull(recordFile));
+            if (current?.pid === process.pid) {
+                rmSync(recordFile, { force: true });
+                rmSync(tokenFile, { force: true });
+            }
+            // THE CLEAN-EXIT MARKER, LAST (Tynn #386): everything above ended; its absence at the next boot is safe mode.
+            safeMode.writeCleanExit(why);
+            process.exit(0);
+        } finally {
+            // Normal exit never returns. If teardown throws or an exit hook returns, this host
+            // must not retain a permanent work hold or an updater stuck in installing.
+            try { updatesService.updates.cancelDrain(); }
+            finally { shuttingDown = false; }
         }
-        // THE CLEAN-EXIT MARKER, LAST (Tynn #386): everything above ended; its absence at the next boot is safe mode.
-        safeMode.writeCleanExit(why);
-        process.exit(0);
     }
     // The updater's own clock (AUTO_CHECK): stopped with the host's other clocks, first, at "Shut down everything".
     clocks.push({ stop: updatesService.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); }) });

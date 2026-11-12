@@ -51,9 +51,10 @@ export class UpdatesReplica {
 
     prepareQuit(): Promise<AgentDrainOutcome> { return this.#call('prepareQuit', []) as Promise<AgentDrainOutcome>; }
     async forceDrain(): Promise<boolean> { return (await this.#call('forceDrain', [])) === true; }
+    async cancelDrain(): Promise<void> { await this.#call('cancelDrain', []); }
 
     install(): Promise<InstallResult> | null {
-        if (this.#state.phase !== 'downloaded') return null;
+        if (this.#state.phase !== 'downloaded' && !(this.#state.phase === 'error' && this.#state.percent === 100 && this.#state.version !== null)) return null;
         // This window's pid: the host's teardown leaves its tree, and the helper waits for it to be gone.
         return (this.#call('install', [this.#pid]) as Promise<InstallResult | null>).then((result) => {
             if (result === null) throw new Error('there is nothing downloaded to install');

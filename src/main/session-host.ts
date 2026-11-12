@@ -957,16 +957,27 @@ export class SessionHost {
      * answering as one agent — which is how a user ends up unable to stop something.
      */
     #shutdownPending = false;
+    readonly #shutdownAgents = new Set<AgentId>();
 
     /** Let current turns finish; keep queued/new work for the next run, without cancelling a tool. */
-    holdForShutdown(): void { this.#shutdownPending = true; }
-    /** Test-first recovery seam: resume held work if shutdown is abandoned. */
-    releaseAfterShutdown(): void {}
+    holdForShutdown(): void {
+        if (this.#shutdownPending) return;
+        for (const id of this.#running.keys()) this.#shutdownAgents.add(id);
+        this.#shutdownPending = true;
+    }
+    /** Resume held work only if shutdown is abandoned or this host survived it. */
+    releaseAfterShutdown(): void {
+        this.#shutdownPending = false;
+        this.#shutdownAgents.clear();
+        for (const [id, entry] of this.#running) { entry.session.releaseWork(); this.#emit(id); }
+    }
 
     start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
-        if (this.#shutdownPending) return { ok: false, reason: 'Genie is shutting down; new agent sessions wait for restart.' };
+        // A setting/crash replacement of an existing identity must still get its session in the
+        // host, so the final restore record cannot drop it. Its work remains held by mayTakeWork.
+        if (this.#shutdownPending && !this.#shutdownAgents.has(record.id)) return { ok: false, reason: 'Genie is shutting down; new agent sessions wait for restart.' };
 
         /*
          * ONE PROVIDER PER AGENT, IN-PROCESS, AT ALL TIMES (hosting plan 1.3; Tynn #796). A run that is still stopping,
