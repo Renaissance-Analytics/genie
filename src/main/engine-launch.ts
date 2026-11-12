@@ -38,8 +38,15 @@ export interface EngineLaunchPorts {
     readonly sleep?: (ms: number) => Promise<void>;
     readonly now?: () => number;
     readonly log?: (line: string) => void;
-    /** How long a started host has to write its record. Default 20 s (the first start builds the Windows supervisor). */
+    /**
+     * How long a started host has to write its record. Absent (a window starting its own host): no fixed time; the wait
+     * ends when the host is ready or when it exits (Tynn #700: a first start on a slow Windows took 20 s).
+     */
     readonly startTimeoutMs?: number;
+    /** How long it has waited for a host it started, about once a second (Tynn #700). */
+    readonly onWaiting?: (elapsedMs: number) => void;
+    /** The person's "Restart Genie's host" while it waits (Tynn #700): asked, then answered once the new host is started. */
+    readonly restart?: { take(): boolean; settled(outcome: { ok: true } | { ok: false; reason: string }): void };
 }
 
 export interface EngineLink {
@@ -233,11 +240,32 @@ export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> 
         if (alive(decision.record.pid)) { log(`host pid=${decision.record.pid} did not exit; ending it`); ports.kill?.(decision.record.pid); }
     }
 
-    const pid = await (ports.spawnHost ?? (() => spawnHostProcess(ports, winLauncherPath(), log)))();
+    const startHost = ports.spawnHost ?? (() => spawnHostProcess(ports, winLauncherPath(), log));
+    let pid = await startHost();
     if (pid === null) throw new Error('the host process could not be started');
     log(`host started pid=${pid} build=${ports.build}`);
-    const until = now() + (ports.startTimeoutMs ?? 20_000);
+    // OUR OWN CHILD (Tynn #700): waited for until it is ready or it exits, never given up on at a fixed time while it lives.
+    const began = now();
+    const until = ports.startTimeoutMs === undefined ? Infinity : began + ports.startTimeoutMs;
+    let said = began;
     while (now() < until) {
+        // RESTART GENIE'S HOST, pressed in the wait (Tynn #700): this host is ended as a replaced one is, a new one started,
+        // and the same wait goes on for the new one.
+        if (ports.restart?.take()) {
+            const old = pid;
+            log(`host pid=${old} restarted by the person after ${Math.round((now() - began) / 1000)} s; ending it`);
+            ports.kill?.(old);
+            const gone = now() + 10_000;
+            while (alive(old) && now() < gone) await sleep(100);
+            if (alive(old)) { ports.restart.settled({ ok: false, reason: `Genie’s host (pid ${old}) did not end, so a new one was not started.` }); }
+            else {
+                const fresh = await startHost();
+                if (fresh === null) { ports.restart.settled({ ok: false, reason: 'the host process could not be started' }); throw new Error('the host process could not be started'); }
+                pid = fresh;
+                log(`host started pid=${pid} build=${ports.build}`);
+                ports.restart.settled({ ok: true });
+            }
+        }
         const record = parseHostRecord(read(recordFile));
         // Its own record: another host winning the endpoint race is adopted instead (this one exits on its own).
         if (record !== null && alive(record.pid) && record.build === ports.build && record.protocol === ENGINE_PROTOCOL) {
@@ -249,8 +277,9 @@ export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> 
         }
         if (!alive(pid) && (record === null || record.pid === pid)) throw new Error('the host process exited before it was ready (see logs/genie-host.log)');
         await sleep(100);
+        if (now() - said >= 1_000) { said = now(); try { ports.onWaiting?.(said - began); } catch { /* the wait's words never stop the wait */ } }
     }
-    throw new Error(`the host did not become ready within ${Math.round((ports.startTimeoutMs ?? 20_000) / 1000)} s (see logs/genie-host.log)`);
+    throw new Error(`the host did not become ready within ${Math.round((ports.startTimeoutMs ?? 0) / 1000)} s (see logs/genie-host.log)`);
 }
 
 /**

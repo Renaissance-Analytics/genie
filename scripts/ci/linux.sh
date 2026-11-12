@@ -39,7 +39,7 @@ SETUP="$OUT/setup"
 ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
-    seed no-pty smoke layout local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag
+    seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag
     trust-step site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
     flows zip64 host-plain-node mailpit
     package package-fuse
@@ -407,6 +407,8 @@ row_local-door() {
     fi
     return "$code"
 }
+# A HOST READY LATE (Tynn #700): the host is started 25 s late on purpose; the window must still reach its page.
+row_host-late-ready() { need_app && timeout 180 node scripts/host-late-ready-cdp.mjs; }
 row_files-watch() { need_app && timeout 180 node scripts/files-watch-cdp.mjs; }
 row_chat-drafts() { need_app && timeout 360 node scripts/chat-drafts-cdp.mjs; }
 row_gapp-open() { need_app && timeout 300 node scripts/gapp-open-cdp.mjs; }

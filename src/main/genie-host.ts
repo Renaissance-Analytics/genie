@@ -123,6 +123,7 @@ import { sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
 import { mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
+import { testReadyDelayMs } from './host-wait-window.js';
 import { RemoteBrowsers } from './remote-browsers.js';
 import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
@@ -224,6 +225,8 @@ const say = (line: string): void => {
 // A fault in one agent's handling never takes every agent down with the process (main.ts's policy, the same here).
 process.on('uncaughtException', (error) => say(`uncaught: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
 process.on('unhandledRejection', (error) => say(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}`));
+
+const sleepFor = (ms: number): Promise<void> => (ms > 0 ? new Promise((done) => setTimeout(done, ms)) : Promise.resolve());
 
 async function main(): Promise<void> {
     // FTS5 FIRST (P10.1b): a Node whose node:sqlite has none (before 22.16) refuses here, in words, with nothing bound.
@@ -327,15 +330,22 @@ async function main(): Promise<void> {
     let sessionsForInbox: SessionHost | null = null;
     // THE SETTINGS AND THE CHAT DRAFTS (P3.2): one file each, one writer — this host. Every window a replica; hot-swap kept.
     // Opened before the stores: attention keeps as much finished history as they say (Tynn #549).
+    // WHAT A START SPENDS ITS TIME ON (Tynn #700): each step up to serving, in the lifecycle log, with when it ended.
+    const bootStarted = Date.now();
+    let stepAt = bootStarted;
+    const bootStep = (name: string, since: number): void => { const at = Date.now(); lifecycleLog(`boot step=${name} ms=${at - since} at=${at - bootStarted}`); stepAt = at; };
     const settings = await SettingsStore.open(home);
+    bootStep('settings', stepAt);
     const own = await openAgentStores(home, () => new Date().toISOString(), (id) => sessionsForInbox?.probe(id) ?? null, () => attentionLimitsFrom(settings.snapshot()));
     const drafts = await ChatDraftStore.open(home);
+    bootStep('agent stores', stepAt);
     // THE REGISTRY'S FILES (P3.2): this host writes them (windows through it) and reads them for its own tools and approvals.
     const registryStore = new Store(home);
     // What a quit or an upgrade recorded is KEPT in safe mode (never taken), and listed on the banner with its own Start.
     if (safeMode.active()) void Promise.all([registryStore.readRunningAtQuit(), registryStore.readInterruptedAtQuit()]).then(([running, interrupted]) => safeMode.wasRunning([...running, ...interrupted]), () => {});
     const hostRegistry = new HostRegistry(registryStore);
     await hostRegistry.refresh();
+    bootStep('registry', stepAt);
     const hiddenWorkspaces = () => hostRegistry.workspaceStates().filter((w) => w.asleep === true).map((w) => w.id);
     own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
     own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to), () => hostRegistry.mailVisibilityVersion());
@@ -400,6 +410,7 @@ async function main(): Promise<void> {
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
         log: (line) => { say(line); lifecycleLog(line); },
     });
+    bootStep('app door', stepAt);
     const workspacesListeners = new Set<() => void>();
     stores.onEvent((event) => {
         if (event.store !== 'registry') return;
@@ -452,6 +463,7 @@ async function main(): Promise<void> {
     } catch (error) {
         say(`Genie's hosting could not start in the host: ${error instanceof Error ? error.message : String(error)}`);
     }
+    bootStep('hosting', stepAt);
     const hostingStack = hosting;
     hostingNow = hostingStack;
     // No hosting, no trust record: git in this host checks every folder's config first, as in a workspace not trusted.
@@ -761,6 +773,7 @@ async function main(): Promise<void> {
      * window reads them through its replica (plugins.event) and asks this host to change them (engine.plugins).
      */
     let marketplaceTransport: ReturnType<typeof hostHttpsFetch> | undefined;
+    bootStep('accounts and services', stepAt);
     const marketplacePlugins = await openMarketplacePlugins({
         pluginsDir: join(home, 'plugins'), cacheFile: join(home, 'marketplace-publisher-keys.json'), origin: TYNN_HOST,
         keys: PUBLISHER_KEYS, publisherChecksOff: () => settings.snapshot().publisher_checks_off === true,
@@ -910,6 +923,7 @@ async function main(): Promise<void> {
     setInterval(() => { void relayHostService.readRole(); }, 5 * 60_000).unref();
     /** genie-host's own answers to a phone (Tynn #551): built once its session host is up, below. */
     let phoneApi: HostApi | null = null;
+    bootStep('marketplace and gapps', stepAt);
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
         hostName: hostname(),
@@ -1080,7 +1094,9 @@ async function main(): Promise<void> {
     const engineHostOptions = engine.hostOptions();
     // Every provider's rate limits, kept here whether or not a window is open (core/headroom-board.ts).
     const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settings.snapshot()));
+    bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
+    bootStep('lock identity', stepAt);
     const host = new SessionHost({
         userData: home,
         ...engineHostOptions,
@@ -1416,6 +1432,7 @@ async function main(): Promise<void> {
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
+    bootStep('sessions', stepAt);
     mcp = startHostMcp({
         stores: stores.stores,
         settings,
@@ -1489,6 +1506,7 @@ async function main(): Promise<void> {
         try { writePtyLedger(ptyLedgerFile, { owner: process.pid, ptys: ptys.map((p) => ({ ...p, start: procStart(p.pid) })) }); } catch (error) { say(`pty ledger not written: ${error instanceof Error ? error.message : String(error)}`); }
     };
     writePtys([]);
+    bootStep('mcp', stepAt);
     relay = startSpawnRelay({
         entry: process.env.GENIE_SPAWN_HOST_ENTRY && process.env.GENIE_SPAWN_HOST_ENTRY.length > 0 ? process.env.GENIE_SPAWN_HOST_ENTRY : join(dirname(fileURLToPath(import.meta.url)), 'spawn-host.js'),
         send: (profile, frame) => {
@@ -1524,6 +1542,9 @@ async function main(): Promise<void> {
     // hosting, whose dump carries each workspace's service variables (P5a.2). P5d: a remote path accepts as not local.
     server.on('connection', (socket) => engine.accept(lineTransport(socket), { local: true }));
 
+    bootStep('spawn hosts', stepAt);
+    // A host started late on purpose, for the real-window test only (host-wait-window.ts testReadyDelayMs).
+    await sleepFor(testReadyDelayMs(process.env));
     // The token first, then the record that points at it: a window that reads the record can always read the token.
     await writeTextPrivate(tokenFile, token);
     if (process.platform !== 'win32') chmodSync(tokenFile, 0o600);

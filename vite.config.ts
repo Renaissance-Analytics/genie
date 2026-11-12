@@ -30,7 +30,7 @@ export default defineConfig({
         // sound-assets-check can see each one in what was built. Everything else keeps Vite's default.
         assetsInlineLimit: (file: string) => (/\.(wav|ogg|mp3|flac|m4a|aac|opus)$/i.test(file) ? false : undefined),
         // Two pages: Genie, and the doctor window (`genie --doctor`), which loads only the doctor renderer.
-        rollupOptions: { input: { index: 'index.html', doctor: 'doctor.html', question: 'question.html', browser: 'browser.html' } },
+        rollupOptions: { input: { index: 'index.html', doctor: 'doctor.html', question: 'question.html', 'host-wait': 'host-wait.html', browser: 'browser.html' } },
     },
     test: {
         /*
