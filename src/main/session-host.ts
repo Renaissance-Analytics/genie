@@ -558,6 +558,13 @@ export class SessionHost {
     readonly #stopped = new Set<AgentSession>();
     /** Each agent's recorded history, read once per run: `before` is the run it was read for (`null` = not running). */
     readonly #histories = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[]; turns: number } | 'loading'>();
+    /**
+     * WHAT EACH AGENT'S LEDGER LAST SHOWED (Tynn #647): while a new run's history is being read — the first send after a
+     * quiet spell starts a session, a restart starts a run — the rows already shown stand in for it, so no reply a person
+     * saw disappears until the read lands. It used to be this run's rows alone, leaving only the inbox's mail rows.
+     */
+    readonly #lastShown = new Map<AgentId, readonly TimedEvent[]>();
+    readonly #renamedRows = new WeakMap<TimedEvent, TimedEvent>();
     #listeners = new Set<(agentId: AgentId) => void>();
     #runs = 0;
 
@@ -1778,8 +1785,8 @@ export class SessionHost {
                 .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); });
         }
         const loaded = cached !== undefined && cached !== 'loading' && cached.before === before ? cached : null;
-        const history = loaded ? loaded.rows : NO_ROWS;
-        if (!entry) return history;
+        const history = loaded ? loaded.rows : this.#standIn(agentId, entry);
+        if (!entry) { this.#lastShown.set(agentId, history); return history; }
         /*
          * SERVED FROM WHAT IS KEPT (the owner, 2026-10-20: the window lagged seconds behind a busy agent): built again only
          * when a row changed, from rows that keep their identity while unchanged — which is what lets main send the window
@@ -1801,7 +1808,29 @@ export class SessionHost {
         }
         const rows = [...history, ...marker, ...run];
         entry.ledger = { history: loaded, rows };
+        this.#lastShown.set(agentId, rows);
         return rows;
+    }
+
+    /**
+     * The history to show while the real one is read (Tynn #647): what this agent's ledger last showed, without this run's
+     * own rows and its marker (they follow it). Nothing shown yet → nothing.
+     */
+    #standIn(agentId: AgentId, entry: Running | undefined): readonly TimedEvent[] {
+        const shown = this.#lastShown.get(agentId);
+        if (!shown) return NO_ROWS;
+        if (!entry) return shown;
+        const mine = new Set<TimedEvent>(entry.rows);
+        if (entry.numbered) for (const r of entry.numbered.rows) mine.add(r);
+        // A previous run's rows were numbered from 0 as this run's are: one shown here keeps its place under an id of its
+        // own, so no two rows of one ledger share an id. The same object each time, so the window is not sent it again.
+        const ids = new Set(entry.rows.map((r) => r.id));
+        return shown.filter((r) => !mine.has(r) && r.id !== entry.marker.id).map((r) => {
+            if (!ids.has(r.id)) return r;
+            let renamed = this.#renamedRows.get(r);
+            if (!renamed) { renamed = { ...r, id: `${r.id}~earlier-run` }; this.#renamedRows.set(r, renamed); }
+            return renamed;
+        });
     }
 
     /** THIS RUN's ledger only (what the doctor channel and file attribution read). Empty for one not running. */
