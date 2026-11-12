@@ -54,6 +54,7 @@ function engine(state: { probe: Probe | null } = { probe: IDLE }) {
         settleParked: (_id: string, decision: string) => { calls.push(`settleParked ${decision}`); return true; },
         historyRows: async () => ({ rows: [], truncated: false }),
         toolOutput: async (_id: string, callId: string) => { calls.push(`toolOutput ${callId}`); return { ok: true, output: 'the whole output' }; },
+        attachment: async (_id: string, attachmentId: string) => { calls.push(`attachment ${attachmentId}`); return { ok: true, mimeType: 'image/png', data: 'iVBORw0K', bytes: 6 }; },
         emit: (id: string) => { for (const l of subscribers) l(id); },
     };
     return fake as unknown as HostAloneEngine & { emit(id: string): void };
@@ -134,6 +135,7 @@ const CALLS: Record<string, (id: string) => unknown[]> = {
     'agents.models': (id) => [id, false],
     'agents.diagnose': (id) => [id],
     'agents.toolOutput': (id) => [id, 'call_1'],
+    'agents.attachment': (id) => [id, 'att_1'],
 };
 
 describe('every agents.* call is answered with no window', () => {
@@ -214,6 +216,8 @@ describe('they do what the window\'s do', () => {
         expect(calls).toEqual(['models claude true']);
         expect(await api.invoke('agents.toolOutput', [atlas.id, 'call_9'])).toMatchObject({ ok: true, output: 'the whole output' });
         expect(calls).toContain('toolOutput call_9');
+        expect(await api.invoke('agents.attachment', [atlas.id, 'att_9'])).toMatchObject({ ok: true, mimeType: 'image/png' });
+        expect(calls).toContain('attachment att_9');
     });
 
     it('Diagnose reads the agent from genie-host', async () => {
