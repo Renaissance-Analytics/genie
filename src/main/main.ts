@@ -770,7 +770,10 @@ const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.in
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
 /** The updater as this window reads and drives it: genie-host's, through a replica (P5b). */
-let updates: Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> | null = null;
+let updates: (Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> & { prepareQuit?: () => Promise<unknown>; forceDrain?: () => boolean | Promise<boolean> }) | null = null;
+/** Repeated quit requests cannot skip the pending safe-point wait or overwrite its final record. */
+let quitPreparation: Promise<unknown> | null = null;
+let updateQuitReady = false;
 /**
  * ONE QUIT (core/quit.ts `quitSequence`): asked at most once, the running set recorded at most once (§7.6 — an
  * upgrade's drain records it itself, so the quit does not overwrite it with the empty list it leaves), the shutdown
@@ -1806,6 +1809,7 @@ async function boot(): Promise<void> {
         const replica = agentEngineLink.client.updates();
         replica.onInstalling(() => {
             lifecycleLog('update: the host is installing; this window quits');
+            updateQuitReady = true;
             quit.markRecorded();
             quit.choose('shut-down');
             setTimeout(() => { app.quit(); }, QUIT_DELAY_MS);
@@ -2528,6 +2532,7 @@ async function boot(): Promise<void> {
                       state: () => updates!.state(),
                       check: () => updates!.check(),
                       download: () => updates!.download(),
+                      forceDrain: () => updates!.forceDrain?.() ?? false,
                       install: () => {
                           const pending = updates!.install();
                           return pending ? pending.then((done) => { console.log(`[updater] ${done.report}`); return { report: done.report }; }) : null;
@@ -3589,6 +3594,11 @@ app.on('before-quit', (event) => {
     // A launch that never booted (a second instance, a `--quit` with no Genie running) owns nothing to shut down — and
     // clearing the genie-running file below would clear the RUNNING Genie's. It exits without a quit; this is the guard.
     if (launch.kind !== 'boot') return;
+    if (quitPreparation !== null) { event.preventDefault(); return; }
+    // An install already owns the shutdown/restore record. Its onInstalling callback quits this
+    // window once the report is returned at `restarting`, never in the middle of the agent wait.
+    const installing = updates?.state();
+    if (installing?.phase === 'installing' && installing.installing?.reason !== 'quit' && !updateQuitReady) { event.preventDefault(); return; }
     // QUIT CONFIRMATION (§6.5): defaults to the safe thing. Asked once; a confirmed quit proceeds. The steps and their
     // once-only guarantees are core/quit.ts `quitSequence`; a cancelled quit changes nothing — the window keeps hiding.
     const step = quit.beforeQuit({
@@ -3610,7 +3620,14 @@ app.on('before-quit', (event) => {
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
     if (step === 'record') {
         event.preventDefault();
-        void recordShutdownNow().catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
+        // The window remains responsive: pending names and Quit now use the same progress surface
+        // as an upgrade. Record AFTER the wait so only turns actually cut off are resumed.
+        revealMainWindow('waiting for agents before quitting');
+        quitPreparation = Promise.resolve(updates?.prepareQuit?.())
+            .catch((error: unknown) => { console.warn('[quit] safe-point wait failed', error); })
+            .then(() => recordShutdownNow())
+            .catch(() => { /* an unsaved list means no restore, never a blocked quit */ })
+            .finally(() => { quitPreparation = null; app.quit(); });
         return;
     }
     // The shutdown already ran (a second quit request arrived while the running set was being written): nothing twice.

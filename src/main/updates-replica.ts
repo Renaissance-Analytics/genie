@@ -1,6 +1,7 @@
 import type { UpdateChannel } from '../core/update-channel.js';
 import type { InstallResult, UpdateState } from './updater.js';
 import type { HelperLaunch, UpdateFailedRecord } from './updates-host.js';
+import type { AgentDrainOutcome } from '../core/agent-shutdown-drain.js';
 
 /**
  * THE WINDOW'S UPDATES, A REPLICA OF GENIE-HOST'S (the host split, P5b). The state is the host's `UpdateState`, sent whole
@@ -47,6 +48,9 @@ export class UpdatesReplica {
     async download(): Promise<boolean> {
         return (await this.#call('download', [])) === true;
     }
+
+    prepareQuit(): Promise<AgentDrainOutcome> { return this.#call('prepareQuit', []) as Promise<AgentDrainOutcome>; }
+    async forceDrain(): Promise<boolean> { return (await this.#call('forceDrain', [])) === true; }
 
     install(): Promise<InstallResult> | null {
         if (this.#state.phase !== 'downloaded') return null;

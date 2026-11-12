@@ -93,9 +93,9 @@ export interface UpdaterPort {
 }
 
 /**
- * The live agents at an upgrade: who is running, and the end of every session (§7.4). No agent is ASKED for anything
- * (the owner, 2026-10-12: "agents no longer need to write a handoff when genie upgrades") — an agent is a session that
- * resumes its own thread.
+ * The live agents at an upgrade: the safe-point wait, then the end of every session (§7.4).
+ * No handoff file is required: each agent resumes its own thread. Tynn #616 adds a notice and
+ * a bounded current-turn/early-thumb wait before the existing record-and-stop path.
  */
 export interface DrainAgentsPort {
     live(): ReadonlyArray<{ id: string; name: string }>;
@@ -202,9 +202,20 @@ export class UpdateHost {
         return this.current;
     }
 
-    /** Test-first stub: quit shares the upgrade's safe-point wait. */
-    prepareQuit(): Promise<AgentDrainOutcome> { return Promise.resolve({ interrupted: [], forced: false, timedOut: false }); }
-    forceDrain(): boolean { return false; }
+    /** Quit shares the host's safe-point gate. The caller records/stops only after this resolves. */
+    prepareQuit(): Promise<AgentDrainOutcome> { return this.waitForAgents('quit'); }
+    forceDrain(): boolean { return this.options.agents?.force?.() ?? false; }
+
+    private waitForAgents(reason: ShutdownReason): Promise<AgentDrainOutcome> {
+        const agents = this.options.agents;
+        if (!agents?.waitForSafe) return Promise.resolve({ interrupted: [], forced: false, timedOut: false });
+        return agents.waitForSafe(reason, (state) => {
+            this.set({ ...this.current, phase: 'installing', installing: { step: 'waiting', reason, agents: agents.live().length, left: state.waiting.length, ...state } });
+        }).then((outcome) => {
+            this.set({ ...this.current, phase: 'installing', installing: { step: 'agents', reason, agents: agents.live().length, left: agents.live().length, interrupted: outcome.interrupted } });
+            return outcome;
+        });
+    }
 
     /**
      * Arm the automatic checks: one after `initialMs`, then one every `intervalMs`, each only
@@ -328,7 +339,7 @@ export class UpdateHost {
      */
     install(): Promise<InstallResult> | null {
         if (this.current.phase !== 'downloaded') return null;
-        // No agent is asked for a handoff (the owner): the sessions end, and each resumes its own thread when started.
+        // No handoff file is required; working agents get a bounded chance to finish safely first.
         const live = this.options.agents?.live() ?? [];
         /*
          * "INSTALLING" FIRST (genie#1201; the owner: "the whole Genie UI freezes, turns a pale white … We need a better UX
@@ -360,18 +371,23 @@ export class UpdateHost {
                 return result;
             }
         }
-        // §7.4: an upgrade ends every agent session and does not revive them — waited for, bounded, never held on main.
+        // The helper is ready. Ask for safe points before recording who was actually interrupted.
+        // Legacy/testing ports without a safe-point gate retain their synchronous stop setup.
+        const drain = this.options.agents?.waitForSafe ? await this.waitForAgents('upgrade') : { interrupted: [], forced: false, timedOut: false };
+        const interrupted = drain.interrupted;
+        const stopping = (step: 'agents' | 'processes' | 'restarting', left: number): InstallProgress => ({ step, agents: live.length, left, ...(interrupted.length ? { interrupted } : {}) });
+        // §7.4: the existing record-before-stop path remains the only restore-roster writer.
         let stillStopping = 0;
         if (this.options.agents) {
             let left = live.length;
-            const stopped = Promise.resolve(this.options.agents.stopAll((n) => { left = n; progress({ step: 'agents', agents: live.length, left: n }); })).then(() => true, () => true);
+            const stopped = Promise.resolve(this.options.agents.stopAll((n) => { left = n; progress(stopping('agents', n)); })).then(() => true, () => true);
             let bound: ReturnType<typeof setTimeout> | undefined;
             const timedOut = new Promise<false>((r) => { bound = setTimeout(() => r(false), this.options.stopWaitMs ?? INSTALL_STOP_WAIT_MS); });
             const ended = await Promise.race([stopped, timedOut]);
             clearTimeout(bound);
             if (!ended) stillStopping = left;
         }
-        progress({ step: 'processes', agents: live.length, left: stillStopping });
+        progress(stopping('processes', stillStopping));
         // What else the install stops before the scan (P5b: genie-host's sites and front door, P5a.3's order; containers stay).
         await this.options.stopHosted?.().catch(() => undefined);
         const orphans = orphansUnder(
@@ -381,10 +397,11 @@ export class UpdateHost {
             this.options.caseInsensitive,
         );
         await Promise.all(orphans.map((p) => Promise.resolve(this.options.kill(p.pid)).catch(() => false)));
-        progress({ step: 'restarting', agents: live.length, left: stillStopping });
+        progress(stopping('restarting', stillStopping));
         (this.options.defer ?? ((fn, ms) => { setTimeout(fn, ms); }))(() => this.options.port.quitAndInstall(), QUIT_DELAY_MS);
         const ended = this.options.agents ? `${endedReport(live)}${stillStopping > 0 ? ` (${stillStopping} still stopping when the installer started)` : ''}. ` : '';
-        const result: InstallResult = { killed: orphans, report: `${ended}${orphanReport(orphans)}` };
+        const cutOff = interrupted.length > 0 ? `Stopped mid-turn: ${interrupted.map((a) => a.name).join(', ')}${drain.timedOut ? ' (120-second wait expired)' : drain.forced ? ' (Upgrade now chosen)' : ''}. ` : '';
+        const result: InstallResult = { killed: orphans, report: `${ended}${cutOff}${orphanReport(orphans)}` };
         this.last = result;
         return result;
     }

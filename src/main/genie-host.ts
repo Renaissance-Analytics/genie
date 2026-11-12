@@ -54,6 +54,7 @@ import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
 import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { AgentShutdownDrain } from '../core/agent-shutdown-drain.js';
 import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
 import { windowReleased } from './window-release.js';
 import { channelFrom } from '../core/update-channel.js';
@@ -691,6 +692,15 @@ async function main(): Promise<void> {
      * (the window's, so an AppImage's `APPIMAGE` reaches it). An install is a person's, from a window; never by itself.
      */
     const runningVersion = build.split('+')[0] ?? build;
+    const agentShutdown = new AgentShutdownDrain({
+        agents: () => hostRegistry.listAgents().map(({ id, name }) => {
+            const session = host.probe(id as AgentId);
+            return { id, name, running: session?.running === true, inTurn: session?.inTurn === true };
+        }),
+        // A queued shutdown notice is no longer relevant after restart; it must not become owed work.
+        notify: (id, text) => { host.handOff(id as AgentId, text, 'genie', { retold: true }); },
+        hold: () => host.holdForShutdown(),
+    });
     const updatesService = new UpdatesService({
         ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
         host: {
@@ -711,6 +721,14 @@ async function main(): Promise<void> {
             agents: hostDrainAgents({
                 agents: () => hostRegistry.listAgents(),
                 probe: (id) => host.probe(id as AgentId),
+                waitForSafe: (reason, progress) => agentShutdown.begin(reason, progress).then((outcome) => {
+                    if (outcome.interrupted.length) {
+                        const line = `${reason}: stopping mid-turn: ${outcome.interrupted.map((a) => a.name).join(', ')}${outcome.timedOut ? ' (120-second wait expired)' : outcome.forced ? ' (proceed now chosen)' : ' (early acknowledgement)'}`;
+                        say(line); lifecycleLog(line);
+                    }
+                    return outcome;
+                }),
+                force: () => agentShutdown.force(),
                 writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
                 writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
                 stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
@@ -1451,7 +1469,10 @@ async function main(): Promise<void> {
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         capabilities,
-        signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
+        signal: (signal) => {
+            if (signal.kind === 'action' && signal.action === 'thumbsup' && signal.reason?.trim().toLowerCase() === 'shutdown') agentShutdown.acknowledge(signal.agentId);
+            engine.callback({ name: 'toolSignal', signal });
+        },
         forwardedCalls,
         processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
         terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), scrollbackCap: 1_000_000 },

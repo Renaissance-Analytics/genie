@@ -19,10 +19,12 @@ export interface InstallScreen {
 export function installScreen(state: InstallScreenInput | null, asked: boolean): InstallScreen | null {
     if (!state || state.phase === 'error') return null;
     if (state.phase !== 'installing' && !(asked && state.phase === 'downloaded')) return null;
-    const title = `Restarting to install Genie${state.version ? ` ${state.version}` : ''}…`;
     const p = state.phase === 'installing' ? state.installing : undefined;
+    const title = p?.reason === 'quit' ? 'Quitting Genie…' : `Restarting to install Genie${state.version ? ` ${state.version}` : ''}…`;
     if (!p) return { title, detail: 'Getting ready…' };
-    if (p.step === 'agents') return { title, detail: p.agents > 0 ? `Stopping agents — ${p.left} of ${p.agents} still stopping` : 'Stopping agents' };
-    if (p.step === 'processes') return { title, detail: 'Closing what runs from Genie’s install folder' };
-    return { title, detail: 'Restarting…' };
+    if (p.step === 'waiting') return { title, detail: `Waiting for ${p.waiting?.map((a) => a.name).join(', ') || 'agents'} to reach a safe point. Up to 120 seconds; you can proceed now.`, forceLabel: p.reason === 'quit' ? 'Quit now' : 'Upgrade now' };
+    const interrupted = p.interrupted?.length ? ` Stopped mid-turn: ${p.interrupted.map((a) => a.name).join(', ')}.` : '';
+    if (p.step === 'agents') return { title, detail: `${p.agents > 0 ? `Stopping agents — ${p.left} of ${p.agents} still stopping` : 'Stopping agents'}${interrupted}` };
+    if (p.step === 'processes') return { title, detail: `Closing what runs from Genie’s install folder${interrupted}` };
+    return { title, detail: `${p.reason === 'quit' ? 'Quitting…' : 'Restarting…'}${interrupted}` };
 }

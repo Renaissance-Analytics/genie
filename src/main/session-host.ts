@@ -956,12 +956,15 @@ export class SessionHost {
      * a second. §6.2 is explicit about it, and the alternative is two provider processes
      * answering as one agent — which is how a user ends up unable to stop something.
      */
-    /** Test-first stub: allow the current turns to finish, holding subsequent work for restart. */
-    holdForShutdown(): void {}
+    #shutdownPending = false;
+
+    /** Let current turns finish; keep queued/new work for the next run, without cancelling a tool. */
+    holdForShutdown(): void { this.#shutdownPending = true; }
 
     start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
+        if (this.#shutdownPending) return { ok: false, reason: 'Genie is shutting down; new agent sessions wait for restart.' };
 
         /*
          * ONE PROVIDER PER AGENT, IN-PROCESS, AT ALL TIMES (hosting plan 1.3; Tynn #796). A run that is still stopping,
@@ -1130,7 +1133,7 @@ export class SessionHost {
                 askWhy: () => askedWhy(this.#approvalWhere(record)),
             } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
-            mayTakeWork: () => !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
+            mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
             onLimitBreach: (reason) => this.#limitBreach(record.id, record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.

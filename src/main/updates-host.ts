@@ -236,6 +236,12 @@ export class UpdatesService {
     /** A window's (or, through it, an owner's remote) call. */
     async call(method: string, args: readonly unknown[], caller: UpdatesCaller): Promise<unknown> {
         switch (method) {
+            case 'prepareQuit':
+                if (!caller.window) throw new Error('Only a local window can prepare a quit.');
+                return this.#host.prepareQuit();
+            case 'forceDrain':
+                if (!caller.window) throw new Error(NO_WINDOW_INSTALL);
+                return this.#host.forceDrain();
             case 'state':
                 return this.#host.state();
             case 'check':
@@ -403,8 +409,12 @@ export function hostDrainAgents(input: {
     writeInterruptedAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     stopAll: (onLeft?: (left: number) => void) => Promise<void>;
     onRecordError?: (error: unknown) => void;
+    waitForSafe?: DrainAgentsPort['waitForSafe'];
+    force?: () => boolean;
 }): DrainAgentsPort {
     return {
+        ...(input.waitForSafe ? { waitForSafe: input.waitForSafe } : {}),
+        ...(input.force ? { force: input.force } : {}),
         live: () => input.agents().filter((a) => input.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
         stopAll: recordThenStopAll({
             markRecorded: () => {},
