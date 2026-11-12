@@ -551,7 +551,7 @@ export class ProcessSupervisor {
             restarts: entry.restarts,
             since: entry.since,
             ...(entry.reason === undefined ? {} : { reason: entry.reason }),
-            ...(entry.external ? { commandRun: true as const } : {}),
+            ...(entry.external ? { commandRun: true as const, startedAt: entry.startedAt } : {}),
         };
     }
 }

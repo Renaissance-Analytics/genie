@@ -678,7 +678,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
-export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now() }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number }) {
+export function ProcessesPanel({ processes, workspaces, onAction, now }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number }) {
     const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
     const button = 'text-[13px]';
     return (
@@ -732,25 +732,26 @@ export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now
                     {processes.map((p) => {
                         const up = p.state === 'running' || p.state === 'restarting';
                         // Drawn in place (no hooks): the row's own buttons stay in this list's element tree.
-                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now, onAction })}</Fragment>;
+                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now: now ?? Date.now(), onAction })}</Fragment>;
                         return (
                             <li key={p.id} data-process={p.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                 <span className="font-medium">{p.name}</span>
                                 <Badge variant="soft" size="sm">{p.state}</Badge>
                                 {p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
+                                {p.commandRun ? <CommandRunFacts process={p} now={now} /> : null}
                                 {p.reason ? <span className="text-sm text-[var(--danger)]">{p.reason}</span> : null}
                                 <span className="ml-auto flex shrink-0 items-center gap-3">
                                     {up ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.stopProcess', processId: p.id })}>Stop</Button> : null}
-                                    {up || !p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</Button> : null}
-                                    {!up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</Button> : null}
-                                    {!up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
+                                    {!p.commandRun && (up || !p.durable) ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</Button> : null}
+                                    {!p.commandRun && !up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</Button> : null}
+                                    {!p.commandRun && !up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
                                 </span>
-                                {p.log && p.log.lines > 0 ? (
+                                {p.commandRun || (p.log && p.log.lines > 0) ? (
                                     <details data-process-log={p.id} className="basis-full">
                                         <summary className="cursor-pointer text-xs text-[var(--fg-3)]">
-                                            Log · last {p.log.lines} line{p.log.lines === 1 ? '' : 's'}{p.log.dropped > 0 ? ' (earlier output was cut)' : ''}
+                                            {p.log && p.log.lines > 0 ? <>Log · last {p.log.lines} line{p.log.lines === 1 ? '' : 's'}{p.log.dropped > 0 ? ' (earlier output was cut)' : ''}</> : 'Log'}
                                         </summary>
-                                        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{p.log.text}</pre>
+                                        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{p.log?.text || (p.commandRun ? (up ? 'No output yet' : 'No output recorded') : '')}</pre>
                                     </details>
                                 ) : null}
                             </li>
@@ -760,6 +761,29 @@ export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now
             )}
         </div>
     );
+}
+
+/** Only this small clock ticks; the process list's forms, buttons and log DOM remain mounted in place. */
+function CommandRunFacts({ process: p, now }: { process: NonNullable<FeatureData['hosting']>['processes'][number]; now: number | undefined }) {
+    const [clock, setClock] = useState(() => Date.now());
+    const up = p.state === 'running' || p.state === 'restarting';
+    useEffect(() => {
+        if (!up || now !== undefined) return;
+        setClock(Date.now());
+        const timer = setInterval(() => setClock(Date.now()), 1_000);
+        return () => clearInterval(timer);
+    }, [up, now]);
+    const start = p.startedAt ?? (up ? p.since : undefined);
+    const end = up ? (now ?? clock) : p.since;
+    const facts: string[] = [];
+    if (start !== undefined && Number.isFinite(start) && Number.isFinite(end)) {
+        const seconds = Math.floor(Math.max(0, end - start) / 1_000);
+        const duration = seconds >= 3_600 ? `${Math.floor(seconds / 3_600)}h ${Math.floor(seconds % 3_600 / 60)}m ${seconds % 60}s`
+            : seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+        facts.push(`${up ? 'Elapsed' : 'Duration'} ${duration}`);
+    }
+    if (!up && p.exitCode !== null) facts.push(`exit ${p.exitCode}`);
+    return facts.length > 0 ? <span className="text-xs text-[var(--fg-3)]">{facts.join(' · ')}</span> : null;
 }
 
 /**
