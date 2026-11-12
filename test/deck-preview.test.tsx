@@ -20,7 +20,7 @@ const itemsOf = (texts: string[]): DeckItem[] =>
     deckItemsFrom({
         questions: [],
         userList: texts.map((text, i) => ({ workspaceId: 'tynn', item: { id: `li_${i}`, text, askedBy: 'tynn', createdAt: '2026-10-18T10:00:00.000Z', done: false } })),
-        unreadDms: [], finished: [], agents: {}, workspaceNames: {},
+        unreadDms: [], agents: {}, workspaceNames: {},
     } as unknown as Parameters<typeof deckItemsFrom>[0]);
 const render = (items: readonly DeckItem[]) =>
     renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} />);

@@ -96,7 +96,7 @@ describe('the attention store dismisses', () => {
         clock += 1_000;
         const b = await store.ask({ agentId: mintAgentId(), agentName: 'wren', workspaceId: 'tynn', questions: q('Second') }, { userActive: true });
         const log: string[] = [];
-        const items = (): DeckItem[] => deckItemsFrom({ questions: store.pending(), userList: [], unreadDms: [], finished: [], agents: {} });
+        const items = (): DeckItem[] => deckItemsFrom({ questions: store.pending(), userList: [], unreadDms: [], agents: {} });
         const ctl = new QuestionWindow({
             items,
             open: () => ({ show: (v: QuestionView) => log.push(`show ${v.item.id}`), close: () => log.push('close') }),

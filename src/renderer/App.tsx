@@ -527,7 +527,7 @@ const EMPTY_REMOTE: RemoteState = { connected: false, host: null, isOwner: false
 function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string; color?: string }) => void): void {
     const prev = useRef<AlertSnapshot | null>(null);
     useEffect(() => {
-        const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason })) };
+        const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason, handoff: a.handoff ?? null })) };
         if (snapshot.deckItems !== null) {
             for (const alert of alertsBetween(prev.current, next)) {
                 // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
@@ -743,12 +743,6 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
         switch (route.kind) {
             case 'refused':
                 setNote(route.reason);
-                return;
-            case 'navigate':
-                setNote(`Open it on ${host}'s screen — this one only answers.`);
-                return;
-            case 'restart-with-handoff':
-                void bridge.restartWithHandoff(route.agentId, route.finishedId).then((r) => { if (!r.ok) setNote(r.reason); });
                 return;
             case 'provider':
                 setInFlight(optionId);
@@ -2023,15 +2017,6 @@ function DesktopApp({ bridge }: AppProps) {
                             console.error('[genie] deck answer refused:', reason);
                             setDeckFormRefusal({ itemId: item.id, reason });
                         }).finally(() => setDeckBusy(null));
-                        return;
-                    case 'navigate':
-                        // Open: the window goes there itself; the finish stays on the Deck until marked read.
-                        navigate(route.route);
-                        return;
-                    case 'restart-with-handoff':
-                        void resolvedBridge?.restartWithHandoff(route.agentId, route.finishedId).then((r) => {
-                            if (!r.ok) console.error('[genie] restart with handoff refused:', r.reason);
-                        });
                         return;
                     case 'provider':
                         // A Deck row holds no approval to compare: the flight is keyed on the agent (one parked at a time).

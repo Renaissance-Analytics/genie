@@ -38,7 +38,7 @@ async function ownersHistory(): Promise<void> {
             id: `fin_${i}`, agentId: agents[i % agents.length]!, agentName: `agent${i % agents.length}`,
             handoff: `Handoff ${i}\n${'h'.repeat(size)}`,
             at: new Date(T0 - (713 - i) * 0.05 * DAY).toISOString(),
-            // The newest 40 are unseen (the Deck's "Since you looked").
+            // The newest 40 are unseen (from when the Deck showed handoffs to read, before Tynn #658).
             seen: i < 673,
         };
     });

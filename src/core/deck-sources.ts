@@ -1,7 +1,7 @@
 import type { ListItem } from './attention.js';
 import { plainLabel, type DeckItem, type StaleReason } from './deck.js';
 import { HUMAN, UNNAMED_AGENT } from './inbox.js';
-import type { Finished, PendingQuestion } from '../main/attention-store.js';
+import type { PendingQuestion } from '../main/attention-store.js';
 import type { InboxMessage } from '../main/inbox-store.js';
 
 /**
@@ -13,8 +13,11 @@ import type { InboxMessage } from '../main/inbox-store.js';
  *   question, even a single one with plain options, is a form: options plus a note per question.
  * - a USER-LIST item is a thing only a person can DO; it blocks nobody and is done inline.
  * - an UNREAD DM to the human is low priority, titled by sender and first line, marked read inline.
- * - a FINISH WITH A HANDOFF carries the note, with Open / Restart with this / mark read. A finish
- *   with no handoff is the agent's row going idle, not a Deck row.
+ *
+ * A FINISHED AGENT'S HANDOFF IS NOT A SOURCE (Tynn #658). It is for agents: the agent's next run, or whoever picks up
+ * the work, reads it (its handoff file and Genie's record of finished turns). It never waits for the person, who sees
+ * the agent's state and its chat; it was an item with Open / Restart with this / mark read until the owner had
+ * "hundreds of handoffs waiting for my attention" (2026-11-12): "I should not have to mark them as read."
  *
  * An agent the roster no longer knows is still shown, under its id — never dropped silently.
  *
@@ -28,7 +31,6 @@ export interface DeckSourceInput {
     readonly questions: readonly PendingQuestion[];
     readonly userList: readonly { workspaceId: string; item: ListItem }[];
     readonly unreadDms: readonly InboxMessage[];
-    readonly finished?: readonly Finished[];
     /** Who the agent ids are, for names and workspaces. */
     readonly agents: Readonly<Record<string, { name: string; workspaceId: string }>>;
     /** Workspace id → its NAME as the rail says it (core/workspace-name.ts). An id not here gets no name — never the id. */
@@ -155,25 +157,6 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
             priority: 'low',
             at: Date.parse(m.sentAt),
             answer: { kind: 'inline', options: [option('read', 'Mark read')] },
-            forwardedFrom: null,
-        });
-    }
-
-    for (const f of input.finished ?? []) {
-        if (f.seen || f.handoff === null) continue;
-        const agent = who(f.agentId);
-        items.push({
-            id: f.id,
-            source: 'finished-handoff',
-            agentId: f.agentId,
-            agentName: f.agentName ?? agent.agentName,
-            workspaceId: agent.workspaceId,
-            ...named(agent.workspaceId),
-            title: `${f.agentName ?? agent.agentName} finished: ${f.handoff}`,
-            blocking: false,
-            priority: 'normal',
-            at: Date.parse(f.at),
-            answer: { kind: 'inline', options: [option('open', 'Open'), option('restart', 'Restart with this'), option('seen', 'mark read')] },
             forwardedFrom: null,
         });
     }

@@ -45,10 +45,11 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'ftq_nudge_hotkey', group: 'general', scope: 'host', label: 'ForceTheQuestion nudge key', description: 'Tells the agent in front of you to ask its question through ForceTheQuestion. Empty: F5.', type: 'string', default: '', hidden: true },
     // WHAT'S NEW (Tynn #762; Genie 1's): the version whose What's New the person has closed — shown once per version.
     { key: 'whats_new_seen_version', group: 'general', scope: 'host', label: 'What’s new seen', description: 'The version whose What’s new was last closed.', type: 'string', default: '', hidden: true },
-    // THE FINISHED HISTORY, BOUNDED (Tynn #549, the owner's numbers): what genie-host keeps of agents' handoffs. Every
-    // unseen one is always kept; a cut handoff's whole text is the agent's handoff file.
-    { key: 'finished_kept_per_agent', group: 'general', scope: 'host', label: 'Finished handoffs kept per agent', description: 'How many of an agent’s finished handoffs Genie keeps. One you have not seen is always kept.', type: 'enum', options: ['5', '10', '20', '50', '100'], default: '20' },
-    { key: 'finished_seen_days', group: 'general', scope: 'host', label: 'Keep seen handoffs for', description: 'Days a handoff you have seen is kept. One you have not seen is always kept.', type: 'enum', options: ['3', '7', '14', '30', '90'], optionLabels: { 3: '3 days', 7: '7 days', 14: '14 days', 30: '30 days', 90: '90 days' }, default: '14' },
+    // THE FINISHED HISTORY, BOUNDED (Tynn #549, the owner's numbers): what genie-host keeps of agents' handoffs, for
+    // agents (Tynn #658: never read by the person). Each agent's newest is always kept; a cut handoff's whole text is
+    // the agent's handoff file. The key `finished_seen_days` keeps its name so a chosen value carries over.
+    { key: 'finished_kept_per_agent', group: 'general', scope: 'host', label: 'Finished handoffs kept per agent', description: 'How many of an agent’s finished handoffs Genie keeps for its next run. Its newest is always kept.', type: 'enum', options: ['5', '10', '20', '50', '100'], default: '20' },
+    { key: 'finished_seen_days', group: 'general', scope: 'host', label: 'Keep handoffs for', description: 'Days an agent’s handoff is kept. Its newest is always kept.', type: 'enum', options: ['3', '7', '14', '30', '90'], optionLabels: { 3: '3 days', 7: '7 days', 14: '14 days', 30: '30 days', 90: '90 days' }, default: '14' },
     { key: 'handoff_kept_kb', group: 'general', scope: 'host', label: 'Handoff text kept', description: 'How much of each handoff Genie keeps with it. The whole text is in the agent’s handoff file.', type: 'enum', options: ['2', '4', '8', '16', '32'], optionLabels: { 2: '2 KB', 4: '4 KB', 8: '8 KB', 16: '16 KB', 32: '32 KB' }, default: '8' },
     { key: 'tray_notice_shown', group: 'general', scope: 'host', label: 'Tray notice shown', description: 'The one-time “Genie is still running in the tray” notice has been shown.', type: 'boolean', default: false, hidden: true },
     // APPS AND SCRIPTS REPORT TO AGENTS (genie#1345; the owner's D2: on by default): this workspace's sites, background

@@ -199,9 +199,10 @@ export type AttentionData = AttentionFile;
 
 /**
  * HOW MUCH FINISHED HISTORY IS KEPT (Tynn #549; settings `finished_kept_per_agent`, `finished_seen_days`, `handoff_kept_kb`).
- * The owner's history on 2026-11-08 was 713 handoffs, 8.1 MB, rewritten whole on every question asked. An unseen handoff
- * is always kept; a seen one goes past the agent's newest `keptPerAgent` or `seenDays` old; a handoff's text is kept up to
- * `handoffKb` (the whole text is the agent's handoff file, `.ai/handoff/<agent>.md`).
+ * The owner's history on 2026-11-08 was 713 handoffs, 8.1 MB, rewritten whole on every question asked. A handoff goes
+ * past the agent's newest `keptPerAgent`, or `seenDays` old — except each agent's NEWEST, which its next run reads; a
+ * handoff's text is kept up to `handoffKb` (the whole text is the agent's handoff file, `.ai/handoff/<agent>.md`). Seen or not makes no difference
+ * (Tynn #658): a handoff is for agents and the person is never asked to read one, so "unseen is always kept" kept all.
  */
 export interface AttentionLimits {
     readonly keptPerAgent: number;
@@ -232,7 +233,7 @@ export function cutHandoff(text: string | null, kb: number): string | null {
     return `${kept}\n… (cut at ${kb} KB; the whole handoff is in the agent's handoff file)`;
 }
 
-/** The finished history within the limits: unseen always kept; a seen one only among its agent's newest, and not too old. */
+/** The finished history within the limits: an agent's newest always; the rest only among its agent's newest, and not too old. */
 export function boundFinished(finished: readonly Finished[], limits: AttentionLimits, nowMs: number): Finished[] {
     return boundWithArchive(finished, limits, nowMs).kept;
 }
@@ -265,7 +266,8 @@ function boundKept(finished: readonly Finished[], limits: AttentionLimits, nowMs
     const maxAge = limits.seenDays * 86_400_000;
     const kept: Finished[] = [];
     for (const f of finished) {
-        const keep = !f.seen || ((rank.get(f.id) ?? 0) < limits.keptPerAgent && nowMs - Date.parse(f.at) <= maxAge);
+        const r = rank.get(f.id) ?? 0;
+        const keep = r === 0 || (r < limits.keptPerAgent && nowMs - Date.parse(f.at) <= maxAge);
         if (!keep) continue;
         const handoff = cutHandoff(f.handoff, limits.handoffKb);
         kept.push(handoff === f.handoff ? f : { ...f, handoff });

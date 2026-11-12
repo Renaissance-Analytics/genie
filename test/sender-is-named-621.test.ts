@@ -77,7 +77,7 @@ describe('the other places a sender is named', () => {
 
     it('a Deck item from an agent the Deck cannot name carries words as its name', () => {
         const items = deckItemsFrom({
-            questions: [], userList: [], finished: [],
+            questions: [], userList: [],
             unreadDms: [{ seq: 1, id: 'msg_1', from: GONE, to: 'human', text: 'hello', sentAt: new Date(T).toISOString(), readAt: null, attachments: [] }], agents: {},
         } as never);
         expect(items).toHaveLength(1);

@@ -42,7 +42,7 @@ const pending = (over: Partial<PendingQuestion> = {}): PendingQuestion => ({
     ...over,
 });
 const itemsOf = (qs: PendingQuestion[]) =>
-    deckItemsFrom({ questions: qs, userList: [], unreadDms: [], finished: [], agents: {}, workspaceNames: { [WS_ID]: 'Tynn.ai' } });
+    deckItemsFrom({ questions: qs, userList: [], unreadDms: [], agents: {}, workspaceNames: { [WS_ID]: 'Tynn.ai' } });
 const render = (items: readonly DeckItem[], extra: Partial<Parameters<typeof Deck>[0]> = {}) =>
     renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} {...extra} />);
 const titleOf = (html: string, id: string) => html.match(new RegExp(`data-deck-title="${id}"[^>]*>([^<]*)<`))?.[1] ?? null;
@@ -89,7 +89,7 @@ describe('who asked, where, and how long ago', () => {
     });
 
     it('an unknown workspace gets no name rather than its id', () => {
-        const [item] = deckItemsFrom({ questions: [pending({ workspaceId: 'ws_gone' })], userList: [], unreadDms: [], finished: [], agents: {}, workspaceNames: { [WS_ID]: 'Tynn.ai' } });
+        const [item] = deckItemsFrom({ questions: [pending({ workspaceId: 'ws_gone' })], userList: [], unreadDms: [], agents: {}, workspaceNames: { [WS_ID]: 'Tynn.ai' } });
         expect(item!.workspaceName).toBeUndefined();
         expect(render([item!])).not.toContain('ws_gone<');
     });
@@ -116,7 +116,7 @@ describe('the body reads like prose', () => {
     });
 
     it('a to-do is read as text with its Done button — never again in a monospace box', () => {
-        const [todo] = deckItemsFrom({ questions: [], userList: [{ workspaceId: WS_ID, item: { id: 'li_1', text: 'rotate the GitHub token', askedBy: 'agent_a', createdAt: '2026-10-15T11:00:00.000Z', done: false } }], unreadDms: [], finished: [], agents: {}, workspaceNames: { [WS_ID]: 'Tynn.ai' } });
+        const [todo] = deckItemsFrom({ questions: [], userList: [{ workspaceId: WS_ID, item: { id: 'li_1', text: 'rotate the GitHub token', askedBy: 'agent_a', createdAt: '2026-10-15T11:00:00.000Z', done: false } }], unreadDms: [], agents: {}, workspaceNames: { [WS_ID]: 'Tynn.ai' } });
         const html = render([todo!]);
         expect(html.split('rotate the GitHub token').length - 1).toBe(1);
         expect(html).toContain('data-approval-option="done"');

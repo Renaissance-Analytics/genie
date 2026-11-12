@@ -23,7 +23,7 @@ const SHORT = 'Rotate the GitHub token.';
 
 const itemOf = (text: string, id = 'li_1'): DeckItem => deckItemsFrom({
     questions: [], userList: [{ workspaceId: 'tynn', item: { id, text, askedBy: 'agent_t', createdAt: '2026-11-10T21:30:44.857Z', done: false } }],
-    unreadDms: [], finished: [], agents: { agent_t: { name: 'tynn' } }, workspaceNames: { tynn: 'Tynn.ai' },
+    unreadDms: [], agents: { agent_t: { name: 'tynn' } }, workspaceNames: { tynn: 'Tynn.ai' },
 } as unknown as Parameters<typeof deckItemsFrom>[0])[0]!;
 const render = (items: readonly DeckItem[]) =>
     renderToStaticMarkup(<Deck items={items} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} now={NOW} />);

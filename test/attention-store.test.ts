@@ -242,7 +242,7 @@ describe('an update is the agent waiting now', () => {
     const questions = [{ header: 'Next', question: 'What next?', options: [{ label: 'a' }, { label: 'b' }] }];
     const updated = [{ header: 'Next', question: 'What next, now?', options: [{ label: 'a' }, { label: 'b' }] }];
     const deck = (q: ReturnType<AttentionStore['pending']>[number], startedAt: number) =>
-        deckItemsFrom({ questions: [q], userList: [], unreadDms: [], finished: [], agents: { [agent]: { name: 'atlas', workspaceId: 'tynn' } }, asker: () => ({ running: true, startedAt }) })[0]!;
+        deckItemsFrom({ questions: [q], userList: [], unreadDms: [], agents: { [agent]: { name: 'atlas', workspaceId: 'tynn' } }, asker: () => ({ running: true, startedAt }) })[0]!;
 
     it('stamps reaskedAt, keeps askedAt, and the Deck then counts it as waiting; the same question before the update is stale (CONTROL)', async () => {
         const asked = await store.ask({ agentId: agent, agentName: 'atlas', workspaceId: 'tynn', questions }, { userActive: true });
