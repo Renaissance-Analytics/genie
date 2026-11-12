@@ -11,6 +11,7 @@
  * is never PASS. --break-admission deliberately removes main's admission before row1, to
  * prove this after-the-feature harness fails on broken native admission. Nothing in src changes.
  */
+import { isMainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -294,7 +295,7 @@ try {
     // inspector were listening, then nothing for 60 s, and the DevTools port answered no request). Said, before the row
     // fails: whether the app still runs, a request to each port, and what Genie itself logged in this run's home.
     let target;
-    try { target = await pageFor((t) => t.type === 'page' && /index\.html/.test(t.url)); } catch (error) {
+    try { target = await pageFor(isMainWindow); } catch (error) {
         const ask = async (port, path) => { try { const r = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(3_000) }); return `HTTP ${r.status} ${(await r.text()).slice(0, 200)}`; } catch (e) { return `${e.name}: ${e.cause?.code ?? e.message}`; } };
         log(`  1 app process ${app.pid}: ${app.exitCode === null && app.signalCode === null ? 'still running' : `ended (exit ${app.exitCode}, signal ${app.signalCode})`}`);
         log(`  1 DevTools ${PORT}/json/version: ${await ask(PORT, '/json/version')}; inspector ${INSPECT}/json: ${await ask(INSPECT, '/json')}`);

@@ -11,6 +11,7 @@
  *   offers Retry, still untrusted → Retry shows progress, the step goes, Genie's files go in → after a relaunch it reads
  *   trusted. A second workspace nobody trusted is the control: the step still shows for it, in both runs.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -99,7 +100,7 @@ class Cdp {
             try {
                 // Bounded (Tynn #692: on the Azure Windows VM this row printed its title and nothing for 60 minutes).
                 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: AbortSignal.timeout(5_000) })).json();
-                page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl) ?? null;
+                page = mainWindow(targets);
                 last = `no page yet (${targets.length})`;
             } catch (error) { last = String(error); }
             if (!page) await sleep(500);

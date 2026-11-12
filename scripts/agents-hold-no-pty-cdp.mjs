@@ -18,6 +18,7 @@
  * processes is the number of live ptys on an otherwise idle machine. On Linux it is the number
  * of allocated pty slaves (`/dev/pts`). Deltas against a baseline taken before anything starts.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
@@ -72,7 +73,7 @@ async function findTarget() {
     while (Date.now() < until) {
         try {
             const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-            const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+            const page = mainWindow(targets);
             if (page) return page;
             last = `no page yet (${targets.length})`;
         } catch (e) { last = String(e); }

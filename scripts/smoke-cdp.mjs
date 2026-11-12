@@ -1,3 +1,4 @@
+import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * THE SMOKE PATH — a real Electron window, driven over the Chrome DevTools Protocol.
@@ -71,7 +72,7 @@ async function findTarget() {
         try {
             const response = await fetch(`http://127.0.0.1:${PORT}/json/list`);
             const targets = await response.json();
-            const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+            const page = mainWindow(targets);
             if (page) return page;
             lastError = `no page target yet (${targets.length} targets)`;
         } catch (error) {

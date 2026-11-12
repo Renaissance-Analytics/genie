@@ -7,6 +7,7 @@
  * page must load from the app's https origin, through the front door and Genie's `.gen` certificate, and `app.me` must
  * answer over the real channel. Nothing in src knows this script exists.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -107,7 +108,7 @@ try {
     const xvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
     app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', log, log] });
 
-    const target = await until('the app page', async () => (await targets()).find((t) => t.type === 'page' && /index\.html/.test(t.url)));
+    const target = await until('the app page', async () => mainWindow(await targets()));
     const page = await Cdp.connect(target.webSocketDebuggerUrl);
     await waitForPageProbe(page);
     await until('a ready page connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"'));

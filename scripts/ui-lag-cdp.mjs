@@ -20,6 +20,7 @@
  *
  *   node scripts/ui-lag-cdp.mjs [--budget]     --budget: exit 1 when window main is late by more than 50 ms during the build
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import { SourceMap } from 'node:module';
@@ -275,7 +276,7 @@ try {
     if (installed.exceptionDetails) throw new Error(installed.exceptionDetails.exception?.description ?? 'host gauge installation failed');
     await main.request('Debugger.resume', {}); await main.request('Debugger.disable', {});
 
-    const target = await until('owned app page', async () => { hostRecord ??= json(join(runtime, 'host.json')); return (await targets(PORT)).find((t) => t.type === 'page' && /index\.html/.test(t.url)); }, 240000);
+    const target = await until('owned app page', async () => { hostRecord ??= json(join(runtime, 'host.json')); return mainWindow(await targets(PORT)); }, 240000);
     page = await Cdp.connect(target.webSocketDebuggerUrl);
     await waitForPageProbe(page);
     // The page's script time, cumulative (Tynn #542): read around each slice, so a slice says how busy the page was.
