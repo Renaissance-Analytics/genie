@@ -300,7 +300,9 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
 export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch, refresh, onRefresh }: {
     refresh?: ConnectProgress | undefined;
     onRefresh?: (() => void) | undefined;
-    mode: 'link' | 'workstations';
+    /** RED stand-in (Tynn #640). */
+    other?: import('react').ReactNode;
+    mode: 'link' | 'workstations' | 'other';
     onClose: () => void;
     workstations: TynnWorkstationList | null;
     onOpenWorkstation?: OpenWorkstation | undefined;

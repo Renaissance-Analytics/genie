@@ -112,6 +112,8 @@ export interface RemoteBadge {
     readonly locked: boolean;
     readonly lostTo?: string | null | undefined;
     readonly onTakeControl?: (() => void) | undefined;
+    /** RED stand-in (Tynn #640). */
+    readonly onDisconnect?: (() => void) | undefined;
 }
 
 export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect, gapps, share }: TitleBarProps) {
