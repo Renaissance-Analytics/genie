@@ -5,6 +5,7 @@ import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { toHotkey, fancyPlatform } from '../hotkey-strings.js';
+import { sendKeyHint } from '../../core/send-key.js';
 import { SentAttachments } from './SentAttachments.js';
 import type { AttachmentReply } from '../../core/thread-store.js';
 import { useSendKey } from '../send-key-store.js';
@@ -898,10 +899,15 @@ function ChatFlyoutBody({
                         sendButton="icon"
                         /*
                          * THE PERSON'S SEND KEY (Tynn #637, react-fancy 6.21): exactly this combination sends, its new line is
-                         * the other, and the hint left of Send names it (Tynn #641) — the composer's own, as its tooltip is.
+                         * the other. THE KEYS LINE IN THE BOX (Tynn #641; the owner: "this line should be in the box, not
+                         * under it. it should be to the left of the send button"): Genie's whole line, both keys, in the slot
+                         * left of Send, which truncates before it moves Send. The kit's own hint names only the send key, so
+                         * it is off: the keys are said once.
                          */
                         submitKey={toHotkey(sendKey, keysPlatform)}
                         platform={fancyPlatform(keysPlatform)}
+                        showHint={false}
+                        beforeSend={blocked ? null : <span data-composer-keys="" className="block truncate text-[10px] text-[var(--fg-4)]">{sendKeyHint(sendKey, keysPlatform)}</span>}
                         pasteThreshold={PASTE_PILL_CHARS}
                         pasteImages
                         previewChars={30}
