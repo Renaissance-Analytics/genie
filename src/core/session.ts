@@ -299,6 +299,9 @@ export const CANCEL_STATE_UNCERTAIN = 'cancel state uncertain; driver stopped';
 export const RESTARTED_FOR_QUEUE = 'The provider did not confirm the interrupt in time, so Genie restarted the agent on the same conversation; your messages are sent now.';
 export const CANCEL_STATE_UNCERTAIN_CODE = 'claude_cancel_state_uncertain';
 
+/** A provider gets this long to confirm the turn ended; a receipt alone is not a stopped turn (Tynn #661). */
+export const TURN_CANCEL_WAIT_MS = 2_000;
+
 /**
  * COOLING (the owner, 2026-11-01): "a state they enter right after finishing a turn (coming out of the work state).
  * Instead of immediately marking them as idle, they are "Cooling" down for 15 seconds then become Idle. This way I can
@@ -518,6 +521,8 @@ export class AgentSession {
      * meanwhile was ended by the Stop (the CLI killed under it), whatever the dying CLI said: stopped, never a limit hit.
      */
     #stopWindow = false;
+    /** One confirmation deadline per turn; repeated Stop clicks cannot extend it. */
+    #cancelPending: { by: string | null; intent: CancelIntent; cancel: () => void } | null = null;
     /** The run's tree as it was when the Stop was asked, read before any kill can orphan a tool (Tynn #556). */
     #stopCapture: Promise<readonly ProcessInfo[]> | null = null;
     /**
@@ -1447,6 +1452,7 @@ export class AgentSession {
                     }),
                 onTurnEnd: (outcome) => {
                     if (this.#ended) { this.#straggler(); return; }
+                    this.#clearCancelWait();
                     // Two turns are two replies even with nothing between them. Without this a
                     // whole conversation would accumulate into one unbounded row.
                     this.#closeMessage();
@@ -1494,6 +1500,7 @@ export class AgentSession {
                     const failed = crashed && !endedByStop;
                     // Ended by the limit: a reading said so during the turn, or the turn's own failure does (Tynn #791).
                     const readingSaidSo = this.#limitThisTurn;
+                    const stoppedAtLimit = readingSaidSo && this.#stopWindow;
                     const byLimit = failed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
                     // Ended by the LOGIN (the owner, 2026-10-18): the provider says this account is not signed in.
                     // Ended by the ACCOUNT (the owner, 2026-10-21: a payment failure paused it): checked before the login,
@@ -1511,6 +1518,7 @@ export class AgentSession {
                         else this.#carryOver ??= carried;
                     }
                     this.#limitThisTurn = false;
+                    if (stoppedAtLimit && !byLimit) this.#sayStoppedAtLimit();
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
                         // Broken; the agent waits for the limit to reset and is resumed then.
@@ -1624,6 +1632,7 @@ export class AgentSession {
                 },
                 onStopVerdict: (verdict) => { this.#nativeVerdict = verdict; },
                 onExit: (code, signal) => {
+                    this.#clearCancelWait();
                     this.#leaveQueuedAsDrafts();
                     // A retry waiting out an overload has nobody to send to now.
                     this.#overloadCancel?.();
@@ -1945,6 +1954,7 @@ export class AgentSession {
      */
     stop(signal: NodeJS.Signals = 'SIGTERM', options: { graceMs?: number } = {}): Promise<StopVerdict> {
         if (this.#stopping) return this.#stopping;
+        this.#clearCancelWait();
         this.#ended = true;
         this.#overloadCancel?.();
         this.#overloadCancel = null;
@@ -2155,8 +2165,8 @@ export class AgentSession {
      *   and attributed as ever. Codex queues nothing (one prompt in flight).
      * - **A parked approval is answered `cancelled`**, ACP's rule for a cancelled turn: an unanswered request would
      *   outlive the turn and park the provider.
-     * - **A driver that cannot cancel is never killed instead**, and neither is one that refuses the interrupt: the
-     *   stream says so, the turn runs on, and Stop agent remains the way to end it.
+     * - **A driver that cannot cancel is never killed instead.** A supported cancel that remains unconfirmed is
+     *   bounded: Genie ends that run, keeps what it owes, and a new driver resumes the same conversation when needed.
      */
     /**
      * A PLAN THE AGENT REPORTED THROUGH GENIE'S `plan` TOOL (the owner, 2026-10-20: the Active Plan column had no way to
@@ -2221,18 +2231,28 @@ export class AgentSession {
             this.#changed();
             return { ok: false, reason: 'unsupported' };
         }
-
         this.#stopAskedBy = by;
         this.#stopIntent = intent;
-        if (intent === 'interrupt') this.#interruptAsked = true;
+        this.#interruptAsked = intent === 'interrupt';
         this.#stopWindow = true;
+        if (this.#cancelPending !== null) {
+            this.#cancelPending.by = by;
+            this.#cancelPending.intent = intent;
+            return { ok: true };
+        }
+        const pending = { by, intent, cancel: (): void => {} };
+        this.#cancelPending = pending;
+        pending.cancel = this.#later(TURN_CANCEL_WAIT_MS, () => {
+            if (this.#cancelPending !== pending) return;
+            this.#clearCancelWait();
+            this.#endUnconfirmedTurn(pending.by, pending.intent);
+        });
         this.#captureForStop();
         const refused = (cause: unknown): void => {
-            this.#stopAskedBy = null;
-            this.#stopIntent = 'stop';
-            this.#stopWindow = false;
+            // The provider's promise can settle after its turn ended, even after another Stop was asked.
+            if (this.#cancelPending !== pending) return;
             const why = cause instanceof Error ? cause.message : String(cause);
-            void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn could not be stopped: ${why}. It is still running; Stop agent ends the session.` });
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn could not be stopped: ${why}. Genie will end this run if the turn does not stop within ${TURN_CANCEL_WAIT_MS / 1000} seconds.` });
             this.#changed();
         };
         try {
@@ -2249,6 +2269,44 @@ export class AgentSession {
         this.#parkedAt = null;
         this.#changed();
         return { ok: true };
+    }
+
+    #clearCancelWait(): void {
+        const pending = this.#cancelPending;
+        this.#cancelPending = null;
+        pending?.cancel();
+    }
+
+    #sayStoppedAtLimit(): void {
+        void this.#emitRow({ kind: 'notice', level: 'warning', message: 'The provider reported a rate limit during this turn. The turn is stopped; your queued messages remain available when the limit clears.' });
+    }
+
+    /** No turn-end frame arrived. End the old run instead of claiming an idle provider that is still working. */
+    #endUnconfirmedTurn(by: string | null, intent: CancelIntent): void {
+        if (this.#ended || !this.#inTurn) return;
+        const limited = this.#limitThisTurn;
+        this.#interruptAsked = intent === 'interrupt';
+        this.#driverStoppedItself();
+        // Accepted mid-turn prompts normally get separate cancelled frames from the provider. A silent one sends
+        // none: retain those prompts using the same draft/carry rules before stop() clears its in-flight queue.
+        for (const prompt of this.#queued) this.#dropped(prompt);
+        this.#closeMessage();
+        this.#turns += 1;
+        this.#endedThisRun += 1;
+        this.#lastTurnEnd = 'stopped';
+        this.#stoppedByYou = by === 'you' && intent === 'stop';
+        if (!this.#carryQueue) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by });
+        if (limited) this.#sayStoppedAtLimit();
+        const failed = (error: unknown): void => {
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn ended, but Genie could not confirm its processes stopped: ${error instanceof Error ? error.message : String(error)}` });
+            this.#changed();
+        };
+        try {
+            void this.stop('SIGTERM', { graceMs: 0 }).then((verdict) => {
+                if (!verdict.verified) failed(new Error(`${verdict.reason}${verdict.survivors.length > 0 ? ` Still running: ${describeProcesses(verdict.survivors)}.` : ''}`));
+            }).catch(failed);
+        } catch (error) { failed(error); }
+        this.#changed();
     }
 
     /** Tell whoever is watching that something a surface renders has changed. */
