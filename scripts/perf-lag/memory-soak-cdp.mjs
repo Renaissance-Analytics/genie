@@ -157,7 +157,7 @@ async function snapshot(cdp, file) {
 }
 
 let app = null, root = null, page = null, main = null, host = null, code = 1;
-const summary = { label: LABEL, minutes: MINUTES, head: null, seeded: null, switches: 0, dismissals: 0, dismissFailures: 0, errors: [], died: null, snapshots: [], profiles: { main: [], host: [] } };
+const summary = { label: LABEL, minutes: MINUTES, head: null, seeded: null, switches: 0, dismissals: 0, dismissFailures: 0, errors: [], pageErrors: [], failedSurfaces: null, died: null, snapshots: [], profiles: { main: [], host: [] } };
 const samplesFile = join(OUT, `${LABEL}-samples.jsonl`);
 try {
     demand(process.env.CI === 'true' || process.env.GENIE_SOAK_ALLOW === '1' || (WIN && /^genie$/i.test(process.env.USERNAME ?? '')) || (process.platform === 'linux' && process.env.USER === 'genie'), 'refused: run only in CI or a test VM');
@@ -189,6 +189,11 @@ try {
     await main.request('Debugger.resume'); await main.request('Debugger.disable');
     const target = await until('the main window', async () => mainWindow(await targets(PORT)), 240000);
     page = await Cdp.connect(target.webSocketDebuggerUrl, 'page');
+    // THE PAGE'S OWN ERRORS: a render that failed (an error boundary drew "failed to draw") is a soak that measured less.
+    const pageError = (kind, text) => { if (summary.pageErrors.length < 10) summary.pageErrors.push({ t: new Date().toISOString(), kind, text: String(text).slice(0, 6000) }); };
+    page.on('Runtime.exceptionThrown', (p) => pageError('exception', p.exceptionDetails?.exception?.description ?? p.exceptionDetails?.text ?? ''));
+    page.on('Runtime.consoleAPICalled', (p) => { if (p.type === 'error') pageError('console.error', (p.args ?? []).map((a) => String(a.description ?? a.value ?? '')).join(' | ')); });
+    await page.request('Runtime.enable');
     await until('the page bridge', () => page.evaluate('typeof window.genieTest === "object"'), 60000);
     host = await Cdp.connect((await until('genie-host inspector', async () => (await targets(HOST_INSPECT))[0], 60000)).webSocketDebuggerUrl, 'host');
     // What's new over a first run: closed as a person closes it.
@@ -222,6 +227,16 @@ try {
             const p = page.dead ? null : await page.request('Runtime.getHeapUsage', {}, 20000).catch(() => null);
             const s = { t: Math.round((Date.now() - t0) / 1000), main: m, host: h, page: p ? { used: p.usedSize, total: p.totalSize } : null };
             writeFileSync(samplesFile, `${JSON.stringify(s)}\n`, { flag: 'a' });
+            // A surface that failed to draw (react-fancy's TabsList update loop, React #185, seen on the line too) is retried as a
+            // person would, so the soak keeps measuring a page that draws; each one is counted.
+            if (!page.dead) {
+                const failed = await page.evaluate(`[...document.querySelectorAll('[data-surface-failed]')].map((e) => e.getAttribute('data-surface-failed'))`, 10000).catch(() => []);
+                if (failed.length > 0) {
+                    summary.failedSurfaces ??= { t: s.t, surfaces: failed };
+                    summary.surfaceRetries = (summary.surfaceRetries ?? 0) + 1;
+                    await page.evaluate(`document.querySelectorAll('[data-surface-retry]').forEach((b) => b.click()); true`, 10000).catch(() => {});
+                }
+            }
             console.log(`SOAK_SAMPLE t=${s.t}s main rss=${m?.rss ? mb(m.rss) : '-'} heap=${m?.heapUsed ? mb(m.heapUsed) : '-'} host rss=${h?.rss ? mb(h.rss) : '-'} heap=${h?.heapUsed ? mb(h.heapUsed) : '-'} page=${p ? mb(p.usedSize) : '-'} wire.maxLine=${m?.wire?.maxLine ?? '-'}`);
             for (const [name, c, r] of [['main', main, m], ['host', host, h]]) {
                 if (snapped.has(name) || !r?.rss || r.rss / 1048576 < SNAPSHOT_RSS_MB) continue;
@@ -270,7 +285,7 @@ try {
     try { if (root) { const crash = join(root, 'home', '.genie', 'runtime', 'crash'); summary.crashRecords = existsSync(crash) ? readdirSync(crash) : []; } } catch { /* none */ }
     try { if (root) { const life = join(root, 'home', '.genie', 'runtime', 'lifecycle.log'); if (existsSync(life)) writeFileSync(join(OUT, `${LABEL}-lifecycle.log`), readFileSync(life)); } } catch { /* none */ }
     writeFileSync(join(OUT, `${LABEL}-summary.json`), JSON.stringify(summary, null, 2));
-    console.log(`SOAK_RESULT ${JSON.stringify({ label: LABEL, head: summary.head, died: summary.died, switches: summary.switches, dismissals: summary.dismissals, main: summary.main, host: summary.host, page: summary.page })}`);
+    console.log(`SOAK_RESULT ${JSON.stringify({ label: LABEL, head: summary.head, died: summary.died, failedSurfaces: summary.failedSurfaces, surfaceRetries: summary.surfaceRetries ?? 0, pageErrors: summary.pageErrors.length, switches: summary.switches, dismissals: summary.dismissals, main: summary.main, host: summary.host, page: summary.page })}`);
     try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.quit();true", 5000); } catch { /* gone */ }
     for (const c of [page, main, host]) c?.close();
     await sleep(5000);
