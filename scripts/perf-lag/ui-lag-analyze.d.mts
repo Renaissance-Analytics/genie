@@ -48,8 +48,8 @@ export function retryOnTimeout<T>(run: (attempt: number) => T, options?: { attem
 export function heldVerdict(input: { floodBytes: number; growthBytes: number }, options?: { capChars?: number; slackBytes?: number }): {
     ok: boolean; floodBytes: number; growthBytes: number; boundBytes: number; reasons: string[];
 };
-export function capVerdict(input: { below: Array<Slice & { scriptMsPerS?: number }>; past: Array<Slice & { scriptMsPerS?: number }> }, options?: { minRatio?: number; maxFrameGapMs?: number; maxScriptOverMsPerS?: number; minSlices?: number }): {
-    ok: boolean; minRatio: number; maxFrameGapMs: number; maxScriptOverMsPerS: number; ratio: number | null; belowCount: number | null; pastCount: number | null; pastWorstGapMs: number | null;
+export function capVerdict(input: { below: Array<Slice & { scriptMsPerS?: number }>; past: Array<Slice & { scriptMsPerS?: number }> }, options?: { minRatio?: number; maxFrameGapMs?: number; maxScriptOverMsPerS?: number; minSlices?: number; /** Read past[k] against below[k], its control taken beside it (Tynn #692). */ paired?: boolean; /** The control's name in the reasons, when paired. */ control?: string }): {
+    ok: boolean; paired?: true; control?: string; ratios?: Array<number | null>; minRatio: number; maxFrameGapMs: number; maxScriptOverMsPerS: number; ratio: number | null; belowCount: number | null; pastCount: number | null; pastWorstGapMs: number | null;
     pastScriptMsPerS: number | null; belowScriptMsPerS: number | null; reasons: string[];
 };
 export function throughputVerdict(input: { on: Slice[]; off: Slice[] }, options?: { minRatio?: number; minSlices?: number }): {

@@ -113,7 +113,7 @@ export class RelayHostService {
         const account = this.#ports.account();
         const signedIn = account?.status().signedIn === true;
         // A read that fails is no answer: connecting out fails closed, and nothing is said in the window's name.
-        const answer = signedIn && account ? await this.#ports.readRole(account.request).catch(() => null) : null;
+        const answer = signedIn && account ? await this.#ports.readRole((path, init) => account.request(path, init)).catch(() => null) : null;
         const role = answer !== null && typeof answer === 'object' ? answer.role : answer;
         const unbound = answer !== null && typeof answer === 'object' && answer.unbound === true && role === null;
         const next = signedIn ? effectiveRoleOf({ signedIn: true, role }) : effectiveRoleOf({ signedIn: false });

@@ -199,21 +199,36 @@ function Need-TestMachine {
 # THE APP, OPENED ONCE for the rows from no-pty to layout, as ci.yml's "open the app and drive it" step, and stopped by
 # app-stopped (which fails when any of its electron processes outlives the stop, as that step did).
 $script:App = $null
+$script:AppHome = ''
 $script:AppState = ''
 function Need-App {
     if ($script:AppState -eq 'ok') { return }
     if ($script:AppState) { Block $script:AppState }
-    Need-Build; Need-TestMachine
-    $script:AppState = 'the seed could not be written'
-    if (-not (Test-Path (Join-Path $Setup 'seed.done'))) {
+    Need-Build; Need-Electron; Need-TestMachine
+    # A HOME OF ITS OWN for this run (Tynn #692, as linux.sh: a loop of runs in one session found the last run's app,
+    # host and state). The seed and the app get it through USERPROFILE, HOME, APPDATA and LOCALAPPDATA; this process's
+    # own are put back once the app has started with them.
+    $script:AppState = 'something already answers on the debugger port 9222 (an app this run did not start)'
+    try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:9222/json/version' | Out-Null; Block $script:AppState } catch { if ($script:Blocked) { throw } }
+    $script:AppHome = Join-Path ([System.IO.Path]::GetTempPath()) ("genie-ci-app-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    foreach ($d in @("$($script:AppHome)\AppData\Roaming", "$($script:AppHome)\AppData\Local")) { New-Item -ItemType Directory -Force $d | Out-Null }
+    Write-Output "--- the app's own home: $($script:AppHome)"
+    $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
+    try {
+        $env:USERPROFILE = $script:AppHome; $env:HOME = $script:AppHome
+        $env:APPDATA = "$($script:AppHome)\AppData\Roaming"; $env:LOCALAPPDATA = "$($script:AppHome)\AppData\Local"
+        $script:AppState = 'the seed could not be written'
         node scripts/smoke-seed.mjs *> (Join-Path $Setup 'seed.out')
         if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Setup 'seed.out') -Tail 20; Block $script:AppState }
-        Set-Content (Join-Path $Setup 'seed.done') ''
+        $env:GENIE2_CODEX_BINARY = "$Repo\scripts\stub-codex.mjs"
+        $env:GENIE_PAGE_PROBE = '1'
+        # Electron by its own path, not through npx: npm would look for its cache and config under the moved APPDATA.
+        # node itself is C:\tools\node on the machine PATH and reads nothing from APPDATA to run the seed.
+        $script:App = Start-Process -FilePath $script:ElectronExe -ArgumentList '.', '--remote-debugging-port=9222' -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput (Join-Path $Out 'electron-out.log') -RedirectStandardError (Join-Path $Out 'electron-err.log')
+    } finally {
+        foreach ($k in $saved.Keys) { Set-Item -Path "env:$k" -Value $saved[$k] }
     }
-    $env:GENIE2_CODEX_BINARY = "$Repo\scripts\stub-codex.mjs"
-    $env:GENIE_PAGE_PROBE = '1'
-    $script:App = Start-Process -FilePath 'npx.cmd' -ArgumentList 'electron', '.', '--remote-debugging-port=9222' -PassThru -WindowStyle Hidden `
-        -RedirectStandardOutput (Join-Path $Out 'electron-out.log') -RedirectStandardError (Join-Path $Out 'electron-err.log')
     Write-Output "--- the app is starting (pid $($script:App.Id))"
     $waited = 0
     while ($true) {
@@ -254,7 +269,15 @@ function Stop-App {
     Start-Sleep -Seconds 2
     $script:App = $null
     $script:AppState = 'the app was stopped (app-stopped); the rows that drive it run before that row'
-    $left = @(Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Repo*" })
+    # Its genie-host: started detached, from its copy under the app's home, so neither the tree kill nor the checkout's
+    # path finds it. By the pid its host.json names, and anything else running from that home.
+    if ($script:AppHome) {
+        $hostJson = Join-Path $script:AppHome '.genie\runtime\host.json'
+        if (Test-Path $hostJson) { $hp = (Get-Content $hostJson -Raw | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
+        @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($script:AppHome, [System.StringComparison]::OrdinalIgnoreCase) }) | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+    $left = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like "$Repo*" -or ($script:AppHome -and $_.Path.StartsWith($script:AppHome, [System.StringComparison]::OrdinalIgnoreCase))) })
     $script:AppLeft = $left.Count
     Write-Host "electron processes from this checkout left after the stop: $($script:AppLeft)"
 }
@@ -322,7 +345,8 @@ function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scri
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 # The app opened for no-pty..layout wrote this log: the spawn host started, and never fell back.
 function Row-spawn-host {
-    $log = Join-Path $HOME '.genie\runtime\lifecycle.log'
+    if (-not $script:AppHome) { Block 'the app was not opened in this run (the seed row opens it)' }
+    $log = Join-Path $script:AppHome '.genie\runtime\lifecycle.log'
     if (-not (Test-Path $log)) { Block 'no lifecycle.log: the app was not opened in this run (the seed row opens it)' }
     Select-String -Path $log -Pattern 'spawn host' | Select-Object -Last 5 | ForEach-Object { $_.Line }
     if (-not (Select-String -Path $log -Pattern 'spawn host ready pid=' -Quiet)) { throw 'no "spawn host ready" in lifecycle.log' }
@@ -405,6 +429,37 @@ function Row-packaged-launcher {
     }
 }
 
+# EVERY ROW HAS A CEILING (Tynn #692: trust-step printed its title and then nothing until the Azure job's 90 minutes ran
+# out; no row after it ran). In seconds: the row script's own timeout (as linux.sh gives it, ci.yml's Windows job had
+# none) plus 60 s, or the job's limit, or a stated one. On expiry a watchdog process marks the row and ends every
+# process this script started except the shared app (each with its tree, taskkill /T), so the row's command returns,
+# the row prints `(timed out after N s)`, and the run goes on.
+function Ceiling([string]$name) {
+    switch ($name) {
+        { $_ -in 'deps', 'packaged-launcher' } { return 900 }
+        { $_ -in 'electron-binary', 'package-fuse', 'sign-plan', 'packed-tree', 'update-metadata', 'host-late-ready', 'seed' } { return 300 }
+        { $_ -in 'unit-build', 'build' } { return 600 }
+        'unit' { return 1800 }
+        { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
+        { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
+        'files-watch' { return 240 }
+        { $_ -in 'chat-drafts', 'artboard' } { return 420 }
+        { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
+        { $_ -in 'safe-mode', 'hang' } { return 600 }
+        'package' { return 1500 }
+        default { return 600 }
+    }
+}
+function Start-Watchdog([int]$limit, [string]$mark) {
+    $keep = if ($script:App) { $script:App.Id } else { 0 }
+    $cmd = "Start-Sleep -Seconds $limit; Set-Content -Path '$mark' -Value timed-out; " +
+        "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$PID' | Where-Object { `$_.ProcessId -ne `$PID -and `$_.ProcessId -ne $keep } | " +
+        "ForEach-Object { taskkill /PID `$_.ProcessId /T /F *> `$null }"
+    # Encoded, so no quoting between here and the child can change a character of it.
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($cmd))
+    Start-Process powershell -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded -WindowStyle Hidden -PassThru
+}
+
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 Write-Output "CI WINDOWS rows: $($selected -join ' ')"
@@ -415,16 +470,30 @@ foreach ($name in $selected) {
     Write-Output "=== $name"
     $log = Join-Path $Out "$name.log"
     $ok = $true
+    $limit = Ceiling $name
+    $mark = Join-Path $Setup "timed-out-$name"
+    Remove-Item -Force -ErrorAction SilentlyContinue $mark
+    $watch = Start-Watchdog $limit $mark
     try {
         & "Row-$name" *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $log -Encoding utf8
     } catch {
         $ok = $false
         Add-Content -Path $log -Value "THREW: $($_.Exception.Message)"
+    } finally {
+        # The watchdog and its tree; not what it already ended.
+        if (-not $watch.HasExited) { taskkill /PID $watch.Id /T /F *> $null }
     }
+    $timedOut = Test-Path $mark
+    if ($timedOut) { $ok = $false }
     $secs = [int]((Get-Date) - $started).TotalSeconds
     $script:Results[$name] = if ($ok) { 'PASS' } else { 'FAIL' }
     if ($ok) {
         Write-Output "ROW $name PASS $secs"
+    } elseif ($timedOut) {
+        Write-Output "--- the end of ci-out\$name.log"
+        Get-Content $log -Tail 40
+        Write-Output "ROW $name FAIL $secs (timed out after $limit s)"
+        $script:Failed += $name
     } elseif ($script:Blocked) {
         Write-Output "ROW $name FAIL $secs (not run: $($script:Blocked))"
         $script:Failed += $name
