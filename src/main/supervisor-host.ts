@@ -30,6 +30,7 @@ export class SupervisorService {
         this.#supervisor = supervisor;
         supervisor.onChange((status) => this.#emit({ kind: 'status', status, command: supervisor.command(status.id) ?? null }));
         supervisor.onOutput((id, data) => this.#emit({ kind: 'output', id, data }));
+        supervisor.onForget((id) => this.#emit({ kind: 'forgotten', id }));
     }
 
     get supervisor(): ProcessSupervisor {
@@ -57,12 +58,7 @@ export class SupervisorService {
             case 'start': return s.start(args[0] as ProcessSpec);
             case 'stop': return s.stop(String(args[0]));
             case 'restart': return s.restart(String(args[0]));
-            default: {
-                const id = String(args[0]);
-                const forgotten = s.forget(id);
-                if (forgotten) this.#emit({ kind: 'forgotten', id });
-                return forgotten;
-            }
+            default: return s.forget(String(args[0]));
         }
     }
 
@@ -79,14 +75,18 @@ export class SupervisorService {
  * answer arriving as the next status. A start the host has not answered yet reads `restarting`, never `running`.
  */
 export class SupervisorReplica {
-    /** Tests-first removal notification seam (#633); the implementation follows measured RED. */
-    onForget(_listener: (id: string) => void): () => void { return () => {}; }
+    /** A real removal, distinct from a process exit: the view refreshes without inventing another state transition. */
+    onForget(listener: (id: string) => void): () => void {
+        this.#forgetListeners.add(listener);
+        return () => { this.#forgetListeners.delete(listener); };
+    }
 
     readonly #statuses = new Map<string, ProcessStatus>();
     readonly #commands = new Map<string, string>();
     readonly #logs = new Map<string, OutputTail>();
     readonly #changeListeners = new Set<(status: ProcessStatus) => void>();
     readonly #outputListeners = new Set<(id: string, data: string) => void>();
+    readonly #forgetListeners = new Set<(id: string) => void>();
     readonly #call: (method: string, args: readonly unknown[]) => Promise<unknown>;
     readonly #now: () => number;
 
@@ -125,9 +125,12 @@ export class SupervisorReplica {
             for (const l of [...this.#outputListeners]) l(event.id, event.data);
             return;
         }
-        this.#statuses.delete(event.id);
+        const removed = this.#statuses.delete(event.id);
         this.#commands.delete(event.id);
         this.#logs.delete(event.id);
+        if (removed) for (const listener of [...this.#forgetListeners]) {
+            try { listener(event.id); } catch { /* one view cannot prevent the other views refreshing */ }
+        }
     }
 
     start(spec: ProcessSpec): ProcessStatus {

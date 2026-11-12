@@ -50,7 +50,7 @@ export type RestartPolicy = 'never' | 'on-failure' | 'always';
  * path), or a window's replica of the host's (supervisor-host.ts SupervisorReplica). Sites, the front door, the process
  * book and the Processes view are written against this, never the class.
  */
-export type SupervisorApi = Pick<ProcessSupervisor, 'start' | 'stop' | 'restart' | 'forget' | 'status' | 'list' | 'command' | 'log' | 'readLog' | 'recheck' | 'watchLiveness' | 'onChange' | 'onOutput'>;
+export type SupervisorApi = Pick<ProcessSupervisor, 'start' | 'stop' | 'restart' | 'forget' | 'status' | 'list' | 'command' | 'log' | 'readLog' | 'recheck' | 'watchLiveness' | 'onChange' | 'onOutput'> & Partial<Pick<ProcessSupervisor, 'onForget'>>;
 
 export interface ProcessSpec {
     readonly id: string;
@@ -155,9 +155,13 @@ export class ProcessSupervisor {
             finish: (exitCode, stopped = false) => {
                 if (!current()) return;
                 external.finished = true;
+                // Release the executor/child/environment closure while its sanitized history remains visible.
+                external.stop = () => {};
                 entry.pid = null;
                 entry.exitCode = exitCode;
-                this.#transition(entry, stopped ? 'stopped' : exitCode === 0 ? 'exited' : 'failed');
+                this.#completedCommands.set(spec.id, entry);
+                try { this.#transition(entry, stopped ? 'stopped' : exitCode === 0 ? 'exited' : 'failed'); }
+                finally { this.#trimCommandHistory(); }
             },
         };
     }
@@ -166,6 +170,8 @@ export class ProcessSupervisor {
     readonly #clock: SupervisorClock;
     readonly #liveness: SupervisorLiveness;
     readonly #entries = new Map<string, Entry>();
+    /** In completion order, independent of start order and equal clock timestamps. Ordinary/active work is never here. */
+    readonly #completedCommands = new Map<string, Entry>();
     readonly #byPty = new Map<string, string>();
     /**
      * ADOPTED, NOT YET CLAIMED (the host split, P2.1): a live pty a previous window started, found under genie-host after
@@ -176,6 +182,7 @@ export class ProcessSupervisor {
     readonly #adoptedByPty = new Map<string, string>();
     readonly #changeListeners = new Set<(status: ProcessStatus) => void>();
     readonly #outputListeners = new Set<(id: string, data: string) => void>();
+    readonly #forgetListeners = new Set<(id: string) => void>();
     #confirmPending = false;
 
     constructor(
@@ -320,13 +327,28 @@ export class ProcessSupervisor {
      */
     forget(id: string): boolean {
         const entry = this.#entries.get(id);
-        if (entry?.external) {
-            if (!entry.external.finished) return false;
-            return this.#entries.delete(id);
-        }
-        if (!this.stop(id)) return false;
+        if (!entry || (entry.external && !entry.external.finished)) return false;
+        if (!entry.external && !this.stop(id)) return false;
         this.#entries.delete(id);
+        this.#completedCommands.delete(id);
+        for (const listener of [...this.#forgetListeners]) {
+            try { listener(id); } catch { /* one observer cannot prevent removal or another window's update */ }
+        }
         return true;
+    }
+
+    #trimCommandHistory(): void {
+        while (this.#completedCommands.size > COMPLETED_COMMAND_HISTORY_MAX) {
+            const oldest = this.#completedCommands.keys().next().value;
+            if (oldest === undefined) break;
+            this.forget(oldest);
+        }
+    }
+
+    /** Removed from status/command/log already, whether forgotten by the host, a window or history expiry. */
+    onForget(listener: (id: string) => void): () => void {
+        this.#forgetListeners.add(listener);
+        return () => { this.#forgetListeners.delete(listener); };
     }
 
     /** Stop the current run and start a new one, by hand: the failure count starts over. */
