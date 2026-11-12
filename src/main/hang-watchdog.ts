@@ -21,7 +21,13 @@ import { HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS,
  * A GAP IN THIS HOST'S OWN CLOCK (the machine asleep, or this host's loop held) HOLDS JUDGMENT for {@link STALL_GRACE_MS}:
  * the tick runs every second, so a tick that comes over 5 s late says the host was not running, and a window's beats sent
  * meanwhile are still waiting in its socket, read just after that late tick. Once they have had that time to land, a
- * window's real silence is what counts. A sleeping machine's window beats within a second of waking; a hung one does not.
+ * window's real silence is what counts. A hung window stays silent; a window whose beats were queued does not.
+ *
+ * A GAP FAR BEYOND ANY LOOP STALL ({@link SLEEP_GAP_MS}: the machine slept) STARTS EVERY WAIT AGAIN FROM THE WAKE: the
+ * window slept too, and on a loaded machine (or throttled) it can take well over a few seconds to beat again. Silence
+ * before the sleep does not count, so a window is judged hung only after a full {@link HANG_MS} of silence awake. A false
+ * hang kills the person's window; a real one after a sleep is still recorded, 30 s later. The loop stalls that hid real
+ * hangs (3.5 to 12 s) are far under this, so they still get only the short grace above.
  *
  * History: a gap first RESTARTED every wait, then (2026-11-06) took the stalled time off each window's silence. On a
  * loaded machine both missed real hangs: omarchy-test, the 61.2 gate's hang row (2026-11-12), the host's loop 3.5, 8.4
@@ -33,6 +39,8 @@ import { HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS,
 const CLOCK_GAP_MS = 5_000;
 /** After such a tick, how long the beats a window sent meanwhile have to land before its silence is judged. */
 const STALL_GRACE_MS = 3_000;
+/** A tick this late says the machine slept (no loop stall seen on a loaded machine comes near it): waits restart at the wake. */
+const SLEEP_GAP_MS = 60_000;
 const SAMPLES_KEPT = 60;
 
 export interface HangWatchdogOptions {
@@ -166,11 +174,13 @@ export class HangWatchdog {
                 // before then). A dropped window's grace still pauses: the host held is not the window gone.
                 this.#judgeAfter = now + STALL_GRACE_MS;
                 const stalled = gap - 1_000;
+                const slept = gap > SLEEP_GAP_MS;
                 for (const w of this.#windows.values()) {
+                    if (slept) w.lastBeatAt = Math.max(w.lastBeatAt, now);
                     if (w.droppedAt !== null) w.droppedAt = Math.min(now, w.droppedAt + stalled);
                 }
                 const rss = toMb(this.#safe(() => this.#o.hostRss(), 0));
-                this.#o.log(`hang watchdog: this host's clock jumped ms=${gap} cpu_ms=${cpuSpent ?? '-'} host_rss_mb=${rss} (asleep, or its loop held); the window waits are judged again after ${STALL_GRACE_MS} ms`);
+                this.#o.log(`hang watchdog: this host's clock jumped ms=${gap} cpu_ms=${cpuSpent ?? '-'} host_rss_mb=${rss} (asleep, or its loop held); ${slept ? 'the machine slept: the window waits start again from now' : `the window waits are judged again after ${STALL_GRACE_MS} ms`}`);
             }
             if (now - this.#lastRssAt >= (this.#o.rssEveryMs ?? RSS_EVERY_MS)) {
                 this.#lastRssAt = now;
