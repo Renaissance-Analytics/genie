@@ -1853,7 +1853,8 @@ export class SessionHost {
                     this.#histories.set(agentId, { before, rows, turns: lastNumberedTurn(rows) });
                     this.#emit(agentId);
                 })
-                .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); });
+                // Announced too (Tynn #659): a window waiting on the read must hear it is over, or it waits for good.
+                .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); this.#emit(agentId); });
         }
         const loaded = cached !== undefined && cached !== 'loading' && cached.before === before ? cached : null;
         // Built ONCE per run (`#standInFor`), so serving it costs nothing per event: built per call, it walked the whole
@@ -1884,6 +1885,16 @@ export class SessionHost {
         entry.ledger = { history: loaded, rows };
         this.#lastShown.set(agentId, rows);
         return rows;
+    }
+
+    /**
+     * WHETHER THE LEDGER IS STILL WAITING ON ITS HISTORY (Tynn #659): the recorded history is being read and no rows already
+     * shown stand in for it (#647), so what `ledgerFor` answers is not yet the agent's conversation — a window draws it as
+     * loading, never as a chat of mail rows alone. Never asked, or read: not pending.
+     */
+    historyPending(agentId: AgentId): boolean {
+        if (this.#histories.get(agentId) !== 'loading') return false;
+        return (this.#standIns.get(agentId)?.rows.length ?? 0) === 0;
     }
 
     /**

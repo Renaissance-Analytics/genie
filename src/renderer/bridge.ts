@@ -124,6 +124,11 @@ export interface AgentDetail {
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
+    /**
+     * `rows` are not yet the agent's conversation (Tynn #659): its host is still reading or sending them. The chat keeps
+     * the rows it last showed for this agent, or draws loading — never its mail rows alone. Absent = whole (an older host).
+     */
+    rowsPending?: boolean | undefined;
     /** The agent's recent AgentInbox mail with other agents (its chat shows each as a system row); absent = not read. */
     comms?: readonly MailLike[] | null | undefined;
     turns: number;

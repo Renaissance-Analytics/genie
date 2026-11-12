@@ -246,13 +246,13 @@ function useAgentDetail(
             // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
             const id = chatSubscriptionId(agentId, detail);
             // A push is a transition (use-snapshot.ts `pushed`): typing is committed before it.
-            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; detailCache.remember(agentId, next); pushed(() => setState({ detail: next, resolved: true })); });
+            // Every detail LANDS through the cache (Tynn #659): one whose rows are still pending shows this agent's kept rows.
+            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; const shown = detailCache.land(agentId, next); pushed(() => setState({ detail: shown, resolved: true })); });
             // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
             // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
             const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
             if (canonical) { window.location.replace(`#${canonical}`); return; }
-            detailCache.remember(agentId, detail);
-            setState({ detail, resolved: true });
+            setState({ detail: detailCache.land(agentId, detail), resolved: true });
         });
         return () => { live = false; off?.(); };
     }, [bridge, agentId]);

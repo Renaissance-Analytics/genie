@@ -154,6 +154,8 @@ interface Replica {
     ledger: { seq: number; rows: TimedEvent[] } | null;
     /** When the window last read the ledger: an agent nobody reads for `ledgerIdleMs` is unwatched. */
     ledgerReadAt: number;
+    /** A change cut in frames is part-applied: its last frame has not come (`EngineAgentUpdate.more`, Tynn #659). */
+    partial: boolean;
 }
 
 const EMPTY_VIEW: EngineAgentView = { probe: null, runOf: null, promptable: null, lastTurnEnd: null, turns: 0, turnsEndedThisRun: 0, recentStderr: [], refusal: null, unusableThreadId: null, models: { state: false, switch: false }, deliverable: null, inTurn: false, queued: [] };
@@ -255,7 +257,7 @@ export class SessionEngineClient {
                     this.#welcome = welcomed;
                     this.#seenSinceWelcome = new Set();
                     // Every replica is re-based: the host sends each running agent in full.
-                    for (const r of this.#agents.values()) { r.rows = null; r.ledger = null; }
+                    for (const r of this.#agents.values()) { r.rows = null; r.ledger = null; r.partial = false; }
                     return;
                 }
                 if (m.kind === 'event') {
@@ -491,7 +493,7 @@ export class SessionEngineClient {
 
     #applyAgent(update: EngineAgentUpdate): void {
         let r = this.#agents.get(update.id);
-        if (!r) { r = { view: EMPTY_VIEW, rows: null, ledger: null, ledgerReadAt: 0 }; this.#agents.set(update.id, r); }
+        if (!r) { r = { view: EMPTY_VIEW, rows: null, ledger: null, ledgerReadAt: 0, partial: false }; this.#agents.set(update.id, r); }
         this.#seenSinceWelcome.add(update.id);
         r.view = update.view;
         const id = update.id as AgentId;
@@ -500,6 +502,10 @@ export class SessionEngineClient {
         const seq = update.seq;
         r.rows = applyPatch(r.rows, update.rows, seq, this.#options.log);
         if (update.ledger) r.ledger = applyPatch(r.ledger, update.ledger, seq, this.#options.log);
+        // ONE CHANGE IS ONE ANNOUNCEMENT (Tynn #659): a long patch comes in frames, and announcing each one showed a first
+        // ledger in parts, oldest first — the chat's replies "slowly build". Said once its last frame is in.
+        r.partial = update.more === true;
+        if (r.partial) return;
         this.#emit(id);
     }
 
@@ -1149,13 +1155,24 @@ export class SessionEngineClient {
      */
     ledgerFor(agentId: AgentId): readonly TimedEvent[] {
         let r = this.#agents.get(agentId);
-        if (!r) { r = { view: EMPTY_VIEW, rows: null, ledger: null, ledgerReadAt: 0 }; this.#agents.set(agentId, r); }
+        if (!r) { r = { view: EMPTY_VIEW, rows: null, ledger: null, ledgerReadAt: 0, partial: false }; this.#agents.set(agentId, r); }
         r.ledgerReadAt = (this.#options.now ?? Date.now)();
         if (!this.#watched.has(agentId)) {
             this.#watched.add(agentId);
             void this.call('engine.watchLedger', [agentId]);
         }
         return r.ledger?.rows ?? NO_ROWS;
+    }
+
+    /**
+     * WHETHER THE LEDGER THIS WINDOW HOLDS IS NOT YET THE AGENT'S CONVERSATION (Tynn #659): watched, and none sent yet (a
+     * first read, or a switch back after `sweepLedgers` dropped it), a change still coming in frames, or the host still
+     * reading its recorded history. `ledgerFor` answers no rows then, which is "loading", never "no conversation".
+     */
+    historyPending(agentId: AgentId): boolean {
+        if (!this.#watched.has(agentId)) return false;
+        const r = this.#agents.get(agentId);
+        return !r || r.ledger === null || r.partial || r.view.historyPending === true;
     }
 
     start(record: AgentRecord, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {

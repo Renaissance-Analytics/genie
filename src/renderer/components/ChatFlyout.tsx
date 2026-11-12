@@ -704,7 +704,7 @@ function ChatFlyoutBody({
                     </div>
                 ) : null}
                 {/* genie's empty thread (the board): what genie is for — the one thread with no work of its own to show. */}
-                {thread?.agentId === 'genie' && thread.messages.length === 0 ? (
+                {thread?.agentId === 'genie' && thread.messages.length === 0 && thread.loaded !== false ? (
                     <div data-chat-empty="genie" className="my-auto flex flex-col items-start gap-1.5 px-1">
                         <div className="text-[14px] font-semibold">No messages with genie yet.</div>
                         <div className="text-[13px] leading-normal text-[var(--fg-3)]">genie can reach any agent in any workspace. Name one with @, or pick a thread above.</div>
@@ -898,6 +898,17 @@ export interface ChatMessagesProps {
 export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOpenMail, onDiscardDraft }: ChatMessagesProps) {
     return (
         <>
+            {/*
+             * THE CONVERSATION IS STILL COMING (Tynn #659): an agent never viewed, while its host reads or sends the ledger.
+             * A loading state, never its mail cards alone. An observed (mail-only) chat has no ledger to wait for.
+             */}
+            {thread?.loaded === false && !mailOnly ? (
+                <div data-chat-loading="" role="status" aria-busy="true" aria-label={`Loading ${thread.name}’s conversation`} className="flex flex-col gap-2 py-1">
+                    <div className="h-4 w-3/5 animate-pulse rounded-md bg-[var(--bg-2)]" />
+                    <div className="ml-auto h-4 w-2/5 animate-pulse rounded-md bg-[var(--bg-2)]" />
+                    <div className="h-4 w-4/5 animate-pulse rounded-md bg-[var(--bg-2)]" />
+                </div>
+            ) : null}
             {messages.map((m) => {
                 const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
                 const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
