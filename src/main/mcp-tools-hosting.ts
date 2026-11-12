@@ -63,7 +63,9 @@ export type ServiceExec = (input: {
     signal?: AbortSignal | undefined;
     /** Tells a client still there how much output the command has written. */
     progress?: ToolProgress | undefined;
-}) => Promise<{ exitCode: number | null; output: string; timedOut: boolean; /** Stopped because its call went away. */ aborted?: boolean }>;
+    /** Host-created metadata after approval; never read from the agent's arguments. */
+    run?: { readonly id: string; readonly workspaceId: string; readonly agentId: string; readonly name: string; readonly secrets: readonly string[] };
+}) => Promise<{ exitCode: number | null; output: string; timedOut: boolean; /** Stopped because its call went away. */ aborted?: boolean; processId?: string }>;
 
 /** How long a `services exec` may run before it is stopped (a migration and seed take minutes, not hours). */
 export const SERVICE_EXEC_TIMEOUT_MS = 15 * 60_000;

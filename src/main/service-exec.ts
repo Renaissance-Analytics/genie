@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { verbatimShellLaunch } from '../core/shell-launch.js';
 import { describeProcesses, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
 import type { ServiceExec } from './mcp-tools-hosting.js';
+import type { ProcessSupervisor } from './process-supervisor.js';
 
 /** How much of a `services exec` command's output is kept: its tail, in characters. */
 const OUTPUT_MAX = 262_144;
@@ -26,7 +27,8 @@ const EXIT_CHECK_MS = 100;
  * another command's tree — another agent's migration running beside it — is never in it. The shell itself is killed
  * as well, so a refused or failed reading still ends the command Genie started.
  */
-export function makeServiceExec(tree: ProcessTree): ServiceExec {
+// Optional observation port is inert in this tests-first checkpoint (#633).
+export function makeServiceExec(tree: ProcessTree, _supervisor?: Pick<ProcessSupervisor, 'trackExternal'>): ServiceExec {
     return ({ command, cwd, env, timeoutMs, signal, progress }) =>
         new Promise((resolve) => {
             if (signal?.aborted) {
