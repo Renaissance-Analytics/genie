@@ -733,6 +733,12 @@ jobs:
           $h = Join-Path $env:RUNNER_TEMP "packaged-home"
           foreach ($d in @("$h\AppData\Roaming", "$h\AppData\Local")) { New-Item -ItemType Directory -Force $d | Out-Null }
           $env:USERPROFILE = $h; $env:HOME = $h; $env:APPDATA = "$h\AppData\Roaming"; $env:LOCALAPPDATA = "$h\AppData\Local"
+          # AS AN INSTALLED GENIE IS (beta.61, measured on an install): the app's archive lists prism-acp's supervisor for both
+          # architectures, and the install holds only this machine's, in an otherwise empty folder for the other. win-unpacked
+          # holds both, so the other is removed here, or this check cannot see what an installed Genie does.
+          $otherArch = "release\win-unpacked\resources\app.asar.unpacked\node_modules\@particle-academy\prism-acp\native\win32-arm64\prism-acp-supervisor.exe"
+          if (-not (Test-Path $otherArch)) { throw "the other architecture's supervisor is not in win-unpacked ($otherArch): this check no longer matches an install" }
+          Remove-Item -Force $otherArch
           $app = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
           $log = "$h\.genie\runtime\lifecycle.log"
           $line = $null
@@ -743,6 +749,14 @@ jobs:
           $hostLog = "$h\.genie\logs\genie-host.log"
           if (-not $up) { Write-Output "--- lifecycle.log"; if (Test-Path $log) { Get-Content $log -Tail 30 }; Write-Output "--- genie-host.log"; if (Test-Path $hostLog) { Get-Content $hostLog -Tail 40 } }
           $hostJson = "$h\.genie\runtime\host.json"
+          # THE HOST RUNS FROM ITS COPY, WITH ITS SUPERVISOR (beta.61's blocker): the copy was made, the host's process is in
+          # it, and the host said its supervisor is ready, naming a file in the copy. Read before anything is killed.
+          $copyFailed = if (Test-Path $log) { Select-String -Path $log -SimpleMatch "the copy could not be made" | Select-Object -Last 1 } else { $null }
+          $hostPath = $null
+          if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { $hostPath = (Get-Process -Id $hp -ErrorAction SilentlyContinue).Path } }
+          $ready = $null
+          for ($i = 0; $i -lt 60 -and $up -and -not $ready; $i++) { $ready = Select-String -Path $log -SimpleMatch "containment ready supervisor=" | Select-Object -Last 1; if (-not $ready) { Start-Sleep -Seconds 1 } }
+          $unready = if (Test-Path $log) { Select-String -Path $log -SimpleMatch "containment unready" | Select-Object -Last 1 } else { $null }
           if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
           if (-not $app.HasExited) { taskkill /PID $app.Id /T /F *> $null }
           if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
@@ -750,6 +764,13 @@ jobs:
           if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
           if (-not $up) { throw "the packaged app's genie-host did not come up within 90 s of its spawn (see genie-host.log above)" }
           Write-Output "the packaged app: $($up.Line)"
+          if ($copyFailed) { throw "the packaged app could not make genie-host's copy: $($copyFailed.Line)" }
+          Write-Output "genie-host runs from: $hostPath"
+          if (-not $hostPath -or -not $hostPath.StartsWith("$h\.genie\host\", [System.StringComparison]::OrdinalIgnoreCase)) { throw "genie-host is not running from its copy under $h\.genie\host\ (it runs from '$hostPath')" }
+          if ($unready) { throw "genie-host's supervisor is not ready: $($unready.Line)" }
+          if (-not $ready) { throw "genie-host did not say its supervisor is ready within 60 s" }
+          Write-Output "the packaged app: $($ready.Line)"
+          if ($ready.Line -notmatch [regex]::Escape("$h\.genie\host\")) { throw "genie-host's supervisor is not in its copy: $($ready.Line)" }
           # taskkill above sets $LASTEXITCODE (part of the tree already gone), and the step's result is the last exit code:
           # 3 of ~20 runs failed after both checks printed. Every failure above has thrown, so reaching here is a pass.
           exit 0

@@ -25,9 +25,8 @@ export function TrustStepBody({ step, phase, onTrust }: { step: TrustStepView; p
     const busy = phase.kind === 'pending';
     return (
         <section data-trust-step={step.workspaceId} className="flex max-h-[45vh] shrink-0 flex-col gap-2 overflow-auto border-b border-[var(--border-1)] px-4 py-3 text-sm">
-            {step.changed
-                ? <p data-trust-changed className="text-[var(--warning)]">Changed since you trusted it. Agents here restart before new work and keep their conversations.</p>
-                : <p data-trust-first>Not trusted yet. Nothing here runs until you trust it.</p>}
+            {/* Asked once (Tynn #618): trust stays until you take it back, so nothing is ever "changed since you trusted it". */}
+            <p data-trust-first>Not trusted yet. Nothing here runs until you trust it. Once you do, it stays trusted, whatever it adds or changes, until you untrust it.</p>
             {nothing ? <p data-trust-nothing-listed className="text-[var(--fg-3)]">Its files name nothing to run.</p> : null}
             {sites.length > 0 ? (
                 <Group label="Sites">

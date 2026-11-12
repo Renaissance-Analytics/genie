@@ -9,7 +9,7 @@ import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
-import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
+import { MainErrorBook, installMainErrorPolicy, retryHostCopy } from '../core/main-errors.js';
 import { forwardRendererConsole } from '../core/render-error.js';
 import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
@@ -51,7 +51,6 @@ import { readFile } from 'node:fs/promises';
 import { agentOpsApi, agentOpsPorts } from './agent-ops-api.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
 import { restartAgent, SettingApplier } from './agent-ops-host.js';
-import { ProviderModelCache } from '../core/provider-models.js';
 import type { WatchedReposView } from '../core/issue-watch.js';
 import { isAcpProvider } from '../core/engine.js';
 import { providerChoiceFile, setProviderChoiceFile, writeProviderChoice } from './provider-choice.js';
@@ -116,10 +115,13 @@ import { Session as InspectorSession } from 'node:inspector';
 import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
-import { realListModels, providerBinary } from './session-host.js';
+import { providerBinary } from './session-host.js';
+import { checkProviderHealth, ProviderHealthBook, realProviderHealthPorts } from './provider-health.js';
+import { afterSignedIn } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
+import { HostRestart, HostWait } from './host-wait-window.js';
 import { LoginHost } from './login-host.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
@@ -156,7 +158,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
-import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
+import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
 import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
@@ -276,6 +278,8 @@ import { tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary } fro
  */
 const mainErrors = new MainErrorBook();
 installMainErrorPolicy(process, mainErrors);
+/** Make genie-host's copy again, for the Deck item's Try again (Tynn #693): its error, or `null` when it is made. Set at boot. */
+let remakeHostCopy: () => Promise<string | null> = async () => 'Genie has not finished starting; try again in a moment';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
@@ -1170,6 +1174,10 @@ let thisMachineIds: () => Promise<ReadonlySet<string>> = () => Promise.resolve(n
 /** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
 // A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
 let workstationRoleNow: WorkstationRole | null = 'drone';
+/** What Tynn answered (`null` = not yet): tells a drone from "not known", which asks Tynn again before refusing. */
+let workstationSaidNow: WorkstationRole | null = null;
+/** Why the role is not known, when genie-host knows (not registered, a sign-in Tynn has not bound): the refusal's words. */
+let workstationWhyNow: string | null = null;
 /** Read this machine's role from Tynn again (set where the reader is built). */
 let readWorkstationRoleNow: (() => Promise<void>) | null = null;
 /** Tynn refused this caller: read the role again FIRST, then word the refusal from it (genie#1278, M0 finding 3). */
@@ -1236,6 +1244,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
         engine: host,
         cwdFor,
         takeOver: (id) => takeOvers?.probe(id) ?? null,
+        providerSignedIn: (provider) => providerHealth.signedIn(provider),
         ...(services ? { mail: (id: AgentId, limit: number) => services!.inbox.involving(id, limit) } : {}),
     }, agentId);
 }
@@ -1307,6 +1316,7 @@ function withGappWindows(client: { gapps(): GAppBookApi } | undefined): GAppsApi
     return {
         ...client.gapps(),
         open: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id); },
+        preview: async (id) => { if (!gappWindowsNow) throw new Error('Genie is still starting; try again in a moment.'); await gappWindowsNow.open(id, { preview: true }); },
         onChanged: (listener) => { gappsChangedListeners.add(listener); return () => { gappsChangedListeners.delete(listener); }; },
     };
 }
@@ -1344,6 +1354,8 @@ let detectedPackageManager: Promise<PackageManager | null> | null = null;
 const packageManager = (): Promise<PackageManager | null> => (detectedPackageManager ??= detectPackageManager(process.platform as Platform, execFileRunner));
 /** Installs and updates take minutes (winget, a polkit prompt waiting on the person); the probe's 20 s would cut them off. */
 const longRunner: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) });
+/** Each provider CLI, measured (Tynn #698): what this process's "installed" and "signed in" read, and the Toolchain's agent rows. */
+const providerHealth = new ProviderHealthBook((provider) => checkProviderHealth(provider, realProviderHealthPorts(execFileRunner)));
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
 const toolchainDataDir = (): string => join(genieRoot(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
@@ -1477,7 +1489,11 @@ async function boot(): Promise<void> {
         // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
         // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
         // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
-        onMcpServers: (agentId: AgentId, reports: readonly McpServerReport[]) => recoverMissingMcp(agentId, reports),
+        onMcpServers: (agentId: AgentId, reports: readonly McpServerReport[]) => {
+            recoverMissingMcp(agentId, reports);
+            // Kept on the agent's record, so its Settings can list its servers while it is not running (Tynn #628).
+            void registry?.noteMcpSeen(agentId, reports.map((r) => r.name)).catch(() => undefined);
+        },
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
         serviceEnvFor: (workspaceId: string) => services?.engines.envFor(workspaceId) ?? {},
         /**
@@ -1545,8 +1561,34 @@ async function boot(): Promise<void> {
         // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
         // Electron copies the runtime; every failure answers the install, with the reason.
         const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
-        const hostRuntime = await materializeHostRuntime({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog });
-        if (hostRuntime.error !== null) mainErrors.record('agent-host', new Error(hostRuntime.error));
+        const hostCopyInput = { packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog };
+        const hostRuntime = await materializeHostRuntime(hostCopyInput);
+        // Its own Deck item (Tynn #693): the error alone is the item's folded detail; the words are core/main-errors.ts's.
+        if (hostRuntime.error !== null) mainErrors.record('host-copy', new Error(hostRuntime.cause ?? hostRuntime.error));
+        remakeHostCopy = () => materializeHostRuntime(hostCopyInput).then((made) => (made.error === null ? null : made.cause ?? made.error));
+        // STARTING GENIE'S HOST, SAID (Tynn #700): a slow first start shows a window of its own that says so, until the link
+        // is up; from 60 s it also offers Open the log and Restart Genie's host (host-wait-window.ts).
+        let hostWaitWindow: BrowserWindow | null = null;
+        const hostRestart = new HostRestart();
+        const hostWait = new HostWait({
+            open: () => {
+                const win = new BrowserWindow({
+                    ...genieWindowIcon(here),
+                    width: 460, height: 190, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, title: 'Genie', backgroundColor: '#111111', autoHideMenuBar: true,
+                    webPreferences: { preload: join(here, 'host-wait-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false },
+                });
+                guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
+                hostWaitWindow = win;
+                void win.loadFile(join(here, '../renderer/host-wait.html'));
+            },
+            update: (view) => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.webContents.send('host-wait:show', view); },
+            close: () => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.destroy(); hostWaitWindow = null; },
+        }, {
+            openLog: () => shell.openPath(join(genieRoot(), 'logs', 'genie-host.log')).then((failed) => failed || null),
+            restart: () => hostRestart.request(),
+        });
+        ipcMain.handle('host-wait:current', () => hostWait.current());
+        ipcMain.handle('host-wait:act', (_event, action: unknown) => (action === 'open-log' || action === 'restart' ? hostWait.act(action) : undefined));
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
@@ -1581,12 +1623,17 @@ async function boot(): Promise<void> {
                 // toolchain), the app data folder, and the resources folder with the bundled Caddy.
                 env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath, GENIE_INSTALL_EXEC: process.execPath },
                 log: lifecycleLog,
+                onWaiting: (elapsedMs) => hostWait.progress(elapsedMs),
+                restart: hostRestart,
             },
             records: () => registry?.listAgents() ?? [],
             onError: (kind, error) => mainErrors.record(kind, error),
             agentName: (id) => registry?.find(id)?.name ?? id,
             log: lifecycleLog,
         });
+        hostWait.done();
+        ipcMain.removeHandler('host-wait:current');
+        ipcMain.removeHandler('host-wait:act');
         // THE WINDOW NEVER RUNS HOST WORK (Tynn #415): with no host it says what is wrong and how to fix it, and stops here.
         if (agentEngineLink === null) {
             await stopForNoHost(hostRuntime.error);
@@ -1841,14 +1888,18 @@ async function boot(): Promise<void> {
      * in" would send people to a login they already have. `linkedSystems` is empty until the
      * Tynn identity layer is wired — so a delete plan lists no external system, honestly.
      */
-    const providerModels = new ProviderModelCache(realListModels);
+    const hostModels = agentEngineLink.client;
+    // Measured once as the agents come up, so a switch or a diagnosis here reads a check rather than claiming nothing.
+    void providerHealth.refreshAll();
     const agentOps = agentOpsPorts({
         registry: () => registry,
         engine: () => host,
-        models: providerModels,
+        // A provider's models are asked of genie-host (beta.61.1): it has the process supervisor a provider launch needs.
+        models: { get: (provider, options) => hostModels.providerModels(provider, options) },
         cwdFor,
         finished: () => services?.attention.finished() ?? [],
-        providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
+        providerInstalled: (provider) => providerHealth.installed(provider),
+        signedIn: (provider) => providerHealth.signedIn(provider),
         applyOnStart: (id) => settingApplier!.requested(id),
         // Start is the restart now (genie#1238): what Start always obeyed — an asleep workspace, the agent cap — it obeys.
         startRefusal: (record) => startRefusal(workspaceOps, record, {
@@ -1872,9 +1923,13 @@ async function boot(): Promise<void> {
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
         runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
         onSignedIn: (provider) => {
-            for (const id of host?.signedOutAgents(provider) ?? []) {
-                void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
-            }
+            // Measured again, so its Toolchain row and its agents stop saying signed out (Tynn #698).
+            void providerHealth.refresh(provider);
+            afterSignedIn(provider, {
+                signedOutAgents: (p) => host?.signedOutAgents(p) ?? [],
+                restart: (id) => { void restartAgent(agentOps, id as AgentId, 'graceful').then((r) => { if (r.ok) host?.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch()); },
+                resumeLimit: (p) => { host?.resumeLimit(p); refreshTray(); },
+            });
         },
         // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry; a retry that
         // is refused again raises the prompt again. They are not restarted: only a tool failed, never their session.
@@ -2064,7 +2119,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:device-open', async (event, url: unknown) => {
         const link = deviceLinkNow();
         if (link) hearDeviceLink(link);
-        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, link: () => link });
+        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, said: () => workstationSaidNow, why: () => workstationWhyNow, reread: async () => { await readWorkstationRoleNow?.(); }, link: () => link });
         if (!opened.ok) return opened;
         const sender = event.sender;
         deviceChannels.set(opened.channel, sender);
@@ -2591,10 +2646,11 @@ async function boot(): Promise<void> {
      */
     const linkedRelayHost = agentEngineLink.client.relayHost();
     {
-        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
+        linkedRelayHost.onChange(() => { workstationRoleNow = linkedRelayHost.role(); workstationSaidNow = linkedRelayHost.said(); workstationWhyNow = linkedRelayHost.unknownWhy(); tynnWorkstationNow = linkedRelayHost.workstation(); relayStatusNow = linkedRelayHost.relay(); pushFeatures(); });
         void linkedRelayHost.refresh().catch((error: unknown) => console.error(`[tynn relay] ${error instanceof Error ? error.message : String(error)}`));
     }
-    readWorkstationRoleNow = () => readRole();
+    // The host reads, then this window takes its answer, so a caller that awaited it decides on the new role.
+    readWorkstationRoleNow = async () => { await readRole(); await linkedRelayHost.refresh(); };
     const readRole = (): Promise<void> => linkedRelayHost.readRole();
     let registering: Promise<void> | null = null;
     const registerWorkstation = (): Promise<void> => {
@@ -3084,10 +3140,17 @@ async function boot(): Promise<void> {
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
         deliverToAgent: (agentId, text) => host?.deliver(agentId as AgentId, text, 'you') ?? false,
-        // The Deck's Dismiss on a recorded main-process error.
-        mainErrors,
+        // The Deck's actions on a recorded main-process error: Dismiss; the host's copy made now; the lifecycle log opened.
+        mainErrors: {
+            dismiss: (id) => mainErrors.dismiss(id),
+            retryHostCopy: (id) => retryHostCopy(mainErrors, id, () => remakeHostCopy()),
+            openLog: () => shell.openPath(join(runtimeDir(genieRoot()), 'lifecycle.log')).then((failed) => failed || null),
+        },
         toolchain: {
-            probe: () => probeToolsLive(latestFor),
+            // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
+            login: (provider) => { const started = loginHost?.start(provider) ?? { ok: false as const, reason: 'Genie’s login window is not ready yet; try again in a moment' }; return started.ok ? { ok: true } : started; },
+            // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).
+            probe: async () => withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll()),
             update: async (tool, version, progress) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),
             // The row's in-progress state, pushed: which update, and its step (genie#1306).
             updating: (row) => { featureState = { ...featureState, toolchainUpdating: row }; pushFeatures(); },

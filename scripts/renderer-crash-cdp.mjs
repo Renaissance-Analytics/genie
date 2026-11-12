@@ -15,6 +15,7 @@
  *
  * Exit: 0 every check passed; 1 a check failed; 2 cannot run here.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -47,7 +48,8 @@ const crashThePage = (inspector) => inspector.evaluate(`(() => {
 /** The page on the debugger port, whatever it is now (the app, or the plain page). */
 async function pageNow() {
     const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: AbortSignal.timeout(3_000) })).json().catch(() => []);
-    return targets.find((t) => t.type === 'page' && !String(t.url).startsWith('devtools')) ?? null;
+    // The main window, or the plain page that replaces it (a data: URL); never devtools nor the host-wait window.
+    return mainWindow(targets) ?? targets.find((t) => t.type === 'page' && String(t.url).startsWith('data:text/html')) ?? null;
 }
 const notice = (cdp) => cdp.evaluate(`(() => { const n = document.querySelector('[data-renderer-notice]'); return n ? { reason: n.getAttribute('data-renderer-notice'), text: n.textContent, report: Boolean(n.querySelector('[data-action="crash-report-open"]')) } : null; })()`, 10_000);
 function pageRecords() {

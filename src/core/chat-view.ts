@@ -7,6 +7,7 @@ import type { StreamEvent, ToolKind } from './stream-event.js';
 import type { Attachment } from './prompt-content.js';
 import { promptDeliveries } from './prompt-delivery.js';
 import { messageLines } from './chat-window.js';
+import { UNNAMED_AGENT } from './inbox.js';
 
 /**
  * THE CHAT FLYOUT'S THREAD, derived — no React in sight.
@@ -60,6 +61,11 @@ export interface ChatMessage {
     queuedForProvider?: boolean;
     /** The agent is still starting (q_04ce323c: its first message started it); it goes the moment it is up. */
     queuedForStart?: boolean;
+    /**
+     * Queued behind a turn: when the agent last showed anything (Tynn #699) — after two minutes of nothing the message
+     * offers "Send now (stop the current turn)". `null`: nothing from the agent in this thread.
+     */
+    silentSince?: number | null;
     /** Its durable queue id, for restarting/sending or discarding an unsent draft. */
     promptId?: string;
     /** A failed Send/Discard press, kept beside the draft so it can be tried again. */
@@ -192,6 +198,9 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
     let lastWasThink = false;
     // The row before, debug notices aside: a compaction repeating it is the same compaction (genie#1249).
     let previous: StreamEvent | undefined;
+    // The agent's last sign of life: any row that is not the person's own message (Tynn #699).
+    let lastOutputAt: number | null = null;
+    for (const row of detail.rows) if (!(row.event.kind === 'message' && row.event.speaker === 'you') && row.at !== null && (lastOutputAt === null || row.at > lastOutputAt)) lastOutputAt = row.at;
     for (const row of detail.rows) {
         const e = row.event;
         if (repeatsCompaction(previous, e)) continue;
@@ -236,7 +245,8 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
             ...(queued && detail.session?.starting === true ? { queuedForStart: true }
-                : queued && detail.session?.turnState === 'idle' ? { queuedForProvider: true } : {}),
+                : queued && detail.session?.turnState === 'idle' && detail.session.inTurn !== true ? { queuedForProvider: true } : {}),
+            ...(queued ? { silentSince: lastOutputAt } : {}),
             ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;
@@ -425,10 +435,18 @@ export function mailSubject(text: string): string {
  * it is not (the session sees it only when the agent calls `receive`), so the person's FTQ answer never reached the chat
  * at all (the owner, beta.33: "I did not see the msg post from answering the FTQ appear").
  */
-export function chatCommsOf(messages: readonly MailLike[]): MailLike[] {
-    return messages.map((m) => ({ id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt,
-        ...(m.deliveryRefusal ? { deliveryRefusal: m.deliveryRefusal } : {}),
-    }));
+export function chatCommsOf(messages: readonly (MailLike & { readonly app?: { readonly label: string } })[], nameOf: (id: string) => string | null = () => null): MailLike[] {
+    // BOTH ENDS NAMED WHERE THE REGISTRY IS (Tynn #621): the chat's own rows are one workspace's agents, and a sender outside
+    // them (Genie's own agent, an agent of another workspace, an app) was shown as its raw id.
+    const named = (id: string, app?: { readonly label: string }): string | null => (id === 'human' ? null : app?.label ?? nameOf(id));
+    return messages.map((m) => {
+        const fromName = named(m.from, m.app);
+        const toName = named(m.to);
+        return { id: m.id, from: m.from, to: m.to, text: m.text, sentAt: m.sentAt, readAt: m.readAt,
+            ...(fromName !== null ? { fromName } : {}), ...(toName !== null ? { toName } : {}),
+            ...(m.deliveryRefusal ? { deliveryRefusal: m.deliveryRefusal } : {}),
+        };
+    });
 }
 
 /**
@@ -442,13 +460,14 @@ function commsRows(detail: ChatDetail, rows: readonly AgentRow[]): ChatMessage[]
 
 /** One mail record and receipt in declared and observed chats, on either side of the conversation. */
 function mailRows(messages: readonly MailLike[], self: string, selfName: string, rows: readonly AgentRow[]): ChatMessage[] {
-    const name = (id: string): string => (id === 'human' ? 'you' : id === self ? selfName : rows.find((r) => r.id === id)?.name ?? id);
+    // Never the id: the rows' name, else the name main carried, else words.
+    const name = (id: string, carried: string | undefined): string => (id === 'human' ? 'you' : id === self ? selfName : rows.find((r) => r.id === id)?.name ?? carried ?? UNNAMED_AGENT);
     return messages
         .filter((m) => m.from === self || m.to === self)
         .map((m) => {
             const at = Date.parse(m.sentAt);
             const delivered = m.readAt != null;
-            return { id: m.id, who: 'mail' as const, from: `${name(m.from)} → ${name(m.to)}`, text: m.text, delivered, at: Number.isNaN(at) ? null : at, mailId: m.id,
+            return { id: m.id, who: 'mail' as const, from: `${name(m.from, m.fromName)} → ${name(m.to, m.toName)}`, text: m.text, delivered, at: Number.isNaN(at) ? null : at, mailId: m.id,
                 ...(!delivered && m.deliveryRefusal ? { reason: m.deliveryRefusal.reason } : {}),
             };
         });
@@ -495,6 +514,9 @@ export interface MailLike {
     readonly text: string;
     readonly sentAt: string;
     readonly readAt: string | null;
+    /** Each end's name as main read it from the registry (Tynn #621); absent = the person, or nobody it knows. */
+    readonly fromName?: string;
+    readonly toName?: string;
     readonly deliveryRefusal?: { readonly attempts: number; readonly reason: string; readonly at: string };
 }
 

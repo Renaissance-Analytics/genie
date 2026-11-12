@@ -73,6 +73,9 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:provider-choose-program', 'window-port'],
     ['genie:features-browser-bounds', 'window-port'],
 
+    ['host-wait:current', 'later:host-wait window'],
+    ['host-wait:act', 'later:host-wait window'],
+
     ['question:current', 'later:question window'],
     ['question:answer', 'later:question window'],
     ['question:later', 'later:question window'],

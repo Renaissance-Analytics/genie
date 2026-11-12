@@ -47,7 +47,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'agents.delete': ['agent_a', 'unmount', [], false], 'agents.switchDriver': ['agent_a', 'codex'],
     'agents.setBudget': ['agent_a', null], 'agents.setMode': ['agent_a', 'manual'],
     'agents.setAccessScope': ['agent_a', 'self'], 'agents.setAccessAgents': ['agent_a', null], 'agents.setAutoApprove': ['agent_a', false],
-    'agents.setManageTabs': ['agent_a', false], 'agents.setDrivePages': ['agent_a', false],
+    'agents.setManageTabs': ['agent_a', false], 'agents.setDrivePages': ['agent_a', false], 'agents.setMcpServer': ['agent_a', 'slack', false],
     activity: ['work'], 'agents.setIssueWatch': ['agent_a', null], 'agents.setPermissions': ['agent_a', 'ask'],
     'agents.setModel': ['agent_a', null], 'agents.models': ['agent_a', false], 'agents.diagnose': ['agent_a'], 'agents.toolOutput': ['agent_a', 'call_1'],
     'workspaces.previewAdd': [ROOT], 'workspaces.confirmAdd': [ROOT],
@@ -70,7 +70,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.removeRepoLock': ['work', 'repo'], 'workspaces.locateRepo': ['work', 'repo', ROOT],
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],
     'workspaces.setSetting': ['work', 'theme', 'dark'], 'workspaces.resetSetting': ['work', 'theme'],
-    'workspaces.setGoverns': ['work', []], 'workspaces.setDefaultAgent': ['work', null],
+    'workspaces.setGoverns': ['work', []], 'workspaces.setDefaultAgent': ['work', null], 'workspaces.setMcpServer': ['work', 'slack', false],
     'workspaces.setColor': ['work', 'blue'], addWorkspace: [], takeOver: ['agent_a'],
     'terminals.open': ['work', { cols: 80, rows: 24 }], 'terminals.write': ['term_1', 'hello'],
     'terminals.resize': ['term_1', 80, 24], 'terminals.close': ['term_1'],
@@ -94,7 +94,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'artboard.read': ['work'], 'artboard.review': ['work', 'p1', 'approved', 'review comment'],
     'marketplace.search': [''], 'marketplace.prepare': ['org.example.plugin', '1.0.0'],
     'marketplace.install': ['unknown-review', true], 'marketplace.discard': ['unknown-review'],
-    'gapps.list': [], 'gapps.review': ['/nowhere'], 'gapps.install': ['/nowhere', { scope: 'workstation' }], 'gapps.setOn': ['com.example.app', false], 'gapps.uninstall': ['com.example.app'], 'gapps.open': ['com.example.app'],
+    'gapps.list': [], 'gapps.review': ['/nowhere'], 'gapps.install': ['/nowhere', { scope: 'workstation' }], 'gapps.setOn': ['com.example.app', false], 'gapps.uninstall': ['com.example.app'], 'gapps.open': ['com.example.app'], 'gapps.preview': ['com.example.app'], 'gapps.allowPreviewNetwork': ['com.example.app', true],
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };

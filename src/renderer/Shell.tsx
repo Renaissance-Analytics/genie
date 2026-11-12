@@ -182,6 +182,8 @@ export interface ShellProps {
     onAnswerDeckForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     /** The last refused form answer, said beside that item's Answer button. */
     deckFormRefusal?: { itemId: string; reason: string } | null | undefined;
+    /** The action running on one of Genie's own Deck items (Tynn #693). */
+    deckBusy?: { itemId: string; optionId: string } | null | undefined;
     /** NOT USED since 2026-10-19: the chat cannot be closed. Removed with the pin model's cleanup row. */
     onCloseChat?: (() => void) | undefined;
     /** The chat's `Restart` (or `Send now`) on an undelivered draft (§4.4, genie#1238). */
@@ -286,6 +288,10 @@ export interface ShellProps {
     tynnPick?: TynnProjectsView | undefined;
     onAddWorkspaceFromTynn?: (() => void) | undefined;
     onPickTynnProject?: ((projectId: string) => void) | undefined;
+    /** The project whose plan is being read after its folder was picked (Tynn #688); `null` = none. */
+    tynnPlanning?: string | null | undefined;
+    /** Try a failed import from Tynn again, same project and folder (Tynn #688); `undefined` = nothing to try again. */
+    onRetryAdd?: (() => void) | undefined;
     onCancelTynnPick?: (() => void) | undefined;
     onConfirmAddTynn?: ((parent: string, projectId: string) => void) | undefined;
     onCancelAddGit?: (() => void) | undefined;
@@ -401,6 +407,7 @@ export function Shell({
     onAnswerDeckItem,
     onAnswerDeckForm,
     deckFormRefusal,
+    deckBusy,
     remote,
     remoteConnect,
     onShareWorkstation,
@@ -419,6 +426,8 @@ export function Shell({
     onConfirmAddTynn,
     tynnPick,
     onPickTynnProject,
+    tynnPlanning,
+    onRetryAdd,
     onCancelTynnPick,
     onCancelAddGit,
     onConfirmAdd,
@@ -532,6 +541,11 @@ export function Shell({
     const colorMap = useShared(useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]));
     // The workspace on screen — its own page, or the page of one of its agents — named with its colour in the title bar.
     const onScreen = workspaceFor(routeWorkspace(route, snapshot.agents) ?? '');
+    /** Trust a workspace from an approval card that asks only because it isn't trusted (Tynn #618): the trust step's own action. */
+    const trustFromCard = (workspaceId: string | null): (() => Promise<unknown>) | undefined => {
+        const workspace = workspaceId ? workspaceFor(workspaceId) : null;
+        return workspace ? () => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: workspace.id, workspacePath: workspace.path })) : undefined;
+    };
     const [gappList, setGappList] = useState<readonly GAppListing[] | null>(null);
     const refreshGapps = useCallback(async (): Promise<void> => {
         if (!gapps) return;
@@ -692,9 +706,9 @@ export function Shell({
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true || Boolean(tynnPlanning)} onRetry={onRetryAdd} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
                     {addFromGit && !addPreview ? <AddFromGitForm busy={addBusy === true} onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} repos={gitRepos} onReloadRepos={onReloadGitRepos} onGithub={onGitGithub} /> : null}
-                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
+                    {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} planning={tynnPlanning} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
                     {/*
                      * ONE first-run invitation. With no workspaces the Onboarding above IS the first run (§6.9's two
                      * steps); the Dashboard's own invitation would stack a second one under it — measured on the
@@ -753,8 +767,10 @@ export function Shell({
                             signals={{ ...snapshot.signals, update: updateState }}
                             answering={answeringApproval}
                             onAnswer={(item, optionId, note) => onAnswerDeckItem(item, optionId, note)}
+                            onTrustWorkspace={(workspaceId) => trustFromCard(workspaceId)?.() ?? Promise.resolve({ ok: false, reason: 'Genie does not have that workspace here.' })}
                             onAnswerForm={onAnswerDeckForm}
                             formRefusal={deckRefusal ?? deckFormRefusal ?? null}
+                            busy={deckBusy}
                             // Dismiss without an answer — one (with the notes written in its form), every stale one shown, or
                             // every question older than a day; the agents are told (main).
                             onDismiss={(item, notes) => deckAct(item.id, { kind: 'deck.dismiss', item, notes })}
@@ -808,6 +824,7 @@ export function Shell({
                                 agent={agentDetail.agent}
                                 session={agentDetail.session}
                                 startRefusal={agentDetail.refusal}
+                                providerSignedOut={agentDetail.providerSignedOut === true}
                                 rows={agentDetail.rows}
                                 tab={parsed.tab}
                                 lanes={parseLanes(parsed.lane)}
@@ -832,6 +849,7 @@ export function Shell({
                                 answeringApproval={answeringFor(answeringApproval, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 approvalRefusal={refusalFor(approvalRefusal, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
                                 onAnswerApproval={(optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note, agentDetail.session?.pendingApproval ?? null)}
+                                onTrustWorkspace={trustFromCard(agentDetail.agent.workspaceId ?? null)}
                                 ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
                                 files={files}
                                 workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
@@ -862,6 +880,8 @@ export function Shell({
                             key={parsed.workspaceId}
                             trustStep={features.trust?.find((row) => row.workspaceId === parsed.workspaceId) ?? null}
                             onTrust={() => Promise.resolve(onFeature({ kind: 'workspace.trust', workspaceId: parsed.workspaceId, workspacePath: workspaceFor(parsed.workspaceId)!.path }))}
+                            // Offered once the trust steps are known (so a workspace not read yet is not offered an Untrust).
+                            onUntrust={features.trust ? () => Promise.resolve(onFeature({ kind: 'workspace.untrust', workspaceId: parsed.workspaceId })) : undefined}
                             // Settings → Hosting opens the same modals as the row's indicators.
                             onOpenRuntime={(kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}
@@ -1005,6 +1025,7 @@ export function Shell({
                         answeringApproval={chatThread ? answeringFor(answeringApproval, chatThread.agentId, chatApproval) : null}
                         approvalRefusal={chatThread ? refusalFor(approvalRefusal, chatThread.agentId, chatApproval) : null}
                         onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note, chatApproval); }}
+                        onTrustWorkspace={trustFromCard(chatWorkspaceId)}
                         scope={scope}
                         // The chat the message was TYPED in (genie#1261): each chat keeps its own composer.
                         onSend={(text, attachments, agentId) => (scope.kind !== 'blocked' ? onSend(agentId || chatThread?.agentId || '', text, attachments) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: scope.reason }))}

@@ -102,6 +102,7 @@ const CALLS: Array<[RemoteMethod, () => unknown[]]> = [
     ['workspaces.setGoverns', () => ['tynn', []]],
     ['workspaces.setDefaultAgent', () => ['tynn', null]],
     ['workspaces.setColor', () => ['tynn', '#112233']],
+    ['workspaces.setMcpServer', () => ['tynn', 'slack', false]],
 ];
 
 describe('each is answered with no window', () => {

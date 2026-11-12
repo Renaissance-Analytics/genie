@@ -867,6 +867,7 @@ export class SessionEngineClient {
             install: (folder, options) => this.#gappsRequest('install', [folder, options]),
             setOn: async (id, on) => { await this.#gappsRequest('setOn', [id, on]); },
             uninstall: async (id) => { await this.#gappsRequest('uninstall', [id]); },
+            allowPreviewNetwork: async (id, allowed) => { await this.#gappsRequest('allowPreviewNetwork', [id, allowed]); },
         };
         return this.#gapps;
     }
@@ -880,7 +881,7 @@ export class SessionEngineClient {
     /** One window of one app (Tynn #595): this process opens it, and the token stays here. */
     gappSessions(): GAppSessionsApi {
         return {
-            open: (packageId) => this.#gappsRequest('openSession', [packageId]),
+            open: (packageId, options) => this.#gappsRequest('openSession', [packageId, options ?? {}]),
             close: (token) => { void this.#gappsRequest('closeSession', [token]).catch(() => undefined); },
         };
     }
@@ -1237,6 +1238,17 @@ export class SessionEngineClient {
 
     async drained(exitWithinMs: number): Promise<void> {
         await this.#value('engine.drained', [exitWithinMs], false);
+    }
+
+    /**
+     * A PROVIDER'S MODELS, ASKED OF GENIE-HOST (beta.61.1). The window used to launch the provider's CLI itself to ask, and only
+     * genie-host prepares the process supervisor a launch needs on Windows: a new agent's model list failed. Never throws: a
+     * link that is down is a reason, like any other.
+     */
+    async providerModels(provider: string, options: { refresh?: boolean } = {}): Promise<import('../core/provider-models.js').ModelChoices> {
+        const reply = await this.call('engine.providerModels', [provider, options.refresh === true]);
+        if (!reply.ok) return { ok: false, provider, reason: reply.reason };
+        return reply.value as import('../core/provider-models.js').ModelChoices;
     }
 
     /** `null` when the agent is not running or its driver cannot say (as the host answers); otherwise the host's answer. */

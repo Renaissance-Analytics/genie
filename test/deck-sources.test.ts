@@ -127,8 +127,9 @@ describe('the whole band', () => {
         expect(sinceYouLooked(items).map((i) => i.source)).toEqual(['finished-handoff']);
     });
 
-    it('an agent the roster no longer knows still shows, with its id as the name — never dropped silently', () => {
+    // Tynn #621 changed the name: words, never the id. The item still shows, and still carries its agent id for actions.
+    it('an agent the roster no longer knows still shows, named in words — never dropped silently, never its id', () => {
         const [item] = deckItemsFrom({ questions: [], userList: [], unreadDms: [dm({ from: 'agent_gone' as InboxMessage['from'] })], finished: [], agents: names });
-        expect(item).toMatchObject({ agentId: 'agent_gone', agentName: 'agent_gone', workspaceId: null });
+        expect(item).toMatchObject({ agentId: 'agent_gone', agentName: 'an agent no longer in Genie', workspaceId: null });
     });
 });
