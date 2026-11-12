@@ -1,3 +1,4 @@
+import type { AttachmentReply } from '../core/thread-store.js';
 import { useActivityFeeds } from './use-activity-feeds.js';
 import type { TynnTabHost } from '../core/tynn-pages.js';
 import type { TynnIssuesHost } from '../core/tynn-issues.js';
@@ -211,6 +212,8 @@ export interface ShellProps {
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
     loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642): the chat's and the agent view's pills. */
+    loadAttachment?: ((agentId: string, attachmentId: string) => Promise<AttachmentReply>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
     tynnBoard?: TynnTabHost | undefined;
     /** The Tynn tab's Issues (genie#1295 I1); absent = the tab has no Issues page in this window. */
@@ -372,6 +375,7 @@ export function Shell({
     filesPopped = [],
     readCommits,
     loadToolOutput,
+    loadAttachment,
     tynnBoard,
     tynnIssues,
     onPopOutFiles,
@@ -830,6 +834,7 @@ export function Shell({
                                 lanes={parseLanes(parsed.lane)}
                                 readCommits={readCommits}
                                 loadToolOutput={loadToolOutput}
+                                loadAttachment={loadAttachment}
                                 at={parsed.at}
                                 layout={parsed.layout}
                                 selectedId={selectedRowId}
@@ -1043,6 +1048,7 @@ export function Shell({
                         // Interrupt and send (item 21): the same cancel, but an INTERRUPT: what waits is already with the provider and runs next,
                         // so the agent is not held for the person to type again, and Genie's notices still reach it (Tynn #672 part 3).
                         onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId, 'interrupt') : undefined}
+                        loadAttachment={loadAttachment}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { provider: snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                         onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}

@@ -79,7 +79,3 @@ export function keycaps(accelerator: string, platform: string): string[] {
     return hotkeyLabel(accelerator, platform).split('+').map((cap) => (cap === ' ' ? 'Space' : cap));
 }
 
-/** The composer's hint: both keys as they are now. */
-export function sendKeyHint(sendKey: string, platform: string): string {
-    return `${hotkeyLabel(sendKey, platform)} to send · ${hotkeyLabel(newlineKeyFor(sendKey), platform)} for a new line`;
-}

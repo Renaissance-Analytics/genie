@@ -4,9 +4,10 @@ import { stableView } from '../stable-view.js';
 import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
-import { sendKeyHint } from '../../core/send-key.js';
+import { toHotkey, fancyPlatform } from '../hotkey-strings.js';
+import { SentAttachments } from './SentAttachments.js';
+import type { AttachmentReply } from '../../core/thread-store.js';
 import { useSendKey } from '../send-key-store.js';
-import { SendKeyBoundary } from './SendKeyBoundary.js';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
@@ -55,7 +56,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'promptId' | 'draftProblem' | 'carried'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -275,6 +276,8 @@ export interface ChatFlyoutProps {
      * next. Absent = this turn cannot be stopped from here; the waiting message still says why.
      */
     onInterruptAndSend?: (() => void) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642): its pill's thumbnail on first hover. Absent: images are named only. */
+    loadAttachment?: ((agentId: string, attachmentId: string) => Promise<AttachmentReply>) | undefined;
     /** Present = the agent's provider login is held for its rate limit: `Resume now` on the context line (Tynn #794). */
     onResumeLimit?: (() => void) | undefined;
     /** Signed out: `Log in` on the context line, with the provider's name. */
@@ -365,7 +368,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 function ChatFlyoutBody({
     onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -756,11 +759,7 @@ function ChatFlyoutBody({
                             {/* As you typed it (the owner, 2026-10-21): your newlines kept, a long word or URL broken rather than overflowing. */}
                             <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
                             {m.attachments ? (
-                                <div data-chat-attachments={m.id} className="flex flex-wrap justify-end gap-1">
-                                    {m.attachments.map((name) => (
-                                        <span key={name} className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-3)]"><Icon name="paperclip" size="xs" />{name}</span>
-                                    ))}
-                                </div>
+                                <SentAttachments id={m.id} names={m.attachments} refs={m.attachmentRefs} load={loadAttachment && thread ? (attachmentId) => loadAttachment(thread.agentId, attachmentId) : undefined} />
                             ) : null}
                             {/*
                              * An undelivered message is KEPT and MARKED, with the route to send it:
@@ -887,7 +886,6 @@ function ChatFlyoutBody({
                  * start empty, and react-fancy reads `defaultDraft` only at mount.
                  */}
                 {drafts !== 'loading' ? (
-                <SendKeyBoundary>
                 <ChatComposers chats={keptChats} active={activeChat}>
                     {(chat) => (
                     <PromptInput
@@ -898,6 +896,12 @@ function ChatFlyoutBody({
                             : { budgetTokens: 0, meter: 'hidden' as const })}
                         attachButton="icon"
                         sendButton="icon"
+                        /*
+                         * THE PERSON'S SEND KEY (Tynn #637, react-fancy 6.21): exactly this combination sends, its new line is
+                         * the other, and the hint left of Send names it (Tynn #641) — the composer's own, as its tooltip is.
+                         */
+                        submitKey={toHotkey(sendKey, keysPlatform)}
+                        platform={fancyPlatform(keysPlatform)}
                         pasteThreshold={PASTE_PILL_CHARS}
                         pasteImages
                         previewChars={30}
@@ -932,11 +936,7 @@ function ChatFlyoutBody({
                     />
                     )}
                 </ChatComposers>
-                </SendKeyBoundary>
                 ) : null}
-                {/* The keys as they are now (Tynn issue #697), in Genie's own line: the send button's tooltip is the
-                    component's and names only its built-in key, which still sends as well. */}
-                {!blocked ? <div data-composer-keys="" className="px-1 pt-1 text-[10px] text-[var(--fg-4)]">{sendKeyHint(sendKey, keysPlatform)}</div> : null}
                 <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
         </aside>

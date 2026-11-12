@@ -1,3 +1,5 @@
+import { SentAttachments } from './SentAttachments.js';
+import type { AttachmentReply } from '../../core/thread-store.js';
 import { Button, Icon } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { memo, useEffect, useRef, useState } from 'react';
@@ -55,6 +57,8 @@ export interface StreamRowProps {
      * the row's preview. Absent = the preview is all this window can show.
      */
     loadFull?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642). Absent: images are named only. */
+    loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
     /**
      * A prose row's markup (genie#1263): what its pills may open, and the opener for a person's click on one. Absent =
      * every pill is its words.
@@ -69,7 +73,7 @@ export interface StreamMarkup {
 
 /** MEMOISED (genie#1340): a push redraws only the rows whose props changed. Rows keep their object while unchanged
  * (core/stream-view.ts LedgerRowCache) and the Stream's callbacks are stable, so an unchanged row is skipped. */
-export const StreamRow = memo(function StreamRow({ row, selected, live = false, streaming = false, cursor = false, expanded = false, onToggle, onSelect, markup, loadFull }: StreamRowProps) {
+export const StreamRow = memo(function StreamRow({ row, selected, live = false, streaming = false, cursor = false, expanded = false, onToggle, onSelect, markup, loadFull, loadAttachment }: StreamRowProps) {
     countRender('StreamRow');
     const answer = row.toolOutput;
     const fetched = useWholeOutput(expanded ? answer : undefined, loadFull);
@@ -146,6 +150,7 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
                 {/* WHO spoke, on a message: a field in its colour, never a role word. */}
                 {row.who ? <span data-who={row.who.tone} className={`mr-2 font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{row.who.label}</span> : null}
                 {expanded && row.full !== undefined ? <span data-thought-full="" className="block whitespace-pre-wrap">{row.full}</span> : row.main}
+                {row.attachments ? <SentAttachments id={row.id} names={row.attachments.map((a) => a.name)} refs={row.attachments.flatMap((a) => (a.ref ? [a.ref] : []))} load={loadAttachment} className="mt-1 flex flex-wrap gap-1" /> : null}
             </span>
             )}
 
