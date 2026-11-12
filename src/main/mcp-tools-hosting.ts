@@ -1,4 +1,5 @@
 import { OS_WORKSPACE } from '../core/os-agent.js';
+import { randomUUID } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
@@ -270,9 +271,6 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const verdict = await deps.approve(caller, 'services.exec', command, context);
                     if (verdict !== 'allowed') return err('the person did not allow this command; nothing was run');
                     const env = s.engines.envFor(caller.workspaceId);
-                    // The call's signal stops the command's process tree if the client goes away (genie#1360).
-                    const r = await deps.exec({ command, cwd, env, timeoutMs: SERVICE_EXEC_TIMEOUT_MS, signal: context.signal, progress: context.progress });
-                    if (r.aborted) return err('client disconnected: the command was stopped');
                     // Every credential the env carries, and every one Genie holds for this workspace's engines: masked in
                     // the output, even one the command printed.
                     const { variables } = maskEnv(env);
@@ -281,7 +279,13 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                         ...Object.values(env).flatMap((v) => [...v.matchAll(/\/\/[^:/@\s]*:([^@\s]+)@/g)].map((m) => m[1]!)),
                         ...s.engines.list().filter((i) => visibleTo(i, caller.workspaceId)).flatMap(secretsOf),
                     ].filter((v) => v.length >= 4);
-                    return ok({ ok: true, exitCode: r.exitCode, timedOut: r.timedOut, output: maskSecrets(r.output, secrets) });
+                    // The host owns attribution and identity, never an agent-supplied run/workspace argument (#633).
+                    // Select credentials BEFORE execution: live output needs the same masking as the final answer.
+                    const run = { id: `service-command-${randomUUID()}`, workspaceId: caller.workspaceId, agentId: caller.agentId, name: `${caller.agentName} · services exec`, secrets };
+                    const r = await deps.exec({ command, cwd, env, run, timeoutMs: SERVICE_EXEC_TIMEOUT_MS, signal: context.signal, progress: context.progress });
+                    const identity = r.processId ? { processId: r.processId } : {};
+                    if (r.aborted) return err('the command was stopped', identity);
+                    return ok({ ok: true, ...identity, exitCode: r.exitCode, timedOut: r.timedOut, output: maskSecrets(r.output, secrets) });
                 }
                 case 'logs': {
                     const i = own(str(args.id));

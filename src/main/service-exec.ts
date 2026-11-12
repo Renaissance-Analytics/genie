@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { verbatimShellLaunch } from '../core/shell-launch.js';
 import { describeProcesses, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
-import type { ServiceExec } from './mcp-tools-hosting.js';
+import { maskSecrets, type ServiceExec } from './mcp-tools-hosting.js';
 import type { ProcessSupervisor } from './process-supervisor.js';
+import { commandOutputMasker } from './command-output-masker.js';
 
 /** How much of a `services exec` command's output is kept: its tail, in characters. */
 const OUTPUT_MAX = 262_144;
@@ -27,9 +28,8 @@ const EXIT_CHECK_MS = 100;
  * another command's tree — another agent's migration running beside it — is never in it. The shell itself is killed
  * as well, so a refused or failed reading still ends the command Genie started.
  */
-// Optional observation port is inert in this tests-first checkpoint (#633).
-export function makeServiceExec(tree: ProcessTree, _supervisor?: Pick<ProcessSupervisor, 'trackExternal'>): ServiceExec {
-    return ({ command, cwd, env, timeoutMs, signal, progress }) =>
+export function makeServiceExec(tree: ProcessTree, supervisor?: Pick<ProcessSupervisor, 'trackExternal'>): ServiceExec {
+    return ({ command, cwd, env, timeoutMs, signal, progress, run }) =>
         new Promise((resolve) => {
             if (signal?.aborted) {
                 resolve({ exitCode: null, output: '', timedOut: false, aborted: true });
@@ -40,16 +40,47 @@ export function makeServiceExec(tree: ProcessTree, _supervisor?: Pick<ProcessSup
             let written = 0;
             let timedOut = false;
             let aborted = false;
+            let observed: ReturnType<ProcessSupervisor['trackExternal']> | undefined;
+            let cancelForObservation = () => {};
+            let observationFailed = false;
+            const publish = (text: string) => {
+                output += text;
+                if (output.length > OUTPUT_MAX) output = output.slice(-OUTPUT_MAX);
+                try { observed?.output(text); }
+                catch { observationFailed = true; cancelForObservation(); }
+            };
+            const masker = run ? commandOutputMasker(run.secrets, publish) : null;
+            const write = (text: string) => { if (masker) masker.write(text); else publish(text); };
+            const observe = (pid: number | null, stop: () => void) => {
+                if (!run || !supervisor) return;
+                try {
+                    observed = supervisor.trackExternal({ id: run.id, workspaceId: run.workspaceId, name: run.name, command: maskSecrets(command, run.secrets), cwd }, { pid, stop });
+                } catch {
+                    // Observation must never orphan a command that already spawned.
+                    observationFailed = true;
+                    stop();
+                }
+            };
+            const finishObservation = (exitCode: number | null, stopped = false) => {
+                try { masker?.finish(); }
+                finally {
+                    try { observed?.finish(exitCode, stopped); }
+                    catch { observationFailed = true; }
+                }
+            };
+            const identity = () => observed && run ? { processId: run.id } : {};
             const keep = (chunk: Buffer) => {
                 written += chunk.length;
-                output += chunk.toString('utf8');
-                if (output.length > OUTPUT_MAX) output = output.slice(-OUTPUT_MAX);
+                write(chunk.toString('utf8'));
             };
             let child: ReturnType<typeof spawn>;
             try {
                 child = spawn(launch.command, launch.args, { cwd, env: { ...process.env, ...env }, windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments });
             } catch (error) {
-                resolve({ exitCode: null, output: `could not start the command: ${error instanceof Error ? error.message : String(error)}`, timedOut: false });
+                observe(null, () => {});
+                write(`could not start the command: ${error instanceof Error ? error.message : String(error)}`);
+                finishObservation(null);
+                resolve({ exitCode: null, output, timedOut: false, ...identity() });
                 return;
             }
             let exited = false;
@@ -102,6 +133,7 @@ export function makeServiceExec(tree: ProcessTree, _supervisor?: Pick<ProcessSup
             child.stderr?.on('data', keep);
             const timer = setTimeout(() => { timedOut = true; void stop(); }, timeoutMs);
             const onAbort = () => { aborted = true; void stop(); };
+            cancelForObservation = onAbort;
             signal?.addEventListener('abort', onAbort, { once: true });
             const ticker = progress ? setInterval(() => progress(`running: ${written} bytes of output so far`), EXEC_PROGRESS_MS) : undefined;
             const finish = () => {
@@ -112,13 +144,22 @@ export function makeServiceExec(tree: ProcessTree, _supervisor?: Pick<ProcessSup
             };
             const note = (text: string, extra: string | null): string => (extra ? `${text}${text ? '\n' : ''}${extra}` : text);
             // The result waits for a stop in flight: its tree has to have EXITED, not just been told to (genie#1372).
-            const settle = async (exitCode: number | null, text: string): Promise<void> => {
+            let settled = false;
+            const settle = async (exitCode: number | null, error?: string): Promise<void> => {
+                if (settled) return;
+                settled = true;
                 finish();
+                if (error) write(`${output ? '\n' : ''}${error}`);
                 const unconfirmed = stopping ? await stopping : null;
-                resolve({ exitCode, output: note(text, unconfirmed), timedOut, ...(aborted ? { aborted } : {}) });
+                if (unconfirmed) write(`${output ? '\n' : ''}${unconfirmed}`);
+                finishObservation(unconfirmed ? null : exitCode, (aborted || timedOut) && unconfirmed === null);
+                resolve({ exitCode, output: note(output, observationFailed ? 'Genie could not publish all command activity.' : null), timedOut, ...(aborted ? { aborted } : {}), ...identity() });
             };
-            child.on('error', (error) => { void settle(null, `${output}${output ? '\n' : ''}could not run the command: ${error.message}`); });
-            child.on('close', (code) => { void settle(code, output); });
+            child.on('error', (error) => { void settle(null, `could not run the command: ${error.message}`); });
+            child.on('close', (code) => { void settle(code); });
+            observe(child.pid ?? null, onAbort);
+            // A cancellation during setup must not be missed between the first check and listener registration.
+            if (signal?.aborted) onAbort();
         });
 }
 
