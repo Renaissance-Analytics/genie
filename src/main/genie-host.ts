@@ -87,6 +87,7 @@ import { openHostKeychain } from './host-keychain.js';
 import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
+import { relayFetchOver } from './host-relay-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
 import { chmod, mkdir, readFile as readFileText } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
@@ -892,9 +893,11 @@ async function main(): Promise<void> {
      * THIS MACHINE ON THE TYNN RELAY, AS A HOST (Tynn #410, host split P5d.3): registered with Tynn, its role read, and the
      * link run here, so a Pilot or a share link reaches this machine with every window closed.
      */
+    // Its Tynn calls over this host's HTTPS client, adapted in the open (Tynn issue #707: a cast here sent no signal and
+    // read a json() the client does not have, so no 61.x drone reached the relay).
     const relayFetch = async (url: string, init?: RequestInit): Promise<Response> => {
         const memory = await proxyMemory;
-        return hostHttpsFetch({ proxyRoutes: (target) => memory.routesFor(target), log: say })(url, init as never) as unknown as Response;
+        return relayFetchOver(hostHttpsFetch({ proxyRoutes: (target) => memory.routesFor(target), log: say }))(url, init);
     };
     const relayHostService: RelayHostService = new RelayHostService({
         account: () => tynnAccountNow,
