@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { linuxRow, windowsFunction } from './helpers/ci-scripts.js';
 
 /*
  * THE SLOW-TEST TABLE AFTER `unit (windows)`, OBSERVE ONLY (scripts/ci/slow-tests.mjs). Rows keep failing at the 30 s
