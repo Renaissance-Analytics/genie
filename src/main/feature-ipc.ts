@@ -382,6 +382,9 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
 
 const sameRow = (r: ToolchainRefusal, tool: string, version: string | undefined): boolean => r.tool === tool && r.version === version;
 
+/** The Toolchain rows whose CLI repair is running now (`toolchain.repairCli`): one repair per CLI at a time. */
+const repairingCli = new Set<string>();
+
 /** A row's next action starts clean: its old refusal goes; every other row's stays. */
 function clearRefusal(next: FeatureState, tool: string, version?: string): void {
     next.toolchainRefusals = (next.toolchainRefusals ?? []).filter((r) => !sameRow(r, tool, version));
@@ -1039,6 +1042,9 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'toolchain.repairCli': {
+            // ONE REPAIR AT A TIME per CLI (PR #1881 review): a second click while one runs does nothing. Two installers
+            // writing the same folder race, and the second's end would clear the first's progress off the row.
+            if (repairingCli.has(action.tool)) break;
             clearRefusal(next, action.tool);
             const tc = ports.toolchain;
             if (!tc?.repairCli) {
@@ -1047,6 +1053,8 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             }
             const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
             const row = (step: string) => tc.updating?.({ tool: action.tool, step });
+            // Taken in the same synchronous run as the check above, so no second click can slip between them.
+            repairingCli.add(action.tool);
             try {
                 row('Starting');
                 const outcome = await tc.repairCli(provider, (step) => { if (step) row(step); });
@@ -1056,6 +1064,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 refuse(next, action.tool, `The repair stopped: ${error instanceof Error ? error.message : String(error)}`);
             } finally {
                 tc.updating?.(null);
+                repairingCli.delete(action.tool);
             }
             // The row shows what the check finds now, never the repair's word for it.
             await rescanToolchain(next, tc, sitePins(services));

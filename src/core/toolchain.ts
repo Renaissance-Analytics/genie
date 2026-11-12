@@ -207,30 +207,47 @@ export function toolStatus(p: ToolProbe): ToolStatus {
 /**
  * THE VENDORS' OWN INSTALLERS for the agent CLIs (Tynn #698), as the vendors document them: Claude Code's native installer
  * (code.claude.com/docs/en/setup) and Codex's standalone installer (github.com/openai/codex, README). Each is ONE argv of
- * constants: the pipe belongs to the shell it names, and nothing a person or an agent typed ever reaches it. No prompt can
+ * constants: its script belongs to the shell it names, and nothing a person or an agent typed ever reaches it. No prompt can
  * wait: Genie closes their input (spawn-exec.ts), and Codex's installer answers its own questions "no" when input is
  * redirected. macOS is not supported by Genie right now.
+ *
+ * The vendor's https domain is trusted, as it is when a person runs the command by hand; nothing is pinned. What Genie adds
+ * is that A DOWNLOAD THAT FAILS FAILS THE STEP (PR #1881 review). `curl … | sh` runs whatever arrived: a failed download is
+ * an empty script that exits 0, and one cut short runs half an installer. So on Linux the installer is downloaded whole to a
+ * temporary file, https only and TLS 1.2+, and run by the vendor's shell only when curl succeeded (`set -e`); the file goes
+ * when the step ends. On Windows the vendor's `irm … | iex` stays, with the download made to stop on error and an empty
+ * one refused, so powershell.exe exits non-zero; it holds no double quote, which Node and PowerShell quote differently.
  */
-export const VENDOR_INSTALLERS: Readonly<Record<string, { readonly name: string; readonly win32: readonly string[]; readonly linux: readonly string[] }>> = {
+function posixInstaller(url: string, shell: 'bash' | 'sh'): readonly string[] {
+    return [shell, '-c', `set -eu; f="$(mktemp)"; trap 'rm -f "$f"' EXIT; curl --proto '=https' --tlsv1.2 -fsSL ${url} -o "$f"; ${shell} "$f"`];
+}
+function windowsInstaller(url: string): readonly string[] {
+    return ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `$installer = irm ${url} -ErrorAction Stop; if (-not $installer) { throw '${url} sent nothing' }; $installer | iex`];
+}
+
+export const VENDOR_INSTALLERS: Readonly<Record<string, { readonly name: string; readonly urls: { readonly win32: string; readonly linux: string }; readonly win32: readonly string[]; readonly linux: readonly string[] }>> = {
     'claude-code': {
         name: 'Claude Code',
-        win32: ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://claude.ai/install.ps1 | iex'],
-        linux: ['bash', '-c', 'curl -fsSL https://claude.ai/install.sh | bash'],
+        // code.claude.com/docs/en/setup, "Native Install": `irm https://claude.ai/install.ps1 | iex`, `curl -fsSL https://claude.ai/install.sh | bash`.
+        urls: { win32: 'https://claude.ai/install.ps1', linux: 'https://claude.ai/install.sh' },
+        win32: windowsInstaller('https://claude.ai/install.ps1'),
+        linux: posixInstaller('https://claude.ai/install.sh', 'bash'),
     },
     codex: {
         name: 'Codex',
-        win32: ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://chatgpt.com/codex/install.ps1 | iex'],
-        linux: ['sh', '-c', 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'],
+        // github.com/openai/codex README: `irm https://chatgpt.com/codex/install.ps1 | iex`, `curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
+        urls: { win32: 'https://chatgpt.com/codex/install.ps1', linux: 'https://chatgpt.com/codex/install.sh' },
+        win32: windowsInstaller('https://chatgpt.com/codex/install.ps1'),
+        linux: posixInstaller('https://chatgpt.com/codex/install.sh', 'sh'),
     },
 };
 
-/** The vendor installer's argv here, or why there is none. */
+/** The vendor installer's argv here, or why there is none. Its label names the vendor's URL, not the hardening around it. */
 export function vendorInstaller(tool: string, platform: Platform): { readonly argv: readonly string[]; readonly label: string } | { readonly refused: string } | null {
     const v = VENDOR_INSTALLERS[tool];
     if (!v) return null;
     if (platform === 'darwin') return { refused: `Genie does not support macOS yet, so it cannot install ${v.name} here` };
-    const argv = v[platform];
-    return { argv, label: `${v.name}’s installer: ${argv[argv.length - 1]}` };
+    return { argv: v[platform], label: `${v.name}’s installer: ${v.urls[platform]}` };
 }
 
 export type UpdatePlan =
