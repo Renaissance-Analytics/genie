@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
+import { windowsFunction, windowsRows } from './helpers/ci-scripts.js';
 import { leftovers, required } from '../scripts/packed-tree-check.mjs';
 import { shouldSignFile } from '../scripts/win-sign-plan.mjs';
 
@@ -55,15 +56,10 @@ describe('what the Windows install directory holds', () => {
         ]) expect(win, pattern).toContain(pattern);
     });
 
-    it('CI\'s Windows packaging runs the check on the built tree', () => {
-        const ci = read('.github/workflows/ci.yml');
-        const start = ci.indexOf('name: it packages');
-        const next = ci.slice(start).search(/\n {2}[a-z][a-z0-9-]*:\n/);
-        const job = ci.slice(start, next > 0 ? start + next : undefined);
-        const build = job.indexOf('npx electron-builder --publish never');
-        const check = job.search(/if: runner\.os == 'Windows'\s+run: node scripts\/packed-tree-check\.mjs release\/win-unpacked/);
-        expect(build).toBeGreaterThan(-1);
-        expect(check, 'after the build, in the same job').toBeGreaterThan(build);
+    it('the Windows gate runs the check on the built tree (scripts/ci/windows.ps1: packed-tree after package)', () => {
+        expect(windowsFunction('Row-package')).toContain('npx electron-builder --publish never');
+        expect(windowsFunction('Row-packed-tree')).toContain('node scripts/packed-tree-check.mjs release/win-unpacked');
+        expect(windowsRows.indexOf('packed-tree'), 'after the build').toBeGreaterThan(windowsRows.indexOf('package'));
     });
 });
 

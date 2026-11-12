@@ -98,24 +98,23 @@ describe('the slow-test table', () => {
     });
 });
 
-describe('the Windows unit job runs it after the suite, whatever happened, and changes nothing else', () => {
-    const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-    const job = ci.slice(ci.indexOf('name: unit (windows)'), ci.indexOf('\n  zip64:'));
-    const test = job.indexOf('name: npm test, with the sampler beside it');
-    const step = job.indexOf('name: the slowest tests');
-
-    it('after the suite, on pass or fail, and it cannot fail the job', () => {
-        expect(test).toBeGreaterThan(0);
-        expect(step).toBeGreaterThan(test);
-        expect(job.slice(step)).toMatch(/^name: the slowest tests[^\r\n]*\r?\n\s+if: always\(\)\r?\n\s+continue-on-error: true\r?\n/);
-        expect(job.slice(step)).toMatch(/node scripts\/ci\/slow-tests\.mjs \(Join-Path \$env:RUNNER_TEMP "vitest-results\.json"\) \(Join-Path \$env:RUNNER_TEMP "slow-tests\.tsv"\)/);
+describe('both unit rows run it after the suite, whatever happened, and it changes nothing else (scripts/ci)', () => {
+    it('windows.ps1: after the suite, on pass or fail, and its own exit is not the row\'s', () => {
+        const row = windowsFunction('Row-unit');
+        const suite = row.indexOf('npm test -- --testTimeout=30000');
+        const table = row.indexOf("node scripts/ci/slow-tests.mjs $results (Join-Path $Out 'slow-tests.tsv')");
+        expect(suite).toBeGreaterThan(-1);
+        expect(table, 'after the suite').toBeGreaterThan(suite);
+        // The row's result is the suite's exit code, read before the table runs.
+        expect(row.indexOf('$code = $LASTEXITCODE')).toBeLessThan(table);
+        expect(row.slice(table)).toMatch(/if \(\$code -ne 0\) \{ throw "npm test failed/);
     });
-
-    it('uploads the full table whatever the outcome', () => {
-        expect(job).toMatch(/name: the slow-test table\s+if: always\(\)\s+uses: actions\/upload-artifact@v4\s+with:\s+name: unit-windows-slow-tests\s+path: \$\{\{ runner\.temp \}\}\/slow-tests\.tsv/);
+    it('linux.sh: the same, and the table cannot fail the row', () => {
+        const row = linuxRow('unit');
+        expect(row).toMatch(/node scripts\/ci\/slow-tests\.mjs "\$OUT\/vitest-results\.json" "\$OUT\/slow-tests\.tsv" \|\| true/);
+        expect(row).toMatch(/return "\$code"/);
     });
-
-    it('the suite itself is unchanged: the same command, the same 30 s budget', () => {
-        expect(job).toMatch(/npm test -- --testTimeout=30000 --reporter=default --reporter=json "--outputFile\.json=\$results"/);
+    it('the Windows suite itself is unchanged: the same command, the same 30 s budget', () => {
+        expect(windowsFunction('Row-unit')).toMatch(/npm test -- --testTimeout=30000 --reporter=default --reporter=json "--outputFile\.json=\$results"/);
     });
 });

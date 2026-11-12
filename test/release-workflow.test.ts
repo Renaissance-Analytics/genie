@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { linuxRow, linuxSh, windowsFunction, windowsPs1 } from './helpers/ci-scripts.js';
 
 /**
  * THE RELEASE WORKFLOW — the one place a Genie 2 build may leave this repo, and the rules it
  * must keep so that nothing ships by accident and what ships lands where installed copies look.
  *
- * - It runs ONLY for a `v*` tag. A push to `main` must build (ci.yml) and never publish: four
+ * - It runs ONLY for a `v*` tag. Nothing else publishes (the local CI builds with --publish never): four
  *   betas of the previous build shipped on green suites, and the owner's rule is that a tag is
  *   a deliberate, approved act — "merge passing work; tags need a nod".
  * - It publishes with THIS repository's own `GITHUB_TOKEN` (contents: write on the jobs that
@@ -18,7 +19,6 @@ import { describe, expect, it } from 'vitest';
  * failure modes here are a string somebody changes without reading the comment next to it.
  */
 const workflow = () => readFileSync('.github/workflows/release.yml', 'utf8').replace(/\r\n/g, '\n');
-const ci = () => readFileSync('.github/workflows/ci.yml', 'utf8').replace(/\r\n/g, '\n');
 
 describe('the release workflow', () => {
     it('exists', () => {
@@ -62,12 +62,13 @@ describe('the release workflow', () => {
         expect(workflow()).not.toContain('macos-latest');
     });
 
-    it('CONTROL: ci.yml still never publishes', () => {
-        // The positive control for the first assertion's intent: the workflow that DOES run on
-        // every push is the one that must keep `--publish never`, and must not know the token.
-        expect(ci()).toMatch(/--publish never/);
-        expect(ci()).not.toMatch(/GENIE_RELEASE_TOKEN/);
-        expect(ci()).not.toMatch(/--publish always/);
+    it('CONTROL: the local gates never publish (scripts/ci: their packaging builds with --publish never, without the token)', () => {
+        expect(windowsFunction('Row-package')).toMatch(/--publish never/);
+        expect(linuxRow('package')).toMatch(/--publish never/);
+        for (const text of [linuxSh, windowsPs1]) {
+            expect(text).not.toMatch(/GENIE_RELEASE_TOKEN/);
+            expect(text).not.toMatch(/--publish always/);
+        }
     });
 });
 
