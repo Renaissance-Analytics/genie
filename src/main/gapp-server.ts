@@ -185,7 +185,7 @@ export class GAppServer {
         try {
             if (!(await lstat(file)).isFile()) { refuse(res, 404, 'Not found.'); return; }
             // Only the installed copy is served: a folder link inside it that leads elsewhere is not followed (CodeQL, beta.61).
-            const [realDir, realFile] = await Promise.all([realpath(dir), realpath(file)]);
+            const [realDir, realFile] = await Promise.all([realpath(served.dir), realpath(file)]);
             const rel = relativePath(realDir, realFile);
             if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) { refuse(res, 404, 'Not found.'); return; }
             const body = await readFile(file);
