@@ -253,21 +253,84 @@ need_keyring() {
 # window over the Chrome DevTools Protocol on port 9222. It stays open until the run ends. The `seed` row is this: the
 # seed written and the app answering on its debugger port. An app that ended, or never answered, is said here once, with
 # its own last words, and the rows that drive it are not run.
+#
+# A HOME OF ITS OWN, AND NOTHING LEFT FROM BEFORE (Tynn #692; the coordinator's loop of `--only smoke`, 8 runs in one
+# omarchy-test session: run 1 passed, runs 2-8 failed, starting with 14 electron processes and a genie-host still alive
+# from the run before. This script's cleanup ended only `npx`, not the app under it nor the genie-host it starts, which
+# outlives its window by design; and the app used the machine's own ~/.genie, so the next run opened on the last run's
+# state, or found the old app still holding Genie's single-instance lock and debugger port). Now:
+#   - the app gets a new home for every run (HOME and XDG_CONFIG_HOME, so ~/.genie and Electron's own profile), and the
+#     seed is written there, every run;
+#   - before it starts, and before every row that starts an app of its own, anything Genie's that an earlier run or row
+#     left alive is ended, and checked gone; what was found is said, by pid and command;
+#   - at the end the app, every process under it, and its genie-host (by the pid its host.json names) are ended and
+#     checked gone.
 APP_PID=''
+APP_HOME=''
 app=''
 app_why=''
+
+# Every pid under these pids, them included.
+tree_of() {
+    ps -e -o pid=,ppid= | awk -v roots="$*" 'BEGIN { n = split(roots, r, " "); for (i = 1; i <= n; i++) keep[r[i]] = 1 }
+        { parent[$1] = $2; pids[NR] = $1 }
+        END { changed = 1; while (changed) { changed = 0; for (i in pids) { p = pids[i]; if (!(p in keep) && (parent[p] in keep)) { keep[p] = 1; changed = 1 } } }
+              for (p in keep) print p }'
+}
+# The shared app's own processes: the app's tree, and its genie-host's (it is started detached, outside the app's tree).
+app_tree() {
+    local roots="" hostpid=""
+    [ -n "$APP_PID" ] && roots="$APP_PID"
+    if [ -n "$APP_HOME" ] && [ -f "$APP_HOME/.genie/runtime/host.json" ]; then
+        hostpid="$(node -e 'try { const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); if (Number.isInteger(j.pid)) console.log(j.pid) } catch {}' "$APP_HOME/.genie/runtime/host.json")"
+        [ -n "$hostpid" ] && roots="$roots $hostpid"
+    fi
+    [ -n "$roots" ] && tree_of $roots
+}
+# Genie's processes alive now: Electron from this checkout, a genie-host from any home's copy, the host bundle on Node.
+genie_processes() {
+    pgrep -f -- "$PWD/node_modules/electron/|/\.genie/host/|dist/main/host\.js|genie-host" 2>/dev/null | grep -vx "$$" || true
+}
+# End what an earlier run or row left, except the shared app while it is needed; say what it was; check it is gone.
+reap_leftovers() {
+    local why="$1" keep pids p
+    keep=" $(app_tree | tr '\n' ' ') "
+    pids=""
+    for p in $(genie_processes); do case "$keep" in *" $p "*) ;; *) pids="$pids $p" ;; esac; done
+    [ -n "$pids" ] || return 0
+    echo "REAPED before $why: $(echo $pids | wc -w) process(es) an earlier run or row left alive:"
+    for p in $pids; do echo "  $p $(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-200)"; done
+    notes+=("before $why, $(echo $pids | wc -w) Genie process(es) left alive by an earlier run or row were ended (see REAPED in ci-out/$why.log)")
+    kill $pids 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        local alive=""
+        for p in $pids; do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done
+        [ -z "$alive" ] && return 0
+        sleep 1
+    done
+    kill -9 $pids 2>/dev/null || true
+    sleep 1
+    local left=""
+    for p in $pids; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
+    [ -z "$left" ] || { block "Genie processes from before would not end:$left"; return 1; }
+}
+
 need_app() {
     if [ -n "$app" ]; then [ "$app" = ok ] && return 0; blocked="$app_why"; return 1; fi
     app=failed
     need_build && need_display || { app_why="$blocked"; return 1; }
-    if [ ! -f "$SETUP/seed.done" ]; then
-        node scripts/smoke-seed.mjs >"$SETUP/seed.out" 2>&1 || { tail -20 "$SETUP/seed.out"; app_why='the seed could not be written'; block "$app_why"; return 1; }
-        : >"$SETUP/seed.done"
+    reap_leftovers "the app" || { app_why="$blocked"; return 1; }
+    if curl -fsS -m 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+        app_why='something already answers on the debugger port 9222 (an app this run did not start)'
+        block "$app_why"; return 1
     fi
+    APP_HOME="$(mktemp -d /tmp/genie-ci-app-XXXXXX)"
+    echo "--- the app's own home: $APP_HOME"
+    HOME="$APP_HOME" XDG_CONFIG_HOME="$APP_HOME/.config" node scripts/smoke-seed.mjs >"$SETUP/seed.out" 2>&1 || { tail -20 "$SETUP/seed.out"; app_why='the seed could not be written'; block "$app_why"; return 1; }
     chmod +x scripts/stub-codex.mjs
     # Ordinary provider configuration, exactly as ci.yml sets it for this launch: codex is the stub, so a REAL parked
     # approval reaches the screen on a machine with no codex.
-    GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs" GENIE_PAGE_PROBE=1 \
+    HOME="$APP_HOME" XDG_CONFIG_HOME="$APP_HOME/.config" GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs" GENIE_PAGE_PROBE=1 \
         on_display npx electron . --no-sandbox --remote-debugging-port=9222 >"$OUT/electron.log" 2>&1 &
     APP_PID=$!
     echo "--- the app is starting (pid $APP_PID); its output is in ci-out/electron.log"
@@ -288,12 +351,25 @@ need_app() {
     app=ok
 }
 
-cleanup() {
-    if [ -n "$APP_PID" ]; then
-        kill "$APP_PID" 2>/dev/null || true
-        wait "$APP_PID" 2>/dev/null || true
-    fi
+# The shared app, everything under it and its genie-host, ended and checked gone: the next run starts clean.
+stop_app() {
+    local pids p left
+    pids="$(app_tree | tr '\n' ' ')"
+    [ -n "${pids// /}" ] || return 0
+    kill $pids 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        left=""
+        for p in $pids; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
+        [ -z "$left" ] && break
+        sleep 1
+    done
+    [ -n "$left" ] && { kill -9 $left 2>/dev/null || true; sleep 1; }
+    left=""
+    for p in $pids; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
+    wait "$APP_PID" 2>/dev/null || true
+    if [ -n "$left" ]; then echo "APP LEFT ALIVE after the stop:$left"; else echo "--- the app and its genie-host are gone ($(echo $pids | wc -w) process(es) ended)"; fi
 }
+cleanup() { stop_app; }
 trap cleanup EXIT
 
 # --- the rows: each prints nothing itself and returns ci.yml's step status --------------------------------------------
@@ -421,9 +497,10 @@ row_browser-process() { need_app && need_keyring && timeout 260 dbus-run-session
 # The app opened by need_app wrote this log: the spawn host started, and never fell back.
 row_spawn-host() {
     need_app || return 1
-    grep -h "spawn host" ~/.genie/runtime/lifecycle.log | tail -5 || true
-    grep -q "spawn host ready pid=" ~/.genie/runtime/lifecycle.log || return 1
-    if grep -q "spawn host could not start" ~/.genie/runtime/lifecycle.log; then return 1; fi
+    local log="$APP_HOME/.genie/runtime/lifecycle.log"
+    grep -h "spawn host" "$log" | tail -5 || true
+    grep -q "spawn host ready pid=" "$log" || return 1
+    if grep -q "spawn host could not start" "$log"; then return 1; fi
 }
 row_safe-mode() { need_build && need_display && on_display timeout 540 node scripts/safe-mode-cdp.mjs; }
 row_hang() { need_build && need_display && on_display timeout 540 node scripts/hang-cdp.mjs; }
@@ -533,6 +610,9 @@ for name in "${selected[@]}"; do
     started=$SECONDS
     echo "=== $name"
     machine_line "$name"
+    case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse " in
+        *" $name "*) reap_leftovers "$name" ;;
+    esac
     blocked=''
     blocked_here=''
     skip_reason=''
@@ -565,6 +645,9 @@ for name in "${selected[@]}"; do
     fi
 done
 
+stop_app
+left_at_end="$(genie_processes | tr '\n' ' ')"
+[ -n "${left_at_end// /}" ] && notes+=("Genie processes still alive at the end of the run: $left_at_end")
 for n in "${notes[@]}"; do echo "NOTE $n"; done
 echo "CLOCK $(awk -v w0="$wall0" -v w1="$(clock_wall)" -v m0="$mono0" -v m1="$(clock_mono)" 'BEGIN { printf "the wall clock advanced %.1f s while %.1f s passed (a difference of %+.1f s)", w1 - w0, m1 - m0, (w1 - w0) - (m1 - m0) }')"
 # TEST FILES THE UNIT SUITE DID NOT RUN HERE, each with its own reason: a file that runs on Windows only carries

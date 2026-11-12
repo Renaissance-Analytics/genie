@@ -199,21 +199,34 @@ function Need-TestMachine {
 # THE APP, OPENED ONCE for the rows from no-pty to layout, as ci.yml's "open the app and drive it" step, and stopped by
 # app-stopped (which fails when any of its electron processes outlives the stop, as that step did).
 $script:App = $null
+$script:AppHome = ''
 $script:AppState = ''
 function Need-App {
     if ($script:AppState -eq 'ok') { return }
     if ($script:AppState) { Block $script:AppState }
     Need-Build; Need-TestMachine
-    $script:AppState = 'the seed could not be written'
-    if (-not (Test-Path (Join-Path $Setup 'seed.done'))) {
+    # A HOME OF ITS OWN for this run (Tynn #692, as linux.sh: a loop of runs in one session found the last run's app,
+    # host and state). The seed and the app get it through USERPROFILE, HOME, APPDATA and LOCALAPPDATA; this process's
+    # own are put back once the app has started with them.
+    $script:AppState = 'something already answers on the debugger port 9222 (an app this run did not start)'
+    try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:9222/json/version' | Out-Null; Block $script:AppState } catch { if ($script:Blocked) { throw } }
+    $script:AppHome = Join-Path ([System.IO.Path]::GetTempPath()) ("genie-ci-app-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    foreach ($d in @("$($script:AppHome)\AppData\Roaming", "$($script:AppHome)\AppData\Local")) { New-Item -ItemType Directory -Force $d | Out-Null }
+    Write-Output "--- the app's own home: $($script:AppHome)"
+    $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
+    try {
+        $env:USERPROFILE = $script:AppHome; $env:HOME = $script:AppHome
+        $env:APPDATA = "$($script:AppHome)\AppData\Roaming"; $env:LOCALAPPDATA = "$($script:AppHome)\AppData\Local"
+        $script:AppState = 'the seed could not be written'
         node scripts/smoke-seed.mjs *> (Join-Path $Setup 'seed.out')
         if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Setup 'seed.out') -Tail 20; Block $script:AppState }
-        Set-Content (Join-Path $Setup 'seed.done') ''
+        $env:GENIE2_CODEX_BINARY = "$Repo\scripts\stub-codex.mjs"
+        $env:GENIE_PAGE_PROBE = '1'
+        $script:App = Start-Process -FilePath 'npx.cmd' -ArgumentList 'electron', '.', '--remote-debugging-port=9222' -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput (Join-Path $Out 'electron-out.log') -RedirectStandardError (Join-Path $Out 'electron-err.log')
+    } finally {
+        foreach ($k in $saved.Keys) { Set-Item -Path "env:$k" -Value $saved[$k] }
     }
-    $env:GENIE2_CODEX_BINARY = "$Repo\scripts\stub-codex.mjs"
-    $env:GENIE_PAGE_PROBE = '1'
-    $script:App = Start-Process -FilePath 'npx.cmd' -ArgumentList 'electron', '.', '--remote-debugging-port=9222' -PassThru -WindowStyle Hidden `
-        -RedirectStandardOutput (Join-Path $Out 'electron-out.log') -RedirectStandardError (Join-Path $Out 'electron-err.log')
     Write-Output "--- the app is starting (pid $($script:App.Id))"
     $waited = 0
     while ($true) {
@@ -254,7 +267,15 @@ function Stop-App {
     Start-Sleep -Seconds 2
     $script:App = $null
     $script:AppState = 'the app was stopped (app-stopped); the rows that drive it run before that row'
-    $left = @(Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Repo*" })
+    # Its genie-host: started detached, from its copy under the app's home, so neither the tree kill nor the checkout's
+    # path finds it. By the pid its host.json names, and anything else running from that home.
+    if ($script:AppHome) {
+        $hostJson = Join-Path $script:AppHome '.genie\runtime\host.json'
+        if (Test-Path $hostJson) { $hp = (Get-Content $hostJson -Raw | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
+        @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($script:AppHome, [System.StringComparison]::OrdinalIgnoreCase) }) | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+    $left = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like "$Repo*" -or ($script:AppHome -and $_.Path.StartsWith($script:AppHome, [System.StringComparison]::OrdinalIgnoreCase))) })
     $script:AppLeft = $left.Count
     Write-Host "electron processes from this checkout left after the stop: $($script:AppLeft)"
 }
@@ -322,7 +343,8 @@ function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scri
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 # The app opened for no-pty..layout wrote this log: the spawn host started, and never fell back.
 function Row-spawn-host {
-    $log = Join-Path $HOME '.genie\runtime\lifecycle.log'
+    if (-not $script:AppHome) { Block 'the app was not opened in this run (the seed row opens it)' }
+    $log = Join-Path $script:AppHome '.genie\runtime\lifecycle.log'
     if (-not (Test-Path $log)) { Block 'no lifecycle.log: the app was not opened in this run (the seed row opens it)' }
     Select-String -Path $log -Pattern 'spawn host' | Select-Object -Last 5 | ForEach-Object { $_.Line }
     if (-not (Select-String -Path $log -Pattern 'spawn host ready pid=' -Quiet)) { throw 'no "spawn host ready" in lifecycle.log' }
