@@ -48,8 +48,19 @@ export interface FileEditFact {
     readonly minus: number;
 }
 
+/**
+ * AN IMAGE THE THREAD KEPT (Tynn #642): sent with a message, kept by the host beside the ledger, named here so a pill
+ * can ask for it (`agents.attachment`). Images only; a text file sent with the message is named in `attachments` alone.
+ */
+export interface AttachmentRef {
+    readonly id: string;
+    readonly name: string;
+    readonly mimeType: string;
+    readonly bytes: number;
+}
+
 export type StreamEvent =
-    | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[]; mail?: readonly NoticeMail[]; pending?: { id: string; content: readonly PromptBlock[] | null } }
+    | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[]; attachmentRefs?: readonly AttachmentRef[]; mail?: readonly NoticeMail[]; pending?: { id: string; content: readonly PromptBlock[] | null } }
     /**
      * A queued message's receipt. Separate rows preserve the original message, time and append-only wire. `unconfirmed`:
      * steered into a running turn with an uncertain outcome (Codex, Tynn #440) — maybe delivered, so never sent again.

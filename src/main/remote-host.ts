@@ -34,6 +34,9 @@ import type { PageOpener } from '../core/local-content.js';
 import { LocalUploads } from './local-uploads.js';
 import { LocalPages } from './local-pages.js';
 import { LocalFilesContent } from './local-files-content.js';
+
+/** The most of one kept image another device is sent in one frame (Tynn #642); this machine's window takes a blob. */
+const REMOTE_ATTACHMENT_MAX_BYTES = 512 * 1024;
 import { isLocalFilesMethod } from '../core/local-files.js';
 import { localFilesArguments } from './local-files-arguments.js';
 import { isLocalDraftMethod } from '../core/local-drafts.js';
@@ -824,6 +827,13 @@ export class RemoteHost {
             // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
             // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
             if (connection.local && (method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
+            // ONE KEPT IMAGE (Tynn #642): up to 5 MB, so this machine's window takes a large one as a blob, never a frame
+            // over the door's cap; another device takes one that fits a frame, and is told plainly when it does not.
+            if (method === 'agents.attachment') {
+                if (connection.local) return ok(this.#content(connection).jsonResult(value, method));
+                const json = JSON.stringify(value);
+                if (json !== undefined && Buffer.byteLength(json) > REMOTE_ATTACHMENT_MAX_BYTES) return ok({ ok: false, reason: 'this image is too large to show on another device' });
+            }
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).

@@ -60,6 +60,8 @@ export const ENGINE_METHODS = [
     'engine.historyRows',
     // A tool row's whole output, read by the host from its own store when a person opens the row (Tynn story #386).
     'engine.toolOutput',
+    // One image a thread kept, read by the host from its own store when a sent message's pill asks (Tynn #642).
+    'engine.attachment',
     // Subscriptions: an agent's ledger is sent only while the window watches it (cheap, incremental — patches only).
     'engine.watchLedger',
     'engine.unwatchLedger',
