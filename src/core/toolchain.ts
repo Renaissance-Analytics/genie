@@ -21,9 +21,12 @@ export interface HostTool {
     readonly probe: { readonly binary: string; readonly args: readonly string[] };
     /** The id each package manager knows the tool by; absent = that manager cannot update it. */
     readonly packages: Partial<Record<PackageManager, string>>;
-    /** A tool with its own updater (rustup) or distribution (npm -g) ignores the OS package manager. */
-    readonly ownUpdater?: { readonly manager: 'rustup' | 'npm'; readonly command: string };
-    /** The npm package an `npm`-distributed tool installs as (`npm install -g <it>`); absent = npm cannot install it. */
+    /**
+     * A tool with its own updater (rustup), its own distribution (npm), or its VENDOR'S INSTALLER (Tynn #698: the agent CLIs,
+     * `VENDOR_INSTALLERS`) ignores the OS package manager.
+     */
+    readonly ownUpdater?: { readonly manager: 'rustup' | 'npm' | 'vendor'; readonly command: string };
+    /** The npm package an agent CLI is published as: what `npm outdated -g` names, and what a repair removes when that copy is broken. */
     readonly npmPackage?: string;
 }
 
@@ -37,8 +40,10 @@ export const HOST_TOOLS: readonly HostTool[] = [
     { name: 'rustc', probe: { binary: 'rustc', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'rustup', command: 'rustup update stable' } },
     { name: 'cargo', probe: { binary: 'cargo', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'rustup', command: 'rustup update stable' } },
     { name: 'git', probe: { binary: 'git', args: ['--version'] }, packages: { winget: 'Git.Git', brew: 'git', apt: 'git', dnf: 'git' } },
-    { name: 'claude-code', probe: { binary: 'claude', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g @anthropic-ai/claude-code@latest' }, npmPackage: '@anthropic-ai/claude-code' },
-    { name: 'codex', probe: { binary: 'codex', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g @openai/codex@latest' }, npmPackage: '@openai/codex' },
+    // The agent CLIs install and update the way their vendors document (Tynn #698): `npm install -g` on npm 12 skips Claude
+    // Code's postinstall and leaves it a placeholder. `claude update` updates a native install; Codex's installer updates it.
+    { name: 'claude-code', probe: { binary: 'claude', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'vendor', command: 'claude update' }, npmPackage: '@anthropic-ai/claude-code' },
+    { name: 'codex', probe: { binary: 'codex', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'vendor', command: 'the Codex installer' }, npmPackage: '@openai/codex' },
     // Docker Desktop: what every hosted service engine runs on. No apt/dnf row on purpose: a distro's `docker.io` is not
     // Docker Desktop, and installing it does not put the person in the `docker` group — a row that "installs" Docker and
     // leaves it unusable is worse than none.
@@ -199,14 +204,66 @@ export function toolStatus(p: ToolProbe): ToolStatus {
     return { tool: p.tool, installed: p.installed, latest: p.latest, tone, source: p.source, ...choices };
 }
 
+/**
+ * THE VENDORS' OWN INSTALLERS for the agent CLIs (Tynn #698), as the vendors document them: Claude Code's native installer
+ * (code.claude.com/docs/en/setup) and Codex's standalone installer (github.com/openai/codex, README). Each is ONE argv of
+ * constants: its script belongs to the shell it names, and nothing a person or an agent typed ever reaches it. No prompt can
+ * wait: Genie closes their input (spawn-exec.ts), and Codex's installer answers its own questions "no" when input is
+ * redirected. macOS is not supported by Genie right now.
+ *
+ * The vendor's https domain is trusted, as it is when a person runs the command by hand; nothing is pinned. What Genie adds
+ * is that A DOWNLOAD THAT FAILS FAILS THE STEP (PR #1881 review). `curl … | sh` runs whatever arrived: a failed download is
+ * an empty script that exits 0, and one cut short runs half an installer. So on Linux the installer is downloaded whole to a
+ * temporary file, https only and TLS 1.2+, and run by the vendor's shell only when curl succeeded (`set -e`); the file goes
+ * when the step ends. On Windows the vendor's `irm … | iex` stays, with the download made to stop on error and an empty
+ * one refused, so powershell.exe exits non-zero; it holds no double quote, which Node and PowerShell quote differently.
+ */
+function posixInstaller(url: string, shell: 'bash' | 'sh'): readonly string[] {
+    return [shell, '-c', `set -eu; f="$(mktemp)"; trap 'rm -f "$f"' EXIT; curl --proto '=https' --tlsv1.2 -fsSL ${url} -o "$f"; ${shell} "$f"`];
+}
+function windowsInstaller(url: string): readonly string[] {
+    return ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `$installer = irm ${url} -ErrorAction Stop; if (-not $installer) { throw '${url} sent nothing' }; $installer | iex`];
+}
+
+export const VENDOR_INSTALLERS: Readonly<Record<string, { readonly name: string; readonly urls: { readonly win32: string; readonly linux: string }; readonly win32: readonly string[]; readonly linux: readonly string[] }>> = {
+    'claude-code': {
+        name: 'Claude Code',
+        // code.claude.com/docs/en/setup, "Native Install": `irm https://claude.ai/install.ps1 | iex`, `curl -fsSL https://claude.ai/install.sh | bash`.
+        urls: { win32: 'https://claude.ai/install.ps1', linux: 'https://claude.ai/install.sh' },
+        win32: windowsInstaller('https://claude.ai/install.ps1'),
+        linux: posixInstaller('https://claude.ai/install.sh', 'bash'),
+    },
+    codex: {
+        name: 'Codex',
+        // github.com/openai/codex README: `irm https://chatgpt.com/codex/install.ps1 | iex`, `curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
+        urls: { win32: 'https://chatgpt.com/codex/install.ps1', linux: 'https://chatgpt.com/codex/install.sh' },
+        win32: windowsInstaller('https://chatgpt.com/codex/install.ps1'),
+        linux: posixInstaller('https://chatgpt.com/codex/install.sh', 'sh'),
+    },
+};
+
+/** The vendor installer's argv here, or why there is none. Its label names the vendor's URL, not the hardening around it. */
+export function vendorInstaller(tool: string, platform: Platform): { readonly argv: readonly string[]; readonly label: string } | { readonly refused: string } | null {
+    const v = VENDOR_INSTALLERS[tool];
+    if (!v) return null;
+    if (platform === 'darwin') return { refused: `Genie does not support macOS yet, so it cannot install ${v.name} here` };
+    return { argv: v[platform], label: `${v.name}’s installer: ${v.urls[platform]}` };
+}
+
 export type UpdatePlan =
-    | { readonly command: string; readonly manager: PackageManager | 'rustup' | 'npm' }
+    | { readonly command: string; readonly manager: PackageManager | 'rustup' | 'npm' | 'vendor'; readonly argv?: readonly string[] }
     | { readonly refused: string };
 
 /** The update command for THIS platform, from Genie's own tables — never a guess. */
 export function planUpdate(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): UpdatePlan {
     const tool = HOST_TOOLS.find((t) => t.name === input.tool);
     if (!tool) return { refused: `${input.tool} is not a tool Genie manages` };
+    // Codex updates by running its installer again; Claude Code by `claude update` (its own updater, any install kind).
+    if (input.tool === 'codex') {
+        const v = vendorInstaller(input.tool, input.platform)!;
+        return 'refused' in v ? v : { command: v.label, argv: v.argv, manager: 'vendor' };
+    }
+    if (tool.ownUpdater?.manager === 'vendor' && input.platform === 'darwin') return { refused: `Genie does not support macOS yet, so it cannot update ${input.tool} here` };
     if (tool.ownUpdater) return { command: tool.ownUpdater.command, manager: tool.ownUpdater.manager };
     const pm = input.packageManager;
     if (pm === null) return { refused: `no package manager found on this machine to update ${input.tool} with` };
@@ -234,7 +291,7 @@ export function planUpdate(input: { tool: string; platform: Platform; packageMan
  * agent CLIs install with npm. `elevated` says a system prompt will appear — never a surprise.
  */
 export type InstallPlan =
-    | { readonly argv: readonly string[]; readonly label: string; readonly manager: PackageManager | 'npm'; readonly elevated: boolean }
+    | { readonly argv: readonly string[]; readonly label: string; readonly manager: PackageManager | 'npm' | 'vendor'; readonly elevated: boolean }
     | { readonly refused: string };
 
 /** A Debian package name; anything else never reaches `sh -c`. */
@@ -245,10 +302,9 @@ export function planInstall(input: { tool: string; platform: Platform; packageMa
     const prereq = PREREQUISITES.find((p) => p.name === input.tool);
     if (!tool && !prereq) return { refused: `${input.tool} is not a tool Genie manages` };
     if (prereq && prereq.platform !== input.platform) return { refused: `the ${prereq.label} is only needed on ${prereq.platform}` };
-    if (tool?.npmPackage) {
-        const [binary, args] = platformArgv('npm', ['install', '-g', tool.npmPackage], input.platform);
-        return { argv: [binary, ...args], label: `npm install -g ${tool.npmPackage}`, manager: 'npm', elevated: false };
-    }
+    // The agent CLIs: their vendor's installer (Tynn #698), never npm.
+    const vendor = vendorInstaller(input.tool, input.platform);
+    if (vendor !== null) return 'refused' in vendor ? vendor : { argv: vendor.argv, label: vendor.label, manager: 'vendor', elevated: false };
     if (tool?.ownUpdater?.manager === 'npm') return { refused: `${input.tool} comes with Node; install node and it is there` };
     if (tool?.ownUpdater?.manager === 'rustup') return { refused: `${input.tool} is installed with rustup (rustup.rs); once it is there, Genie keeps it updated` };
     const pm = input.packageManager;

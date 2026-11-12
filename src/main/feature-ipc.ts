@@ -132,6 +132,8 @@ export interface FeaturePorts {
         repair?(): Promise<RepairReport>;
         /** Open a provider's own login (LoginHost, the Agent view's Log in), for a row that says Not signed in (Tynn #698). */
         login?(provider: string): { ok: true } | { ok: false; reason: string };
+        /** Repair a provider's CLI (Tynn #698, main/cli-repair.ts): each step pushed while it runs; never throws by contract, guarded anyway. */
+        repairCli?(provider: string, progress: (step: string | null) => void): Promise<{ readonly kind: 'repaired'; readonly words: string } | { readonly kind: 'failed' | 'refused'; readonly reason: string }>;
         /** T4: Genie-managed PHP versions. `pins` are the sites' PHP pins, which a removal is refused against. */
         php?: {
             list(pins: readonly SitePin[]): Promise<PhpVersionsView>;
@@ -379,6 +381,9 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
 }
 
 const sameRow = (r: ToolchainRefusal, tool: string, version: string | undefined): boolean => r.tool === tool && r.version === version;
+
+/** The Toolchain rows whose CLI repair is running now (`toolchain.repairCli`): one repair per CLI at a time. */
+const repairingCli = new Set<string>();
 
 /** A row's next action starts clean: its old refusal goes; every other row's stays. */
 function clearRefusal(next: FeatureState, tool: string, version?: string): void {
@@ -1034,6 +1039,35 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const login = ports.toolchain?.login;
             const opened = login ? login(provider) : { ok: false as const, reason: 'no login is wired into this Genie' };
             if (!opened.ok) refuse(next, action.tool, opened.reason);
+            break;
+        }
+        case 'toolchain.repairCli': {
+            // ONE REPAIR AT A TIME per CLI (PR #1881 review): a second click while one runs does nothing. Two installers
+            // writing the same folder race, and the second's end would clear the first's progress off the row.
+            if (repairingCli.has(action.tool)) break;
+            clearRefusal(next, action.tool);
+            const tc = ports.toolchain;
+            if (!tc?.repairCli) {
+                refuse(next, action.tool, 'no repair is wired into this Genie; nothing was changed');
+                break;
+            }
+            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
+            const row = (step: string) => tc.updating?.({ tool: action.tool, step });
+            // Taken in the same synchronous run as the check above, so no second click can slip between them.
+            repairingCli.add(action.tool);
+            try {
+                row('Starting');
+                const outcome = await tc.repairCli(provider, (step) => { if (step) row(step); });
+                if (outcome.kind === 'repaired') next.toolchainResult = outcome.words;
+                else refuse(next, action.tool, outcome.reason);
+            } catch (error) {
+                refuse(next, action.tool, `The repair stopped: ${error instanceof Error ? error.message : String(error)}`);
+            } finally {
+                tc.updating?.(null);
+                repairingCli.delete(action.tool);
+            }
+            // The row shows what the check finds now, never the repair's word for it.
+            await rescanToolchain(next, tc, sitePins(services));
             break;
         }
         case 'toolchain.install': {
