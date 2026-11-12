@@ -1,7 +1,11 @@
 # Where Genie's CI runs
 
 All of Genie's testing runs on machines we run, never on GitHub Actions (the owner, 2026-11-11: "ALL CI IS LOCAL OR IN
-AZURE"). GitHub may still build, sign and publish a release; it tests nothing and gates no merge.
+AZURE"). GitHub builds, signs and publishes a release; it runs no tests and gates no merge.
+
+**The gate before a tag** is a green `scripts/ci/linux.sh` on omarchy-test AND a green `scripts/ci/windows.ps1` on an Azure
+Windows VM, on the commit being tagged. `release.yml` no longer runs the suite before it builds: a tag pushed without both
+gates green ships untested code.
 
 | Platform | Machine | Entry |
 | --- | --- | --- |
@@ -59,11 +63,12 @@ A run with `--only`/`--from` (`-Only`/`-From`) first runs the setup its rows sta
 
 ## The GitHub workflows
 
-| Workflow | What it does | Tests? |
-| --- | --- | --- |
-| `ci.yml` | typecheck + unit, genie-host on plain Node, flows, zip64, mailpit, the real-window rows (Linux and Windows), Windows unit, packaging, on every PR and on pushes to `main` and `next/**` | yes: replaced by `scripts/ci/linux.sh` and `scripts/ci/windows.ps1`, to be removed |
-| `release.yml` | for a `v*` tag: checks the tag against `package.json`, builds each platform into a draft release, signs and verifies Windows, writes the notes; the release stays a draft | runs `npm test` and `verify:zip64` before it builds |
-| `release-published.yml` | when the owner publishes a release: closes the issues it ships | no |
-| `sign-test.yml` | a push to `next/release-signing` (or by hand): a signing trial behind the protected environment's approval | no |
-| `signing-guards.yml` | PRs and `next/release-signing`: the signing and release-workflow unit tests | yes: a subset of the unit suite |
-| `deps-drift.yml` | daily: drift of the pinned `@particle-academy` packages, and known advisories against them | a check, not the suite |
+| Workflow | What it does |
+| --- | --- |
+| `release.yml` | for a `v*` tag: checks the tag against `package.json`, typechecks, builds each platform into a draft release, signs and verifies Windows, writes the notes; the release stays a draft. No tests. |
+| `release-published.yml` | when the owner publishes a release: closes the issues it ships |
+| `sign-test.yml` | a push to `next/release-signing` (or by hand): a signing trial behind the protected environment's approval |
+| `deps-drift.yml` | daily: drift of the pinned `@particle-academy` packages, and known advisories against them (a check, not the suite) |
+
+Removed: `ci.yml` (every test job; its rows are `scripts/ci/linux.sh` and `scripts/ci/windows.ps1`) and `signing-guards.yml`
+(the signing and release-workflow unit tests, which are in the unit row of both scripts).
