@@ -36,7 +36,13 @@ const SLICE_PAIRS = 10, SLICE_MS = 1200, SETTLE_MS = 400;
 // PAST THE OUTPUT CAP (Tynn #542): more than the view keeps per terminal (OUTPUT_CAP, 2,000,000), then slices while it streams.
 // The Take Over window's flood (Tynn #544): six times the view's cap, so a view that keeps everything shows it.
 const TAKEOVER_FLOOD_BYTES = 12_000_000;
-const FLOOD_BYTES = 2_500_000, PAST_SLICES = 6, PAST_STREAM_MS = PAST_SLICES * (SLICE_MS + SETTLE_MS) + 4000;
+const FLOOD_BYTES = 2_500_000, PAST_SLICES = 6, PAST_STREAM_MS = PAST_SLICES * 2 * (SLICE_MS + SETTLE_MS) + 4000;
+// THE CONTROL PAST THE CAP (Tynn #692; the coordinator's ruling, 2026-11-11): beside each slice past the cap, one taken at
+// the next moment with the same terminal still streaming and its pane HIDDEN (visibility, so nothing is laid out again,
+// resized or re-attached: a re-attach starts from a short snapshot, under the cap). The verdict reads each pair, so a
+// machine that slows down during the phase moves both sides (Azure run 2 read 0.79, run 3 1.02, unpaired).
+const PAST_CONTROL = 'its pane hidden at the same moments';
+const hidePane = (hidden) => `(() => { const pane = document.querySelector('[data-terminal-pane]'); if (!pane) return false; pane.style.visibility = ${hidden ? "'hidden'" : "''"}; return true; })()`;
 // One pair traced in the profiled pass (Tynn #537): what every thread of the window did, terminal on against off.
 const TRACE_PAIR = 4, TRACE_CATEGORIES = ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.frame', 'blink', 'cc', 'gpu', 'viz', 'benchmark', 'renderer.scheduler', 'v8.execute'];
 const BUDGET = process.argv.includes('--budget'), BUDGET_MS = 50, HOST_BUDGET_MS = 100, IDLE_MS = 6000, BUILD_MS = 52000, CONTROL_MS = 120;
@@ -420,14 +426,18 @@ try {
         p = await mark('terminal-past-cap');
         const pastSlices = [], pastMouse = [], pastKeys = [];
         for (let k = 0; k < PAST_SLICES; k += 1) {
-            await sleep(SETTLE_MS);
-            await focusField();
-            const script0 = await scriptMs(page), from = await page.evaluate('performance.now()');
-            const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
-            pastMouse.push(...d.mouse); pastKeys.push(...d.keys);
-            const to = await page.evaluate('performance.now()');
-            pastSlices.push({ cond: 'past', from, to, scriptMs: (await scriptMs(page)) - script0 });
+            for (const cond of ['past', 'past-hidden']) {
+                demand(await page.evaluate(hidePane(cond === 'past-hidden')), 'the terminal pane is there to hide and show');
+                await sleep(SETTLE_MS);
+                await focusField();
+                const script0 = await scriptMs(page), from = await page.evaluate('performance.now()');
+                const d = await drive(page, { ms: SLICE_MS, width: box.width, height: box.height });
+                pastMouse.push(...d.mouse); pastKeys.push(...d.keys);
+                const to = await page.evaluate('performance.now()');
+                pastSlices.push({ cond, from, to, scriptMs: (await scriptMs(page)) - script0 });
+            }
         }
+        await page.evaluate(hidePane(false));
         await noDialog(`after the ${label} pass's slices past the output cap`);
         phases.push({ ...p, end: await mark('terminal-past-cap-end'), input: { mouse: pastMouse, keys: pastKeys }, slices: pastSlices, flooded });
         await until('the flood to end', () => page.evaluate(`${rowsText}.includes('UI_LAG_FLOOD_DONE ${run}')`), 60000).catch(() => null);
@@ -473,13 +483,17 @@ try {
         const flooded = await until('the flood in the Take Over window', async () => json(pastFile), 90000);
         const tkSlices = [];
         for (let k = 0; k < PAST_SLICES; k += 1) {
-            await sleep(SETTLE_MS);
-            await tk.evaluate(`document.querySelector('[data-ui-lag-typing]').focus(); true`);
-            const script0 = await scriptMs(tk), from = await tk.evaluate('performance.now()');
-            await drive(tk, { ms: SLICE_MS, width: tkBox.width, height: tkBox.height });
-            const to = await tk.evaluate('performance.now()');
-            tkSlices.push({ cond: 'takeover', from, to, scriptMs: (await scriptMs(tk)) - script0 });
+            for (const cond of ['takeover', 'takeover-hidden']) {
+                demand(await tk.evaluate(hidePane(cond === 'takeover-hidden')), 'the Take Over window\'s terminal pane is there to hide and show');
+                await sleep(SETTLE_MS);
+                await tk.evaluate(`document.querySelector('[data-ui-lag-typing]').focus(); true`);
+                const script0 = await scriptMs(tk), from = await tk.evaluate('performance.now()');
+                await drive(tk, { ms: SLICE_MS, width: tkBox.width, height: tkBox.height });
+                const to = await tk.evaluate('performance.now()');
+                tkSlices.push({ cond, from, to, scriptMs: (await scriptMs(tk)) - script0 });
+            }
         }
+        await tk.evaluate(hidePane(false));
         const tkDone = await until('the Take Over flood to end', () => tk.evaluate(`(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').includes('UI_LAG_FLOOD_DONE ${run}')`), 120000).catch(() => false);
         await sleep(1000);
         const heap1 = await heap();
@@ -634,9 +648,15 @@ try {
     // THE THROUGHPUT BUDGET (Tynn #537): the input the page keeps up with, terminal on screen against off, the same slices.
     const throughput = throughputVerdict({ on: termSlices.filter((x) => x.cond === 'on'), off: termSlices.filter((x) => x.cond === 'off') });
     // PAST THE OUTPUT CAP (Tynn #542): the terminal on screen with its output trimmed every batch, against it on screen below.
-    const capBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: passes[0].rows.find((r) => r.phase === 'terminal-past-cap')?.slices ?? [] }, { maxFrameGapMs: 100 + over.frameGapMs });
+    // Each slice past the cap against its own control beside it (Tynn #692); the earlier below-cap comparison is printed for
+    // reference and judges nothing.
+    const pastRow = passes[0].rows.find((r) => r.phase === 'terminal-past-cap')?.slices ?? [];
+    const capBudget = capVerdict({ below: pastRow.filter((x) => x.cond === 'past-hidden'), past: pastRow.filter((x) => x.cond === 'past') }, { maxFrameGapMs: 100 + over.frameGapMs, paired: true, control: PAST_CONTROL });
+    const capReference = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: pastRow.filter((x) => x.cond === 'past') }, { maxFrameGapMs: 100 + over.frameGapMs });
+    console.log(`UI_LAG_CAP_REFERENCE (not judged) against the build's below-cap slices a minute earlier: ratio ${capReference.ratio}, script past ${capReference.pastScriptMsPerS} below ${capReference.belowScriptMsPerS} ms/s`);
     // THE TAKE OVER WINDOW'S TERMINAL (Tynn #544): streaming past the cap there, against the workspace's terminal below it.
-    const takeoverBudget = capVerdict({ below: termSlices.filter((x) => x.cond === 'on'), past: result.takeover?.slices ?? [] }, { maxFrameGapMs: 100 + over.frameGapMs });
+    const tkAll = result.takeover?.slices ?? [];
+    const takeoverBudget = capVerdict({ below: tkAll.filter((x) => x.cond === 'takeover-hidden'), past: tkAll.filter((x) => x.cond === 'takeover') }, { maxFrameGapMs: 100 + over.frameGapMs, paired: true, control: PAST_CONTROL });
     const heldBudget = result.takeoverHeld ?? { ok: false, reasons: ['the Take Over window was not measured'] };
     result.budget = { ok: mainBudget.ok && paging.ok && pushes.ok && spawnsOk && hostBudget.ok && pageBudget.ok && throughput.ok && capBudget.ok && takeoverBudget.ok && heldBudget.ok, main: mainBudget, paging, pushes, hostSpawns, host: hostBudget, page: pageBudget, throughput, cap: capBudget, takeover: takeoverBudget, held: heldBudget };
     code = BUDGET && !result.budget.ok ? 1 : 0;

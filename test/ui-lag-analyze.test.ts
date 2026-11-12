@@ -194,6 +194,42 @@ describe('the throughput budget: input the page keeps up with, terminal on again
     });
 });
 
+describe('the terminal past its output cap, against itself hidden AT THE SAME MOMENTS (Tynn #692)', () => {
+    /*
+     * The past-cap slices used to be one phase of their own, compared with below-cap slices taken a minute earlier: a slower
+     * minute on the machine read as a cost of the cap (Azure run 2: 0.79; run 3: 1.02). Now each past slice has a control
+     * next to it in time, the same terminal still streaming past the cap with its pane hidden, and the verdict reads the
+     * PAIRS: each past slice against its own control.
+     */
+    const slice = (count: number, scriptMsPerS = 60, worstGapMs = 0) => ({ count, p95: 20, worstGapMs, scriptMsPerS });
+    const paired = { paired: true, control: 'its pane hidden at the same moments' } as const;
+    it('a machine that slows down halfway moves both sides of each pair, and passes', () => {
+        const control = [slice(70), slice(71), slice(69), slice(40), slice(38), slice(41)];
+        const past = [slice(69), slice(70), slice(70), slice(39), slice(38), slice(40)];
+        const v = capVerdict({ below: control, past }, paired);
+        expect(v.reasons).toEqual([]);
+        expect(v.ratio).toBe(0.99);
+        // CONTROL: the same slices read unpaired (medians of each side) fail on the slowdown alone.
+        expect(capVerdict({ below: [slice(70), slice(71), slice(69), slice(70), slice(70), slice(71)], past }).ok).toBe(false);
+    });
+    it('a past side that falls behind its own controls fails, in words that name the control', () => {
+        const v = capVerdict({ below: [slice(70), slice(71), slice(69)], past: [slice(50), slice(52), slice(49)] }, paired);
+        expect(v.ok).toBe(false);
+        expect(v.reasons).toEqual(['mouse events acknowledged past the output cap: 0.71 of its pane hidden at the same moments, median of 3 pairs (bound 0.9; past 50, control 70)']);
+    });
+    it('script time is read by pair too: over its own control by more than the bound fails', () => {
+        // Pair differences 40, 40, 280: the median is 40, under the bound. Unpaired, the same slices fail (340 against 120).
+        const below = [slice(70, 100), slice(70, 300), slice(70, 120)], past = [slice(70, 140), slice(70, 340), slice(70, 400)];
+        expect(capVerdict({ below, past }, paired).reasons).toEqual([]);
+        expect(capVerdict({ below, past }).ok).toBe(false);
+        const busy = capVerdict({ below: [slice(70, 100), slice(70, 100), slice(70, 100)], past: [slice(70, 200), slice(70, 220), slice(70, 180)] }, paired);
+        expect(busy.reasons).toEqual(['page script time past the output cap: 100 ms per second over its pane hidden at the same moments, median of 3 pairs (bound 50; past 200, control 100)']);
+    });
+    it('needs as many controls as past slices, and enough of them', () => {
+        expect(capVerdict({ below: [slice(70), slice(70)], past: [slice(70), slice(70), slice(70)] }, paired).reasons).toEqual(['too few pairs: 2 past slices with a control beside them (need 3)']);
+    });
+});
+
 describe('the terminal past its output cap, against below it (Tynn #542)', () => {
     const slice = (count: number, worstGapMs = 0, scriptMsPerS = 60) => ({ count, p95: 20, worstGapMs, scriptMsPerS });
     it('fails a page whose script time past the cap is far over below it, though its input keeps up (run 0d892cff)', () => {

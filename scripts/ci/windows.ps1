@@ -56,7 +56,7 @@ $Rows = @(
     'deps', 'electron-binary',
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
-    'local-door-break', 'local-door', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag',
+    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag',
     'trust-step', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher'
 )
@@ -312,6 +312,8 @@ function Row-local-door {
     if ($code -eq 2) { $script:Notes += 'local-door is INCOMPLETE (exit 2): see the UNMEASURED rows in ci-out\local-door.log'; return }
     if ($code -ne 0) { throw "local-door-cdp failed (exit $code)" }
 }
+# A host that comes up late is waited for (Tynn #700): the window must not give up on a genie-host that is still starting.
+function Row-host-late-ready { Need-Build; Need-TestMachine; Run 'host-late-ready-cdp' { node scripts/host-late-ready-cdp.mjs } }
 function Row-files-watch { Need-Build; Need-TestMachine; Run 'files-watch-cdp' { node scripts/files-watch-cdp.mjs } }
 function Row-chat-drafts { Need-Build; Need-TestMachine; Run 'chat-drafts-cdp' { node scripts/chat-drafts-cdp.mjs } }
 function Row-gapp-open { Need-Build; Need-TestMachine; Run 'gapp-open-cdp' { node scripts/gapp-open-cdp.mjs } }
