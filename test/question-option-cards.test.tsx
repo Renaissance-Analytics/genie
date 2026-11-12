@@ -62,7 +62,10 @@ describe('each option is a card as wide as the question', () => {
         for (const label of [LONG, 'Terminal', 'Skip', 'unit', 'e2e']) {
             const c = card(html, label);
             expect(c, label).not.toMatch(/\b(sm|md|lg|xl|2xl):/);
-            expect(c, label).not.toMatch(/max-w-\[|\bw-\d|\bw-\[/);
+            // A width or a width cap, as a whole class: `w-48`, `w-[30ch]`, `max-w-[40ch]`. `\bw-\d` also matched inside
+            // `min-w-0` (a `-` is a word boundary), which takes no width away — it lets a flex child shrink, and both the card
+            // and Fancy's own Button label carry it so a long title wraps between words (red on the 62a gate for that).
+            expect(c, label).not.toMatch(/(?:^|[\s"])(?:max-w-\[|w-\d|w-\[)/);
         }
     });
 });
