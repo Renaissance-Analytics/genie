@@ -92,6 +92,9 @@ if ($Only -or $From) {
     # $prereq, not $setup: PowerShell's names ignore case, and $setup IS $Setup, the ci-out\setup folder (the Azure run of
     # -Only unit on 101287c4: the folder became this list, ci-out was never made, every row read as timed out).
     $prereq = @('deps', 'electron-binary')
+    # The Windows unit suite stands on build:main (ci.yml's unit (windows) job built it first): without it, 394 tests that
+    # start dist/main's processes failed (files-git-delta, git-read-limit…; -Only unit on e9e73006).
+    if ($selected -contains 'unit') { $prereq += 'unit-build' }
     if (@($selected | Where-Object { @('deps', 'electron-binary', 'unit-build', 'unit') -notcontains $_ }).Count -gt 0) { $prereq += 'build' }
     $selected = @($prereq | Where-Object { $selected -notcontains $_ }) + $selected
 }
