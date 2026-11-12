@@ -264,6 +264,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             check: () => read((bridge) => bridge.updates.check()),
             download: () => read((bridge) => bridge.updates.download()),
             install: () => read((bridge) => bridge.updates.install()),
+            forceDrain: () => read((bridge) => bridge.updates.forceDrain?.() ?? Promise.resolve(false)),
             notes: () => read((bridge) => bridge.updates.notes!()),
             subscribe: (listener) => subscribe((bridge) => bridge.updates.subscribe(listener)),
         },

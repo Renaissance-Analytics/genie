@@ -277,6 +277,7 @@ export interface HostApiDeps {
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
         install(): Promise<{ report: string }> | null;
+        forceDrain?(): boolean | Promise<boolean>;
         notes?(): Promise<UpdateState | null>;
         /** Abandon a drain in progress (§7.5); `false` when there is none. */
         onChange(listener: (state: UpdateState) => void): () => void;
@@ -682,6 +683,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates ? deps.updates.download() : false;
             case 'updates.install':
                 return deps.updates?.install() ?? null;
+            case 'updates.forceDrain':
+                return deps.updates?.forceDrain?.() ?? false;
             case 'updates.notes':
                 return deps.updates?.notes?.() ?? null;
             case 'headroom':

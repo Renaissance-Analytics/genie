@@ -610,7 +610,7 @@ export function Shell({
                     }}
                 />
             ) : null}
-            {restartScreen ? <InstallScreen screen={restartScreen} /> : null}
+            {restartScreen ? <InstallScreen screen={restartScreen} onForce={() => { void updates.forceDrain?.(); }} /> : null}
             {/* A workspace's background processes or sites, from its row's indicator (Genie 1's modals). */}
             {runtimeModal && runtimeWorkspace ? (
                 <WorkspaceRuntimeModal kind={runtimeModal.kind} workspace={runtimeWorkspace} data={features} onAction={onFeature} onClose={() => setRuntimeModal(null)} />

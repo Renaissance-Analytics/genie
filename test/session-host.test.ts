@@ -2,7 +2,8 @@ import { writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fileLockIdentityStatus, warmLockIdentity } from '@particle-academy/prism-harness';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import { agentRowFor } from '../src/core/roster.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
@@ -57,6 +58,13 @@ const noProcessTree: ProcessTree = {
     killTree: (pids) => { reaped = [...reaped, pids]; return { killed: pids.length, refused: false }; },
 };
 
+// Match genie-host startup and the thread-write suites: pay the cold Windows PowerShell/CIM
+// identity read before the test, retaining the real file lock and the unchanged 5 s test budget.
+beforeAll(async () => {
+    await warmLockIdentity();
+    console.log(`[#616] ${process.platform} lock identity read once: ${Math.round(fileLockIdentityStatus().sample_duration_ms)} ms`);
+}, 30_000);
+
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-host-'));
     killed = 0;
@@ -90,6 +98,54 @@ const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}): AgentRec
     agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas', ...over });
 
 describe('starting', () => {
+    it('shutdown holds new work and new starts without cancelling the current turn, and the next run re-delivers the held message (Tynn #616)', async () => {
+        expect(fileLockIdentityStatus().sampled, 'the real lock identity is sampled before the test, as at host startup').toBe(true);
+        const prompts: unknown[] = [];
+        host = new SessionHost({
+            userData: dir, processTree: noProcessTree, clock: () => now,
+            driverFor: () => (options) => {
+                events = options.events;
+                return { start: () => {}, prompt: (text) => { prompts.push(text); }, kill: () => { killed += 1; }, cliSessionId: null };
+            },
+        });
+        const r = record();
+        expect(host.start(r, dir)).toEqual({ ok: true });
+        expect(host.prompt(r.id, 'current turn')).toBe(true);
+        expect(prompts).toHaveLength(1);
+        host.holdForShutdown();
+        expect(killed).toBe(0);
+        expect(host.probe(r.id)?.inTurn).toBe(true);
+        expect(host.prompt(r.id, 'next turn')).toBe(true); // held, never silently discarded
+        events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+        expect(prompts).toHaveLength(1);
+        expect(host.probe(r.id)?.inTurn).toBe(false);
+        expect(host.start(record({ name: 'new worker' }), dir)).toMatchObject({ ok: false, reason: expect.stringMatching(/shutting down/i) });
+        host.stop(r.id, { graceful: false }); await host.ended(r.id);
+        // A setting/crash replacement of an agent present at hold entry is allowed, so it cannot
+        // disappear from the final restore record merely because its old run ended during the wait.
+        expect(host.start(r, dir)).toEqual({ ok: true });
+        host.releaseAfterShutdown();
+        expect(await host.deliverOwed(r.id)).toBe(1);
+        expect(prompts).toEqual(['current turn', 'next turn']);
+        expect(await host.deliverOwed(r.id)).toBe(0);
+        host.stopAll();
+        await host.settled();
+    });
+
+    it('abandoning shutdown releases held input in the current run and permits fresh agent starts', () => {
+        const prompts: unknown[] = [];
+        host = new SessionHost({ userData: dir, processTree: noProcessTree, driverFor: () => (options) => {
+            events = options.events;
+            return { start: () => {}, prompt: (text) => { prompts.push(text); }, kill: () => {}, cliSessionId: null };
+        } });
+        const r = record(); host.start(r, dir); host.holdForShutdown();
+        expect(host.prompt(r.id, 'held during quit')).toBe(true);
+        expect(prompts).toEqual([]);
+        host.releaseAfterShutdown();
+        expect(prompts).toEqual(['held during quit']);
+        expect(host.start(record({ name: 'new worker' }), dir)).toEqual({ ok: true });
+    });
+
     it('REATTACHES rather than creating a second session', () => {
         /**
          * §6.2. The alternative is two provider processes answering as one agent, which is how

@@ -1,6 +1,7 @@
 import { orphanReport, orphansUnder, type RunningProcess } from './upgrade.js';
 import { changelogBetween, type ReleaseLike, type UpdateChangelog } from '../core/update-notes.js';
 import { DEFAULT_UPDATE_CHANNEL, updaterConfigFor, type UpdateChannel } from '../core/update-channel.js';
+import type { AgentDrainOutcome, AgentDrainProgress, ShutdownReason } from '../core/agent-shutdown-drain.js';
 
 /**
  * THE UPDATE HOST — §7, wired.
@@ -62,9 +63,13 @@ export interface UpdateState {
 }
 
 export interface InstallProgress {
-    step: 'agents' | 'processes' | 'restarting';
+    step: 'waiting' | 'agents' | 'processes' | 'restarting';
     agents: number;
     left: number;
+    reason?: ShutdownReason;
+    waiting?: AgentDrainProgress['waiting'];
+    deadline?: number;
+    interrupted?: AgentDrainOutcome['interrupted'];
 }
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
@@ -79,7 +84,7 @@ export interface UpdaterPort {
     /** Downloads the update found by the last check, reporting progress 0–100. */
     download(onProgress: (percent: number) => void): Promise<void>;
     /** Quits and runs the installer. Does not return in the real implementation. */
-    quitAndInstall(): void;
+    quitAndInstall(): void | Promise<void>;
     /**
      * Make the install ready BEFORE anything is stopped (P5b: the helper has the update in hand). A rejection stops the
      * install there, in words, with every agent and site still running. Absent = nothing to make ready.
@@ -88,14 +93,17 @@ export interface UpdaterPort {
 }
 
 /**
- * The live agents at an upgrade: who is running, and the end of every session (§7.4). No agent is ASKED for anything
- * (the owner, 2026-10-12: "agents no longer need to write a handoff when genie upgrades") — an agent is a session that
- * resumes its own thread.
+ * The live agents at an upgrade: the safe-point wait, then the end of every session (§7.4).
+ * No handoff file is required: each agent resumes its own thread. Tynn #616 adds a notice and
+ * a bounded current-turn/early-thumb wait before the existing record-and-stop path.
  */
 export interface DrainAgentsPort {
     live(): ReadonlyArray<{ id: string; name: string }>;
     /** End every session; resolves once each stop has ended, reporting how many are still stopping as they do. */
     stopAll(onLeft?: (left: number) => void): Promise<void> | void;
+    waitForSafe?(reason: ShutdownReason, progress: (state: AgentDrainProgress) => void): Promise<AgentDrainOutcome>;
+    force?(): boolean;
+    release?(): void;
 }
 
 
@@ -168,6 +176,9 @@ export class UpdateHost {
     private readonly clock: () => number;
     private last: InstallResult | null = null;
     private currentChannel: UpdateChannel;
+    private drainReturnState: UpdateState | null = null;
+    private retryInstallState: UpdateState | null = null;
+    private drainGeneration = 0;
 
     constructor(private readonly options: UpdateHostOptions) {
         this.clock = options.clock ?? Date.now;
@@ -193,6 +204,34 @@ export class UpdateHost {
 
     state(): UpdateState {
         return this.current;
+    }
+
+    /** Quit shares the host's safe-point gate. The caller records/stops only after this resolves. */
+    prepareQuit(): Promise<AgentDrainOutcome> {
+        return this.waitForAgents('quit').catch((error: unknown) => { this.cancelDrain(); throw error; });
+    }
+    forceDrain(): boolean { return this.drainReturnState !== null && (this.options.agents?.force?.() ?? false); }
+    /** Shutdown failed/was abandoned, or its exit hook returned because this host survived. */
+    cancelDrain(): void {
+        const previous = this.drainReturnState;
+        this.drainReturnState = null;
+        this.drainGeneration += 1;
+        try { this.options.agents?.release?.(); }
+        finally { if (previous) this.set(previous); }
+    }
+
+    private waitForAgents(reason: ShutdownReason): Promise<AgentDrainOutcome> {
+        if (this.drainReturnState === null) { this.drainReturnState = this.current; this.drainGeneration += 1; }
+        const generation = this.drainGeneration;
+        const agents = this.options.agents;
+        if (!agents?.waitForSafe) return Promise.resolve({ interrupted: [], forced: false, timedOut: false });
+        return agents.waitForSafe(reason, (state) => {
+            if (generation !== this.drainGeneration) return;
+            this.set({ ...this.current, phase: 'installing', installing: { step: 'waiting', reason, agents: agents.live().length, left: state.waiting.length, ...state } });
+        }).then((outcome) => {
+            if (generation === this.drainGeneration) this.set({ ...this.current, phase: 'installing', installing: { step: 'agents', reason, agents: agents.live().length, left: agents.live().length, interrupted: outcome.interrupted } });
+            return outcome;
+        });
     }
 
     /**
@@ -269,6 +308,7 @@ export class UpdateHost {
 
     /** Ask the feed. Rejoins a check already in flight. Resolves to the resulting state. */
     check(): Promise<UpdateState> {
+        this.retryInstallState = null;
         if (this.inFlight) return this.inFlight;
         this.set({ phase: 'checking', version: null, percent: null, error: null, checkedAt: this.current.checkedAt });
         this.inFlight = this.options.port.check().then(
@@ -316,17 +356,23 @@ export class UpdateHost {
      * the answer leaves the process before the process leaves.
      */
     install(): Promise<InstallResult> | null {
-        if (this.current.phase !== 'downloaded') return null;
-        // No agent is asked for a handoff (the owner): the sessions end, and each resumes its own thread when started.
-        const live = this.options.agents?.live() ?? [];
+        const ready = this.current.phase === 'downloaded' ? this.current : this.current.phase === 'error' ? this.retryInstallState : null;
+        if (!ready) return null;
+        this.retryInstallState = ready;
+        this.drainReturnState = ready;
+        this.drainGeneration += 1;
+        // No handoff file is required; working agents get a bounded chance to finish safely first.
+        let live: ReadonlyArray<{ id: string; name: string }>;
+        try { live = this.options.agents?.live() ?? []; }
+        catch (error: unknown) { return Promise.resolve(this.failedInstall(error, true)); }
         /*
          * "INSTALLING" FIRST (genie#1201; the owner: "the whole Genie UI freezes, turns a pale white … We need a better UX
          * during that time"). This used to stop every agent, read every process and kill each inside the click's own
          * call, synchronously, and only then say so. Now the window has its restart screen before any of it starts, and
          * the work below waits without holding main.
          */
-        this.set({ ...this.current, phase: 'installing', installing: { step: 'agents', agents: live.length, left: live.length } });
-        return this.finishInstall(live);
+        this.set({ ...ready, phase: 'installing', error: null, installing: { step: 'agents', agents: live.length, left: live.length } });
+        return this.finishInstall(live).catch((error: unknown) => this.failedInstall(error));
     }
 
     /** The report of the install that ran last (the drain's words first, then §7.2's), for the UI that missed the return value. */
@@ -341,26 +387,26 @@ export class UpdateHost {
             try {
                 await this.options.port.prepareInstall();
             } catch (error: unknown) {
-                const message = error instanceof Error ? error.message : String(error);
-                const { installing: _dropped, ...rest } = this.current;
-                this.set({ ...rest, phase: 'error', error: message });
-                const result: InstallResult = { killed: [], report: `Not installed: ${message}. Nothing was stopped.` };
-                this.last = result;
-                return result;
+                return this.failedInstall(error, true);
             }
         }
-        // §7.4: an upgrade ends every agent session and does not revive them — waited for, bounded, never held on main.
+        // The helper is ready. Ask for safe points before recording who was actually interrupted.
+        // Legacy/testing ports without a safe-point gate retain their synchronous stop setup.
+        const drain = this.options.agents?.waitForSafe ? await this.waitForAgents('upgrade') : { interrupted: [], forced: false, timedOut: false };
+        const interrupted = drain.interrupted;
+        const stopping = (step: 'agents' | 'processes' | 'restarting', left: number): InstallProgress => ({ step, agents: live.length, left, ...(interrupted.length ? { interrupted } : {}) });
+        // §7.4: the existing record-before-stop path remains the only restore-roster writer.
         let stillStopping = 0;
         if (this.options.agents) {
             let left = live.length;
-            const stopped = Promise.resolve(this.options.agents.stopAll((n) => { left = n; progress({ step: 'agents', agents: live.length, left: n }); })).then(() => true, () => true);
+            const stopped = Promise.resolve(this.options.agents.stopAll((n) => { left = n; progress(stopping('agents', n)); })).then(() => true, () => true);
             let bound: ReturnType<typeof setTimeout> | undefined;
             const timedOut = new Promise<false>((r) => { bound = setTimeout(() => r(false), this.options.stopWaitMs ?? INSTALL_STOP_WAIT_MS); });
             const ended = await Promise.race([stopped, timedOut]);
             clearTimeout(bound);
             if (!ended) stillStopping = left;
         }
-        progress({ step: 'processes', agents: live.length, left: stillStopping });
+        progress(stopping('processes', stillStopping));
         // What else the install stops before the scan (P5b: genie-host's sites and front door, P5a.3's order; containers stay).
         await this.options.stopHosted?.().catch(() => undefined);
         const orphans = orphansUnder(
@@ -370,17 +416,36 @@ export class UpdateHost {
             this.options.caseInsensitive,
         );
         await Promise.all(orphans.map((p) => Promise.resolve(this.options.kill(p.pid)).catch(() => false)));
-        progress({ step: 'restarting', agents: live.length, left: stillStopping });
-        (this.options.defer ?? ((fn, ms) => { setTimeout(fn, ms); }))(() => this.options.port.quitAndInstall(), QUIT_DELAY_MS);
+        progress(stopping('restarting', stillStopping));
         const ended = this.options.agents ? `${endedReport(live)}${stillStopping > 0 ? ` (${stillStopping} still stopping when the installer started)` : ''}. ` : '';
-        const result: InstallResult = { killed: orphans, report: `${ended}${orphanReport(orphans)}` };
+        const cutOff = interrupted.length > 0 ? `Stopped mid-turn: ${interrupted.map((a) => a.name).join(', ')}${drain.timedOut ? ' (120-second wait expired)' : drain.forced ? ' (Upgrade now chosen)' : ''}. ` : '';
+        const result: InstallResult = { killed: orphans, report: `${ended}${cutOff}${orphanReport(orphans)}` };
+        this.last = result;
+        (this.options.defer ?? ((fn, ms) => { setTimeout(fn, ms); }))(() => {
+            try {
+                const exiting = this.options.port.quitAndInstall();
+                // The real host's exit promise never returns: process.exit ends it. A returning
+                // exit hook means this host survived, so the hold and updater phase must recover.
+                if (exiting) void exiting.then(() => this.cancelDrain(), (error: unknown) => { this.failedInstall(error); });
+                else this.cancelDrain();
+            } catch (error: unknown) { this.failedInstall(error); }
+        }, QUIT_DELAY_MS);
+        return this.last;
+    }
+
+    private failedInstall(error: unknown, beforeStop = false): InstallResult {
+        const message = error instanceof Error ? error.message : String(error);
+        try { this.cancelDrain(); } catch { /* phase recovery still happens if one release observer failed */ }
+        const { installing: _dropped, ...rest } = this.current;
+        this.set({ ...rest, phase: 'error', error: message });
+        const result: InstallResult = { killed: [], report: `Not installed: ${message}.${beforeStop ? ' Nothing was stopped.' : ''}` };
         this.last = result;
         return result;
     }
 
     private set(next: UpdateState): void {
         this.current = next;
-        for (const l of this.listeners) l(next);
+        for (const l of this.listeners) { try { l(next); } catch { /* a window observer never owns shutdown */ } }
     }
 }
 
