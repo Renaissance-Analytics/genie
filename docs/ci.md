@@ -15,7 +15,9 @@ desktop: the rows open real windows, start real hosts, write to `~/.genie` and e
 ## Running it
 
 ```bash
-# Linux, from the envelope
+# Linux, from the envelope. First the changed paths, so flows and zip64 run only when the change touches them
+# (the shipped tree has no .git; with no file, both run):
+git -C <genie checkout> diff --name-only <base>...HEAD > <genie checkout>/ci-changed.txt
 OMARCHY_FETCH=ci-out=<local dir> scripts/omarchy-run.sh <genie checkout> 'bash scripts/ci/linux.sh'
 #   bash scripts/ci/linux.sh --only unit,smoke    only these rows
 #   bash scripts/ci/linux.sh --from local-door    this row and every row after it
@@ -35,6 +37,7 @@ A run with `--only`/`--from` (`-Only`/`-From`) first runs the setup its rows sta
 ## Reading a run
 
 - One line per row: `ROW <name> PASS|FAIL <seconds>`, with `(not run: <why>)` when something the row needed failed.
+- `ROW <name> SKIP (<why>)`: not needed by this change (flows, zip64); neither a pass nor a fail.
 - `NOTE` lines: what was measured differently here (for example `MEASURED ON A SOFTWARE-RENDERED MACHINE`, below).
 - `NOT RUN ON LINUX <file> (<reason>)`: a test file that runs on Windows only; it carries `// CI: WINDOWS ONLY (<reason>)`
   and `test/ci-windows-only-files.test.ts` holds that.
@@ -55,7 +58,9 @@ A run with `--only`/`--from` (`-Only`/`-From`) first runs the setup its rows sta
   artboard's absolute time bounds. There (`GENIE_CI_RENDERING=software`, detected or given) those absolute bounds are
   judged against the same run's idle pass; their within-run ratios and byte budgets are judged as everywhere.
 - **Unit workers (Linux).** Three eighths of the cores, at least 2 (3 on omarchy-test). `CI_UNIT_WORKERS` overrides.
-- **flows and zip64** always run on Linux: there is no base commit to diff against in a shipped tree.
+- **flows and zip64** run only when `ci-changed.txt` says the change touches them (`scripts/flows-paths.mjs`,
+  `scripts/zip64-paths.mjs` decide; a changed `package.json` or `package-lock.json` counts), and print
+  `ROW flows SKIP (no Flows changes)` otherwise. With no list both run. Windows has neither row.
 
 ## The GitHub workflows
 
