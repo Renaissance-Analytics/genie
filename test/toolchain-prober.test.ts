@@ -102,16 +102,21 @@ describe('an update, judged by the version measured after', () => {
         expect(ran).toBe(0);
     });
 
-    it('on Windows an npm-distributed update goes through cmd.exe (npm is npm.cmd, which execFile cannot start); elsewhere npm is run directly', async () => {
+    it('agent CLIs update the vendor\'s way (Tynn #698): `claude update` (through cmd.exe on Windows, where claude may be a shim), Codex\'s installer as argv', async () => {
         const calls: Array<[string, readonly string[]]> = [];
         const spy: CommandRunner = async (binary, args) => { calls.push([binary, args]); return { stdout: '', exitCode: 0 }; };
         await runUpdate('claude-code', { platform: 'win32', packageManager: 'winget' }, spy, null);
-        expect(calls.filter(([, a]) => a.includes('install'))).toEqual([['cmd.exe', ['/d', '/s', '/c', 'npm', 'install', '-g', '@anthropic-ai/claude-code@latest']]]);
+        expect(calls.filter(([, a]) => a.includes('update'))).toEqual([['cmd.exe', ['/d', '/s', '/c', 'claude', 'update']]]);
         // Its probe too: `claude` from npm is claude.cmd.
         expect(calls.filter(([, a]) => a.includes('--version'))).toEqual([['cmd.exe', ['/d', '/s', '/c', 'claude', '--version']], ['cmd.exe', ['/d', '/s', '/c', 'claude', '--version']]]);
         calls.length = 0;
         await runUpdate('claude-code', { platform: 'linux', packageManager: 'apt' }, spy, null);
-        expect(calls.filter(([, a]) => a.includes('install'))).toEqual([['npm', ['install', '-g', '@anthropic-ai/claude-code@latest']]]);
+        expect(calls.filter(([, a]) => a.includes('update'))).toEqual([['claude', ['update']]]);
+        calls.length = 0;
+        // The installer is one argv, never split on its spaces: its pipe belongs to the shell it names.
+        await runUpdate('codex', { platform: 'linux', packageManager: 'apt' }, spy, null);
+        expect(calls.filter(([b]) => b === 'sh')).toEqual([['sh', ['-c', 'curl -fsSL https://chatgpt.com/codex/install.sh | sh']]]);
+        expect(calls.some(([b, a]) => b === 'npm' || a.includes('npm'))).toBe(false);
     });
 
     it('the command is run as a binary and arguments, never through a shell', async () => {
