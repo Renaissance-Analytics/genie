@@ -13,7 +13,7 @@ import { writeJsonAtomic } from '../src/main/store.js';
  * genie-host REWROTE THE WHOLE attention.json ON EVERY QUESTION CHANGE (Tynn #549). Measured on the owner's machine on
  * 2026-11-08: 8.6 MB — 713 finished handoffs (the largest 159 KB, 8.1 MB in all), 255 answered questions (478 KB), lists
  * 21 KB, questions 12 KB — and "PRIVATE_FILE_SLOW_WRITE 13688 ms". The owner's choice: keep the last 20 finished
- * handoffs per agent; drop seen ones older than 14 days (an unseen one is always kept); store at most 8 KB of a handoff
+ * handoffs per agent; drop ones older than 14 days (Tynn #658: seen or not; each agent's newest kept); store at most 8 KB of a handoff
  * (the whole text is the agent's handoff file); and split the file, so a question asked writes kilobytes. The three
  * numbers are settings. Acceptance: a question asked on the owner's history writes under 100 KB and takes under 50 ms.
  */
@@ -102,16 +102,22 @@ describe('a question asked on the owner\'s history (Tynn #549 acceptance)', () =
 });
 
 describe('the finished history is bounded (Tynn #549)', () => {
-    it('keeps at most 20 per agent, never drops an unseen one, drops seen ones older than 14 days, and keeps each handoff\'s first 8 KB', async () => {
+    // Tynn #658: a handoff is for agents and nobody marks it seen any more, so "unseen" protects nothing: the bound is
+    // the same for every record (an agent's newest 20, none past 14 days), and each agent's newest is always kept (its
+    // next run reads it). Before, "an unseen one is always kept" let the owner's unread hundreds grow without end.
+    it("keeps at most 20 per agent and none past 14 days, seen or not, but always each agent's newest; and each handoff's first 8 KB", async () => {
         await ownersHistory();
         const store = await AttentionStore.open(dir, await InboxStore.open(dir, now), now);
         const finished = store.finished();
-        // Every unseen one is kept.
-        expect(finished.filter((f) => !f.seen).map((f) => f.id)).toEqual(Array.from({ length: 40 }, (_, i) => `fin_${673 + i}`));
-        // No seen one older than 14 days.
-        for (const f of finished.filter((x) => x.seen)) expect(T0 - Date.parse(f.at)).toBeLessThanOrEqual(14 * DAY);
-        // At most 20 per agent, unseen ones aside.
-        for (const a of agents) expect(finished.filter((f) => f.agentId === a && f.seen).length).toBeLessThanOrEqual(20);
+        // Seen or not, nothing older than 14 days (every agent here finished within them, so its newest is among them).
+        for (const f of finished) expect(T0 - Date.parse(f.at)).toBeLessThanOrEqual(14 * DAY);
+        // At most 20 per agent, the unseen counted too; each agent's newest kept.
+        agents.forEach((a, k) => {
+            const mine = finished.filter((f) => f.agentId === a);
+            expect(mine.length).toBeLessThanOrEqual(20);
+            const newest = Math.max(...Array.from({ length: 713 }, (_, i) => i).filter((i) => i % agents.length === k));
+            expect(mine.at(-1)!.id).toBe(`fin_${newest}`);
+        });
         // At most 8 KB of a handoff; a cut one says it was cut.
         for (const f of finished) expect(Buffer.byteLength(f.handoff ?? '')).toBeLessThanOrEqual(8 * 1024 + 200);
         const cut = finished.find((f) => f.id === 'fin_700')!;
@@ -131,7 +137,7 @@ describe('the finished history is bounded (Tynn #549)', () => {
         }
         await store.imDone({ agentId: a, agentName: 'atlas', workspacePath: null, workspaceId: 'ws', handoff: 'the last' });
         const mine = store.finished().filter((f) => f.agentId === a);
-        expect(mine.filter((f) => f.seen).length).toBeLessThanOrEqual(20);
+        expect(mine.length).toBeLessThanOrEqual(20);
         expect(mine.at(-1)!.handoff).toBe('the last');
         expect(Buffer.byteLength(mine.find((f) => f.handoff?.startsWith('run 24'))!.handoff!)).toBeLessThanOrEqual(8 * 1024 + 200);
     });
@@ -148,7 +154,7 @@ describe('the finished history is bounded (Tynn #549)', () => {
         (store as unknown as { useLimits(l: () => { keptPerAgent: number; seenDays: number; handoffKb: number }): void })
             .useLimits(() => ({ keptPerAgent: 5, seenDays: 14, handoffKb: 2 }));
         await store.imDone({ agentId: agents[0]!, agentName: 'a', workspacePath: null, workspaceId: 'ws', handoff: 'x'.repeat(5_000) });
-        for (const a of agents) expect(store.finished().filter((f) => f.agentId === a && f.seen).length).toBeLessThanOrEqual(5);
+        for (const a of agents) expect(store.finished().filter((f) => f.agentId === a).length).toBeLessThanOrEqual(5);
         expect(Buffer.byteLength(store.finished().at(-1)!.handoff!)).toBeLessThanOrEqual(2 * 1024 + 200);
     });
 });

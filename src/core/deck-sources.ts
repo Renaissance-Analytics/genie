@@ -28,7 +28,7 @@ export interface DeckSourceInput {
     readonly questions: readonly PendingQuestion[];
     readonly userList: readonly { workspaceId: string; item: ListItem }[];
     readonly unreadDms: readonly InboxMessage[];
-    readonly finished: readonly Finished[];
+    readonly finished?: readonly Finished[];
     /** Who the agent ids are, for names and workspaces. */
     readonly agents: Readonly<Record<string, { name: string; workspaceId: string }>>;
     /** Workspace id → its NAME as the rail says it (core/workspace-name.ts). An id not here gets no name — never the id. */
@@ -159,7 +159,7 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
         });
     }
 
-    for (const f of input.finished) {
+    for (const f of input.finished ?? []) {
         if (f.seen || f.handoff === null) continue;
         const agent = who(f.agentId);
         items.push({
