@@ -167,6 +167,6 @@ describe('the chat carries the kept images to its pills', () => {
             session: { running: true, turnState: 'idle', failure: null },
             rows: [{ id: 'r1', at: 1, event: { kind: 'message', speaker: 'you', peerName: null, text: 'look', attachments: ['Pasted image 3.png'], attachmentRefs: refs } }],
         } as never);
-        expect((messages[0] as { attachmentRefs?: Ref[] }).attachmentRefs).toEqual(refs);
+        expect((messages[0] as unknown as { attachmentRefs?: Ref[] }).attachmentRefs).toEqual(refs);
     });
 });

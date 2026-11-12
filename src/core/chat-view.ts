@@ -3,7 +3,7 @@ import { isSleeping } from './agent-status.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import { repeatsCompaction, type TimedEvent } from './stream-view.js';
-import type { StreamEvent, ToolKind } from './stream-event.js';
+import type { AttachmentRef, StreamEvent, ToolKind } from './stream-event.js';
 import type { Attachment } from './prompt-content.js';
 import { promptDeliveries } from './prompt-delivery.js';
 import { messageLines } from './chat-window.js';
@@ -83,6 +83,8 @@ export interface ChatMessage {
     carried?: string;
     /** The names of the files sent with it (your message only); absent when there were none. */
     attachments?: readonly string[];
+    /** The images among them the host kept (Tynn #642): what a pill asks for to show its image. Absent when none was kept. */
+    attachmentRefs?: readonly AttachmentRef[];
     /** Why an undelivered draft was not sent, when the host said; absent = the agent is not running. */
     reason?: string;
     /** An undelivered draft only: how it is sent now — `send` while its agent runs again, else `restart` (start it, then send). */
@@ -247,7 +249,8 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
             ...(queued && detail.session?.starting === true ? { queuedForStart: true }
                 : queued && detail.session?.turnState === 'idle' && detail.session.inTurn !== true ? { queuedForProvider: true } : {}),
             ...(queued ? { silentSince: lastOutputAt } : {}),
-            ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
+            ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}),
+            ...(e.attachmentRefs && e.attachmentRefs.length > 0 ? { attachmentRefs: e.attachmentRefs } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;
 }

@@ -1,5 +1,6 @@
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
@@ -1230,6 +1231,11 @@ export class SessionEngineClient {
     /** A tool row's whole output, read by the host from its own store, bounded (`SessionHost.toolOutput`, Tynn story #386). */
     toolOutput(agentId: AgentId, toolCallId: string): Promise<ToolOutputReply> {
         return this.#value<ToolOutputReply>('engine.toolOutput', [agentId, toolCallId], { ok: false, reason: 'Genie’s agents are not running yet' });
+    }
+
+    /** One image a thread kept, read by the host from its own store (`SessionHost.attachment`, Tynn #642). */
+    attachment(agentId: AgentId, attachmentId: string): Promise<AttachmentReply> {
+        return this.#value<AttachmentReply>('engine.attachment', [agentId, attachmentId], { ok: false, reason: 'Genie’s agents are not running yet' });
     }
 
     async settled(): Promise<void> {

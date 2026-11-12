@@ -12,6 +12,7 @@ import { BATON_REFUSAL } from '../core/remote.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
 import { heldLimiter, localPageClient, localUploadClient } from './local-content-client.js';
@@ -450,6 +451,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             models: (agentId, refresh) => answer('agents.models', agentId, refresh === true),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
             toolOutput: (agentId, toolCallId) => answer('agents.toolOutput', agentId, toolCallId),
+            // Inline when it fits a frame; this machine's own window takes a larger image as a blob (below, Tynn #642).
+            attachment: (agentId, attachmentId) => answer('agents.attachment', agentId, attachmentId),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
         files: phone ? {
@@ -636,6 +639,13 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             picked: async (paths: readonly string[]) => {
                 if (tooLargeForFrame([paths])) throw new Error('too many files were picked to report in one piece');
                 await read('features.picked', paths);
+            },
+        });
+        // ONE KEPT IMAGE (Tynn #642): inline when small, one blob when not (RemoteHost's jsonResult); a refusal is an answer.
+        Object.assign(bridge.agents, {
+            attachment: async (agentId: string, attachmentId: string): Promise<AttachmentReply> => {
+                try { return await decodeJson<AttachmentReply>(() => read('agents.attachment', agentId, attachmentId)); }
+                catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
             },
         });
         terminalClient = localTerminalClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, on, limit });

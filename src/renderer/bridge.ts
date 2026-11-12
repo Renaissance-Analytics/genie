@@ -51,6 +51,7 @@ import type { EnvelopePlan } from '../core/envelope-plan.js';
 import type { Published, RemoteChoice } from '../core/agi-remote.js';
 import type { RepoListing } from '../core/github.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
 
 /**
@@ -430,6 +431,11 @@ export interface GenieBridge {
          * ledger and answers it, bounded, when a person opens the row. A call with none kept is a refusal with a reason.
          */
         toolOutput(agentId: string, toolCallId: string): Promise<ToolOutputReply>;
+        /**
+         * ONE IMAGE A THREAD KEPT (Tynn #642): what a sent message's pill shows on hover, read from the host when the pill
+         * asks — never with the thread. Named by the message row's `attachmentRefs`.
+         */
+        attachment(agentId: string, attachmentId: string): Promise<AttachmentReply>;
         /** Mode is wording for the agent (§6.2), not a permission boundary. */
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** The agent's own half of who may message it (§6.4). */
