@@ -122,7 +122,7 @@ describe('genie-host hears window main beat, and records a hang', () => {
         expect(r.killed).toEqual([4242]);
         // Each late tick was said, with what the host itself spent meanwhile.
         expect(r.lines.filter((l) => /clock jumped/.test(l))).toHaveLength(3);
-        expect(r.lines.find((l) => /clock jumped/.test(l))).toMatch(/the window waits pause/);
+        expect(r.lines.find((l) => /clock jumped/.test(l))).toMatch(/the window waits are judged again after 3000 ms/);
     });
 
     /*
