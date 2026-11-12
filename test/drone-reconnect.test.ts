@@ -14,17 +14,28 @@ import { connectRemote, type RemoteClient } from '../src/renderer/remote-bridge.
  * comes back on a build still too old says so, and is dialled again until it has been updated.
  */
 
-/** A manual clock: `schedule` queues, `advance` runs what is due, in order, letting each dial settle. */
+/**
+ * A manual clock: `schedule` queues, `advance` runs what is due, in order, letting each dial settle.
+ *
+ * Two things it must get right (the first VM run of #1888 failed on both, in this clock, not in the code under test):
+ * - What is already in flight settles BEFORE the time moves. A drop the in-memory pair delivers on the microtask queue
+ *   happened "now"; with the clock jumped first it was heard at the end of the advance, so `dropped()` stamped its start
+ *   4 min late (no give-up at 6 min) and scheduled its first dial past the end (still `restarting`, never `skew`).
+ * - Settling uses setImmediate, not setTimeout(0): Windows clamps a 0 ms timer to its ~15.6 ms tick, so 20 of them per
+ *   fired timer took the two-hour backoff test past vitest's 5 s. Everything the fakes do is microtasks, which one
+ *   macrotask turn drains; a few turns are margin.
+ */
 function manualClock() {
     let at = 0;
     let timers: Array<{ due: number; fn: () => void; live: boolean }> = [];
-    const settle = async () => { for (let i = 0; i < 20; i++) await new Promise<void>((r) => setTimeout(r, 0)); };
+    const settle = async () => { for (let i = 0; i < 5; i++) await new Promise<void>((r) => setImmediate(r)); };
     return {
         now: () => at,
         schedule: (ms: number, fn: () => void) => { const t = { due: at + ms, fn, live: true }; timers.push(t); return () => { t.live = false; }; },
         pending: () => timers.filter((t) => t.live).length,
         async advance(ms: number) {
             const end = at + ms;
+            await settle();
             for (;;) {
                 const next = timers.filter((t) => t.live && t.due <= end).sort((a, b) => a.due - b.due)[0];
                 if (!next) break;
