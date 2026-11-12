@@ -100,3 +100,53 @@ describe('a send never makes a shown row disappear', () => {
         await vi.waitFor(() => expect(texts(host, record.id)).toHaveLength(4));
     });
 });
+
+const OLD = ['first question', 'REPLY-ONE', 'mail between', 'REPLY-TWO'];
+
+describe('what stands in is one ledger with the new run, and goes with the agent', () => {
+    it('a restart after a run with rows of its own: no two rows share an id while the new run grows, before its history lands', async () => {
+        const { host } = rig();
+        const record = await withHistory();
+        host.start(record, dir);
+        texts(host, record.id);
+        await vi.waitFor(() => expect(texts(host, record.id).slice(0, 4)).toEqual(OLD));
+        // Run one's own rows are numbered from 0 (`<agent>:0`, …), and so are run two's.
+        host.prompt(record.id, 'run one asks', 'you');
+        expect(texts(host, record.id)).toEqual([...OLD, 'run one asks']);
+        host.stop(record.id);
+        await host.settled();
+        host.start(record, dir);
+        // The new run's first read: what was shown stands in, and the ledger served is then grown in place.
+        expect(texts(host, record.id)).toEqual([...OLD, 'run one asks']);
+        host.prompt(record.id, 'run two asks', 'you');
+        // Both runs' messages, each once (the CONTROL that the ids below are read from both runs' rows) …
+        expect(texts(host, record.id)).toEqual([...OLD, 'run one asks', 'run two asks']);
+        // … and no id twice: run two's first row is `<agent>:0`, as run one's was.
+        const ids = host.ledgerFor(record.id).map((r) => r.id);
+        expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
+    });
+
+    it('a deleted agent (SessionHost.forgetShown): nothing it showed stands in again', async () => {
+        const { host } = rig();
+        const record = await withHistory();
+        host.start(record, dir);
+        texts(host, record.id);
+        await vi.waitFor(() => expect(texts(host, record.id).slice(0, 4)).toEqual(OLD));
+        host.stop(record.id);
+        await host.settled();
+        host.forgetShown(record.id);
+        // Stopped, a new read starts; nothing was kept to stand in for it.
+        expect(texts(host, record.id)).toEqual([]);
+    });
+
+    it('CONTROL: without the forget, the same stop keeps the rows standing in', async () => {
+        const { host } = rig();
+        const record = await withHistory();
+        host.start(record, dir);
+        texts(host, record.id);
+        await vi.waitFor(() => expect(texts(host, record.id).slice(0, 4)).toEqual(OLD));
+        host.stop(record.id);
+        await host.settled();
+        expect(texts(host, record.id)).toEqual(OLD);
+    });
+});
