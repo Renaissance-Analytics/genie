@@ -89,12 +89,14 @@ if ($Only) {
 # in a full run the rows before had done that). Every -Only or -From run starts with deps and electron-binary, and with
 # build when a chosen row needs the built app; each prints its own ROW line.
 if ($Only -or $From) {
-    $setup = @('deps', 'electron-binary')
-    if (@($selected | Where-Object { @('deps', 'electron-binary', 'unit-build', 'unit') -notcontains $_ }).Count -gt 0) { $setup += 'build' }
-    $selected = @($setup | Where-Object { $selected -notcontains $_ }) + $selected
+    # $prereq, not $setup: PowerShell's names ignore case, and $setup IS $Setup, the ci-out\setup folder (the Azure run of
+    # -Only unit on 101287c4: the folder became this list, ci-out was never made, every row read as timed out).
+    $prereq = @('deps', 'electron-binary')
+    if (@($selected | Where-Object { @('deps', 'electron-binary', 'unit-build', 'unit') -notcontains $_ }).Count -gt 0) { $prereq += 'build' }
+    $selected = @($prereq | Where-Object { $selected -notcontains $_ }) + $selected
 }
 
-New-Item -ItemType Directory -Force $Out, $Setup | Out-Null
+foreach ($dir in @($Out, $Setup)) { New-Item -ItemType Directory -Force -Path $dir -ErrorAction Stop | Out-Null }
 $script:Failed = @()
 $script:Notes = @()
 $script:Blocked = ''
@@ -368,8 +370,8 @@ function Row-packed-tree { Need-Packaged; Run 'packed-tree-check' { node scripts
 function Row-update-metadata { Need-Packaged; Run 'verify-windows-update' { node scripts/verify-windows-update.cjs release test/fixtures/windows-update-beta59.json } }
 function Row-package-fuse {
     Need-Packaged
-    $app = @(Get-ChildItem release\win-unpacked\*.exe)[0].FullName
-    npx --yes @electron/fuses read --app "$app" | Tee-Object -FilePath (Join-Path $Out 'fuses.txt')
+    $exe = @(Get-ChildItem release\win-unpacked\*.exe)[0].FullName
+    npx --yes @electron/fuses read --app "$exe" | Tee-Object -FilePath (Join-Path $Out 'fuses.txt')
     if (-not (Select-String -Path (Join-Path $Out 'fuses.txt') -Pattern 'EnableCookieEncryption is Enabled' -Quiet)) { throw 'the cookie fuse is not on in what was packaged' }
 }
 # The packaged app starts genie-host through genie-launch.exe, from its copy, with its supervisor ready. ci.yml's step,
@@ -390,7 +392,7 @@ function Row-packaged-launcher {
         $otherArch = "release\win-unpacked\resources\app.asar.unpacked\node_modules\@particle-academy\prism-acp\native\win32-arm64\prism-acp-supervisor.exe"
         if (-not (Test-Path $otherArch)) { throw "the other architecture's supervisor is not in win-unpacked ($otherArch): this check no longer matches an install" }
         Remove-Item -Force $otherArch
-        $app = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
+        $packaged = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
         $log = "$h\.genie\runtime\lifecycle.log"
         $line = $null
         for ($i = 0; $i -lt 90 -and -not $line; $i++) { Start-Sleep -Seconds 1; if (Test-Path $log) { $line = Select-String -Path $log -Pattern "host spawn via=" | Select-Object -Last 1 } }
@@ -409,7 +411,7 @@ function Row-packaged-launcher {
         for ($i = 0; $i -lt 60 -and $up -and -not $ready; $i++) { $ready = Select-String -Path $log -SimpleMatch "containment ready supervisor=" | Select-Object -Last 1; if (-not $ready) { Start-Sleep -Seconds 1 } }
         $unready = if (Test-Path $log) { Select-String -Path $log -SimpleMatch "containment unready" | Select-Object -Last 1 } else { $null }
         if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
-        if (-not $app.HasExited) { taskkill /PID $app.Id /T /F *> $null }
+        if (-not $packaged.HasExited) { taskkill /PID $packaged.Id /T /F *> $null }
         if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
         Write-Output "the packaged app: $($line.Line)"
         if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
@@ -450,9 +452,10 @@ function Ceiling([string]$name) {
         default { return 600 }
     }
 }
-function Start-Watchdog([int]$limit, [string]$mark) {
+function Start-Watchdog([int]$limit, [string]$mark, [string]$token) {
+    if ($limit -lt 1) { throw "a row's ceiling must be at least 1 s, not '$limit'" }
     $keep = if ($script:App) { $script:App.Id } else { 0 }
-    $cmd = "Start-Sleep -Seconds $limit; Set-Content -Path '$mark' -Value timed-out; " +
+    $cmd = "Start-Sleep -Seconds $limit; Set-Content -LiteralPath '$mark' -Value '$token'; " +
         "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$PID' | Where-Object { `$_.ProcessId -ne `$PID -and `$_.ProcessId -ne $keep } | " +
         "ForEach-Object { taskkill /PID `$_.ProcessId /T /F *> `$null }"
     # Encoded, so no quoting between here and the child can change a character of it.
@@ -463,17 +466,19 @@ function Start-Watchdog([int]$limit, [string]$mark) {
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 Write-Output "CI WINDOWS rows: $($selected -join ' ')"
-$script:Results = [ordered]@{}
+$script:RowResults = [ordered]@{}
 foreach ($name in $selected) {
     $started = Get-Date
     $script:Blocked = ''
     Write-Output "=== $name"
     $log = Join-Path $Out "$name.log"
     $ok = $true
-    $limit = Ceiling $name
+    $limit = [int](Ceiling $name)
     $mark = Join-Path $Setup "timed-out-$name"
-    Remove-Item -Force -ErrorAction SilentlyContinue $mark
-    $watch = Start-Watchdog $limit $mark
+    # This row's own token: a mark left by anything else, or by an earlier row of the same name, is not this row's.
+    $token = [guid]::NewGuid().ToString('N')
+    Remove-Item -LiteralPath $mark -Force -ErrorAction SilentlyContinue
+    $watch = Start-Watchdog $limit $mark $token
     try {
         & "Row-$name" *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $log -Encoding utf8
     } catch {
@@ -483,10 +488,14 @@ foreach ($name in $selected) {
         # The watchdog and its tree; not what it already ended.
         if (-not $watch.HasExited) { taskkill /PID $watch.Id /T /F *> $null }
     }
-    $timedOut = Test-Path $mark
+    # A ROW THAT ENDS BEFORE ITS CEILING CANNOT READ AS TIMED OUT: the mark must exist as a file, hold this row's token,
+    # and the ceiling's time must have passed. A scalar test each, never Test-Path of a list (an array of results reads
+    # as true however they came out).
+    $elapsed = ((Get-Date) - $started).TotalSeconds
+    $timedOut = (Test-Path -LiteralPath $mark -PathType Leaf) -and ((Get-Content -LiteralPath $mark -Raw).Trim() -eq $token) -and ($elapsed -ge $limit - 5)
     if ($timedOut) { $ok = $false }
-    $secs = [int]((Get-Date) - $started).TotalSeconds
-    $script:Results[$name] = if ($ok) { 'PASS' } else { 'FAIL' }
+    $secs = [int]$elapsed
+    $script:RowResults[$name] = if ($ok) { 'PASS' } else { 'FAIL' }
     if ($ok) {
         Write-Output "ROW $name PASS $secs"
     } elseif ($timedOut) {
@@ -513,9 +522,9 @@ if ($script:App) { Stop-App }
 
 foreach ($n in $script:Notes) { Write-Output "NOTE $n" }
 # Every selected row has exactly one result; a row with none is a failure of this script, and fails the run.
-$missing = @($selected | Where-Object { -not $script:Results.Contains($_) })
+$missing = @($selected | Where-Object { -not $script:RowResults.Contains($_) })
 foreach ($m in $missing) { $script:Failed += $m }
-Write-Output "ROWS $($script:Results.Count) of $($selected.Count) reported: $(($script:Results.Keys | ForEach-Object { "$_=$($script:Results[$_])" }) -join ' ')$(if ($missing.Count) { "; NO RESULT: $($missing -join ' ')" })"
+Write-Output "ROWS $($script:RowResults.Count) of $($selected.Count) reported: $(($script:RowResults.Keys | ForEach-Object { "$_=$($script:RowResults[$_])" }) -join ' ')$(if ($missing.Count) { "; NO RESULT: $($missing -join ' ')" })"
 if ($script:Failed.Count -gt 0) {
     Write-Output "FAILED ROWS: $($script:Failed -join ' ')"
     Write-Output 'CI WINDOWS FAIL'
