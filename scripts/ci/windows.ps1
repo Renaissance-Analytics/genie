@@ -204,7 +204,7 @@ $script:AppState = ''
 function Need-App {
     if ($script:AppState -eq 'ok') { return }
     if ($script:AppState) { Block $script:AppState }
-    Need-Build; Need-TestMachine
+    Need-Build; Need-Electron; Need-TestMachine
     # A HOME OF ITS OWN for this run (Tynn #692, as linux.sh: a loop of runs in one session found the last run's app,
     # host and state). The seed and the app get it through USERPROFILE, HOME, APPDATA and LOCALAPPDATA; this process's
     # own are put back once the app has started with them.
@@ -222,7 +222,9 @@ function Need-App {
         if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Setup 'seed.out') -Tail 20; Block $script:AppState }
         $env:GENIE2_CODEX_BINARY = "$Repo\scripts\stub-codex.mjs"
         $env:GENIE_PAGE_PROBE = '1'
-        $script:App = Start-Process -FilePath 'npx.cmd' -ArgumentList 'electron', '.', '--remote-debugging-port=9222' -PassThru -WindowStyle Hidden `
+        # Electron by its own path, not through npx: npm would look for its cache and config under the moved APPDATA.
+        # node itself is C:\tools\node on the machine PATH and reads nothing from APPDATA to run the seed.
+        $script:App = Start-Process -FilePath $script:ElectronExe -ArgumentList '.', '--remote-debugging-port=9222' -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput (Join-Path $Out 'electron-out.log') -RedirectStandardError (Join-Path $Out 'electron-err.log')
     } finally {
         foreach ($k in $saved.Keys) { Set-Item -Path "env:$k" -Value $saved[$k] }

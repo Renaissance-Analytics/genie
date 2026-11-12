@@ -324,14 +324,22 @@ need_app() {
         app_why='something already answers on the debugger port 9222 (an app this run did not start)'
         block "$app_why"; return 1
     fi
+    # NODE, RESOLVED UNDER THE REAL HOME FIRST (the gate on candidate 10347329: with HOME moved, mise's shims refused,
+    # "Config files ... are not trusted", because mise keeps its trust record under the real home). The real binary's
+    # directory goes first on the app's PATH, so the seed, the stub codex's `#!/usr/bin/env node` and anything the app
+    # starts find node without a shim; Electron is started by its own path, not through npx. Nothing is trusted anew.
+    local node_bin
+    node_bin="$( (command -v mise >/dev/null 2>&1 && mise which node 2>/dev/null) || readlink -f "$(command -v node)")"
+    if [ ! -x "$node_bin" ]; then app_why="node could not be resolved to its own binary (got '$node_bin')"; block "$app_why"; return 1; fi
+    local app_path="$(dirname "$node_bin"):$PATH"
     APP_HOME="$(mktemp -d /tmp/genie-ci-app-XXXXXX)"
-    echo "--- the app's own home: $APP_HOME"
-    HOME="$APP_HOME" XDG_CONFIG_HOME="$APP_HOME/.config" node scripts/smoke-seed.mjs >"$SETUP/seed.out" 2>&1 || { tail -20 "$SETUP/seed.out"; app_why='the seed could not be written'; block "$app_why"; return 1; }
+    echo "--- the app's own home: $APP_HOME; node: $node_bin ($("$node_bin" --version))"
+    HOME="$APP_HOME" XDG_CONFIG_HOME="$APP_HOME/.config" PATH="$app_path" "$node_bin" scripts/smoke-seed.mjs >"$SETUP/seed.out" 2>&1 || { tail -20 "$SETUP/seed.out"; app_why="the seed could not be written: $(tail -1 "$SETUP/seed.out" | cut -c1-160)"; block "$app_why"; return 1; }
     chmod +x scripts/stub-codex.mjs
     # Ordinary provider configuration, exactly as ci.yml sets it for this launch: codex is the stub, so a REAL parked
     # approval reaches the screen on a machine with no codex.
-    HOME="$APP_HOME" XDG_CONFIG_HOME="$APP_HOME/.config" GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs" GENIE_PAGE_PROBE=1 \
-        on_display npx electron . --no-sandbox --remote-debugging-port=9222 >"$OUT/electron.log" 2>&1 &
+    HOME="$APP_HOME" XDG_CONFIG_HOME="$APP_HOME/.config" PATH="$app_path" GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs" GENIE_PAGE_PROBE=1 \
+        on_display "$ELECTRON_BIN" . --no-sandbox --remote-debugging-port=9222 >"$OUT/electron.log" 2>&1 &
     APP_PID=$!
     echo "--- the app is starting (pid $APP_PID); its output is in ci-out/electron.log"
     local waited=0
