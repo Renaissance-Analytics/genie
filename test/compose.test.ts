@@ -91,13 +91,14 @@ describe('wiring', () => {
         expect(services.routes()).toEqual([{ host: 'docs.gen', target: '127.0.0.1:5173' }]);
     });
 
-    it('the Deck items come from the stores, live', async () => {
+    it('the Deck items come from the stores, live; a handoff is kept for agents and is never one of them (Tynn #658)', async () => {
         const agentId = 'agent_' + 'a'.repeat(32);
         onRoster(agentId, 'atlas', 'tynn');
         await services.attention.imDone({ agentId: agentId as never, agentName: 'atlas', workspacePath: dir, handoff: 'done for today' });
         await services.inbox.send({ from: agentId as never, to: 'human', text: 'note' });
         const items = services.deckItems();
-        expect(items.map((i) => i.source).sort()).toEqual(['finished-handoff', 'unread-dm']);
+        expect(items.map((i) => i.source).sort()).toEqual(['unread-dm']);
+        expect(services.attention.lastHandoff(agentId as never)?.text).toBe('done for today');
         expect(items.every((i) => i.agentName === 'atlas')).toBe(true);
     });
 

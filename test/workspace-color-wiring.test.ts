@@ -54,7 +54,6 @@ describe('the Deck\'s items', () => {
             ] as never,
             userList: [],
             unreadDms: [],
-            finished: [],
             agents: { a1: { name: 'kai', workspaceId: 'tynn' }, a2: { name: 'wren', workspaceId: 'gone' } } as never,
             workspaceNames: { tynn: 'Tynn' },
             workspaceColors: { tynn: '#0891b2' },

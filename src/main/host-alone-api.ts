@@ -31,7 +31,7 @@ import { startForWork, startForYourMessage } from './start-on-demand.js';
  * with a window open, the window answers as before. Anything outside the phone's set is refused with what to do.
  */
 export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
-    'snapshot', 'agentDetail', 'prompt', 'answerApproval', 'restartWithHandoff', 'agents.restart', 'resumeLimit', 'features.act',
+    'snapshot', 'agentDetail', 'prompt', 'answerApproval', 'agents.restart', 'resumeLimit', 'features.act',
     'files.children', 'files.open', 'files.readMedia', 'files.upload',
 ]);
 
@@ -193,7 +193,6 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             subscribe: (listener) => ports.engine()?.subscribe(listener) ?? (() => {}),
         },
         registerAgent: async () => { throw new Error(needsWindow('a new agent')); },
-        attention: { finished: () => ports.attention.finished(), markSeen: (id) => ports.attention.markSeen(id) },
         terminals: windowOnly<HostApiDeps['terminals']>('terminals', ports.terminals),
         uploads: windowOnly<HostApiDeps['uploads']>('inbox.sendFile'),
         files: ports.files,

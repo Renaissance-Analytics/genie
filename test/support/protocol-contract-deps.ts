@@ -17,7 +17,6 @@ export function protocolContractDeps(root: string): HostApiDeps {
             resolvePrompt: async () => ({ ok: false, reason: 'the draft is no longer queued' }), subscribe: off,
         },
         registerAgent: async () => ({ ok: true, id: 'agent_new', name: 'new' }),
-        attention: { finished: () => [], markSeen: () => {} },
         terminals: {
             open: () => ({ id: 'term_1', pid: 7, shell: 'sh', scrollback: '' }),
             write: () => true, resize: () => true, close: () => true,

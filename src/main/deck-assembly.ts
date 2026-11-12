@@ -7,7 +7,7 @@ import type { InboxStore } from './inbox-store.js';
 
 /**
  * THE DECK'S ITEMS (Tynn #551, host split P5d.2): approvals and Genie's own asks grouped under their workspace's name and
- * colour, then the questions, the person's list, unread mail and finished agents. One assembly for the window's snapshot
+ * colour, then the questions, the person's list and unread mail. A finished agent's handoff is not one (Tynn #658). One assembly for the window's snapshot
  * (compose.ts) and genie-host's, which a phone reads with every window closed — the same Deck from either.
  */
 export interface DeckAssemblyInput {
@@ -17,7 +17,7 @@ export interface DeckAssemblyInput {
     readonly approvals: readonly DeckItem[];
     /** Genie's own asks about its front door (Trust its certificate). */
     readonly trust: readonly DeckItem[];
-    readonly attention: Pick<AttentionStore, 'pending' | 'allUserItems' | 'finished'>;
+    readonly attention: Pick<AttentionStore, 'pending' | 'allUserItems'>;
     readonly inbox: Pick<InboxStore, 'unread'>;
     readonly agents: Readonly<Record<string, { name: string; workspaceId: string }>>;
     readonly asker?: DeckSourceInput['asker'];
@@ -42,7 +42,6 @@ export function assembleDeckItems(input: DeckAssemblyInput): DeckItem[] {
             questions: input.attention.pending(),
             userList: input.attention.allUserItems(),
             unreadDms: input.inbox.unread(HUMAN),
-            finished: input.attention.finished(),
             agents: input.agents,
             workspaceNames,
             workspaceColors,

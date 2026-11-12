@@ -49,7 +49,7 @@ import { refusalReason } from './site-actions.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
 import type { Approval } from '../core/approval.js';
-import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
+import { alertsBetween, finishAlerts, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
@@ -576,18 +576,22 @@ const EMPTY_REMOTE: RemoteState = { connected: false, host: null, isOwner: false
  */
 function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string; color?: string }) => void): void {
     const prev = useRef<AlertSnapshot | null>(null);
+    // The last handoff time seen per agent (Tynn #658): a finish alerts once, however its row comes and goes.
+    const handoffsSeen = useRef<ReadonlyMap<string, number | null>>(new Map());
     useEffect(() => {
-        const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason })) };
-        if (snapshot.deckItems !== null) {
-            for (const alert of alertsBetween(prev.current, next)) {
-                // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
-                playAlertSound(alertSound(alert.kind, settings ?? {}));
-                // The agent's workspace colour beside its address (genie#1300).
-                const color = snapshot.workspaces?.find((w) => w.id === alert.workspace)?.color;
-                show({ ...toastFor(alert, slugsFor(snapshot.workspaces ?? [])), ...(color ? { color } : {}) });
-            }
-            prev.current = next;
+        const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason, handoff: a.handoff ?? null })) };
+        // A finish is read from the rows against the ref, so it does not wait on the Deck having been read.
+        const finishes = finishAlerts(handoffsSeen.current, next.agents);
+        handoffsSeen.current = finishes.seen;
+        const deck = snapshot.deckItems !== null ? alertsBetween(prev.current, next) : [];
+        for (const alert of [...deck, ...finishes.alerts]) {
+            // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
+            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            // The agent's workspace colour beside its address (genie#1300).
+            const color = snapshot.workspaces?.find((w) => w.id === alert.workspace)?.color;
+            show({ ...toastFor(alert, slugsFor(snapshot.workspaces ?? [])), ...(color ? { color } : {}) });
         }
+        if (snapshot.deckItems !== null) prev.current = next;
     }, [snapshot, settings]);
 }
 
@@ -795,12 +799,6 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
         switch (route.kind) {
             case 'refused':
                 setNote(route.reason);
-                return;
-            case 'navigate':
-                setNote(`Open it on ${host}'s screen — this one only answers.`);
-                return;
-            case 'restart-with-handoff':
-                void bridge.restartWithHandoff(route.agentId, route.finishedId).then((r) => { if (!r.ok) setNote(r.reason); });
                 return;
             case 'provider':
                 setInFlight(optionId);
@@ -2096,15 +2094,6 @@ function DesktopApp({ bridge }: AppProps) {
                             console.error('[genie] deck answer refused:', reason);
                             setDeckFormRefusal({ itemId: item.id, reason });
                         }).finally(() => setDeckBusy(null));
-                        return;
-                    case 'navigate':
-                        // Open: the window goes there itself; the finish stays on the Deck until marked read.
-                        navigate(route.route);
-                        return;
-                    case 'restart-with-handoff':
-                        void resolvedBridge?.restartWithHandoff(route.agentId, route.finishedId).then((r) => {
-                            if (!r.ok) console.error('[genie] restart with handoff refused:', r.reason);
-                        });
                         return;
                     case 'provider':
                         // A Deck row holds no approval to compare: the flight is keyed on the agent (one parked at a time).
