@@ -455,9 +455,9 @@ function Ceiling([string]$name) {
 function Start-Watchdog([int]$limit, [string]$mark, [string]$token) {
     if ($limit -lt 1) { throw "a row's ceiling must be at least 1 s, not '$limit'" }
     $keep = if ($script:App) { $script:App.Id } else { 0 }
-    $sampler = if ($script:Sampler) { $script:Sampler.Id } else { 0 }
+    $samplerPid = if ($script:MachineSampler) { $script:MachineSampler.Id } else { 0 }
     $cmd = "Start-Sleep -Seconds $limit; Set-Content -LiteralPath '$mark' -Value '$token'; " +
-        "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$PID' | Where-Object { `$_.ProcessId -ne `$PID -and `$_.ProcessId -ne $keep -and `$_.ProcessId -ne $sampler } | " +
+        "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$PID' | Where-Object { `$_.ProcessId -ne `$PID -and `$_.ProcessId -ne $keep -and `$_.ProcessId -ne $samplerPid } | " +
         "ForEach-Object { taskkill /PID `$_.ProcessId /T /F *> `$null }"
     # Encoded, so no quoting between here and the child can change a character of it.
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($cmd))
@@ -467,9 +467,9 @@ function Start-Watchdog([int]$limit, [string]$mark, [string]$token) {
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 # THE MACHINE BESIDE EVERY ROW (Tynn #660): scripts/ci/machine-sampler.ps1 writes one MACHINE line every ~2 s for the
-# whole run into ci-out\machine-samples.log, and ends with this script. The watchdog spares it ($script:Sampler).
+# whole run into ci-out\machine-samples.log, and ends with this script. The watchdog spares it ($script:MachineSampler).
 $MachineSamples = Join-Path $Out 'machine-samples.log'
-$script:Sampler = Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/ci/machine-sampler.ps1', '-Out', $MachineSamples, '-ParentId', $PID -PassThru -WindowStyle Hidden
+$script:MachineSampler = Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/ci/machine-sampler.ps1', '-Out', $MachineSamples, '-ParentId', $PID -PassThru -WindowStyle Hidden
 Write-Output "CI WINDOWS rows: $($selected -join ' ')"
 
 # >>> THE ROW LOOP (test/ci-infra-rerun-windows.test.ts runs this block, as it is, with stub rows)
@@ -554,12 +554,12 @@ function Invoke-Row([string]$name) {
 function Invoke-Rows {
     foreach ($name in $selected) {
         Write-Output "=== $name"
-        $from = Now-Ms
+        $rowFrom = Now-Ms
         $before = Get-Needs
         Remove-Item -LiteralPath (Join-Path $Out "$name.log") -Force -ErrorAction SilentlyContinue
         Invoke-Row $name
         if ($script:RowVerdict -eq 'FAIL' -and $script:RowOwn) {
-            $stall = @(node scripts/ci/stall.mjs $MachineSamples $from (Now-Ms))
+            $stall = @(node scripts/ci/stall.mjs $MachineSamples $rowFrom (Now-Ms))
             $stalled = ($LASTEXITCODE -eq 0)
             $stall | ForEach-Object { Write-Output $_ }
             if ($stalled) {
@@ -593,7 +593,7 @@ function Write-InfraSummary {
 
 Invoke-Rows
 if ($script:App) { Stop-App }
-if ($script:Sampler -and -not $script:Sampler.HasExited) { Stop-Process -Id $script:Sampler.Id -Force -ErrorAction SilentlyContinue }
+if ($script:MachineSampler -and -not $script:MachineSampler.HasExited) { Stop-Process -Id $script:MachineSampler.Id -Force -ErrorAction SilentlyContinue }
 
 foreach ($n in $script:Notes) { Write-Output "NOTE $n" }
 Write-InfraSummary

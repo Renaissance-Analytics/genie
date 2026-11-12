@@ -71,6 +71,6 @@ describe('both gates run the sampler for the whole run, out of the watchdog\'s r
     it('windows.ps1 starts it on its own pid into ci-out\\machine-samples.log, and its watchdog spares it', () => {
         expect(windowsPs1).toMatch(/\$MachineSamples = Join-Path \$Out 'machine-samples\.log'/);
         expect(windowsPs1).toMatch(/scripts\/ci\/machine-sampler\.ps1', '-Out', \$MachineSamples, '-ParentId', \$PID/);
-        expect(windowsPs1).toMatch(/\$_\.ProcessId -ne \$sampler/);
+        expect(windowsPs1).toMatch(/\$_\.ProcessId -ne \$samplerPid /);
     });
 });
