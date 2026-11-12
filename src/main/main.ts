@@ -1572,8 +1572,14 @@ async function boot(): Promise<void> {
         const hostRestart = new HostRestart();
         const hostWait = new HostWait({
             open: () => {
-                hostWaitWindow = new BrowserWindow({ width: 460, height: 190, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, title: 'Genie', backgroundColor: '#111111', autoHideMenuBar: true, webPreferences: { preload: join(here, 'host-wait-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
-                void hostWaitWindow.loadFile(join(here, '../renderer/host-wait.html'));
+                const win = new BrowserWindow({
+                    ...genieWindowIcon(here),
+                    width: 460, height: 190, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, title: 'Genie', backgroundColor: '#111111', autoHideMenuBar: true,
+                    webPreferences: { preload: join(here, 'host-wait-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false },
+                });
+                guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
+                hostWaitWindow = win;
+                void win.loadFile(join(here, '../renderer/host-wait.html'));
             },
             update: (view) => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.webContents.send('host-wait:show', view); },
             close: () => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.destroy(); hostWaitWindow = null; },
