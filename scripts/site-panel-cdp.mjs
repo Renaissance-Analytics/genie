@@ -10,6 +10,7 @@
  * It launches Electron, so it refuses to run anywhere but CI or a test machine (SITE_PANEL_CDP_ALLOW=1). Exit 0 all passed; 1 a
  * check failed; 2 cannot run here. Every wait has a deadline, and the whole run has one.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -91,7 +92,7 @@ setTimeout(() => { console.log('FAIL the run\'s own deadline, 260 s'); end(1); }
 
 const targets = async () => (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 try {
-    const page = await until('the window', 60_000, async () => (await targets()).find((t) => t.type === 'page' && /index\.html/.test(t.url)));
+    const page = await until('the window', 60_000, async () => mainWindow(await targets()));
     if (!page) { check(false, 'the main window came up'); end(1); }
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     const ready = await until('window.genie', 60_000, () => cdp.evaluate('typeof window.genie === "object" && document.readyState === "complete"'));

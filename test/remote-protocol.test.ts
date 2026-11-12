@@ -98,7 +98,9 @@ describe('the capability table', () => {
         // 150 with family 11's local features.soundData and features.picked, and C4's four connection-owned Marketplace operations.
         // 155 with GApps v2 V7's five local store actions. 156 with opening an app's window (Tynn #595).
         // 158 with a preview's run and its network (V8, Tynn #573).
-        expect(REMOTE_METHODS.length).toBe(158);
+        // 159 with `agents.setMcpServer` (one MCP server on or off for one agent, Tynn #628): a write, agent-scoped.
+        // 160 with `workspaces.setMcpServer` (a workspace's default for its agents' MCP servers, Tynn #628): a write, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(160);
         for (const method of ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const) expect(capabilityOf(method)).toBe('local');
         expect(capabilityOf('features.soundData')).toBe('local');
         expect(capabilityOf('features.picked')).toBe('local');

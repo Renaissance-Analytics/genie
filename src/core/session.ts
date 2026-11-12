@@ -684,6 +684,20 @@ export class AgentSession {
      * other held agent is simply released.
      */
     resumeAfterLimit(): void {
+        // A TURN STILL OPEN (Tynn #699): the limit's reading came mid-turn and the provider never ended that turn, so
+        // what waited behind it could never go — `#flushAfterTurn` refuses while a turn is open. Genie ends the turn
+        // itself; what waited, or the "continue", goes when its end comes.
+        if (this.#held && this.running && this.#inTurn) {
+            const nudge = (this.#cutByLimit || this.#limitThisTurn) && this.#options.limitNudge !== false;
+            this.#cutByLimit = false;
+            this.#held = false;
+            this.#overloadCancel?.();
+            this.#overloadCancel = null;
+            if (nudge && !this.#afterTurn.some((p) => p.steer === undefined)) this.prompt(LIMIT_RESUME_PROMPT, 'genie');
+            this.cancel('genie', 'interrupt');
+            this.#changed();
+            return;
+        }
         const nudge = this.#cutByLimit && this.#options.limitNudge !== false;
         if (this.#held && this.running) this.#cutByLimit = false;
         this.#resumeHeld(nudge ? LIMIT_RESUME_PROMPT : null);

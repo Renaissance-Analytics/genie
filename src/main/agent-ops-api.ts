@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { sessionHostPort, type AgentOpsHostEngine } from './agent-ops-host-port.js';
-import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessAgents, setAccessScope, setAutoApprove, setBudget, setDrivePages, setIssueWatch, setManageTabs, setMode, setModel, setPermissions, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessAgents, setAccessScope, setAutoApprove, setBudget, setDrivePages, setIssueWatch, setMcpServer, setManageTabs, setMode, setModel, setPermissions, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import type { AgentEngine } from './agent-engine.js';
 import type { Finished } from './attention-store.js';
 import type { HostApiDeps } from './host-api.js';
@@ -30,6 +30,8 @@ export interface AgentOpsWiring {
     /** The finished items in attention: how a handoff asked for before a delete is seen to have landed. */
     finished(): readonly Finished[];
     readonly providerInstalled: AgentOpsPorts['providerInstalled'];
+    /** What the provider's own status call last said (Tynn #698, the health book). */
+    readonly signedIn: AgentOpsPorts['signedIn'];
     readonly applyOnStart?: AgentOpsPorts['applyOnStart'];
 }
 
@@ -49,6 +51,8 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
             setAutoApprove: (id, on) => registry().setAutoApprove(id, on),
             setManageTabs: (id, on) => registry().setManageTabs(id, on),
             setDrivePages: (id, on) => registry().setDrivePages(id, on),
+            setMcpOff: (id, off, on) => registry().setMcpOff(id, off, on),
+            workspaceMcpOff: (workspaceId) => wiring.registry()?.workspaceMcpOff(workspaceId) ?? [],
             setIssueWatch: (id, setting) => registry().setIssueWatch(id, setting),
             setPermissions: (id, permissions) => registry().setPermissions(id, permissions),
             setModel: (id, model) => registry().setModel(id, model),
@@ -86,7 +90,7 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
         },
         linkedSystems: () => [],
         providerInstalled: wiring.providerInstalled,
-        signedIn: () => true,
+        signedIn: wiring.signedIn,
         ...(wiring.applyOnStart ? { applyOnStart: wiring.applyOnStart } : {}),
         startRefusal: wiring.startRefusal,
     };
@@ -106,6 +110,7 @@ export function agentOpsApi(ops: AgentOpsPorts, touch: () => void, engine: () =>
         setAutoApprove: (id, on) => setAutoApprove(ops, id, on).finally(touch),
         setManageTabs: (id, on) => setManageTabs(ops, id, on).finally(touch),
         setDrivePages: (id, on) => setDrivePages(ops, id, on).finally(touch),
+        setMcpServer: (id, name, on) => setMcpServer(ops, id, name, on).finally(touch),
         setIssueWatch: (id, setting) => setIssueWatch(ops, id, setting).finally(touch),
         setPermissions: (id, permissions) => setPermissions(ops, id, permissions).finally(touch),
         setModel: (id, model) => setModel(ops, id, model).finally(touch),

@@ -1,8 +1,10 @@
 import type { ActivityFeed } from '../../core/activity-feed.js';
+import type { McpRow } from '../../core/agent-mcp.js';
 import { pluginPaneState } from '../../core/catalog-projections.js';
 import { flushSync } from 'react-dom';
 import { terminalAction, watchTerminal } from '../local-terminal-client.js';
 import { useMinuteTick } from '../use-activity-feeds.js';
+import { McpServerSwitches } from './AgentSkills.js';
 import { PathBrowse } from './HostPathPicker.js';
 import { IssueWatchPanel } from './IssueWatchPanel.js';
 import { TynnTab } from './TynnTab.js';
@@ -124,6 +126,11 @@ export interface WorkspaceOpsProps {
     readonly color?: {
         readonly current: string | null;
         readonly onSet: (color: string) => void;
+    } | undefined;
+    /** Its default for MCP servers, which its agents inherit (Tynn #628). Absent = not offered. */
+    readonly mcp?: {
+        readonly rows: readonly McpRow[];
+        readonly onSet: (name: string, on: boolean) => Promise<{ ok: true } | { ok: false; reason: string }>;
     } | undefined;
     /** The workspace-scoped settings (§6.1) with THIS workspace's effective values; `values: null` = not loaded yet. */
     readonly settings?: {
@@ -278,6 +285,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
     // What the body shows: the Files tab while the files are open here (beta.35 #41), else the route's view.
     const onScreen: WorkspaceView | 'files' = filesInline ? 'files' : view;
     const label = workspace.name ?? workspace.id;
+    const name = label;
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
      * evaluation, so a static import of `fancy-term` anywhere Node can reach — the SSR render
@@ -742,6 +750,11 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                                     <div data-setting-control="" className="flex shrink-0 items-center justify-end gap-2">
                                         <WorkspaceColorPicker current={ops.color.current} onSet={ops.color.onSet} />
                                     </div>
+                                </li>
+                            ) : null}
+                            {ops.mcp ? (
+                                <li data-ws-mcp="" className="py-2">
+                                    <McpServerSwitches workspace rows={ops.mcp.rows} agentName={name} onSet={ops.mcp.onSet} />
                                 </li>
                             ) : null}
                             {ops.defaultAgent ? (

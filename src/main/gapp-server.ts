@@ -2,8 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
-import { lstat, readFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import { extname, isAbsolute, join, relative as relativePath } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { ElementDefinition } from '../core/catalog.js';
 import { APP_CHANNEL_MAX_BYTES, APP_CHANNEL_PATH, appCsp, appHost, previewHost } from '../core/gapp-origin.js';
@@ -184,6 +184,10 @@ export class GAppServer {
         const file = join(served.dir, ...segments);
         try {
             if (!(await lstat(file)).isFile()) { refuse(res, 404, 'Not found.'); return; }
+            // Only the installed copy is served: a folder link inside it that leads elsewhere is not followed (CodeQL, beta.61).
+            const [realDir, realFile] = await Promise.all([realpath(served.dir), realpath(file)]);
+            const rel = relativePath(realDir, realFile);
+            if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) { refuse(res, 404, 'Not found.'); return; }
             const body = await readFile(file);
             res.writeHead(200, {
                 'content-type': CONTENT_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',

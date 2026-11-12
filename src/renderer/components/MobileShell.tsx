@@ -1,5 +1,10 @@
 import { Button, Icon, Input, Tabs } from '@particle-academy/react-fancy';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { composerKey } from '../../core/send-key.js';
+import { sendKeyNow } from '../send-key-store.js';
+
+/** A fine pointer comes with a real keyboard often enough; a touch-only phone has neither. */
+const hasHardwareKeyboard = (): boolean => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(any-pointer: fine)').matches;
 import type { AgentRow } from '../../core/dashboard-view.js';
 import { statusOf, summaryChips } from '../../core/dashboard-view.js';
 import type { TreeNode } from '../../core/files-panel.js';
@@ -402,7 +407,14 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                     <form data-mobile-composer onSubmit={submit} className="flex flex-col gap-2">
                         {sendRefusal ? <p data-send-refusal className="text-xs text-[var(--danger)]">{sendRefusal}</p> : null}
                         <PendingAttachments files={pending} onRemove={(i) => setPending((p) => p.filter((_, j) => j !== i))} />
-                        <textarea name="text" rows={2} aria-label={`Message ${detail.agent.name}`} placeholder={`Tell ${detail.agent.name} what to do next`} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-2 text-[16px]" />
+                        <textarea name="text" rows={2} aria-label={`Message ${detail.agent.name}`} placeholder={`Tell ${detail.agent.name} what to do next`} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-2 text-[16px]"
+                            onKeyDown={(e) => {
+                                // A hardware keyboard only (Tynn issue #697): on a touch keyboard Enter stays a new line, and Send is the button.
+                                if (!hasHardwareKeyboard()) return;
+                                if (composerKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode }, sendKeyNow()) !== 'send') return;
+                                e.preventDefault();
+                                e.currentTarget.form?.requestSubmit();
+                            }} />
                         <div className="flex items-center gap-2">
                             <label className={attach} aria-label="Take a photo">
                                 <Icon name="camera" size="sm" />

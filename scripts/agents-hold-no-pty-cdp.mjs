@@ -18,6 +18,7 @@
  * processes is the number of live ptys on an otherwise idle machine. On Linux it is the number
  * of allocated pty slaves (`/dev/pts`). Deltas against a baseline taken before anything starts.
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
@@ -72,7 +73,7 @@ async function findTarget() {
     while (Date.now() < until) {
         try {
             const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-            const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+            const page = mainWindow(targets);
             if (page) return page;
             last = `no page yet (${targets.length})`;
         } catch (e) { last = String(e); }
@@ -112,6 +113,14 @@ let terminalId = null;
 let codexId = null;
 try {
     await cdp.evaluate('document.readyState');
+    // THE BRIDGE BEFORE IT IS USED (Tynn #692, the Azure Windows gate: "Cannot read properties of undefined (reading
+    // 'snapshot')": the first page target was there before window.genie was). Waited for, bounded; when it never comes the
+    // failure says which page this was and what it had.
+    const bridgeBy = Date.now() + 60_000;
+    while (Date.now() < bridgeBy && !(await cdp.evaluate("typeof window.genie?.snapshot === 'function'"))) await new Promise((r) => setTimeout(r, 250));
+    if (!(await cdp.evaluate("typeof window.genie?.snapshot === 'function'"))) {
+        throw new Error(`the page never had window.genie.snapshot within 60 s: ${await cdp.evaluate("JSON.stringify({ url: location.href.slice(0, 120), readyState: document.readyState, genie: typeof window.genie, keys: window.genie ? Object.keys(window.genie).slice(0, 20) : null })")}`);
+    }
     const base = ptys();
     const baseStubs = stubProcesses();
     console.log(`  baseline: ptys ${base.total} (${base.detail}); provider processes ${baseStubs}`);

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** CI/test VM only. Copy all five artboard-*.mjs probe scripts to the baseline; add --baseline there. */
+import { mainWindow } from './cdp-main-window.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
@@ -162,7 +163,7 @@ try {
         phase('trace-installed'); await main.request('Debugger.resume', {}); await main.request('Debugger.disable', {});
         startup.traceResumeMs = Date.now() - launchStarted; phase('entry-resumed');
     }
-    const target = await until('owned app page', async () => { hostRecord ??= json(join(runtime, 'host.json')); return (await targets(PORT)).find(target => target.type === 'page' && /index\.html/.test(target.url)); }, 240000);
+    const target = await until('owned app page', async () => { hostRecord ??= json(join(runtime, 'host.json')); return mainWindow(await targets(PORT)); }, 240000);
     startup.pageTargetMs = Date.now() - launchStarted; page = await Cdp.connect(target.webSocketDebuggerUrl);
     main ??= await Cdp.connect((await until('owned main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl); startup.inspectorsConnectedMs = Date.now() - launchStarted;
     await waitForPageProbe(page); startup.pageBridgeMs = Date.now() - launchStarted;

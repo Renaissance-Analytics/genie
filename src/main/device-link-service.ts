@@ -43,7 +43,7 @@ export type ConnectGrant = Awaited<ReturnType<typeof mintConnectGrant>>;
 export interface RelayMemberPorts {
     readonly signedIn: () => boolean;
     /** Why this machine may not connect out (a drone, from the role genie-host read from Tynn); `null` = it may. */
-    readonly refusal?: () => string | null;
+    readonly refusal?: () => string | null | Promise<string | null>;
     readonly keypair: () => PopKeypair;
     readonly mint: (workstationId: string, jwk: PopJwk) => Promise<ConnectGrant>;
     readonly open: (input: { relayUrl: string; workstationId: string; grant: string; pop: PopKeypair; renew: () => Promise<ConnectGrant> }) => Promise<RelayMemberResult>;
@@ -142,7 +142,7 @@ export class DeviceLinkService {
         const relay = this.#options.relay;
         if (!relay) return { ok: false, reason: 'this Genie connects to no Tynn workstations' };
         if (typeof workstationId !== 'string' || workstationId.length === 0 || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
-        const refused = relay.refusal?.() ?? null;
+        const refused = (await relay.refusal?.()) ?? null;
         if (refused) return { ok: false, reason: refused };
         if (!relay.signedIn()) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = relay.keypair();
