@@ -154,12 +154,13 @@ import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, t
 import { panelRestart } from '../core/panel-restart.js';
 import { LeftRunningMark } from './left-running.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { runCliRepair } from './cli-repair.js';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
-import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
 import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
 import { defaultPathEntries } from '../core/toolchain-defaults.js';
@@ -3147,6 +3148,16 @@ async function boot(): Promise<void> {
             openLog: () => shell.openPath(join(runtimeDir(genieRoot()), 'lifecycle.log')).then((failed) => failed || null),
         },
         toolchain: {
+            // A Broken agent CLI's Repair (Tynn #698): the vendor's installer, step by step, judged by checking it again.
+            repairCli: (provider, progress) => runCliRepair(provider, {
+                platform: process.platform,
+                env: processEnv,
+                isFile: (path) => { try { return statSync(path).isFile(); } catch { return false; } },
+                run: (binary, args, options) => execFileRunner(binary, args, { timeoutMs: options.timeoutMs }),
+                refreshPath: () => refreshPersistedPath({ platform: process.platform as Platform, run: execFileRunner, env: processEnv }),
+                check: (p) => providerHealth.refresh(p),
+                progress,
+            }),
             // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
             login: (provider) => { const started = loginHost?.start(provider) ?? { ok: false as const, reason: 'Genie’s login window is not ready yet; try again in a moment' }; return started.ok ? { ok: true } : started; },
             // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).

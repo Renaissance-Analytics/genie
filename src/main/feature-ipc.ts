@@ -132,6 +132,8 @@ export interface FeaturePorts {
         repair?(): Promise<RepairReport>;
         /** Open a provider's own login (LoginHost, the Agent view's Log in), for a row that says Not signed in (Tynn #698). */
         login?(provider: string): { ok: true } | { ok: false; reason: string };
+        /** Repair a provider's CLI (Tynn #698, main/cli-repair.ts): each step pushed while it runs; never throws by contract, guarded anyway. */
+        repairCli?(provider: string, progress: (step: string | null) => void): Promise<{ readonly kind: 'repaired'; readonly words: string } | { readonly kind: 'failed' | 'refused'; readonly reason: string }>;
         /** T4: Genie-managed PHP versions. `pins` are the sites' PHP pins, which a removal is refused against. */
         php?: {
             list(pins: readonly SitePin[]): Promise<PhpVersionsView>;
@@ -1034,6 +1036,29 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const login = ports.toolchain?.login;
             const opened = login ? login(provider) : { ok: false as const, reason: 'no login is wired into this Genie' };
             if (!opened.ok) refuse(next, action.tool, opened.reason);
+            break;
+        }
+        case 'toolchain.repairCli': {
+            clearRefusal(next, action.tool);
+            const tc = ports.toolchain;
+            if (!tc?.repairCli) {
+                refuse(next, action.tool, 'no repair is wired into this Genie; nothing was changed');
+                break;
+            }
+            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
+            const row = (step: string) => tc.updating?.({ tool: action.tool, step });
+            try {
+                row('Starting');
+                const outcome = await tc.repairCli(provider, (step) => { if (step) row(step); });
+                if (outcome.kind === 'repaired') next.toolchainResult = outcome.words;
+                else refuse(next, action.tool, outcome.reason);
+            } catch (error) {
+                refuse(next, action.tool, `The repair stopped: ${error instanceof Error ? error.message : String(error)}`);
+            } finally {
+                tc.updating?.(null);
+            }
+            // The row shows what the check finds now, never the repair's word for it.
+            await rescanToolchain(next, tc, sitePins(services));
             break;
         }
         case 'toolchain.install': {

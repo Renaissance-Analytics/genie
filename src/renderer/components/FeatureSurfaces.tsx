@@ -978,6 +978,25 @@ type ToolchainData = NonNullable<FeatureData['toolchain']>;
  * other tool's "Update to <latest>". While its update runs the row shows the step with a spinner and every button is
  * off; it ends updated (the new version), or failed — the reason, and Retry. Hook-free: what it renders is what is tested.
  */
+/**
+ * A BROKEN AGENT CLI'S ONE ACTION (Tynn #698): Repair, Genie running the vendor's installer itself. While it runs the row
+ * shows its step on the busy button; it ends repaired (the row re-checked) or failed, the reason on the row and Repair again.
+ */
+export function CliRepairAction({ t, busy, updating, onAction }: { t: ToolStatus; busy: boolean; updating?: ToolchainData['updating'] | null; onAction: SurfaceProps['onAction'] }) {
+    if (updating && updating.tool === t.tool) {
+        return (
+            <span data-tool-updating={t.tool} className="ml-auto flex items-center gap-2">
+                <Button type="button" size="sm" color="blue" loading disabled data-action="toolchain-repair-cli">{updating.step}</Button>
+            </span>
+        );
+    }
+    return (
+        <Button type="button" size="sm" color="red" className="ml-auto" disabled={busy || (updating ?? null) !== null} data-action="toolchain-repair-cli" onClick={() => onAction({ kind: 'toolchain.repairCli', tool: t.tool })}>
+            Repair
+        </Button>
+    );
+}
+
 export function ToolUpdateActions({ t, busy, updating, updated, refusal, onAction }: { t: ToolStatus; busy: boolean; updating?: ToolchainData['updating'] | null; updated?: ToolchainData['updated'] | null; refusal?: ToolchainRefusal | null; onAction: SurfaceProps['onAction'] }) {
     const update = (version?: string) => onAction({ kind: 'toolchain.update', tool: t.tool, ...(version ? { version } : {}) });
     if (updating && updating.tool === t.tool) {
@@ -1149,7 +1168,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                         </>
                                     ) : null}
                                     {/* Update from here (genie#1306): real buttons — a language's patch first, another line second; the step while it runs; the end, either way. */}
-                                    {t.installed !== null ? <ToolUpdateActions t={t} busy={busy !== null} updating={updating} updated={tc.updated ?? null} refusal={refusal} onAction={onAction} /> : null}
+                                    {t.tone === 'broken' ? <CliRepairAction t={t} busy={busy !== null} updating={updating} onAction={onAction} /> : t.installed !== null ? <ToolUpdateActions t={t} busy={busy !== null} updating={updating} updated={tc.updated ?? null} refusal={refusal} onAction={onAction} /> : null}
                                     {plan && 'label' in plan ? (
                                         <>
                                             <span data-install-command={t.tool} className="ml-auto truncate font-mono text-xs text-[var(--fg-3)]">{plan.label}{plan.elevated ? ' — asks for permission' : ''}</span>
@@ -1158,7 +1177,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                     ) : plan ? (
                                         <span data-install-refused={t.tool} className="ml-auto text-xs text-[var(--fg-3)]">{plan.refused}</span>
                                     ) : null}
-                                    {refusal && t.installed === null ? <span data-tool-refusal={t.tool} className="basis-full text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
+                                    {refusal && (t.installed === null || t.tone === 'broken') ? <span data-tool-refusal={t.tool} className="basis-full text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
                                 </li>
                             );
                         })}
