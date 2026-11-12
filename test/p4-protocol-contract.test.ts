@@ -49,7 +49,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'agents.setAccessScope': ['agent_a', 'self'], 'agents.setAccessAgents': ['agent_a', null], 'agents.setAutoApprove': ['agent_a', false],
     'agents.setManageTabs': ['agent_a', false], 'agents.setDrivePages': ['agent_a', false], 'agents.setMcpServer': ['agent_a', 'slack', false],
     activity: ['work'], 'agents.setIssueWatch': ['agent_a', null], 'agents.setPermissions': ['agent_a', 'ask'],
-    'agents.setModel': ['agent_a', null], 'agents.models': ['agent_a', false], 'agents.diagnose': ['agent_a'], 'agents.toolOutput': ['agent_a', 'call_1'],
+    'agents.setModel': ['agent_a', null], 'agents.models': ['agent_a', false], 'agents.diagnose': ['agent_a'], 'agents.toolOutput': ['agent_a', 'call_1'], 'agents.attachment': ['agent_a', '0123456789abcdef0123456789abcdef'],
     'workspaces.previewAdd': [ROOT], 'workspaces.confirmAdd': [ROOT],
     'workspaces.create': ['new', ROOT, null, ''], 'workspaces.previewAddFromGit': ['https://example.test/repo.git', ROOT],
     'workspaces.confirmAddFromGit': ['https://example.test/repo.git', ROOT], 'workspaces.readSource': [ROOT],

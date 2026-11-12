@@ -34,6 +34,7 @@ import type { PageOpener } from '../core/local-content.js';
 import { LocalUploads } from './local-uploads.js';
 import { LocalPages } from './local-pages.js';
 import { LocalFilesContent } from './local-files-content.js';
+
 import { isLocalFilesMethod } from '../core/local-files.js';
 import { localFilesArguments } from './local-files-arguments.js';
 import { isLocalDraftMethod } from '../core/local-drafts.js';
@@ -47,6 +48,12 @@ import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
+
+/**
+ * The most one kept image's reply may be, as JSON, for another device (Tynn #642): 512 KB, so it fits one frame. This
+ * machine's window has no such cap (it takes the image as a blob, up to the 5 MB a sent image can be).
+ */
+const REMOTE_ATTACHMENT_MAX_BYTES = 512 * 1024;
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -824,6 +831,14 @@ export class RemoteHost {
             // This machine's own window (P4 family 11): the whole snapshot, the pairing requests included, inline when small
             // and through a blob when not, so nothing it carries can reach the door's frame cap. A sound's data the same.
             if (connection.local && (method === 'features.snapshot' || method === 'features.soundData' || method === 'features.act')) return ok(this.#content(connection).jsonResult(value, method));
+            // ONE KEPT IMAGE (Tynn #642): a sent image can be up to 5 MB, so this machine's window takes it as a blob, never
+            // a frame over the door's cap; another device takes one whose reply is at most REMOTE_ATTACHMENT_MAX_BYTES
+            // (512 KB), and is told plainly when it is larger.
+            if (method === 'agents.attachment') {
+                if (connection.local) return ok(this.#content(connection).jsonResult(value, method));
+                const json = JSON.stringify(value);
+                if (json !== undefined && Buffer.byteLength(json) > REMOTE_ATTACHMENT_MAX_BYTES) return ok({ ok: false, reason: 'this image is too large to show on another device' });
+            }
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             // The TUI started (or was open): a ticket for this window's own Take Over window, which presents it (Tynn #529 A).
