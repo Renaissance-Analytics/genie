@@ -77,6 +77,8 @@ export interface ProcessStatus {
     readonly reason?: string;
     /** A one-shot command already owned by its executor: observed here, never kept or restarted. */
     readonly commandRun?: true;
+    /** Actual command start, retained after completion so elapsed time does not become time since exit. */
+    readonly startedAt?: number;
 }
 
 export interface SupervisorClock {
