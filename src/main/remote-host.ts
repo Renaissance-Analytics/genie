@@ -168,6 +168,24 @@ const PHONE_REFUSES = (method: string): boolean => method.startsWith('terminals.
 /** Extended only when a family moves. Unmoved local views retain their existing subscriptions. */
 const LOCAL_EVENTS = new Set<string>(['workspace-settings-changed', ...Object.values(LOCAL_EVENT_CHANNELS)]);
 
+/** Whether an event is for this host's LOCAL connections only (the window's own doors), never a remote one. */
+export function isLocalEvent(channel: string): boolean {
+    return LOCAL_EVENTS.has(channel);
+}
+
+/**
+ * WHAT THE HOST API'S EVENTS MUST CARRY FOR THIS HOST'S CONNECTIONS (Tynn #662): `remote` = a remote connection hears
+ * the non-local events; `all` = one of them hears every agent (a window that is not a phone), else `agents` = the agents
+ * a phone watches; `local` = a local connection hears the local events. What a window that forwards its events to
+ * genie-host builds and sends, and nothing more.
+ */
+export interface EventWants {
+    readonly remote: boolean;
+    readonly all: boolean;
+    readonly agents: readonly string[];
+    readonly local: boolean;
+}
+
 /** A push a connection does not receive. */
 const NOT_SENT = Symbol('not sent');
 
@@ -254,6 +272,20 @@ export class RemoteHost {
     #listen(): void {
         if (![...this.#connections.values()].some((connection) => connection.auth !== null)) return;
         this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), { wantsAgent: (agentId) => this.#wantsAgent(agentId) });
+    }
+
+    /** What this host's connections want of the events now (Tynn #662): said in genie-host's status to the window that feeds them. */
+    wanted(): EventWants {
+        let remote = false, all = false, local = false;
+        const agents = new Set<string>();
+        for (const c of this.#connections.values()) {
+            if (c.auth === null) continue;
+            if (c.local) { local = true; continue; }
+            remote = true;
+            if (c.profile !== 'mobile') all = true;
+            else for (const id of c.watching.keys()) agents.add(id);
+        }
+        return { remote, all, agents: all ? [] : [...agents].sort(), local };
     }
 
     /** Someone wants this agent's detail: a window that is not a phone (it hears every agent), or a phone watching it. */
@@ -712,8 +744,12 @@ export class RemoteHost {
                 return ok({ locked: false });
             case 'agent.watch':
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
-            case 'agent.unwatch':
-                return ok({ unwatched: connection.watching.delete(String(args[0] ?? '')) });
+            case 'agent.unwatch': {
+                const unwatched = connection.watching.delete(String(args[0] ?? ''));
+                // What the forwarding window sends follows (Tynn #662).
+                if (unwatched) this.#changed();
+                return ok({ unwatched });
+            }
             case 'activity.watch':
             case 'activity.unwatch': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
@@ -909,8 +945,11 @@ export class RemoteHost {
         }
         const { rows = [], ...rest } = detail;
         const opened = openWindow(rows, options);
+        const first = !connection.watching.has(agentId);
         connection.watching.set(agentId, opened.state);
         if (!this.#stopListening) this.#listen();
+        // A newly watched agent is one the forwarding window must now send (Tynn #662).
+        if (first) this.#changed();
         return { seq: opened.state.seq, detail: rest, rows: opened.rows };
     }
 

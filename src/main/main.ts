@@ -2552,7 +2552,7 @@ async function boot(): Promise<void> {
     // Genie-host's remote connections follow this window's events (the snapshot, features…) while it is the newest window.
     if (remoteApiNow) {
         const api = remoteApiNow;
-        linkedRemote.forwardEvents((listener) => api.onEvent(listener));
+        linkedRemote.forwardEvents((listener, options) => api.onEvent(listener, options));
         void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
     }
     composedNow = composed;
