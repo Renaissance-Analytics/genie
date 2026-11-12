@@ -1,3 +1,4 @@
+import { decodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { readTynnPage } from './tynn-page-client.js';
@@ -531,7 +532,7 @@ export class SessionEngineClient {
             }
             if (method === 'client.remoteInvoke') {
                 if (!this.#options.onRemoteInvoke) throw new Error('this window answers no remote calls');
-                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), Array.isArray(args[1]) ? args[1] : [], forwardedCallContext(args[2])) };
+                reply = { kind: 'result', id, ok: true, value: await this.#options.onRemoteInvoke(String(args[0]), decodeRemoteInvokeArgs(String(args[0]), Array.isArray(args[1]) ? args[1] : []), forwardedCallContext(args[2])) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }

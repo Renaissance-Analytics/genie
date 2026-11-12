@@ -1,3 +1,4 @@
+import { encodeRemoteInvokeArgs } from './remote-invoke-wire.js';
 import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { KeyringService } from './keyring-service.js';
@@ -401,7 +402,8 @@ export class SessionEngineServer {
 
     /** A remote method genie-host does not own yet, done by the newest LOCAL window (Tynn #409). Rejects with none. */
     remoteInvoke(method: string, args: unknown[], context?: CallContext): Promise<unknown> {
-        return this.#reverse('client.remoteInvoke', [method, args, context ?? null], { localOnly: true });
+        // Staged bytes cross as base64: the reverse call is JSON (Tynn #657, remote-invoke-wire.ts).
+        return this.#reverse('client.remoteInvoke', [method, encodeRemoteInvokeArgs(method, args), context ?? null], { localOnly: true });
     }
 
     /** The newest local window's connection: the one remote calls go to, and whose events remote connections follow. */
