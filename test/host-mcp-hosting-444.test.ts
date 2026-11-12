@@ -28,10 +28,11 @@ async function rig(connected: boolean) {
     });
     await vi.waitFor(() => expect(host!.endpoint()).not.toBeNull());
     const server = host.sessionServers(record)[0];
-    if (!server || server.type === 'stdio') throw new Error('expected the host HTTP MCP entry');
+    if (!server || !('headers' in server)) throw new Error('expected the host HTTP MCP entry');
+    const headers = { 'content-type': 'application/json', ...Object.fromEntries(server.headers.map((h) => [h.name, h.value])) };
     const call = async (name: string, args: Record<string, unknown>) => {
         const response = await fetch(host!.endpoint()!.url, {
-            method: 'POST', headers: { 'content-type': 'application/json', ...Object.fromEntries(server.headers.map((h) => [h.name, h.value])) },
+            method: 'POST', headers,
             body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args, _meta: META } }),
         });
         expect(response.status).toBe(200);
