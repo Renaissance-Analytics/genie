@@ -75,6 +75,34 @@ describe('the host keeps the images sent in a thread', () => {
         expect(await attachmentOf(r.host)(record.id, ref.id)).toEqual({ ok: true, mimeType: 'image/png', data: b64(PNG), bytes: PNG.byteLength });
     });
 
+    /*
+     * PAIRED BY THE FILE, NOT BY THE PLACE (review of genie#1879): a mixed send (an image, a text file, a second image) keeps
+     * each image under ITS OWN name, with its own bytes — never the first image under the text file's name, never the
+     * second image's pill showing the first. With and without words, since the words are a block of their own or none.
+     */
+    it('a mixed send keeps each image under its own attachment name, with its own bytes', async () => {
+        const second = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array.from({ length: 40 }, (_, i) => 255 - i)]);
+        for (const words of ['two images and a note', '']) {
+            const r = rig();
+            const record = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+            r.host.start(record, dir);
+            expect(r.host.promptWith(record.id, words, [
+                { name: 'first.png', type: 'image/png', bytes: PNG },
+                { name: 'notes.txt', type: 'text/plain', bytes: new TextEncoder().encode('just text') },
+                { name: 'second.png', type: 'image/png', bytes: second },
+            ], 'you'), words).toEqual({ ok: true });
+            await r.host.settled();
+            const row = r.host.ledgerFor(record.id).map((t) => t.event).find((e) => e.kind === 'message' && e.speaker === 'you') as { attachments?: readonly string[]; attachmentRefs?: readonly Ref[] } | undefined;
+            expect(row?.attachments, words).toEqual(['first.png', 'notes.txt', 'second.png']);
+            expect(row?.attachmentRefs?.map((ref) => ref.name), words).toEqual(['first.png', 'second.png']);
+            const [a, b] = row!.attachmentRefs!;
+            expect(a, words).toMatchObject({ mimeType: 'image/png', bytes: PNG.byteLength });
+            expect(b, words).toMatchObject({ mimeType: 'image/png', bytes: second.byteLength });
+            expect(await attachmentOf(r.host)(record.id, a!.id), words).toEqual({ ok: true, mimeType: 'image/png', data: b64(PNG), bytes: PNG.byteLength });
+            expect(await attachmentOf(r.host)(record.id, b!.id), words).toEqual({ ok: true, mimeType: 'image/png', data: b64(second), bytes: second.byteLength });
+        }
+    });
+
     it('kept inside Genie’s data dir, in the folder beside the agent’s ledger', async () => {
         const r = rig();
         const { record } = await sentWithAnImage(r);
