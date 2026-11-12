@@ -115,13 +115,17 @@ describe('the question window never scrolls sideways', () => {
         ]));
     });
 
-    it('the option chips wrap within their row; a long label wraps instead of widening it', () => {
+    it('the options are full-width cards in one column; a long title wraps between words, never widening the window (Tynn #646)', () => {
         const groups = all.filter((e) => attr(e, 'role') === 'group' && inside(e, scroll));
         expect(groups.length).toBeGreaterThan(0);
-        for (const g of groups) expect(classes(g)).toEqual(expect.arrayContaining(['flex-wrap', 'min-w-0']));
+        for (const g of groups) expect(classes(g)).toEqual(expect.arrayContaining(['flex-col', 'w-full', 'min-w-0']));
         const options = withAttr(all, 'data-question-option');
         expect(options.length).toBe(2);
-        for (const o of options) expect(classes(o)).toEqual(expect.arrayContaining(['max-w-full', '[overflow-wrap:anywhere]']));
+        // `[overflow-wrap:anywhere]` broke a title letter by letter in a narrow column ("approv / al"): gone.
+        for (const o of options) {
+            expect(classes(o)).toEqual(expect.arrayContaining(['w-full', 'min-w-0']));
+            expect(classes(o)).not.toContain('[overflow-wrap:anywhere]');
+        }
     });
 
     it('one rule, not two: the question form and the file drawer draw prose through the same containment', () => {
