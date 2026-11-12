@@ -11,6 +11,7 @@ import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport
 import type { ConnectProgress } from '../../core/connect-machine.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
+import type { DndHeaderView } from '../../core/dnd-header.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -91,6 +92,8 @@ export interface TitleBarProps {
     gapps?: { apps: readonly GAppListing[] | null; actions?: GAppStoreActions | undefined } | undefined;
     /** Share this workstation through Tynn (Tynn #587), the host's when driving one. Absent for a guest. */
     share?: { readonly onShare: () => void } | undefined;
+    /** DO NOT DISTURB (Tynn #655). STUB: the tests come first. */
+    dnd?: { view: DndHeaderView; onToggle: () => unknown } | undefined;
     connect?: {
         workstations: TynnWorkstationList | null;
         onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
