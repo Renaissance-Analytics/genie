@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { windowsFunction } from './helpers/ci-scripts.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
@@ -148,8 +149,8 @@ describe('a provider’s model list is asked of genie-host, which has the superv
     });
 });
 
-describe('CI: the packaged host runs from its copy, with its supervisor', () => {
-    const run = (): string => ((require('js-yaml').load(readFileSync('.github/workflows/ci.yml', 'utf8')) as { jobs: { package: { steps: Array<{ name?: string; run?: string }> } } }).jobs.package.steps.find((s) => s.name === 'the packaged app starts genie-host through genie-launch.exe')?.run ?? '');
+describe('CI: the packaged host runs from its copy, with its supervisor (scripts/ci/windows.ps1)', () => {
+    const run = (): string => windowsFunction('Row-packaged-launcher');
 
     it('fails when the copy could not be made, when the host is not running from it, or when its supervisor is not ready', () => {
         const step = run();

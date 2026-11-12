@@ -11,7 +11,7 @@
 # `scripts/omarchy-run.sh <repo-dir> 'bash scripts/ci/linux.sh'` does exactly that on the omarchy-test VM. NEVER on a
 # person's desktop: the rows open real windows, start real hosts and write to ~/.genie.
 #
-# Each row is a step of a Linux job in .github/workflows/ci.yml, run with the same command and the same time limit, and
+# Each row is a step of a Linux job of the removed .github/workflows/ci.yml, run with the same command and time limit, and
 # it passes or fails on the same thing. One line per row, `ROW <name> PASS|FAIL <seconds>`, then `CI LINUX PASS|FAIL`;
 # the exit status is non-zero when any row failed. A row's whole output is in ci-out/<name>.log, and the end of it is
 # printed when the row fails. A failed row does not stop the run: every later row still reports.

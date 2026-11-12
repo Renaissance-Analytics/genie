@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { linuxRow, linuxRows, linuxSh, windowsPs1 } from './helpers/ci-scripts.js';
 import { SERVICE_CATALOG } from '../src/core/services.js';
 import { MAILPIT_MEASURED_IMAGE, MAILPIT_V130_DIGEST } from './mailpit-measure/mailpit-image.js';
 
@@ -8,7 +9,6 @@ import { MAILPIT_MEASURED_IMAGE, MAILPIT_V130_DIGEST } from './mailpit-measure/m
  * starts a real Mailpit container, so it is never part of `npm test` (which runs on people's machines too): it runs as
  * `npm run verify:mailpit` in its own CI job on Linux, against the image Genie itself runs, pinned by digest from GHCR.
  */
-const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { scripts: Record<string, string> };
 const vite = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
 const config = (() => { try { return readFileSync(new URL('../vitest.mailpit.config.mts', import.meta.url), 'utf8'); } catch { return ''; } })();
@@ -21,15 +21,11 @@ describe('the Mailpit measurement', () => {
         expect('test/mailpit-measure/mailpit-v130.accept.ts').not.toMatch(/\.test\.(ts|tsx)$/);
     });
 
-    it('runs in its own CI job on Linux, always, and nowhere else in the workflow', () => {
-        const job = /\n {2}mailpit:\n([\s\S]*?)(?=\n {2}[a-z0-9-]+:\n|$)/.exec(ci)?.[1] ?? '';
-        expect(job).toContain('name: mailpit measure');
-        expect(job).toContain('runs-on: ubuntu-latest');
-        expect(job).toMatch(/- run: npm ci\n\s+- run: npm run verify:mailpit/);
-        // Not path-filtered: a required check that is filtered out never reports.
-        expect(job).not.toMatch(/\bif:/);
-        // Run by exactly one step (a comment naming the command is not a run).
-        expect(ci.match(/^\s*- run: npm run verify:mailpit\s*$/gm)).toHaveLength(1);
+    it('runs in its own row of the Linux gate (scripts/ci/linux.sh), and nowhere else', () => {
+        expect(linuxRows).toContain('mailpit');
+        expect(linuxRow('mailpit')).toMatch(/npm run verify:mailpit/);
+        expect(linuxSh.match(/npm run verify:mailpit/g)).toHaveLength(1);
+        expect(windowsPs1).not.toMatch(/verify:mailpit/);
     });
 
     it('measures the image Genie runs: axllent/mailpit v1.30, by its digest, from GHCR', () => {
