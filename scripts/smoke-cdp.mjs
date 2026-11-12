@@ -1061,6 +1061,22 @@ if (!approvalEnabled) {
         await new Promise((r) => setTimeout(r, 2000));
         const shown = await cdp.evaluate(`${rowsText}.includes('${again}')`).catch(() => null);
         console.log(`  TERMINAL_RETYPE ${JSON.stringify({ focusAtFailure: focus, secondTokenShown: shown })} ${await terminalDump()}`);
+        // INPUT OR OUTPUT (beta.61.1): the second token not showing means the keys never reached the shell OR the pane
+        // stopped drawing what the shell printed. The workspace's terminal error says why a pane's stream ended, and a
+        // REMOUNT (away to the Dashboard and back: a new watch, a fresh snapshot from the host) shows what the shell has
+        // printed: the tokens in it = the keys arrived and only the pane's stream died; not in it = the keys were lost.
+        const alerts = await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[role="alert"]')].map((a) => (a.textContent ?? '').trim()).filter(Boolean).slice(0, 5))`).catch((e) => `(unread: ${e?.message ?? e})`);
+        const tabId = await cdp.evaluate(`[...document.querySelectorAll('[data-workspace-tab]')].map((t) => t.getAttribute('data-workspace-tab')).find((id) => id && id !== 'home' && id !== 'add') ?? null`).catch(() => null);
+        let remount = '(no designed tab to come back to)';
+        if (typeof tabId === 'string') {
+            await cdp.evaluate(`document.querySelector('[data-workspace-tab="home"]')?.click(); true`);
+            await new Promise((r) => setTimeout(r, 1000));
+            await cdp.evaluate(`document.querySelector('[data-workspace-tab="${tabId}"]')?.click(); true`);
+            await new Promise((r) => setTimeout(r, 4000));
+            await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
+            remount = await cdp.evaluate(`JSON.stringify({ firstToken: ${rowsText}.split('${token}').length - 1, secondToken: ${rowsText}.includes('${again}') })`).catch((e) => `(unread: ${e?.message ?? e})`);
+        }
+        console.log(`  TERMINAL_STREAM_OR_KEYS ${JSON.stringify({ alerts, remount })} ${await terminalDump()}`);
     }
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
