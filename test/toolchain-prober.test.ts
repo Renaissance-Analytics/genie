@@ -113,9 +113,9 @@ describe('an update, judged by the version measured after', () => {
         await runUpdate('claude-code', { platform: 'linux', packageManager: 'apt' }, spy, null);
         expect(calls.filter(([, a]) => a.includes('update'))).toEqual([['claude', ['update']]]);
         calls.length = 0;
-        // The installer is one argv, never split on its spaces: its pipe belongs to the shell it names.
+        // The installer is one argv, never split on its spaces: its script belongs to the shell it names.
         await runUpdate('codex', { platform: 'linux', packageManager: 'apt' }, spy, null);
-        expect(calls.filter(([b]) => b === 'sh')).toEqual([['sh', ['-c', 'curl -fsSL https://chatgpt.com/codex/install.sh | sh']]]);
+        expect(calls.filter(([b]) => b === 'sh')).toEqual([['sh', ['-c', `set -eu; f="$(mktemp)"; trap 'rm -f "$f"' EXIT; curl --proto '=https' --tlsv1.2 -fsSL https://chatgpt.com/codex/install.sh -o "$f"; sh "$f"`]]]);
         expect(calls.some(([b, a]) => b === 'npm' || a.includes('npm'))).toBe(false);
     });
 

@@ -13,10 +13,20 @@ const plan = async () => { const path: string = '../src/core/cli-repair.js'; ret
 const runner = async () => { const path: string = '../src/main/cli-repair.js'; return import(path) as Promise<any>; };
 const toolchain = async () => { const path: string = '../src/core/toolchain.js'; return import(path) as Promise<any>; };
 
-const CLAUDE_WIN = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://claude.ai/install.ps1 | iex'];
-const CLAUDE_LINUX = ['bash', '-c', 'curl -fsSL https://claude.ai/install.sh | bash'];
-const CODEX_WIN = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://chatgpt.com/codex/install.ps1 | iex'];
-const CODEX_LINUX = ['sh', '-c', 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'];
+/*
+ * Each vendor's documented command, hardened (PR #1881 review). The URLs are the vendors' own: claude.ai/install.sh and
+ * claude.ai/install.ps1 (code.claude.com/docs/en/setup, "Native Install"), chatgpt.com/codex/install.sh and install.ps1
+ * (github.com/openai/codex, README). The vendor's https domain is trusted; nothing is pinned. Hardened so that a download
+ * that fails FAILS THE STEP: POSIX downloads the installer whole to a temporary file, https only and TLS 1.2+, and only then
+ * runs it (with `curl … | sh` the shell ran whatever arrived, and a failed download ran an empty script that exited 0).
+ * Windows keeps the vendor's `irm … | iex`, with the download made to stop on error and an empty one refused, so
+ * powershell.exe exits non-zero instead of running nothing; no double quote, which Node and PowerShell quote differently.
+ */
+const PS = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command'];
+const CLAUDE_WIN = [...PS, `$installer = irm https://claude.ai/install.ps1 -ErrorAction Stop; if (-not $installer) { throw 'https://claude.ai/install.ps1 sent nothing' }; $installer | iex`];
+const CLAUDE_LINUX = ['bash', '-c', `set -eu; f="$(mktemp)"; trap 'rm -f "$f"' EXIT; curl --proto '=https' --tlsv1.2 -fsSL https://claude.ai/install.sh -o "$f"; bash "$f"`];
+const CODEX_WIN = [...PS, `$installer = irm https://chatgpt.com/codex/install.ps1 -ErrorAction Stop; if (-not $installer) { throw 'https://chatgpt.com/codex/install.ps1 sent nothing' }; $installer | iex`];
+const CODEX_LINUX = ['sh', '-c', `set -eu; f="$(mktemp)"; trap 'rm -f "$f"' EXIT; curl --proto '=https' --tlsv1.2 -fsSL https://chatgpt.com/codex/install.sh -o "$f"; sh "$f"`];
 
 const health = (over: Record<string, unknown>) => ({ provider: 'claude', ok: false, installed: false, signedIn: null, version: null, program: null, fault: 'missing', words: 'w', checkedAt: 1, ...over });
 const NPM_CLAUDE_WIN = 'C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe';
@@ -30,6 +40,56 @@ describe('the vendors\' installers, from Genie\'s own table', () => {
         expect(planInstall({ tool: 'codex', platform: 'win32', packageManager: null })).toMatchObject({ argv: CODEX_WIN, manager: 'vendor' });
         expect(planInstall({ tool: 'codex', platform: 'linux', packageManager: 'apt' })).toMatchObject({ argv: CODEX_LINUX, manager: 'vendor' });
         expect(planInstall({ tool: 'claude-code', platform: 'linux', packageManager: null }).label).toContain('claude.ai/install.sh');
+    });
+
+    it('the table holds exactly those commands: no download is piped into a shell, and only the vendor URL differs', async () => {
+        const { VENDOR_INSTALLERS } = await toolchain();
+        expect(VENDOR_INSTALLERS['claude-code'].linux).toEqual(CLAUDE_LINUX);
+        expect(VENDOR_INSTALLERS['claude-code'].win32).toEqual(CLAUDE_WIN);
+        expect(VENDOR_INSTALLERS.codex.linux).toEqual(CODEX_LINUX);
+        expect(VENDOR_INSTALLERS.codex.win32).toEqual(CODEX_WIN);
+        for (const v of Object.values(VENDOR_INSTALLERS) as Array<{ linux: string[]; win32: string[] }>) {
+            expect(v.linux.at(-1)).not.toMatch(/\|\s*(ba)?sh\b/);
+            expect(v.linux.at(-1)).toContain("--proto '=https' --tlsv1.2");
+            expect(v.win32.at(-1)).not.toContain('"');
+        }
+    });
+
+    // The shell itself runs the command, with `curl` replaced by a stand-in on PATH (no network): a download that fails, or
+    // is cut short, fails the step and runs nothing; a whole one runs. Red against `curl … | sh`: the empty pipe exits 0.
+    it.skipIf(process.platform === 'win32')('POSIX: a failed or cut-short download fails the step and runs nothing; a whole one runs', async () => {
+        const { VENDOR_INSTALLERS } = await toolchain();
+        const { chmodSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+        const { spawnSync } = await import('node:child_process');
+        const { join } = await import('node:path');
+        const { tmpdir } = await import('node:os');
+        const bin = mkdtempSync(join(tmpdir(), 'genie-fake-curl-'));
+        try {
+            writeFileSync(join(bin, 'curl'), [
+                '#!/bin/sh',
+                'out=""',
+                'while [ $# -gt 0 ]; do if [ "$1" = "-o" ]; then out="$2"; shift; fi; shift; done',
+                // `curl -f` on a 404 writes nothing and exits 22.
+                'if [ "${FAKE_CURL:-}" = fail ]; then exit 22; fi',
+                'echo "echo ran-installer" > "$out"',
+                // A transfer cut short: part of the file is there, and curl exits 18.
+                'if [ "${FAKE_CURL:-}" = partial ]; then exit 18; fi',
+                '',
+            ].join('\n'));
+            chmodSync(join(bin, 'curl'), 0o755);
+            const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` };
+            for (const tool of ['claude-code', 'codex']) {
+                const [binary, ...args] = VENDOR_INSTALLERS[tool].linux as string[];
+                const failed = spawnSync(binary!, args, { env: { ...env, FAKE_CURL: 'fail' }, encoding: 'utf8', input: '' });
+                expect([tool, failed.status, failed.stdout]).toEqual([tool, 22, '']);
+                const partial = spawnSync(binary!, args, { env: { ...env, FAKE_CURL: 'partial' }, encoding: 'utf8', input: '' });
+                expect([tool, partial.status, partial.stdout]).toEqual([tool, 18, '']);
+                const whole = spawnSync(binary!, args, { env, encoding: 'utf8', input: '' });
+                expect([tool, whole.status, whole.stdout]).toEqual([tool, 0, 'ran-installer\n']);
+            }
+        } finally {
+            rmSync(bin, { recursive: true, force: true });
+        }
     });
 
     it('updates Claude Code with `claude update`, Codex with its installer again; macOS is said to be unsupported', async () => {

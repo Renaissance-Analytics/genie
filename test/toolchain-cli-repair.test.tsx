@@ -79,6 +79,45 @@ describe('the Repair action', () => {
         expect(seen.rows.at(-1)).toBeNull();
     });
 
+    it('a second Repair while one runs for the same CLI does nothing: no second installer, the running row left alone', async () => {
+        const { handleFeatureAction } = await featureIpc();
+        const rows: unknown[] = [];
+        const started: string[] = [];
+        let finish!: () => void;
+        const gate = new Promise<void>((resolve) => { finish = resolve; });
+        const slow = {
+            toolchain: {
+                probe: async () => [BROKEN],
+                update: async () => ({ kind: 'refused', reason: 'no' }),
+                now: () => 1,
+                updating: (r: unknown) => { rows.push(r); },
+                repairCli: async (provider: string, progress: (step: string | null) => void) => {
+                    started.push(provider);
+                    progress('Running Claude Code’s installer');
+                    await gate;
+                    return { kind: 'repaired', words: 'Claude Code 2.1.322 is installed and answers.' };
+                },
+            },
+        };
+        const first = handleFeatureAction(services, { kind: 'toolchain.repairCli', tool: 'claude-code' }, state, slow);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(started).toEqual(['claude']);
+        const rowsBefore = [...rows];
+        // The second click comes back at once, while the first is still running.
+        const second = await handleFeatureAction(services, { kind: 'toolchain.repairCli', tool: 'claude-code' }, state, slow);
+        expect(started).toEqual(['claude']);
+        expect(rows).toEqual(rowsBefore);
+        expect(rows).not.toContain(null);
+        expect(second.toolchain?.refusals).toBeUndefined();
+        expect(second.toolchain?.result ?? null).toBeNull();
+        finish();
+        const done = await first;
+        expect(done.toolchain?.result).toBe('Claude Code 2.1.322 is installed and answers.');
+        // Once it has ended, Repair runs again.
+        await handleFeatureAction(services, { kind: 'toolchain.repairCli', tool: 'claude-code' }, state, { toolchain: { ...slow.toolchain, repairCli: async (provider: string) => { started.push(provider); return { kind: 'failed', reason: 'y' }; } } });
+        expect(started).toEqual(['claude', 'claude']);
+    });
+
     it('a repair that throws still ends the row\'s step, and says why on it', async () => {
         const { handleFeatureAction } = await featureIpc();
         const rows: unknown[] = [];
