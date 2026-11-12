@@ -134,11 +134,23 @@ describe('connectRemote against a fake older drone', () => {
         const drone = olderDrone({ protocol: 1, build: '2.0.0-beta.61' }, ['host.home']);
         const client = connectRemote(drone.client, { kind: 'relay', label: 'pilot' }, 'pilot', { minBuild: DRONE_MIN_BUILD });
         expect(await client.ready).toEqual({ ok: true });
-        const home = client.bridge.host!.home!();
-        await vi.waitFor(() => expect(client.state()).toMatchObject({ connected: false, skew: { build: '2.0.0-beta.61', method: 'host.home' } }));
-        await expect(home).rejects.toThrow();
-        expect(drone.closed()).toBe(true);
-        expect(client.state().lastRefusal ?? '').not.toContain('bridge method');
+        // Nothing this path leaves behind rejects with nobody listening (the Deck's raw "unhandled rejection", #636).
+        const unhandled: unknown[] = [];
+        const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+        process.on('unhandledRejection', onUnhandled);
+        try {
+            // The caller listens from the moment it asks, as the window's caller does (host-home.ts catches): the read ends
+            // with the link, in this bridge's words for any closed link.
+            const home = expect(client.bridge.host!.home!()).rejects.toThrow('the connection closed');
+            await vi.waitFor(() => expect(client.state()).toMatchObject({ connected: false, skew: { build: '2.0.0-beta.61', method: 'host.home' } }));
+            await home;
+            expect(drone.closed()).toBe(true);
+            expect(client.state().lastRefusal ?? '').not.toContain('bridge method');
+            await new Promise<void>((r) => setImmediate(r));
+            expect(unhandled).toEqual([]);
+        } finally {
+            process.off('unhandledRejection', onUnhandled);
+        }
     });
 
     it('the same refusal before the welcome resolves ready with the skew', async () => {
