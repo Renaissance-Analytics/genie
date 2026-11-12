@@ -56,12 +56,13 @@ describe('the detail an agent switch shows first', () => {
 });
 
 describe('the hook uses it', () => {
-    it("useAgentDetail opens a switch with the cache's detail, not an empty one, and remembers what lands", () => {
+    it("useAgentDetail opens a switch with the cache's detail, not an empty one, and lands every detail through it", () => {
         const app = readFileSync('src/renderer/App.tsx', 'utf8').replace(/\r\n/g, '\n');
         const hook = app.slice(app.indexOf('function useAgentDetail('), app.indexOf('function useRemote('));
         expect(hook.length).toBeGreaterThan(200);
         expect(hook).toMatch(/setState\(detailCache\.show\(agentId\)\)/);
-        // Every detail that lands is remembered — the first answer and every live update (counted).
-        expect(hook.match(/detailCache\.remember\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+        // Every detail that lands goes through the cache — the first answer and every live update (counted). `land`
+        // remembers a whole one and keeps the agent's rows over one still pending (Tynn #659, chat-switch-659.test.tsx).
+        expect(hook.match(/detailCache\.land\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     });
 });
