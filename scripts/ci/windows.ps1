@@ -434,8 +434,8 @@ function Row-packaged-launcher {
 # EVERY ROW HAS A CEILING (Tynn #692: trust-step printed its title and then nothing until the Azure job's 90 minutes ran
 # out; no row after it ran). In seconds: the row script's own timeout (as linux.sh gives it, ci.yml's Windows job had
 # none) plus 60 s, or the job's limit, or a stated one. On expiry a watchdog process marks the row and ends every
-# process this script started except the shared app (each with its tree, taskkill /T), so the row's command returns,
-# the row prints `(timed out after N s)`, and the run goes on.
+# process this script started except the shared app and the machine sampler (each with its tree, taskkill /T), so the
+# row's command returns, the row prints `(timed out after N s)`, and the run goes on.
 function Ceiling([string]$name) {
     switch ($name) {
         { $_ -in 'deps', 'packaged-launcher' } { return 900 }
@@ -455,8 +455,9 @@ function Ceiling([string]$name) {
 function Start-Watchdog([int]$limit, [string]$mark, [string]$token) {
     if ($limit -lt 1) { throw "a row's ceiling must be at least 1 s, not '$limit'" }
     $keep = if ($script:App) { $script:App.Id } else { 0 }
+    $sampler = if ($script:Sampler) { $script:Sampler.Id } else { 0 }
     $cmd = "Start-Sleep -Seconds $limit; Set-Content -LiteralPath '$mark' -Value '$token'; " +
-        "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$PID' | Where-Object { `$_.ProcessId -ne `$PID -and `$_.ProcessId -ne $keep } | " +
+        "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$PID' | Where-Object { `$_.ProcessId -ne `$PID -and `$_.ProcessId -ne $keep -and `$_.ProcessId -ne $sampler } | " +
         "ForEach-Object { taskkill /PID `$_.ProcessId /T /F *> `$null }"
     # Encoded, so no quoting between here and the child can change a character of it.
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($cmd))
@@ -465,12 +466,43 @@ function Start-Watchdog([int]$limit, [string]$mark, [string]$token) {
 
 # --- run them ---------------------------------------------------------------------------------------------------------
 
+# THE MACHINE BESIDE EVERY ROW (Tynn #660): scripts/ci/machine-sampler.ps1 writes one MACHINE line every ~2 s for the
+# whole run into ci-out\machine-samples.log, and ends with this script. The watchdog spares it ($script:Sampler).
+$MachineSamples = Join-Path $Out 'machine-samples.log'
+$script:Sampler = Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/ci/machine-sampler.ps1', '-Out', $MachineSamples, '-ParentId', $PID -PassThru -WindowStyle Hidden
 Write-Output "CI WINDOWS rows: $($selected -join ' ')"
+
+# >>> THE ROW LOOP (test/ci-infra-rerun-windows.test.ts runs this block, as it is, with stub rows)
+#
+# STALL-AWARE ROWS (Tynn #660; the owner: "we are wasting so much time on failing test infrastructure"). A row that
+# FAILS while the machine sampler recorded a stall during it (scripts/ci/stall.mjs: the disk queue up with the CPU
+# idle, as on the 62c gates' D8ads_v5, or the VM paused) is INFRA: said, and run ONCE more on this machine; its ROW line
+# is the rerun's, marked INFRA, and the summary names it. A row that fails with no stall is never run again: its failure
+# is the code's. A row an earlier row's need stopped (`not run`) is not its own failure and is not run again either.
+# What stall.mjs found, or that it found nothing in N samples, is printed under the failure.
 $script:RowResults = [ordered]@{}
-foreach ($name in $selected) {
+$script:Infra = @()
+$script:NeedStates = @('Installed', 'Electron', 'Built', 'Machine', 'AppState')
+function Now-Ms { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+function Get-Needs { $h = @{}; foreach ($n in $script:NeedStates) { $h[$n] = [string](Get-Variable -Scope Script -Name $n -ValueOnly -ErrorAction SilentlyContinue) }; return $h }
+# A need that FAILED during a row is asked again by its rerun, never read from that failure (a half-started app is ended).
+function Reset-NeedsFailedHere($before) {
+    $now = Get-Needs
+    foreach ($n in $script:NeedStates) {
+        if ($now[$n] -ne $before[$n] -and $now[$n] -ne 'ok') {
+            if ($n -eq 'AppState' -and $script:App) { Stop-App }
+            Set-Variable -Scope Script -Name $n -Value $before[$n]
+        }
+    }
+}
+
+# ONE RUN OF ONE ROW, its output appended to ci-out\<name>.log and the end of it printed when it fails. Sets
+# $script:RowVerdict (PASS or FAIL), $script:RowLine (its ROW line, printed by Invoke-Rows) and $script:RowOwn ($false when
+# an earlier row's need stopped it).
+function Invoke-Row([string]$name) {
     $started = Get-Date
     $script:Blocked = ''
-    Write-Output "=== $name"
+    $script:RowOwn = $true
     $log = Join-Path $Out "$name.log"
     $ok = $true
     $limit = [int](Ceiling $name)
@@ -478,9 +510,10 @@ foreach ($name in $selected) {
     # This row's own token: a mark left by anything else, or by an earlier row of the same name, is not this row's.
     $token = [guid]::NewGuid().ToString('N')
     Remove-Item -LiteralPath $mark -Force -ErrorAction SilentlyContinue
+    $before = Get-Needs
     $watch = Start-Watchdog $limit $mark $token
     try {
-        & "Row-$name" *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $log -Encoding utf8
+        & "Row-$name" *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $log -Encoding utf8 -Append
     } catch {
         $ok = $false
         Add-Content -Path $log -Value "THREW: $($_.Exception.Message)"
@@ -495,17 +528,17 @@ foreach ($name in $selected) {
     $timedOut = (Test-Path -LiteralPath $mark -PathType Leaf) -and ((Get-Content -LiteralPath $mark -Raw).Trim() -eq $token) -and ($elapsed -ge $limit - 5)
     if ($timedOut) { $ok = $false }
     $secs = [int]$elapsed
-    $script:RowResults[$name] = if ($ok) { 'PASS' } else { 'FAIL' }
-    if ($ok) {
-        Write-Output "ROW $name PASS $secs"
-    } elseif ($timedOut) {
+    if ($ok) { $script:RowVerdict = 'PASS'; $script:RowLine = "ROW $name PASS $secs"; return }
+    $script:RowVerdict = 'FAIL'
+    if ($timedOut) {
         Write-Output "--- the end of ci-out\$name.log"
         Get-Content $log -Tail 40
-        Write-Output "ROW $name FAIL $secs (timed out after $limit s)"
-        $script:Failed += $name
+        $script:RowLine = "ROW $name FAIL $secs (timed out after $limit s)"
     } elseif ($script:Blocked) {
-        Write-Output "ROW $name FAIL $secs (not run: $($script:Blocked))"
-        $script:Failed += $name
+        # Its own when one of its needs failed in it; an earlier row's when it only read that failure.
+        $now = Get-Needs
+        $script:RowOwn = @($script:NeedStates | Where-Object { $now[$_] -ne $before[$_] -and $now[$_] -ne 'ok' }).Count -gt 0
+        $script:RowLine = "ROW $name FAIL $secs (not run: $($script:Blocked))"
     } else {
         Write-Output "--- the end of ci-out\$name.log"
         Get-Content $log -Tail 60
@@ -514,13 +547,56 @@ foreach ($name in $selected) {
             Write-Output "--- the end of smoke-out\$($_.Name)"
             Get-Content $_.FullName -Tail 40
         }
-        Write-Output "ROW $name FAIL $secs"
-        $script:Failed += $name
+        $script:RowLine = "ROW $name FAIL $secs"
     }
 }
+
+function Invoke-Rows {
+    foreach ($name in $selected) {
+        Write-Output "=== $name"
+        $from = Now-Ms
+        $before = Get-Needs
+        Remove-Item -LiteralPath (Join-Path $Out "$name.log") -Force -ErrorAction SilentlyContinue
+        Invoke-Row $name
+        if ($script:RowVerdict -eq 'FAIL' -and $script:RowOwn) {
+            $stall = @(node scripts/ci/stall.mjs $MachineSamples $from (Now-Ms))
+            $stalled = ($LASTEXITCODE -eq 0)
+            $stall | ForEach-Object { Write-Output $_ }
+            if ($stalled) {
+                $secs = ($script:RowLine -split ' ')[3]
+                Write-Output "INFRA $name FAIL ${secs}: the machine stalled during the row ($($stall[0])); running it once more on this machine"
+                Add-Content -Path (Join-Path $Out "$name.log") -Value "`r`n=== INFRA: the machine stalled during the run above; the rerun follows"
+                Reset-NeedsFailedHere $before
+                Invoke-Row $name
+                if ($script:RowVerdict -ne 'FAIL') {
+                    Write-Output "$($script:RowLine) (INFRA: the first run failed during a machine stall; the rerun passed)"
+                    $script:Infra += "$name (rerun PASS)"
+                } else {
+                    Write-Output "$($script:RowLine) (INFRA: the first run failed during a machine stall; the rerun failed too)"
+                    $script:Infra += "$name (rerun FAIL)"
+                    $script:Failed += $name
+                }
+                $script:RowResults[$name] = $script:RowVerdict
+                continue
+            }
+        }
+        Write-Output $script:RowLine
+        $script:RowResults[$name] = $script:RowVerdict
+        if ($script:RowVerdict -eq 'FAIL') { $script:Failed += $name }
+    }
+}
+
+function Write-InfraSummary {
+    if ($script:Infra.Count) { Write-Output "INFRA ROWS: $($script:Infra -join ' ')" } else { Write-Output 'INFRA ROWS: none' }
+}
+# <<< THE ROW LOOP
+
+Invoke-Rows
 if ($script:App) { Stop-App }
+if ($script:Sampler -and -not $script:Sampler.HasExited) { Stop-Process -Id $script:Sampler.Id -Force -ErrorAction SilentlyContinue }
 
 foreach ($n in $script:Notes) { Write-Output "NOTE $n" }
+Write-InfraSummary
 # Every selected row has exactly one result; a row with none is a failure of this script, and fails the run.
 $missing = @($selected | Where-Object { -not $script:RowResults.Contains($_) })
 foreach ($m in $missing) { $script:Failed += $m }
