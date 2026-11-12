@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { linuxRow, windowsFunction } from './helpers/ci-scripts.js';
 
 /**
  * THE COOKIE FUSE (the host split, P2b). Measured on omarchy-test: stock Electron writes a cookie's value in the clear on Linux,
@@ -22,10 +23,11 @@ describe('the build', () => {
     });
 });
 
-describe('CI reads it from what was packaged', () => {
+describe('CI reads it from what was packaged (scripts/ci, both platforms)', () => {
     it('the fuse, as the built binary has it, not as the config asks', () => {
-        const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
-        expect(ci).toMatch(/@electron\/fuses read --app/);
-        expect(ci).toMatch(/EnableCookieEncryption is Enabled/);
+        for (const row of [linuxRow('package-fuse'), windowsFunction('Row-package-fuse')]) {
+            expect(row).toMatch(/@electron\/fuses read --app/);
+            expect(row).toMatch(/EnableCookieEncryption is Enabled/);
+        }
     });
 });

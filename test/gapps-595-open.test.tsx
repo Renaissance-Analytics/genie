@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { linuxRow, windowsFunction } from './helpers/ci-scripts.js';
 import WebSocket from 'ws';
 import { APP_BRIDGE } from '../src/core/catalog.js';
 import { appHost } from '../src/core/gapp-origin.js';
@@ -285,7 +286,7 @@ describe('the crossing', () => {
     });
 
     it('a real window row opens a real installed app, on both platforms', () => {
-        const ci = readFileSync(join('.github', 'workflows', 'ci.yml'), 'utf8');
-        expect(ci.match(/node scripts\/gapp-open-cdp\.mjs/g)).toHaveLength(2);
+        expect(linuxRow('gapp-open')).toMatch(/node scripts\/gapp-open-cdp\.mjs/);
+        expect(windowsFunction('Row-gapp-open')).toMatch(/node scripts\/gapp-open-cdp\.mjs/);
     });
 });
