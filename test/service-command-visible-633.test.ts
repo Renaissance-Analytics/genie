@@ -81,12 +81,12 @@ describe('the service command ledger label (#633)', () => {
         const event: StreamEvent = { kind: 'tool', toolCallId: 'call-1', name, title: 'services', status: 'in_progress', toolKind: null, rawInput: { action: 'exec', command: 'php artisan test' } };
         const row = ledgerRow({ id: 'row-1', at: 1, event });
         expect(row.main).toMatch(/^Running .*php artisan test.*services/);
-        expect(row.meta ?? '').not.toContain('kind not reported');
+        expect(row.note ?? '').not.toContain('kind not reported');
         expect(event.toolKind).toBeNull();
     });
 
     it('CONTROL: an unrelated MCP tool still reports an unknown kind honestly', () => {
         const event: StreamEvent = { kind: 'tool', toolCallId: 'call-2', name: 'mcp__other__services', title: null, status: 'in_progress', toolKind: null, rawInput: { action: 'exec', command: 'synthetic' } };
-        expect(ledgerRow({ id: 'row-2', at: 1, event }).meta).toContain('kind not reported');
+        expect(ledgerRow({ id: 'row-2', at: 1, event }).note).toBe('(kind not reported)');
     });
 });
