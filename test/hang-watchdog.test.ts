@@ -171,6 +171,42 @@ describe('genie-host hears window main beat, and records a hang', () => {
         expect(r.records).toEqual([]);
     });
 
+    /*
+     * A LONG SLEEP IS NOT A HOST STALL (review of #1885). A late tick holds judgment only 3 s, then counts silence from the
+     * window's last beat BEFORE the gap. After the machine slept for minutes, a window that is slow to wake (a loaded
+     * machine, a throttled window) and has not beaten within those 3 s would be declared hung and its pid killed: a false
+     * hang ends the owner's window. So a gap far beyond any loop stall (the machine slept) gives every window a full wait
+     * from the wake; silence before the sleep does not count. The repeated short stalls of (c) are still not sleeps.
+     */
+    for (const [before, after] of [[20, 5], [20, 8], [25, 8], [29, 12]] as const) {
+        it(`(e) a window silent ${before} s before a 10-minute sleep and beating ${after} s after waking is not ended`, () => {
+            const r = rig();
+            r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+            r.second(before);
+            r.jump(600_000);
+            r.second(after);
+            r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+            r.second(60, () => r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB }));
+            expect(r.records).toEqual([]);
+            expect(r.killed).toEqual([]);
+        });
+    }
+
+    it('CONTROL for (e): a window still silent well past the wake grace after a long sleep IS a hang, and is ended', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(20);
+        r.jump(600_000);
+        // Well past any wake grace (and every case of (e)), still nothing recorded: the wait runs from the wake.
+        r.second(20);
+        expect(r.records).toEqual([]);
+        expect(r.killed).toEqual([]);
+        // 30 s of silence since the wake (its first tick was the first of those 20 s): a hang.
+        r.second(11);
+        expect(r.records.map((x) => x.kind)).toEqual(['hang']);
+        expect(r.killed).toEqual([4242]);
+    });
+
     it('CONTROL for (a): the same jumps with the window beating between them: no hang', () => {
         const r = rig();
         r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
