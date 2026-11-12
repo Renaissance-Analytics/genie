@@ -63,6 +63,25 @@ export class AgentDetailCache<D extends { readonly agent: { readonly id: string 
         }
     }
 
+    /**
+     * A DETAIL THAT LANDED for `key` — the first answer, or a push — and what to show for it (Tynn #659). A whole detail is
+     * remembered and shown. One whose rows are PENDING (its host is still reading or sending its ledger: a first read, or a
+     * switch back after the window's replica was dropped) is never remembered, so it never replaces the rows kept for the
+     * agent: they are shown, with everything else the new detail says (its session, its mail), until a whole one lands.
+     * An agent with nothing kept shows the pending detail as it is, which the chat draws as loading.
+     */
+    land(key: string, detail: D | null): D | null {
+        if (detail === null) return null;
+        if ((detail as { rowsPending?: boolean }).rowsPending !== true) {
+            this.remember(key, detail);
+            return detail;
+        }
+        const kept = this.#byKey.get(key) ?? this.#byKey.get(detail.agent.id);
+        if (kept === undefined || kept.agent.id !== detail.agent.id) return detail;
+        this.#current = kept;
+        return { ...detail, rows: (kept as unknown as { rows: unknown }).rows, rowsPending: false };
+    }
+
     /** The rows held, in bytes: each detail once, however many keys it is kept under. */
     bytes(): number {
         let total = 0;

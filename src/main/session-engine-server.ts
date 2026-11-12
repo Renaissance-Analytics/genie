@@ -1007,7 +1007,7 @@ export class SessionEngineServer {
         for (let k = 0; k < pieces; k += 1) {
             const prev = k === 0 ? null : held.seq;
             const seq = ++held.seq;
-            updates.push({ id: agentId, seq, view, rows: cut(rowsP, k, prev), ...(ledgerP ? { ledger: cut(ledgerP, k, prev) } : {}) });
+            updates.push({ id: agentId, seq, view, rows: cut(rowsP, k, prev), ...(ledgerP ? { ledger: cut(ledgerP, k, prev) } : {}), ...(k < pieces - 1 ? { more: true as const } : {}) });
         }
         held.rows = heldRows(held.seq, rows);
         if (ledgerRows !== null) held.ledger = heldRows(held.seq, ledgerRows);
@@ -1031,6 +1031,7 @@ export class SessionEngineServer {
             inTurn: host.inTurn(id),
             queued: [...host.queuedPromptIds(id)],
             needsNewDriver: host.needsNewDriver(id),
+            historyPending: host.historyPending(id),
         };
     }
 

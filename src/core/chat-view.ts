@@ -156,6 +156,8 @@ export interface ChatDetail {
     rows: readonly TimedEvent[];
     /** The agent's AgentInbox mail (both directions); absent or `null` = not read, which adds no rows. */
     comms?: readonly MailLike[] | null | undefined;
+    /** `rows` are not yet its conversation (Tynn #659, `AgentDetail.rowsPending`): the thread is not loaded, and shows no mail alone. */
+    rowsPending?: boolean | undefined;
 }
 
 export function chatContext(detail: ChatDetail): ChatContext {
@@ -359,8 +361,11 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
     // loaded for another agent is never drawn under this one's name.
     const own = detail !== null && (detail.agent.id === subjectId || detail.agent.id === row?.id || detail.agent.name === subjectId);
     if (!own) detail = null;
-    const start = detail && lines !== undefined ? chatTailStart(detail.rows, lines) : 0;
-    const messages = detail ? tailMessages(detail, rows, start) : [];
+    // ROWS STILL COMING (Tynn #659): the mail is there at once and the replies are not, so drawing it would be a chat of
+    // mail cards alone — the switch the owner saw. Not loaded: the chat draws loading until the conversation is whole.
+    const conversation = detail !== null && detail.rowsPending !== true ? detail : null;
+    const start = conversation && lines !== undefined ? chatTailStart(conversation.rows, lines) : 0;
+    const messages = conversation ? tailMessages(conversation, rows, start) : [];
     return {
         agentId: subjectId,
         name: detail?.agent.name ?? row?.name ?? subjectId,
@@ -368,9 +373,9 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         unread: null,
         messages,
         context: detail ? chatContext(detail) : null,
-        loaded: detail !== null,
+        loaded: conversation !== null,
         earlier: start > 0,
-        arriving: detail ? arrivingMessageId(detail, messages) : null,
+        arriving: conversation ? arrivingMessageId(conversation, messages) : null,
     };
 }
 
