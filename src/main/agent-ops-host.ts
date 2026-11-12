@@ -71,6 +71,8 @@ export interface AgentOpsPorts {
          * them their work again.
          */
         deliverOwed(id: AgentRecord['id'], then?: { text: string; by: string }): Promise<number>;
+        /** A deleted or unmounted agent: the host drops what its ledger last showed (`SessionHost.forgetShown`, Tynn #647). */
+        forgetShown?(id: AgentRecord['id']): void | Promise<void>;
     };
     /**
      * WHY A START WOULD BE REFUSED (§6.1, main.ts's `startRefusal`): an asleep workspace, the agent cap — what Start
@@ -264,6 +266,8 @@ export async function deleteAgent(ports: AgentOpsPorts, agentId: string, outcome
     if (!folder.ok) return folder;
     const handoff = options.handoff === true ? await askForHandoff(ports, record, outcome) : 'not-asked';
     ports.host.stop(record.id);
+    // Nothing of it stands in for its history again (Tynn #647): the host drops what its ledger last showed.
+    await ports.host.forgetShown?.(record.id);
     await ports.registry.forget(record.id);
     // A handoff asked for and written is the one thing a delete keeps: Genie 1's "that note survives even though its
     // .agents/ files do not". Without a fresh one, an old note goes with the agent as before.

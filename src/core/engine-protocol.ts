@@ -45,6 +45,7 @@ export const ENGINE_METHODS = [
     'engine.resolvePrompt',
     'engine.recordOwed',
     'engine.deliverOwed',
+    'engine.forgetShown',
     'engine.ended',
     'engine.settled',
     'engine.drained',

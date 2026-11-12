@@ -565,6 +565,8 @@ export class SessionHost {
      */
     readonly #lastShown = new Map<AgentId, readonly TimedEvent[]>();
     readonly #renamedRows = new WeakMap<TimedEvent, TimedEvent>();
+    /** The stand-in each agent's ledger is serving, and the run it was built for (`before`, as `#histories`). */
+    readonly #standIns = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[] }>();
     #listeners = new Set<(agentId: AgentId) => void>();
     #runs = 0;
 
@@ -1785,7 +1787,10 @@ export class SessionHost {
                 .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); });
         }
         const loaded = cached !== undefined && cached !== 'loading' && cached.before === before ? cached : null;
-        const history = loaded ? loaded.rows : this.#standIn(agentId, entry);
+        // Built ONCE per run (`#standInFor`), so serving it costs nothing per event: built per call, it walked the whole
+        // ledger three times a read (test/agent-stream-perf.test.ts: 359,502 old rows read per event at 60k rows).
+        if (loaded) this.#standIns.delete(agentId);
+        const history = loaded ? loaded.rows : this.#standInFor(agentId, entry, before);
         if (!entry) { this.#lastShown.set(agentId, history); return history; }
         /*
          * SERVED FROM WHAT IS KEPT (the owner, 2026-10-20: the window lagged seconds behind a busy agent): built again only
@@ -1813,8 +1818,20 @@ export class SessionHost {
     }
 
     /**
-     * The history to show while the real one is read (Tynn #647): what this agent's ledger last showed, without this run's
-     * own rows and its marker (they follow it). Nothing shown yet → nothing.
+     * The history to show while the real one is read (Tynn #647), built once for the run it stands in for (`before`) and
+     * then served as it is: the ledger built over it is grown in place, so it is never walked again per event.
+     */
+    #standInFor(agentId: AgentId, entry: Running | undefined, before: number | null): readonly TimedEvent[] {
+        const kept = this.#standIns.get(agentId);
+        if (kept && kept.before === before) return kept.rows;
+        const rows = this.#standIn(agentId, entry);
+        this.#standIns.set(agentId, { before, rows });
+        return rows;
+    }
+
+    /**
+     * What this agent's ledger last showed, without this run's own rows and its marker (they follow it). Nothing shown yet →
+     * nothing.
      */
     #standIn(agentId: AgentId, entry: Running | undefined): readonly TimedEvent[] {
         const shown = this.#lastShown.get(agentId);
@@ -1822,15 +1839,28 @@ export class SessionHost {
         if (!entry) return shown;
         const mine = new Set<TimedEvent>(entry.rows);
         if (entry.numbered) for (const r of entry.numbered.rows) mine.add(r);
-        // A previous run's rows were numbered from 0 as this run's are: one shown here keeps its place under an id of its
-        // own, so no two rows of one ledger share an id. The same object each time, so the window is not sent it again.
-        const ids = new Set(entry.rows.map((r) => r.id));
+        // A previous run's own rows were numbered from 0 (`<agent>:<n>`) as this run's are and will be. Built once, the
+        // stand-in cannot see the ids this run has not made yet, so EVERY such row is renamed for this run, not only one
+        // colliding now: no two rows of one ledger share an id as the run grows. The same object each time it is built
+        // for this run, so the window is not sent it again.
+        const prefix = `${agentId}:`;
+        const runRow = (id: string) => id.startsWith(prefix) && /^\d+$/.test(id.slice(prefix.length));
         return shown.filter((r) => !mine.has(r) && r.id !== entry.marker.id).map((r) => {
-            if (!ids.has(r.id)) return r;
+            if (!runRow(r.id)) return r;
+            const id = `${r.id}~before-run-${entry.run}`;
             let renamed = this.#renamedRows.get(r);
-            if (!renamed) { renamed = { ...r, id: `${r.id}~earlier-run` }; this.#renamedRows.set(r, renamed); }
+            if (!renamed || renamed.id !== id) { renamed = { ...r, id }; this.#renamedRows.set(r, renamed); }
             return renamed;
         });
+    }
+
+    /**
+     * AN AGENT DELETED OR UNMOUNTED (Tynn #647 review): what its ledger last showed goes with it, so nothing of it stands in
+     * again (and nothing of it is kept for the life of the host).
+     */
+    forgetShown(agentId: AgentId): void {
+        this.#lastShown.delete(agentId);
+        this.#standIns.delete(agentId);
     }
 
     /** THIS RUN's ledger only (what the doctor channel and file attribution read). Empty for one not running. */

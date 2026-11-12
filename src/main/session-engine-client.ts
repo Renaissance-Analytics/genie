@@ -1218,6 +1218,11 @@ export class SessionEngineClient {
         return this.#value('engine.deliverOwed', [agentId, then ?? null], 0);
     }
 
+    /** A deleted agent's last shown rows go with it, on the host (`SessionHost.forgetShown`, Tynn #647). */
+    async forgetShown(agentId: AgentId): Promise<void> {
+        await this.#value('engine.forgetShown', [agentId], false);
+    }
+
     ended(agentId: AgentId): Promise<StopVerdict | null> {
         return this.#value<StopVerdict | null>('engine.ended', [agentId], null);
     }
