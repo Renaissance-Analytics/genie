@@ -1020,6 +1020,29 @@ if (!approvalEnabled) {
     await cdp.evaluate(`(() => {
         const rows = document.querySelector('[data-terminal-pane] .xterm-rows');
         const watch = window.__smokeTerminal = { mountedAt: performance.now(), firstOutputMs: null, firstText: '' };
+        // THE DOOR'S SIDE (beta.61.1): what the host answered this window from here on — each result (a write's true or
+        // false, a watch's snapshot: its scrollback's end and its position, a refusal's reason) and each terminal event
+        // (its offset and bytes). Read only on the 37 failure path; recording it costs one parse per frame.
+        const wire = window.__smokeWire = [];
+        const short = (v) => typeof v === 'string' ? JSON.stringify(v.slice(-80)) : v;
+        window.genieLocalProtocol?.onFrame((action, _connection, text) => {
+            const at = Math.round(performance.now() - watch.mountedAt);
+            if (action !== 'frame') { wire.push(at + ' ' + action); return; }
+            let m; try { m = JSON.parse(text); } catch { return; }
+            let line = null;
+            if (m.kind === 'result') {
+                const v = m.value;
+                if (!m.ok) line = 'refused ' + String(m.reason).slice(0, 160);
+                else if (v === true || v === false || v === null) line = 'result ' + v;
+                else if (v && typeof v === 'object' && v.value && typeof v.value.scrollback === 'string') line = 'snapshot id=' + v.value.id + ' pid=' + v.value.pid + ' tail=' + short(v.value.scrollback) + ' position=' + JSON.stringify(v.position ?? null);
+                else if (v && typeof v === 'object' && v.terminalContent) line = 'snapshot (blob)';
+                else if (v && typeof v === 'object' && typeof v.id === 'string' && 'pid' in v) line = 'opened id=' + v.id + ' pid=' + v.pid + ' tail=' + short(v.scrollback ?? '');
+            } else if (m.kind === 'event' && typeof m.channel === 'string' && m.channel.startsWith('terminal-')) {
+                const e = m.payload?.event ?? m.value?.event ?? null;
+                line = m.channel + ' ' + (m.payload?.view ?? '') + ' ' + (e ? (e.kind + ' offset=' + (e.offset ?? e.endOffset) + ' data=' + short(e.data ?? '') + (e.reason ? ' reason=' + e.reason : '')) : JSON.stringify(m).slice(0, 160));
+            }
+            if (line !== null) { wire.push(at + ' ' + line); if (wire.length > 300) wire.splice(0, wire.length - 300); }
+        });
         if (!rows) return true;
         const seen = () => {
             const text = (rows.innerText ?? '').trim();
@@ -1078,6 +1101,9 @@ if (!approvalEnabled) {
             remount = await cdp.evaluate(`JSON.stringify({ firstToken: ${rowsText}.split('${token}').length - 1, secondToken: ${rowsText}.includes('${again}') })`).catch((e) => `(unread: ${e?.message ?? e})`);
         }
         console.log(`  TERMINAL_STREAM_OR_KEYS ${JSON.stringify({ alerts, remount })} ${await terminalDump()}`);
+        const wire = await cdp.evaluate(`JSON.stringify(window.__smokeWire ?? null)`).catch((e) => `(unread: ${e?.message ?? e})`);
+        const panes = await cdp.evaluate(`JSON.stringify([...document.querySelectorAll('[data-terminal-pane]')].map((p) => { const r = p.getBoundingClientRect(); return { pane: p.getAttribute('data-terminal-pane'), w: Math.round(r.width), h: Math.round(r.height), rows: p.querySelectorAll('.xterm-rows > *').length }; }))`).catch((e) => `(unread: ${e?.message ?? e})`);
+        console.log(`  TERMINAL_WIRE ${JSON.stringify({ panes })} ${wire}`);
     }
 
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
