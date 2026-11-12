@@ -1106,12 +1106,35 @@ if (!approvalEnabled) {
                     pane: el.getAttribute('data-terminal-pane'), connected: el.isConnected,
                     props: paneProps ? { outputTail: String(paneProps.output).slice(-160), outputLength: String(paneProps.output).length, outputEnd: paneProps.outputEnd ?? null, outputEpoch: paneProps.outputEpoch ?? null, readOnly: paneProps.readOnly } : null,
                     xterm: x ? { rows: x.rows, cols: x.cols, disposed: !x.element?.isConnected, lines: lines.slice(-8) } : null,
+                    // WHY XTERM DID NOT DRAW WHAT ITS BUFFER HOLDS (61.2 gate: the buffer had both tokens, the rows the first prompt).
+                    // xterm's render service: paused by its IntersectionObserver (it renders nothing until that observer says the
+                    // screen is visible again), or a frame requested that never ran (every later refresh waits behind it).
+                    renderer: (() => {
+                        const rs = x?._core?._renderService;
+                        if (!rs) return null;
+                        const screen = x._core.screenElement ?? x.element?.querySelector('.xterm-screen');
+                        const r = screen?.getBoundingClientRect();
+                        return { paused: rs._isPaused ?? null, needsFullRefresh: rs._needsFullRefresh ?? null, frameWaiting: rs._renderDebouncer?._animationFrame ?? null,
+                            charSizeValid: x._core._charSizeService?.hasValidSize ?? null, screen: r ? [Math.round(r.width), Math.round(r.height), Math.round(r.top), Math.round(r.left)] : null,
+                            windowIsPage: x._core._coreBrowserService?.window === window };
+                    })(),
                     domRows: (el.querySelector('.xterm-rows')?.innerText ?? '').trim().slice(-160),
                 });
             }
             return JSON.stringify(out);
         })()`).catch((e) => `(unread: ${e?.message ?? e})`);
         console.log(`  TERMINAL_LAYERS ${layers}`);
+        const redrawn = await cdp.evaluate(`(async () => {
+            const el = document.querySelector('[data-terminal-pane]');
+            const key = el ? Object.keys(el).find((k) => k.startsWith('__reactFiber$')) : null;
+            let f = key ? el[key] : null, x = null;
+            for (let i = 0; f && i < 40 && !x; i++, f = f.return) if (f.ref && typeof f.ref === 'object' && f.ref.current && 'xterm' in f.ref.current) x = f.ref.current.xterm;
+            if (!x) return 'no xterm';
+            x.refresh(0, x.rows - 1);
+            await new Promise((r) => setTimeout(r, 500));
+            return JSON.stringify({ afterRefresh: (el.querySelector('.xterm-rows')?.innerText ?? '').trim().slice(-160), paused: x._core?._renderService?._isPaused ?? null, frameWaiting: x._core?._renderService?._renderDebouncer?._animationFrame ?? null });
+        })()`, { awaitPromise: true }).catch((e) => `(unread: ${e?.message ?? e})`);
+        console.log(`  TERMINAL_REDRAW ${redrawn}`);
         // INPUT OR OUTPUT (beta.61.1): the second token not showing means the keys never reached the shell OR the pane
         // stopped drawing what the shell printed. The workspace's terminal error says why a pane's stream ended, and a
         // REMOUNT (away to the Dashboard and back: a new watch, a fresh snapshot from the host) shows what the shell has
