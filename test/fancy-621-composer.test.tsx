@@ -71,16 +71,37 @@ describe('#637: the send key as the kit records it, stored as Genie always store
     });
 });
 
-describe('#641: the send-key hint is PromptInput’s own, inside the composer', () => {
-    it('the hint is drawn in the action row, and Genie’s line under the composer is gone', async () => {
+// The coordinator, 2026-11-12: the owner asked for THAT line ("Enter to send · Shift+Enter for a new line") to move into the
+// box — both halves. Genie's full line goes in PromptInput's `beforeSend` slot (left of Send, truncating before it), and the
+// kit's own hint, which names only the send key, is off so nothing is said twice.
+describe('#641: Genie’s whole line, inside the composer, left of Send', () => {
+    const render = async () => {
         const { ChatFlyout } = await import('../src/renderer/components/ChatFlyout.js');
         seen.prompt.length = 0;
         const html = renderToStaticMarkup(<ChatFlyout thread={{ agentId: 'a1', name: 'atlas', fidelity: 'declared', unread: null, messages: [], context: null }} onSend={() => {}} onClose={() => {}} />);
-        const props = seen.prompt.at(-1)!;
-        expect(props['showHint']).not.toBe(false);
+        return { html, props: seen.prompt.at(-1)! };
+    };
+    const slot = (html: string) => html.match(/data-react-fancy-prompt-input-before-send[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? '';
+
+    it('both keys, in the slot left of Send; the kit’s own hint is off; nothing under the box', async () => {
+        const { html, props } = await render();
+        expect(props['showHint']).toBe(false);
         expect(props['submitKey']).toBe('enter');
-        expect(html.split('data-react-fancy-prompt-input-hint').length - 1).toBe(1);
-        expect(html).not.toContain('data-composer-keys');
+        expect(slot(html)).toContain('Enter to send · Shift+Enter for a new line');
+        expect(html).not.toContain('data-react-fancy-prompt-input-hint');
+        // The line is in the composer's action row: before the send button, inside the composer.
+        expect(html.indexOf('data-react-fancy-prompt-input-before-send')).toBeLessThan(html.indexOf('data-react-fancy-prompt-input-send'));
+        expect(html.split('data-composer-keys').length - 1).toBe(1);
+    });
+
+    it('follows a changed send key', async () => {
+        const store = await import('../src/renderer/send-key-store.js');
+        store.setSendKey('CommandOrControl+Enter');
+        try {
+            const { html, props } = await render();
+            expect(props['submitKey']).toBe('ctrl+enter');
+            expect(slot(html)).toContain('Ctrl+Enter to send · Enter for a new line');
+        } finally { store.setSendKey('Enter'); }
     });
 });
 

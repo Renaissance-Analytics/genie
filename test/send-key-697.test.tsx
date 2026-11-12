@@ -62,7 +62,12 @@ describe('what a key does in a composer', () => {
         expect(sendKeyFrom()(null)).toBe('Enter');
     });
 
-    // The hint is PromptInput's own since react-fancy 6.21.0 (Tynn #641): test/fancy-621-composer.test.tsx.
+    it('the hint names both keys as they are now (drawn inside the composer since Tynn #641)', () => {
+        const hint = fn<(sendKey: string, platform: string) => string>(core, 'sendKeyHint');
+        expect(hint('Enter', 'generic')).toBe('Enter to send · Shift+Enter for a new line');
+        expect(hint(MOD_ENTER, 'generic')).toBe('Ctrl+Enter to send · Enter for a new line');
+        expect(hint(MOD_ENTER, 'darwin')).toBe('⌘+Enter to send · Enter for a new line');
+    });
 });
 
 describe('a key that cannot be the send key is refused in words', () => {
