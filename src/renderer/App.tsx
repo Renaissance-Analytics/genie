@@ -56,6 +56,8 @@ import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { redialer } from './remote-redial.js';
+import { droneReconnect, type DroneHold } from './drone-reconnect.js';
+import { DRONE_MIN_BUILD } from '../core/drone-version.js';
 import { pushed, useSnapshot } from './use-snapshot.js';
 import type { AuthRequest } from '../core/remote-protocol.js';
 import type { DeckItem } from '../core/deck.js';
@@ -299,6 +301,17 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     // connection stands, step by step (core/relay-connect.ts). Never the raw `relay:<id>`.
     const [boundName, setBoundName] = useState<string | null>(() => (typeof window === 'undefined' ? null : remoteNameFromSearch(window.location.search)));
     const [relayConnect, setRelayConnect] = useState<RelayConnect>({ kind: 'working', step: 'tynn' });
+    /*
+     * A DRONE ON AN OLDER GENIE, AND A DRONE THAT RESTARTS (Tynn #651). `droneHold` is what the connect screen says while
+     * the window dials by itself (drone-reconnect.ts): `restarting` ("aion is restarting, reconnecting…"), or `skew` (the
+     * update sentence, `skewView`). Each dial's own steps stay underneath, and show again once the hold lifts.
+     */
+    const [droneHold, setDroneHold] = useState<DroneHold>(null);
+    const droneHoldNow = useRef<DroneHold>(null);
+    const [skewView, setSkewView] = useState<RelayConnect | null>(null);
+    // This Pilot's own build, the one a skewed drone is told to update to.
+    const pilotBuild = useRef<string | null>(null);
+    useEffect(() => { void local?.features?.snapshot().then((f) => { pilotBuild.current = f.version ?? null; }, () => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
     const last = useRef<{ url: string; label: string } | null>(null);
     // A TAKE OVER WINDOW for another machine (Tynn #529 part A): the ticket main handed it, read once; it connects as the
     // driving window's companion with it, and never drives.
@@ -377,11 +390,16 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                     const transport = ipcRelayTransport(net, opened.channel);
                     // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
                     const localBrowser = window.genie?.browserWindow;
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}) });
+                    // A drone older than this Pilot needs is said as such, never as its protocol words (Tynn #651).
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}), minBuild: DRONE_MIN_BUILD });
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
                         if (r.ok && hosts) { hosts.noteConnected(url.url, next.state().host, Date.now()); setKnown(hosts.list()); }
+                        if (!r.ok && r.skew) {
+                            droneSkewed(r.skew.build, r.reason);
+                            return false;
+                        }
                         // The relay's or the host's own words beat the protocol's generic close.
                         if (!r.ok) {
                             const reason = transport.closedBecause() ?? r.reason;
@@ -479,24 +497,55 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         if (/not paired/i.test(state?.lastRefusal ?? '')) return;
         redial.dropped();
     }, [state?.connected]); // eslint-disable-line react-hooks/exhaustive-deps
-    // A Tynn workstation's connection that DROPPED after it was up: said at its last step, with Retry.
+    /*
+     * A TYNN WORKSTATION'S CONNECTION THAT DROPPED AFTER IT WAS UP DIALS AGAIN BY ITSELF (Tynn #651): a drone that upgraded,
+     * quit or restarted is reconnected with no click. It says "restarting, reconnecting…" while it dials; past ~5 min it
+     * says the last dial's failure, with Retry. A drone on an older Genie says so, and is dialled until it has been updated.
+     * Not a Take Over window (its ticket was used), not after Disconnect.
+     */
+    const [reconnectDrone] = useState(() => droneReconnect({
+        dial: async () => {
+            const ok = await dialAgain.current();
+            return ok ? 'connected' : droneHoldNow.current === 'skew' ? 'skew' : 'failed';
+        },
+        schedule: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        now: () => Date.now(),
+        onHold: (hold) => { droneHoldNow.current = hold; setDroneHold(hold); },
+    }));
+    useEffect(() => () => reconnectDrone.stop(), [reconnectDrone]);
+    const droneSkewed = (build: string | null, reason: string): void => {
+        const view: RelayConnect = { kind: 'failed', step: 'host', reason, skew: { drone: build, pilot: pilotBuild.current } };
+        setRelayConnect(view);
+        setSkewView(view);
+        setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: null }));
+        if (companionTicket.current === null) reconnectDrone.skewed();
+    };
     const wasConnected = useRef(false);
     useEffect(() => {
         if (state?.connected) { wasConnected.current = true; return; }
         if (!wasConnected.current || !bound || relayWorkstationOf(bound) === null) return;
         wasConnected.current = false;
+        // A call it refused as not a bridge method, after the welcome: the same skew (remote-bridge.ts `minBuild`).
+        if (state?.skew) { droneSkewed(state.skew.build, 'that machine runs an older Genie'); return; }
         setRelayConnect({ kind: 'failed', step: 'host', reason: state?.lastRefusal ?? 'The connection dropped.' });
+        if (leaving.current || companionTicket.current !== null) return;
+        reconnectDrone.dropped();
     }, [state?.connected]); // eslint-disable-line react-hooks/exhaustive-deps
+    const shownRelayConnect: RelayConnect = droneHold === 'restarting' ? { kind: 'reconnecting' } : droneHold === 'skew' && skewView ? skewView : relayConnect;
     return {
         client,
         state,
         remembered,
         connect: connectWith,
-        disconnect: () => { leaving.current = true; client?.close(); setClient(null); setState(null); },
+        disconnect: () => { leaving.current = true; reconnectDrone.cancel(); client?.close(); setClient(null); setState(null); },
         known,
         bound,
         // The link dropped (Genie 1's remote.reconnect): the same host again, with the token this device holds.
-        reconnect: () => { const l = last.current ?? (bound ? { url: bound, label: '' } : null); if (l) void connectTo(l.url, l.label); },
+        // A Tynn workstation's Retry starts its reconnect over (Tynn #651): a skew found then keeps dialling until it is updated.
+        reconnect: () => {
+            if (bound !== null && relayWorkstationOf(bound) !== null) { reconnectDrone.retryNow(); return; }
+            const l = last.current ?? (bound ? { url: bound, label: '' } : null); if (l) void connectTo(l.url, l.label);
+        },
         upgrade,
         upgradeHost: startUpgrade,
         forget: (url: string) => { hosts?.forget(url); setKnown(hosts?.list() ?? []); setRemembered(pairedNow.current); },
@@ -504,7 +553,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         reloadTynnWorkstations,
         tynnRefresh,
         boundName,
-        relayConnect,
+        relayConnect: shownRelayConnect,
         // Take control (Tynn #529): from nobody, or from whoever drives — the host says no only to a guest asking the owner.
         takeControl: async () => { if (client) await client.takeBaton({ force: true }); },
         // The machine this window drives, for its Take Over windows (Tynn #529 part A).
