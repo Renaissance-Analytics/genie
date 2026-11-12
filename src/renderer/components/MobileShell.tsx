@@ -501,7 +501,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                         <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>
                     ) : (
                         <div data-chat-log="" className="flex min-h-full min-w-0 flex-col justify-end gap-3 px-3 py-3 text-[14px] [overflow-wrap:anywhere]">
-                            <ChatMessages messages={messages} thread={thread} refs={PHONE_CHAT_REFS} mailOnly={thread?.fidelity === 'observed'} restartOn={null} />
+                            <ChatMessages messages={messages} thread={thread} refs={PHONE_CHAT_REFS} mailOnly={thread?.fidelity === 'observed'} />
                         </div>
                     )}
                 </main>

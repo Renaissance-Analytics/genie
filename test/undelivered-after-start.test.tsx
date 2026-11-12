@@ -32,26 +32,25 @@ const render = (t: ChatThread) => renderToStaticMarkup(<ChatFlyout thread={t} on
 const threadWith = (resend: 'send' | 'restart'): ChatThread => ({ ...wire, messages: [{ id: 'd1', who: 'you', from: 'you', text: draft.text, delivered: false, at: 2_000, resend }] });
 
 describe('on screen', () => {
-    it('running now: says it was not running WHEN SENT, offers Send now — and never claims it is not running', () => {
+    it('running now: says it was not running WHEN SENT, the queue offers Send all now — and never claims it is not running', () => {
         const html = render(threadWith('send'));
         expect(html).toContain('Not delivered. tynn was not running when you sent it.');
         expect(html).not.toContain('tynn is not running');
-        expect(control(html, 'data-action="send-draft"')).toMatchObject({ tag: 'button', fancy: true, text: 'Send now' });
-        expect(control(html, 'data-action="send-draft"')!.open).toContain('data-draft="d1"');
+        expect(control(html, 'data-action="send-all"')).toMatchObject({ tag: 'button', fancy: true, text: 'Send all now' });
         expect(html).not.toContain('data-action="restart"');
     });
 
-    it('not running: the chat’s one Restart (genie#1238) (CONTROL)', () => {
+    it('not running: the same Send all now, the chat’s one Restart (genie#1238) (CONTROL)', () => {
         const html = render(threadWith('restart'));
         expect(html).toContain('Not delivered. tynn is not running.');
-        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
+        expect(control(html, 'data-action="send-all"')).toMatchObject({ tag: 'button', fancy: true, text: 'Send all now' });
     });
 
-    it('either way it can be discarded', () => {
+    it('either way it can be removed, by itself', () => {
         for (const r of ['send', 'restart'] as const) {
-            const discard = control(render(threadWith(r)), 'data-action="discard-draft"');
-            expect(discard).toMatchObject({ tag: 'button', fancy: true, text: 'Discard' });
-            expect(discard!.open).toContain('data-draft="d1"');
+            const remove = control(render(threadWith(r)), 'data-action="remove-draft"');
+            expect(remove).toMatchObject({ tag: 'button', fancy: true, text: '×' });
+            expect(remove!.open).toContain('data-draft="d1"');
         }
     });
 });
