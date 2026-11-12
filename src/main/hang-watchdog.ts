@@ -18,16 +18,21 @@ import { HANG_MS, LOST_GRACE_MS, RELAUNCH_MAX, RELAUNCH_WINDOW_MS, RSS_EVERY_MS,
  *    {@link LOST_GRACE_MS}: its process gone, and this host not ending itself (its own end writes the clean-exit marker),
  *    it is a `lost` record with its last beat and RSS. A window still alive only lost its link; it reconnects.
  *
- * A GAP IN THIS HOST'S OWN CLOCK (the machine asleep — the window slept too — or this host's loop held) PAUSES every
- * wait: the tick runs every second, so a tick that comes over 5 s late says the host was not running either, and that
- * stalled time comes off each window's silence. It used to restart the wait, and on a loaded machine (omarchy-test,
- * 2026-11-06: the host's loop 8–12 s late twice in every 40 s hold) a real hang was never reached. A window silent for
- * 30 s of the host's awake time is a hang; a sleep is one stalled span, so a window that beats after it is not. Each late
+ * A GAP IN THIS HOST'S OWN CLOCK (the machine asleep, or this host's loop held) HOLDS JUDGMENT for {@link STALL_GRACE_MS}:
+ * the tick runs every second, so a tick that comes over 5 s late says the host was not running, and a window's beats sent
+ * meanwhile are still waiting in its socket, read just after that late tick. Once they have had that time to land, a
+ * window's real silence is what counts. A sleeping machine's window beats within a second of waking; a hung one does not.
+ *
+ * History: a gap first RESTARTED every wait, then (2026-11-06) took the stalled time off each window's silence. On a
+ * loaded machine both missed real hangs: omarchy-test, the 61.2 gate's hang row (2026-11-12), the host's loop 3.5, 8.4
+ * and 11.6 s late inside a 40 s hold left about 16 s of counted silence, and the second hang was never recorded. Each late
  * tick is logged with the CPU this host spent across it and its memory: busy (its own work) or not run at all.
  */
 
-/** A tick this late says the host itself did not run (sleep, or its own loop held): nobody's silence is counted across it. */
+/** A tick this late says the host itself did not run (sleep, or its own loop held). */
 const CLOCK_GAP_MS = 5_000;
+/** After such a tick, how long the beats a window sent meanwhile have to land before its silence is judged. */
+const STALL_GRACE_MS = 3_000;
 const SAMPLES_KEPT = 60;
 
 export interface HangWatchdogOptions {
@@ -145,6 +150,9 @@ export class HangWatchdog {
         return this.#samples;
     }
 
+    /** No hang is judged before this: a late tick's grace for the beats that were waiting behind it. */
+    #judgeAfter = 0;
+
     #tick(): void {
         try {
             const now = this.#now();
@@ -154,14 +162,15 @@ export class HangWatchdog {
             const cpuSpent = cpu !== null && this.#lastCpu !== null ? Math.round(cpu - this.#lastCpu) : null;
             this.#lastCpu = cpu;
             if (gap > CLOCK_GAP_MS) {
-                // Only the stalled span comes off (the tick's own second is the window's): its wait pauses, never restarts.
+                // The beats a window sent meanwhile land after this tick: judged again once they have had time to (no hang
+                // before then). A dropped window's grace still pauses: the host held is not the window gone.
+                this.#judgeAfter = now + STALL_GRACE_MS;
                 const stalled = gap - 1_000;
                 for (const w of this.#windows.values()) {
-                    w.lastBeatAt = Math.min(now, w.lastBeatAt + stalled);
                     if (w.droppedAt !== null) w.droppedAt = Math.min(now, w.droppedAt + stalled);
                 }
                 const rss = toMb(this.#safe(() => this.#o.hostRss(), 0));
-                this.#o.log(`hang watchdog: this host's clock jumped ms=${gap} cpu_ms=${cpuSpent ?? '-'} host_rss_mb=${rss} (asleep, or its loop held); the window waits pause for it`);
+                this.#o.log(`hang watchdog: this host's clock jumped ms=${gap} cpu_ms=${cpuSpent ?? '-'} host_rss_mb=${rss} (asleep, or its loop held); the window waits are judged again after ${STALL_GRACE_MS} ms`);
             }
             if (now - this.#lastRssAt >= (this.#o.rssEveryMs ?? RSS_EVERY_MS)) {
                 this.#lastRssAt = now;
@@ -176,7 +185,7 @@ export class HangWatchdog {
                     }
                     continue;
                 }
-                if (!w.ended && !w.bye && now - w.lastBeatAt >= (this.#o.hangMs ?? HANG_MS)) this.#hang(w, now);
+                if (!w.ended && !w.bye && now >= this.#judgeAfter && now - w.lastBeatAt >= (this.#o.hangMs ?? HANG_MS)) this.#hang(w, now);
             }
         } catch (error) {
             // The watchdog's own fault never takes the host down with it.
