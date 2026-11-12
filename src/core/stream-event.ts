@@ -3,6 +3,7 @@ import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js'
 import type { ToolStatus } from '@particle-academy/prism-acp';
 import type { PromptBlock } from './prompt-content.js';
 import { editsFromUpdate } from './file-edits.js';
+import type { CommandRunRef } from './command-run.js';
 
 /**
  * THE STREAM LEDGER — one line per event.
@@ -196,6 +197,8 @@ export type StreamEvent =
           kind: 'notice';
           level: string;
           message: string;
+          /** Host-authored reference to the actual visible command, available before completion (#633). */
+          commandRun?: CommandRunRef;
           /** The provider's rate-limit headroom when the notice carried it (`core/headroom.ts`); `null` otherwise. */
           headroom?: Headroom | null;
           /** A thinking-token ESTIMATE riding the notice (Claude's `system/thinking_tokens` frame); it belongs to its thought. */

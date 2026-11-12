@@ -4,6 +4,7 @@ import { describeProcesses, stillRunning, subtreeOf, systemProcessTree, unionOf,
 import { maskSecrets, type ServiceExec } from './mcp-tools-hosting.js';
 import type { ProcessSupervisor } from './process-supervisor.js';
 import { commandOutputMasker } from './command-output-masker.js';
+import type { CommandRunRef } from '../core/command-run.js';
 
 /** How much of a `services exec` command's output is kept: its tail, in characters. */
 const OUTPUT_MAX = 262_144;
@@ -28,7 +29,7 @@ const EXIT_CHECK_MS = 100;
  * another command's tree — another agent's migration running beside it — is never in it. The shell itself is killed
  * as well, so a refused or failed reading still ends the command Genie started.
  */
-export function makeServiceExec(tree: ProcessTree, supervisor?: Pick<ProcessSupervisor, 'trackExternal'>): ServiceExec {
+export function makeServiceExec(tree: ProcessTree, supervisor?: Pick<ProcessSupervisor, 'trackExternal'>, _onRun?: (agentId: string, run: CommandRunRef) => void): ServiceExec {
     return ({ command, cwd, env, timeoutMs, signal, progress, run }) =>
         new Promise((resolve) => {
             if (signal?.aborted) {

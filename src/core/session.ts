@@ -1,5 +1,6 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
+import type { CommandRunRef } from './command-run.js';
 import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-store.js';
 import { boundToolEvent, utf8Bytes } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
@@ -2177,6 +2178,9 @@ export class AgentSession {
         void this.#emitRow({ kind: 'plan', entries: entries.map((e) => ({ content: e.content, status: e.status })) });
         this.#changed();
     }
+
+    /** Tests-first live-command publication seam (#633); implementation follows measured RED. */
+    commandStarted(_run: CommandRunRef): void {}
 
     /** A warning Genie says in this agent's chat (the plan keepalive's stop, core/plan-keepalive.ts). Not a prompt. */
     notice(message: string): void {

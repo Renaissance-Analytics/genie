@@ -8,6 +8,7 @@ import { SupervisorService } from '../src/main/supervisor-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ServiceExec } from '../src/main/mcp-tools-hosting.js';
+import type { CommandRunRef } from '../src/core/command-run.js';
 
 vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawn: vi.fn() }));
 
@@ -112,6 +113,24 @@ function rig() {
 }
 
 describe('actual service executor publishes one transient command (#633)', () => {
+    it('publishes the exact live command reference only after the visible run exists, before completion', async () => {
+        const w = rig(); const published: unknown[] = [];
+        const execute = makeServiceExec({ snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) }, w.supervisor,
+            (agentId, ref) => { published.push({ agentId, ref, state: w.supervisor.status(ref.processId)?.state }); });
+        const result = execute(w.input); pending.push(result);
+        expect(published).toEqual([{ agentId: 'fixture-agent', ref: { processId: 'command-one', workspaceId: 'work', command: 'php artisan test' }, state: 'running' }]);
+        commands[0]!.emit('close', 0); await result;
+    });
+
+    it('publishes only safe reference fields with a masked command label, never internal credentials or env', async () => {
+        const w = rig(); const refs: CommandRunRef[] = [];
+        const execute = makeServiceExec({ snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) }, w.supervisor, (_agentId, ref) => refs.push(ref));
+        const result = execute({ ...w.input, command: `echo ${SECRET}`, env: { DB_PASSWORD: SECRET } }); pending.push(result);
+        expect(refs).toEqual([{ processId: 'command-one', workspaceId: 'work', command: 'echo ********' }]);
+        expect(JSON.stringify(refs)).not.toContain(SECRET); expect(JSON.stringify(refs)).not.toContain('DB_PASSWORD');
+        commands[0]!.emit('close', 0); await result;
+    });
+
     it('lists the command while it runs, with its exact pid, workspace and result identity', async () => {
         const w = rig(); const result = w.start();
         expect(w.supervisor.list('work')).toMatchObject([{ id: 'command-one', pid: 4_633, state: 'running', commandRun: true }]);
