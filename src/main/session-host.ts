@@ -1648,8 +1648,9 @@ export class SessionHost {
 
     /**
      * STOP THE TURN, keep the agent: `Stop this turn` in the chat and the Agent view. The session stays in the map — its
-     * slot, its provider and its conversation untouched — and the turn ends when the provider reports it cancelled.
-     * Ending the agent is `stop` below, a different action. `not-running` for an agent with no session here.
+     * slot and conversation stay. A confirmed cancel keeps its provider; an unconfirmed one ends the old run after
+     * the session's bounded wait, preserving input for the existing same-conversation restart path (Tynn #661).
+     * Ending the agent explicitly is `stop` below. `not-running` for an agent with no session here.
      */
     cancel(agentId: AgentId, by: string | null = 'you', intent: CancelIntent = 'stop'): CancelOutcome {
         const entry = this.#running.get(agentId);
