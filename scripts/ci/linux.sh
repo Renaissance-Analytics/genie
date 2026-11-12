@@ -635,8 +635,13 @@ ceiling() {
 # The watchdog: after the ceiling, it marks the row timed out and ends every process under this script but itself and
 # the shared app's tree. The row's command then returns, failing, and the loop reads the mark.
 watchdog() {
-    local name="$1" limit="$2" mark="$3"
-    sleep "$limit"
+    local name="$1" limit="$2" mark="$3" s
+    # Its sleep ends with it, and never holds the gate's output (Tynn issue #709): a sleep left behind by a killed
+    # watchdog kept an SSH-run gate open until the longest ceiling had passed.
+    sleep "$limit" >/dev/null 2>&1 </dev/null &
+    s=$!
+    trap 'kill "$s" 2>/dev/null; exit 0' TERM
+    wait "$s" || return 0
     : >"$mark"
     local keep p
     keep=" $BASHPID $(app_tree | tr '\n' ' ') "
