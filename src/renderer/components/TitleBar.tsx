@@ -11,6 +11,7 @@ import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport
 import type { ConnectProgress } from '../../core/connect-machine.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
+import type { DndHeaderView } from '../../core/dnd-header.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -91,6 +92,12 @@ export interface TitleBarProps {
     gapps?: { apps: readonly GAppListing[] | null; actions?: GAppStoreActions | undefined } | undefined;
     /** Share this workstation through Tynn (Tynn #587), the host's when driving one. Absent for a guest. */
     share?: { readonly onShare: () => void } | undefined;
+    /**
+     * DO NOT DISTURB, among the header's system icons (Tynn #655; the owner: "that should be a toggle in the app header,
+     * not buried in settings"). One click turns it on or off; on, it is a filled warning-coloured bell-off, pressed, in
+     * every window. `view` is core/dnd-header.ts's reading of the host's settings; absent = not known yet (no control).
+     */
+    dnd?: { view: DndHeaderView; onToggle: () => unknown } | undefined;
     connect?: {
         workstations: TynnWorkstationList | null;
         onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
@@ -118,8 +125,17 @@ export interface RemoteBadge {
     readonly onDisconnect?: (() => void) | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect, gapps, share }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect, gapps, share, dnd }: TitleBarProps) {
     const [storeOpen, setStoreOpen] = useState(false);
+    // The write is in flight until the host's next snapshot redraws the state: the button shows it is working meanwhile.
+    const [dndPending, setDndPending] = useState(false);
+    const dndOn = dnd?.view.on;
+    useEffect(() => { setDndPending(false); }, [dndOn]);
+    const toggleDnd = (): void => {
+        if (!dnd) return;
+        setDndPending(true);
+        void Promise.resolve(dnd.onToggle()).catch(() => undefined).finally(() => setDndPending(false));
+    };
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -201,6 +217,25 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                         </Button>
                     </Tooltip>
                 ))}
+                {dnd ? (
+                    <Tooltip content={dnd.view.tooltip} placement="bottom">
+                        <Button variant="ghost" size="xs" labelClassName="contents"
+                            type="button"
+                            data-system-icon="DoNotDisturb"
+                            data-dnd={dnd.view.on ? 'on' : 'off'}
+                            aria-label={dnd.view.label}
+                            aria-pressed={dnd.view.on}
+                            aria-busy={dndPending || undefined}
+                            onClick={toggleDnd}
+                            // On is unmistakable: a filled warning-coloured square, not a tinted glyph among grey ones.
+                            className={`[-webkit-app-region:no-drag] flex size-6 items-center justify-center rounded-md ${dnd.view.on
+                                ? 'bg-[var(--warning)] text-black hover:bg-[var(--warning)]/80'
+                                : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]'} ${dndPending ? 'opacity-60' : ''}`}
+                        >
+                            <span data-dnd-icon={dnd.view.icon} className="contents"><Icon name={dnd.view.icon} size="sm" /></span>
+                        </Button>
+                    </Tooltip>
+                ) : null}
                 {inbox ? (
                     <Tooltip content={inbox.unread ? `AgentInbox · ${inbox.unread} unread` : 'AgentInbox'} placement="bottom">
                         <Button variant="ghost" size="xs" labelClassName="contents"

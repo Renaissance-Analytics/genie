@@ -67,6 +67,7 @@ import { RendererNoticeBar } from './components/RendererNoticeBar.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 import type { GAppListing, GAppsApi } from '../core/gapps.js';
+import { dndHeader, dndToggleAction } from '../core/dnd-header.js';
 
 
 /**
@@ -566,6 +567,8 @@ export function Shell({
         actions: { api: gapps, pickFolder: pickGappFolder, refresh: refreshGapps, workspace: onScreenId !== null && onScreenName !== null ? { id: onScreenId, name: onScreenName } : null },
     } : { apps: [] as readonly GAppListing[] }), [gapps, pickGappFolder, gappList, refreshGapps, onScreenId, onScreenName]);
 
+    const dndView = dndHeader(features.settings.values);
+
     return (
         <WorkspaceColorsContext.Provider value={colorMap}>
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
@@ -589,6 +592,9 @@ export function Shell({
                 connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
                 // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it, over the host's book (V7) in a local window.
                 gapps={gappStore}
+                // DO NOT DISTURB (Tynn #655): Settings → General's own setting, read from this window's host snapshot and
+                // written through its feature channel — so a window on another machine shows and sets that machine's.
+                dnd={dndView ? { view: dndView, onToggle: () => onFeature(dndToggleAction(dndView.on)) } : undefined}
             />
             {remote?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />
