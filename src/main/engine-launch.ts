@@ -45,6 +45,8 @@ export interface EngineLaunchPorts {
     readonly startTimeoutMs?: number;
     /** How long it has waited for a host it started, about once a second (Tynn #700). */
     readonly onWaiting?: (elapsedMs: number) => void;
+    /** The person's "Restart Genie's host" while it waits (Tynn #700): asked, then answered once the new host is started. */
+    readonly restart?: { take(): boolean; settled(outcome: { ok: true } | { ok: false; reason: string }): void };
 }
 
 export interface EngineLink {

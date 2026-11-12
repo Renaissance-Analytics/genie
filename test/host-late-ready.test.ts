@@ -69,7 +69,7 @@ describe('what the person sees while it waits', () => {
 
     it('nothing for a quick start; shown once it takes longer, updated, and closed when the host is ready', () => {
         const seen: string[] = [];
-        const wait = new HostWait({ open: (t, d) => seen.push(`open ${t} | ${d}`), update: (d) => seen.push(`update ${d}`), close: () => seen.push('close') });
+        const wait = new HostWait({ open: (v) => seen.push(`open ${v.title} | ${v.detail}`), update: (v) => seen.push(`update ${v.detail}`), close: () => seen.push('close') });
         wait.progress(HOST_WAIT_SHOW_AFTER_MS - 1);
         expect(seen).toEqual([]);
         wait.progress(HOST_WAIT_SHOW_AFTER_MS);

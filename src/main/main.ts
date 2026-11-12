@@ -1569,11 +1569,11 @@ async function boot(): Promise<void> {
         // STARTING GENIE'S HOST, SAID (Tynn #700): a slow first start shows a small window that says so, until the link is up.
         let hostWaitWindow: BrowserWindow | null = null;
         const hostWait = new HostWait({
-            open: (title, detail) => {
+            open: (view) => {
                 hostWaitWindow = new BrowserWindow({ width: 440, height: 140, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, title: 'Genie', backgroundColor: '#111111', autoHideMenuBar: true, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
-                void hostWaitWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(hostWaitPage(title, detail))}`);
+                void hostWaitWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(hostWaitPage(view.title, view.detail))}`);
             },
-            update: (detail) => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) void hostWaitWindow.webContents.executeJavaScript(`document.getElementById('detail').textContent = ${JSON.stringify(detail)};`).catch(() => {}); },
+            update: (view) => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) void hostWaitWindow.webContents.executeJavaScript(`document.getElementById('detail').textContent = ${JSON.stringify(view.detail)};`).catch(() => {}); },
             close: () => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.destroy(); hostWaitWindow = null; },
         });
         agentEngineLink = await connectAgentEngine({

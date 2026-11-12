@@ -5,25 +5,48 @@
  * been; it closes as soon as the link is up, or the host is known to have failed.
  */
 export const HOST_WAIT_SHOW_AFTER_MS = 1_500;
+/** RED stand-in. */
+export const HOST_WAIT_ACTIONS_AFTER_MS = 0;
+export type HostWaitAction = 'open-log' | 'restart';
+export interface HostWaitView {
+    readonly title: string;
+    readonly detail: string;
+    readonly actions: boolean;
+    readonly busy: HostWaitAction | null;
+    readonly outcome: { readonly ok: boolean; readonly text: string } | null;
+}
+export type HostWaitOutcome = { ok: true } | { ok: false; reason: string };
+/** RED stand-in. */
+export class HostRestart {
+    request(): Promise<HostWaitOutcome> { return Promise.resolve({ ok: true }); }
+    take(): boolean { return false; }
+    settled(_outcome: HostWaitOutcome): void {}
+}
 
 export function hostWaitWords(elapsedMs: number): { readonly title: string; readonly detail: string } {
     return { title: 'Starting Genie’s host…', detail: `The first start can take a minute. ${Math.floor(elapsedMs / 1000)} s so far.` };
 }
 
 export interface HostWaitPorts {
-    open(title: string, detail: string): void;
-    update(detail: string): void;
+    open(view: HostWaitView): void;
+    update(view: HostWaitView): void;
     close(): void;
+}
+export interface HostWaitActions {
+    openLog(): Promise<string | null>;
+    restart(): Promise<HostWaitOutcome>;
 }
 
 /** The wait's state: nothing for a quick start; opened once it is slow, updated, and closed once. Never throws into the link. */
 export class HostWait {
+    /** RED stand-in. */
+    act(_action: HostWaitAction): Promise<void> { return Promise.resolve(); }
     readonly #ports: HostWaitPorts;
     readonly #showAfterMs: number;
     #shown = false;
     #done = false;
 
-    constructor(ports: HostWaitPorts, options: { readonly showAfterMs?: number } = {}) {
+    constructor(ports: HostWaitPorts, _actions?: HostWaitActions, options: { readonly showAfterMs?: number } = {}) {
         this.#ports = ports;
         this.#showAfterMs = options.showAfterMs ?? HOST_WAIT_SHOW_AFTER_MS;
     }
@@ -31,9 +54,10 @@ export class HostWait {
     progress(elapsedMs: number): void {
         if (this.#done || elapsedMs < this.#showAfterMs) return;
         const words = hostWaitWords(elapsedMs);
+        const view: HostWaitView = { ...words, actions: false, busy: null, outcome: null };
         try {
-            if (!this.#shown) { this.#shown = true; this.#ports.open(words.title, words.detail); }
-            else this.#ports.update(words.detail);
+            if (!this.#shown) { this.#shown = true; this.#ports.open(view); }
+            else this.#ports.update(view);
         } catch { /* a wait that cannot be drawn must not stop the host being reached */ }
     }
 
