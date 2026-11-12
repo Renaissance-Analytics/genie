@@ -1199,12 +1199,19 @@ export class AgentSession {
      * (`sent`, or `undelivered` again if this run breaks before it goes) settles THAT message. Sent in queue order once the
      * run can take a turn: at once, at `ready`, or when the current turn ends. Already waiting here: nothing is added.
      */
-    redeliver(id: string, text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+    redeliver(id: string, text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}, options: { hold?: boolean } = {}): void {
         if (!this.running) throw new Error('session is not running');
         if (this.hasQueuedPrompt(id)) return;
         this.#afterTurn.push({ id, text, by, sent, context });
         this.#changed();
+        // `hold`: more are being handed over (`deliverOwed`); `flushOwed` sends them all together, in order (Tynn #702).
+        if (options.hold !== true) this.#flushAfterTurn();
+    }
+
+    /** Send what `redeliver` held, all of it in order, as the queue sends (Tynn #702: a restart's owed messages go together). */
+    flushOwed(): void {
         this.#flushAfterTurn();
+        this.#changed();
     }
 
     discardPrompt(id: string): void {

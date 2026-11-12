@@ -30,7 +30,10 @@ describe('servedPath', () => {
 describe('the server asks the disk only about a path that passed', () => {
     it('the request handler takes its file from servedPath, before its first lstat, realpath or readFile', () => {
         const src = readFileSync('src/main/gapp-server.ts', 'utf8');
-        const handler = src.slice(src.indexOf('async #onRequest('), src.indexOf('#onUpgrade('));
+        const start = src.indexOf('async #onRequest(');
+        const handler = src.slice(start, src.indexOf('#onUpgrade(req: IncomingMessage', start));
+        expect(start).toBeGreaterThan(-1);
+        expect(handler.length).toBeGreaterThan(200);
         const checked = handler.indexOf('servedPath(served.dir, segments)');
         expect(checked).toBeGreaterThan(-1);
         for (const fs of ['lstat(', 'realpath(', 'readFile(']) expect(handler.indexOf(fs), fs).toBeGreaterThan(checked);

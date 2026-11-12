@@ -1469,16 +1469,20 @@ export class SessionHost {
                 if (status !== 'queued' && status !== 'undelivered' && status !== 'carried') continue;
                 if (entry.session.hasQueuedPrompt(e.pending.id)) continue;
                 try {
+                    // Held, then sent together below (Tynn #702): one at a time, each after the first waited for a turn of its own.
                     entry.session.redeliver(e.pending.id, e.text, e.speaker === 'you' ? 'you' : e.peerName,
                         e.pending.content ? { content: e.pending.content, attachments: e.attachments ?? [] } : null,
-                        e.mail ? { mail: e.mail } : {});
+                        e.mail ? { mail: e.mail } : {}, { hold: true });
                     handed += 1;
                 } catch {
                     // The run ended under us: what was not handed over stays owed for the next Restart.
                     break;
                 }
             }
-            if (handed > 0) this.#emit(agentId);
+            if (handed > 0) {
+                if (this.#running.get(agentId) === entry && entry.session.running) entry.session.flushOwed();
+                this.#emit(agentId);
+            }
             after();
             return handed;
         };

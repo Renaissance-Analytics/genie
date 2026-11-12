@@ -222,7 +222,7 @@ describe('the chat: one queue, one action', () => {
 
     it('the chat draws the bar once, and a message’s own row keeps only a small remove', () => {
         const chat = readFileSync('src/renderer/components/ChatFlyout.tsx', 'utf8');
-        expect(chat).toMatch(/<ChatQueueBar /);
+        expect(chat).toMatch(/<ChatQueueBar\b/);
         expect(chat).toMatch(/data-action="remove-draft"[^>]*aria-label="Remove this message"/);
         expect(chat).not.toMatch(/data-action="send-draft"/);
         expect(chat).not.toMatch(/onSendNow=\{onInterruptAndSend\}/);
