@@ -71,6 +71,19 @@ interface Served {
 
 type PreviewsView = Pick<GAppPreviews, 'list' | 'previewDir' | 'appElement'>;
 
+/**
+ * THE FILE A REQUEST NAMES, IF IT IS ONE OF THE APP'S OWN (CodeQL alert #106): joined under the app's folder and checked,
+ * by the path's text alone, to stay inside it, before anything on disk is asked. `null` = nothing to serve. The realpath
+ * check after it still refuses a link inside the folder that leads out.
+ */
+export function servedPath(dir: string, segments: readonly string[]): string | null {
+    const file = join(dir, ...segments);
+    const rel = relativePath(dir, file);
+    // The form CodeQL reads as a containment check, as the realpath check below uses (a name starting with `..` is refused too).
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null;
+    return file;
+}
+
 export class GAppServer {
     readonly #book: Pick<GAppBook, 'list' | 'installedDir' | 'appElement' | 'verifyInstalled'>;
     readonly #previews: PreviewsView | null;
@@ -181,7 +194,9 @@ export class GAppServer {
             const problem = await this.#book.verifyInstalled(served.packageId);
             if (problem) { refuse(res, 403, problem); return; }
         }
-        const file = join(served.dir, ...segments);
+        // Inside the app's folder by its text, before any call to the disk (CodeQL alert #106).
+        const file = servedPath(served.dir, segments);
+        if (file === null) { refuse(res, 404, 'Not found.'); return; }
         try {
             if (!(await lstat(file)).isFile()) { refuse(res, 404, 'Not found.'); return; }
             // Only the installed copy is served: a folder link inside it that leads elsewhere is not followed (CodeQL, beta.61).

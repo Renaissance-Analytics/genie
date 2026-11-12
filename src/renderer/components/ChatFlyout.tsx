@@ -3,6 +3,7 @@ import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
 import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
+import { ChatQueueBar } from './ChatQueueBar.js';
 import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { sendKeyHint } from '../../core/send-key.js';
 import { useSendKey } from '../send-key-store.js';
@@ -434,6 +435,12 @@ function ChatFlyoutBody({
     const shown = windowStart === 0 ? messages : messages.slice(windowStart);
     // ONE RESTART IN THE CHAT (genie#1238): on the latest message waiting for one — the restart sends every undelivered
     // message, in order, so a Restart on each was the same button many times over.
+    // THE QUEUE (Tynn #702): your messages waiting behind the turn, and those not delivered, in the order written.
+    const queue = (() => {
+        const yours = messages.filter((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you');
+        const undelivered = yours.filter((m) => !m.delivered && !m.queued);
+        return { waiting: yours.filter((m) => m.queued || (m.waiting !== undefined && m.delivered)).length, undelivered, sendable: undelivered.filter((m) => !m.reason) };
+    })();
     const restartOn = [...messages].reverse().find((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you' && !m.delivered && !m.queued && !m.reason && m.resend !== 'send')?.id ?? null;
     /** The scroll height before a page of history was added: the reader stays on the message they were reading. */
     const anchorRef = useRef<number | null>(null);
@@ -769,26 +776,20 @@ function ChatFlyoutBody({
                              * cannot come.
                              */}
                             {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
-                            {m.waiting && m.delivered ? <ChatWaitingLive id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} onInterruptAndSend={onInterruptAndSend} /> : null}
+                            {m.waiting && m.delivered ? <ChatWaitingLive id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} /> : null}
                             {mailOnly && m.read !== undefined ? (
                                 <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                             ) : null}
                             {m.queued ? (m.queuedForStart || m.queuedForProvider
                                 ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>
-                                : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} onSendNow={onInterruptAndSend} />) : null}
+                                : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} />) : null}
                             {m.delivered || m.queued ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
                                     {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
                                     <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
                                     {m.draftProblem ? <span role="alert" className="text-[12px] text-[var(--danger)]">{m.draftProblem}</span> : null}
-                                    <div className="flex items-center gap-1.5">
-                                        {onDiscardDraft ? <Button size="xs" type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</Button> : null}
-                                        {m.reason ? null : m.resend === 'send'
-                                            ? <Button size="xs" type="button" data-action="send-draft" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Send now</Button>
-                                            : m.id === restartOn
-                                                ? <Button size="xs" type="button" data-action="restart" data-draft={m.id} title={`Restart ${thread?.name ?? 'the agent'}; every message not yet delivered to it is sent, in order, once it is up`} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart</Button>
-                                                : null}
-                                    </div>
+                                    {/* One message sent by mistake comes out here; sending is the queue bar's one action (Tynn #702). */}
+                                    {onDiscardDraft ? <Button size="xs" variant="ghost" type="button" data-action="remove-draft" data-draft={m.id} aria-label="Remove this message" title="Remove this message" onClick={() => onDiscardDraft(m.id)} className="h-auto px-1 py-0 text-[13px] leading-none text-[var(--fg-3)] hover:text-[var(--fg-1)]">×</Button> : null}
                                 </div>
                             )}
                         </div>
@@ -800,6 +801,19 @@ function ChatFlyoutBody({
                         </div>
                     );
                 })}
+                {/* ONE QUEUE, ONE ACTION (Tynn #702): what waits and what was not delivered, counted, with one Send all now. */}
+                <ChatQueueBar
+                    agentName={thread?.name ?? 'the agent'}
+                    waiting={queue.waiting}
+                    undelivered={queue.undelivered.length}
+                    onInterruptAndSend={onInterruptAndSend}
+                    onSendAll={queue.sendable.length > 0 && onRestartAndSend ? () => {
+                        // While it runs, each in the order written; not running, the chat's one Restart, which sends them all.
+                        if (queue.sendable.some((m) => m.resend === 'send')) for (const m of queue.sendable) onRestartAndSend(m.id);
+                        else onRestartAndSend(restartOn ?? queue.sendable.at(-1)!.id);
+                    } : undefined}
+                    onDiscardAll={queue.undelivered.length > 0 && onDiscardDraft ? () => { for (const m of queue.undelivered) onDiscardDraft(m.id); } : undefined}
+                />
                 {/* The board's error rule: a broken session ends the transcript with the failure, in red. */}
                 {thread?.context?.tone === 'bad' ? (
                     <div data-chat-error="" className="flex items-center gap-2 border-y border-[var(--danger)] py-1.5 font-mono text-[11px] text-[var(--danger)]">
