@@ -6,7 +6,7 @@ import { GAppStoreFlyout, type GAppStoreActions } from './GAppStore.js';
 import type { UpdateChip } from '../../core/update-chip.js';
 import { GenieLogo } from './GenieLogo.js';
 import { ConnectMenu } from './ConnectMenu.js';
-import { CONNECT_LABEL, CONNECT_ROUTE } from '../../core/connect-machine.js';
+import { CONNECT_LABEL } from '../../core/connect-machine.js';
 import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 import type { ConnectProgress } from '../../core/connect-machine.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
@@ -98,6 +98,8 @@ export interface TitleBarProps {
         /** Read Tynn's list again — every time the menu opens (M0 finding 1) — and where that read stands. */
         onRefresh?: (() => void) | undefined;
         refresh?: ConnectProgress | undefined;
+        /** The host and PIN form, your machines and the ones remembered, in a dialog of their own (Tynn #640). */
+        onOpenOther?: (() => void) | undefined;
     } | undefined;
 }
 
@@ -112,6 +114,8 @@ export interface RemoteBadge {
     readonly locked: boolean;
     readonly lostTo?: string | null | undefined;
     readonly onTakeControl?: (() => void) | undefined;
+    /** End this window's link to the host (Tynn #640: it used to be on Settings → Remote access). Absent = no button. */
+    readonly onDisconnect?: (() => void) | undefined;
 }
 
 export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect, gapps, share }: TitleBarProps) {
@@ -252,7 +256,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                                 refresh={connect.refresh}
                                 onRefresh={connect.onRefresh}
                                 onOpenLink={connect.onOpenLink ? () => { setConnectOpen(false); connect.onOpenLink?.(); } : undefined}
-                                onOpenSurface={() => { setConnectOpen(false); onNavigate(CONNECT_ROUTE); }}
+                                onOpenSurface={() => { setConnectOpen(false); connect.onOpenOther?.(); }}
                             />
                         </Popover.Content>
                     </Popover>
@@ -310,6 +314,12 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                             // no-drag: in the bar's drag region a click is the OS's.
                             className="[-webkit-app-region:no-drag] rounded border border-[var(--warning)]/40 px-1.5 py-0 font-sans text-[11px] font-medium text-[var(--warning)] hover:bg-[var(--warning)]/20">
                             {remote.driver ? `Take control from ${remote.driver}` : 'Take control'}
+                        </Button>
+                    ) : null}
+                    {remote.onDisconnect ? (
+                        <Button size="xs" type="button" data-action="disconnect-host" onClick={remote.onDisconnect}
+                            className="[-webkit-app-region:no-drag] rounded border border-[var(--warning)]/40 px-1.5 py-0 font-sans text-[11px] font-medium text-[var(--warning)] hover:bg-[var(--warning)]/20">
+                            Disconnect
                         </Button>
                     ) : null}
                 </div>

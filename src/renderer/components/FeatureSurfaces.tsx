@@ -2484,6 +2484,17 @@ function githubCapabilityList(rows: readonly GithubCapability[]) {
     );
 }
 
+/** Upgrade the host this window drives (its owner only): the button, or where an upgrade in flight has got to. */
+function HostUpgradeRow({ host, upgrade, onUpgradeHost }: { host: string; upgrade: HostUpgradeStep | null; onUpgradeHost: () => void }) {
+    const upgrading = upgrade !== null && upgrade.kind !== 'up-to-date' && upgrade.kind !== 'done' && upgrade.kind !== 'failed' && upgrade.kind !== 'lost';
+    return (
+        <div data-remote-host-upgrade="" className="flex flex-wrap items-center gap-3 text-sm">
+            {upgrade ? <span data-host-upgrade={upgrade.kind} className="text-xs text-[var(--fg-3)]">{upgradeWords(upgrade, host)}</span> : null}
+            {upgrading ? null : <Button size="xs" type="button" data-action="upgrade-host" className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={onUpgradeHost}>Upgrade {host}</Button>}
+        </div>
+    );
+}
+
 /**
  * REMOTE ACCESS (§6.8) — the PIN this screen shows, the paired devices (Revoke each), who is connected
  * and who is driving, the lock as one button. No transport → the section says devices cannot connect. Sharing is a Tynn
@@ -2499,15 +2510,11 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
     return (
         <section data-remote className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
             <h2 className="text-sm font-semibold">Remote access</h2>
-            {/* DRIVE ANOTHER MACHINE FIRST (genie#1278 C1): this page is where the title bar's Connect lands, so the way to
-                another machine is the first thing on it. Never on a drone (W5): Tynn refuses it every connect-grant. It is THIS
-                window's, so it does not wait for the host's own section: a windowless Drone sends none (gp-11102335, beta.61),
-                and a connected window keeps its Disconnect whatever the host is (gp-11102252). */}
-            {connect && (connect.state?.connected === true || (remote !== null && browse)) ? (
-                <div data-drive-another="">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
-                    <ConnectRemote {...connect} />
-                </div>
+            {/* THIS MACHINE'S OWN, OR THE HOST THIS WINDOW DRIVES (Tynn #640; the owner: "that is for settings on the host I am
+                connected to"). Connecting to other machines is the title bar's host picker alone (Genie 1's HostsButton); a
+                connected window's Disconnect is its host badge's. Upgrading the host this window drives is about that host. */}
+            {connect?.state?.connected === true && connect.state.host && connect.state.isOwner && connect.onUpgradeHost ? (
+                <HostUpgradeRow host={connect.state.host} upgrade={connect.upgrade ?? null} onUpgradeHost={connect.onUpgradeHost} />
             ) : null}
             {remote === null && connect?.state?.connected === true && connect.state.host ? (
                 // A host with no window open sends no Remote access of its own yet (#1231): said, never a skeleton for ever.
