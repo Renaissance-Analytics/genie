@@ -121,7 +121,7 @@ import { afterSignedIn } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
-import { HostWait, hostWaitPage } from './host-wait-window.js';
+import { HostRestart, HostWait } from './host-wait-window.js';
 import { LoginHost } from './login-host.js';
 import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
@@ -1566,16 +1566,23 @@ async function boot(): Promise<void> {
         // Its own Deck item (Tynn #693): the error alone is the item's folded detail; the words are core/main-errors.ts's.
         if (hostRuntime.error !== null) mainErrors.record('host-copy', new Error(hostRuntime.cause ?? hostRuntime.error));
         remakeHostCopy = () => materializeHostRuntime(hostCopyInput).then((made) => (made.error === null ? null : made.cause ?? made.error));
-        // STARTING GENIE'S HOST, SAID (Tynn #700): a slow first start shows a small window that says so, until the link is up.
+        // STARTING GENIE'S HOST, SAID (Tynn #700): a slow first start shows a window of its own that says so, until the link
+        // is up; from 60 s it also offers Open the log and Restart Genie's host (host-wait-window.ts).
         let hostWaitWindow: BrowserWindow | null = null;
+        const hostRestart = new HostRestart();
         const hostWait = new HostWait({
-            open: (view) => {
-                hostWaitWindow = new BrowserWindow({ width: 440, height: 140, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, title: 'Genie', backgroundColor: '#111111', autoHideMenuBar: true, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
-                void hostWaitWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(hostWaitPage(view.title, view.detail))}`);
+            open: () => {
+                hostWaitWindow = new BrowserWindow({ width: 460, height: 190, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, title: 'Genie', backgroundColor: '#111111', autoHideMenuBar: true, webPreferences: { preload: join(here, 'host-wait-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
+                void hostWaitWindow.loadFile(join(here, '../renderer/host-wait.html'));
             },
-            update: (view) => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) void hostWaitWindow.webContents.executeJavaScript(`document.getElementById('detail').textContent = ${JSON.stringify(view.detail)};`).catch(() => {}); },
+            update: (view) => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.webContents.send('host-wait:show', view); },
             close: () => { if (hostWaitWindow && !hostWaitWindow.isDestroyed()) hostWaitWindow.destroy(); hostWaitWindow = null; },
+        }, {
+            openLog: () => shell.openPath(join(genieRoot(), 'logs', 'genie-host.log')).then((failed) => failed || null),
+            restart: () => hostRestart.request(),
         });
+        ipcMain.handle('host-wait:current', () => hostWait.current());
+        ipcMain.handle('host-wait:act', (_event, action: unknown) => (action === 'open-log' || action === 'restart' ? hostWait.act(action) : undefined));
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => {
@@ -1611,6 +1618,7 @@ async function boot(): Promise<void> {
                 env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath, GENIE_INSTALL_EXEC: process.execPath },
                 log: lifecycleLog,
                 onWaiting: (elapsedMs) => hostWait.progress(elapsedMs),
+                restart: hostRestart,
             },
             records: () => registry?.listAgents() ?? [],
             onError: (kind, error) => mainErrors.record(kind, error),
@@ -1618,6 +1626,8 @@ async function boot(): Promise<void> {
             log: lifecycleLog,
         });
         hostWait.done();
+        ipcMain.removeHandler('host-wait:current');
+        ipcMain.removeHandler('host-wait:act');
         // THE WINDOW NEVER RUNS HOST WORK (Tynn #415): with no host it says what is wrong and how to fix it, and stops here.
         if (agentEngineLink === null) {
             await stopForNoHost(hostRuntime.error);

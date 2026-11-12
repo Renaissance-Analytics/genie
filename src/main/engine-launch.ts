@@ -240,7 +240,8 @@ export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> 
         if (alive(decision.record.pid)) { log(`host pid=${decision.record.pid} did not exit; ending it`); ports.kill?.(decision.record.pid); }
     }
 
-    const pid = await (ports.spawnHost ?? (() => spawnHostProcess(ports, winLauncherPath(), log)))();
+    const startHost = ports.spawnHost ?? (() => spawnHostProcess(ports, winLauncherPath(), log));
+    let pid = await startHost();
     if (pid === null) throw new Error('the host process could not be started');
     log(`host started pid=${pid} build=${ports.build}`);
     // OUR OWN CHILD (Tynn #700): waited for until it is ready or it exits, never given up on at a fixed time while it lives.
@@ -248,6 +249,23 @@ export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> 
     const until = ports.startTimeoutMs === undefined ? Infinity : began + ports.startTimeoutMs;
     let said = began;
     while (now() < until) {
+        // RESTART GENIE'S HOST, pressed in the wait (Tynn #700): this host is ended as a replaced one is, a new one started,
+        // and the same wait goes on for the new one.
+        if (ports.restart?.take()) {
+            const old = pid;
+            log(`host pid=${old} restarted by the person after ${Math.round((now() - began) / 1000)} s; ending it`);
+            ports.kill?.(old);
+            const gone = now() + 10_000;
+            while (alive(old) && now() < gone) await sleep(100);
+            if (alive(old)) { ports.restart.settled({ ok: false, reason: `Genie’s host (pid ${old}) did not end, so a new one was not started.` }); }
+            else {
+                const fresh = await startHost();
+                if (fresh === null) { ports.restart.settled({ ok: false, reason: 'the host process could not be started' }); throw new Error('the host process could not be started'); }
+                pid = fresh;
+                log(`host started pid=${pid} build=${ports.build}`);
+                ports.restart.settled({ ok: true });
+            }
+        }
         const record = parseHostRecord(read(recordFile));
         // Its own record: another host winning the endpoint race is adopted instead (this one exits on its own).
         if (record !== null && alive(record.pid) && record.build === ports.build && record.protocol === ENGINE_PROTOCOL) {
