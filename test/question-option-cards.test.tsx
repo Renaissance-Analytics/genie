@@ -89,6 +89,17 @@ describe('what is picked is unmistakable, and is not what hover looks like', () 
         expect(off).not.toMatch(/hover:border-\[var\(--primary\)\]|hover:bg-\[color-mix/);
     });
 
+    it('in Genie’s dark theme too: the picked look is not covered by the button’s own dark colours', () => {
+        const html = form({ selections: [[LONG], []], notes: ['', ''] });
+        const on = open(card(html, LONG));
+        const off = open(card(html, 'Terminal'));
+        expect(on).toMatch(/dark:border-\[var\(--primary\)\]/);
+        expect(on).toMatch(/dark:bg-\[color-mix\(in_srgb,var\(--primary\)/);
+        expect(on).not.toMatch(/dark:bg-\[color:var\(--fancy|dark:border-\[color:var\(--fancy/);
+        expect(off).toMatch(/dark:hover:bg-\[var\(--bg-2\)\]/);
+        expect(off).not.toMatch(/dark:hover:bg-zinc/);
+    });
+
     it('focus is visible on every card', () => {
         for (const label of [LONG, 'unit']) expect(open(card(form(), label)), label).toMatch(/focus-visible:ring-2/);
     });
