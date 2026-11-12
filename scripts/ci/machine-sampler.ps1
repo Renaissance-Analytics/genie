@@ -14,7 +14,9 @@ $ErrorActionPreference = 'Continue'
 $counters = '\PhysicalDisk(_Total)\Current Disk Queue Length', '\Processor(_Total)\% Processor Time', '\PhysicalDisk(_Total)\Avg. Disk sec/Transfer'
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 $clock = [System.Diagnostics.Stopwatch]::StartNew()
-$last = 0
+# No sample before the first: its gap is not the time since start (the first counter read takes up to ~10 s to set
+# up, which read as a 10 s pause on the first quiet-image run, gt-11122013-341d332e).
+$last = -1
 $end = (Get-Date).AddSeconds($Seconds)
 $usePdh = $true
 $prevCpu = $null
@@ -53,7 +55,8 @@ while ((Get-Date) -lt $end -and (Get-Process -Id $ParentId -ErrorAction Silently
     if (-not $line) { $w = ($why -replace '\s+', '_') -replace '=', ':'; $line = 'error=' + $w.Substring(0, [math]::Min(160, $w.Length)) }
     $now = $clock.ElapsedMilliseconds
     $epoch = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    Add-Content -Path $Out -Value "MACHINE $epoch gap=$($now - $last) $line" -Encoding ascii
+    $gap = if ($last -lt 0) { [int]($Interval * 1000) } else { $now - $last }
+    Add-Content -Path $Out -Value "MACHINE $epoch gap=$gap $line" -Encoding ascii
     $last = $now
     $rest = [int]($Interval * 1000 - 1000)
     if ($rest -gt 0) { Start-Sleep -Milliseconds $rest }

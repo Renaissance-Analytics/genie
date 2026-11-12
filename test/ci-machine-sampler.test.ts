@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error: a plain .mjs script, imported for its functions
-import { parseSamples } from '../scripts/ci/stall.mjs';
+import { findStalls, parseSamples } from '../scripts/ci/stall.mjs';
 import { linuxSh, windowsPs1 } from './helpers/ci-scripts.js';
 
 /*
@@ -55,6 +55,8 @@ describe.skipIf(process.platform !== 'win32')('machine-sampler.ps1', () => {
         expect(last.f, text).toHaveProperty('disk_q');
         expect(last.f, text).toHaveProperty('cpu');
         expect(last.gap).toBeGreaterThan(500);
+        // Its own slow start is not a pause of the machine (the first quiet-image run read a 10 s one there).
+        expect(findStalls(s).filter((x: { kind: string }) => x.kind === 'pause'), text).toEqual([]);
         expect(outlivedMs).not.toBeNull();
         expect(outlivedMs!).toBeLessThan(6000);
     }, 40000);
