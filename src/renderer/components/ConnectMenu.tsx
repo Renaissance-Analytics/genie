@@ -240,7 +240,7 @@ export interface ConnectMenuProps {
     /** What Tynn listed; `null` = not read yet (said as such, never as an empty list). */
     readonly workstations: TynnWorkstationList | null;
     readonly onOpenWorkstation?: OpenWorkstation | undefined;
-    /** Settings → Remote access: the full page, where host and PIN live. */
+    /** The other ways in (Tynn #640): host and PIN, the machines remembered. A dialog of their own, never the settings page. */
     readonly onOpenSurface: () => void;
     /** Paste a share link instead. */
     readonly onOpenLink?: (() => void) | undefined;
@@ -281,7 +281,7 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
                 {onOpenLink ? (
                     <Button size="xs" labelClassName="contents" type="button" data-action="paste-share-link" onClick={onOpenLink} className={quiet}><Icon name="link" size="xs" />Share link</Button>
                 ) : null}
-                <Button size="xs" labelClassName="contents" type="button" data-action="open-connect-surface" onClick={onOpenSurface} className={quiet}><Icon name="settings" size="xs" />Remote access</Button>
+                <Button size="xs" labelClassName="contents" type="button" data-action="open-connect-surface" onClick={onOpenSurface} className={quiet}><Icon name="monitor" size="xs" />Other ways…</Button>
                 {/* Genie 1's ⟳ "Rescan" (master.tsx:5046): ask Tynn again, here. */}
                 {onRefresh ? (
                     <Button size="xs" labelClassName="contents" type="button" data-action="refresh-workstations" title="Ask Tynn again" aria-label="Ask Tynn again" disabled={refresh.kind === 'working'} onClick={onRefresh} className={`ml-auto ${quiet}`}>
@@ -297,10 +297,10 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
  * THE COMMAND WINDOW'S TWO WAYS IN (genie#1278 C1), in a window of their own: "Open a share link…" (paste, Open, its
  * progress) and "Connect to my workstations" (the same menu as the title bar's button).
  */
-export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch, refresh, onRefresh }: {
+export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch, refresh, onRefresh, other }: {
     refresh?: ConnectProgress | undefined;
     onRefresh?: (() => void) | undefined;
-    /** RED stand-in (Tynn #640). */
+    /** `other`: the host and PIN form, your machines, the ones remembered (Tynn #640), as the window draws them. */
     other?: import('react').ReactNode;
     mode: 'link' | 'workstations' | 'other';
     onClose: () => void;
@@ -309,7 +309,7 @@ export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, 
     onOpenSurface: () => void;
     /** Main decides and acts (core/connect-link.ts); absent = this window cannot open links (not a desktop Genie). */
     openLink?: ((text: string) => Promise<{ ok: boolean; note: string }>) | undefined;
-    onSwitch: (mode: 'link' | 'workstations') => void;
+    onSwitch: (mode: 'link' | 'workstations' | 'other') => void;
 }) {
     const [value, setValue] = useState('');
     const [state, setState] = useState<ConnectProgress>({ kind: 'idle' });
@@ -326,10 +326,12 @@ export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, 
     return (
         <Modal open onClose={onClose} size="md">
             <Modal.Header>
-                <span className="flex items-center gap-2"><Icon name={mode === 'link' ? 'link' : 'monitor'} size="sm" />{mode === 'link' ? 'Open a share link' : 'Your workstations'}</span>
+                <span className="flex items-center gap-2"><Icon name={mode === 'link' ? 'link' : 'monitor'} size="sm" />{mode === 'link' ? 'Open a share link' : mode === 'other' ? 'Connect to another machine' : 'Your workstations'}</span>
             </Modal.Header>
             <Modal.Body>
-                {mode === 'link' ? (
+                {mode === 'other' ? (
+                    <div data-connect-other="">{other}</div>
+                ) : mode === 'link' ? (
                     <ShareLinkForm value={value} state={state} onChange={(v) => { setValue(v); if (state.kind !== 'working') setState({ kind: 'idle' }); }} onOpen={open} />
                 ) : (
                     <ConnectMenu fill workstations={workstations} onOpenWorkstation={onOpenWorkstation} onOpenSurface={onOpenSurface} onOpenLink={() => onSwitch('link')} refresh={refresh} onRefresh={onRefresh} />

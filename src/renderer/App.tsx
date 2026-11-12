@@ -3,7 +3,7 @@ import { CommandWindow } from './components/CommandWindow.js';
 import { FlowEditorWindow } from './components/FlowEditorWindow.js';
 import { WhatsNewWindow } from './components/WhatsNewWindow.js';
 import { ConnectDialog } from './components/ConnectMenu.js';
-import { CONNECT_ROUTE, OPEN_SHARE_LINK_ACTION, connectPaletteActions, mergeWorkstationRead, type ConnectProgress } from '../core/connect-machine.js';
+import { OPEN_SHARE_LINK_ACTION, connectPaletteActions, mergeWorkstationRead, type ConnectProgress } from '../core/connect-machine.js';
 import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
@@ -1085,7 +1085,7 @@ function DesktopApp({ bridge }: AppProps) {
      */
     const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
     // The Command Window's two ways to another machine (genie#1278 C1), each in its own window.
-    const [connectDialog, setConnectDialog] = useState<'link' | 'workstations' | null>(null);
+    const [connectDialog, setConnectDialog] = useState<'link' | 'workstations' | 'other' | null>(null);
     // A role change (genie#1278 W6) through main, which asks Tynn; then the list is read again, so it shows Tynn's answer.
     const setWorkstationRole = async (w: TynnWorkstationRow, role: 'pilot' | 'drone', code: string): Promise<RoleChange> => {
         const net = ownWindowBridge()?.tynnNetwork;
@@ -1930,8 +1930,12 @@ function DesktopApp({ bridge }: AppProps) {
             remote={remote.state?.connected && remote.state.host ? {
                 host: remote.state.host, driver: remote.state.driver, driving: remote.state.driving, locked: remote.state.locked,
                 lostTo: remote.state.batonLostTo ?? null, onTakeControl: () => { void remote.takeControl(); },
+                // Disconnect is the host badge's (Tynn #640), no longer Settings → Remote access.
+                onDisconnect: remote.disconnect,
                 refusal: remote.state.lastRefusal, needsBaton: remote.state.needsBaton === true, onDismissRefusal: remote.clearRefusal,
             } : null}
+            // The host picker's other ways (Tynn #640): a dialog, never the settings page.
+            onOpenConnectOther={() => setConnectDialog('other')}
             remoteConnect={{
                 state: remote.state, remembered: remote.remembered, onConnect: remote.connect, onDisconnect: remote.disconnect,
                 known: remote.known, onForgetHost: remote.forget, onReconnect: remote.reconnect,
@@ -2271,7 +2275,8 @@ function DesktopApp({ bridge }: AppProps) {
                 onSwitch={setConnectDialog}
                 workstations={remote.tynnWorkstations}
                 onOpenWorkstation={(w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }, w.name)}
-                onOpenSurface={() => { setConnectDialog(null); navigate(CONNECT_ROUTE); }}
+                onOpenSurface={() => setConnectDialog('other')}
+                other={<ConnectRemote state={remote.state} remembered={remote.remembered} onConnect={(i) => { void remote.connect(i); }} onDisconnect={remote.disconnect} known={remote.known} onForgetHost={remote.forget} onReconnect={remote.reconnect} onOpenHost={(url: string) => openRemoteHost(url, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); })} tynnWorkstations={remote.tynnWorkstations} onOpenWorkstation={(w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }, w.name)} onOpenLink={() => setConnectDialog('link')} onRefresh={remote.reloadTynnWorkstations} refresh={remote.tynnRefresh} onSetRole={features.remote?.tynnWorkstation?.role === 'pilot' ? setWorkstationRole : undefined} />}
                 openLink={typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork?.openLink}
                 refresh={remote.tynnRefresh}
                 onRefresh={remote.reloadTynnWorkstations}

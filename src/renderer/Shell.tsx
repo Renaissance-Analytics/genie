@@ -267,6 +267,8 @@ export interface ShellProps {
     remoteConnect?: RemoteConnectProps | undefined;
     /** Share this workstation through Tynn (Tynn #587); absent for a guest. */
     onShareWorkstation?: (() => void) | undefined;
+    /** The host picker's other ways to another machine, in a dialog (Tynn #640). */
+    onOpenConnectOther?: (() => void) | undefined;
     /** Agent operations (§6.2) for the Agent view; absent when this window cannot operate agents. */
     agentOps?: AgentOpsProps | undefined;
     /** Workspace operations (§6.1) for the Workspace surface; absent when this window cannot operate workspaces. */
@@ -323,6 +325,8 @@ export type ShellRemote = {
     host: string; driver: string | null; driving: boolean; locked: boolean;
     lostTo?: string | null; onTakeControl?: () => void;
     refusal?: string | null; needsBaton?: boolean; onDismissRefusal?: () => void;
+    /** The host badge's Disconnect (Tynn #640). */
+    onDisconnect?: () => void;
 } | null;
 
 /** The dock's panels, as the notice names them (§4.4). */
@@ -411,6 +415,7 @@ export function Shell({
     remote,
     remoteConnect,
     onShareWorkstation,
+    onOpenConnectOther,
     agentOps,
     workspaceOps,
     addPreview,
@@ -581,7 +586,7 @@ export function Shell({
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
-                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh }}
+                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
                 // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it, over the host's book (V7) in a local window.
                 gapps={gappStore}
             />

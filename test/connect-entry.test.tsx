@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
     CONNECT_EMPTY_GUIDANCE,
     CONNECT_LABEL,
-    CONNECT_ROUTE,
     CONNECT_WORKSTATIONS_ACTION,
     OPEN_SHARE_LINK_ACTION,
     connectPaletteActions,
@@ -21,9 +20,9 @@ import { control } from './helpers/control-markup.js';
  */
 
 describe('the entry', () => {
-    it('is called "Connect to another machine" and its page is Settings → Remote access', () => {
+    it('is called "Connect to another machine"; it has no page of its own in Settings (Tynn #640)', () => {
         expect(CONNECT_LABEL).toBe('Connect to another machine');
-        expect(parseRoute(CONNECT_ROUTE)).toMatchObject({ surface: 'settings', section: 'remote' });
+        expect(parseRoute('genie://settings/remote')).toMatchObject({ surface: 'settings', section: 'remote' });
     });
 
     it('the steps, exactly', () => {
