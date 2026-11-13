@@ -53,7 +53,10 @@ beforeEach(() => {
         stop(Number(args[args.indexOf('/PID') + 1])); return '';
     });
     vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
-        if (signal === 0) return live.has(Math.abs(pid));
+        if (signal === 0) {
+            if (!live.has(Math.abs(pid))) throw Object.assign(new Error('fixture process gone'), { code: 'ESRCH' });
+            return true;
+        }
         stop(Math.abs(pid)); return true;
     });
     io.write.mockImplementation((file: string, content: string) => {
