@@ -271,13 +271,19 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                 ) : null}
                 {connect ? (
                     <Popover placement="bottom-start" open={connectOpen} onOpenChange={(open) => { setConnectOpen(open); if (open) connect.onRefresh?.(); }}>
-                        <Popover.Trigger className="[-webkit-app-region:no-drag]">
+                        {/*
+                          * no-drag sits on the BUTTON, never on the Trigger (Tynn #686). From react-fancy 6.23 the Trigger renders
+                          * no wrapper: it joins its className onto its child, here the Tooltip, which keeps className for its
+                          * bubble. A class on the Trigger made the bubble no-drag and left the button in the drag region, so the
+                          * OS took the click and the host picker never opened.
+                          */}
+                        <Popover.Trigger>
                             <Tooltip content={CONNECT_LABEL} placement="bottom">
                                 <Button variant="ghost" size="xs" labelClassName="contents"
                                     type="button"
                                     data-system-icon="Connect"
                                     aria-label={CONNECT_LABEL}
-                                    className={`flex size-6 items-center justify-center rounded-md hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)] ${connectOpen ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'}`}
+                                    className={`[-webkit-app-region:no-drag] flex size-6 items-center justify-center rounded-md hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)] ${connectOpen ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'}`}
                                 >
                                     <Icon name="monitor" size="sm" />
                                 </Button>
