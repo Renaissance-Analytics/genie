@@ -1,14 +1,19 @@
 <#
 Tynn #671, opt-in BEFORE/AFTER job, Windows PowerShell 5.1. TEST VM ONLY.
 Prepare the normal unit prerequisites first: scripts/ci/windows.ps1 -Only deps,electron-binary,unit-build
-Then run this script with GENIE_TEST_MACHINE=1. Optional environment:
+Run in genie's LOGGED-ON session, never directly over SSH. The Azure job uses:
+  In-Session scripts/measure/unit-disk-windows.ps1 85
+That launcher passes no arguments or SSH environment. Defaults work for BEFORE; optional environment must be set
+INSIDE a logged-on wrapper script for overrides (including phase=after), not on the SSH side:
   GENIE_MEASURE671_PHASE=before|after  (default before)
   GENIE_MEASURE671_OUT=<new artifact directory> (default ci-out/measure671-<phase>-<timestamp>)
   GENIE_MEASURE671_CANDIDATES=<semicolon-separated test paths> (default candidates below)
   GENIE_MEASURE671_SKIP_FULL=1 (candidate probe only; NOT the complete BEFORE/AFTER job)
 
 Each candidate runs ALONE, with the normal 30 s Windows budgets, then the unchanged full unit suite runs ONCE at
-normal concurrency. Nothing patches fs, disables sync, edits test fixtures, or changes the test runner configuration.
+normal concurrency. The existing >512 MiB public-SDK file is always first: it must pass, reveal a readable worker,
+and account for >=512 MiB with no discovery errors, or the job stops before doing any more measurement.
+Nothing patches fs, disables sync, edits test fixtures, or changes the test runner configuration.
 The existing machine/proc samplers run beside the full suite. slow-tests.mjs supplies the existing outside-test
 time estimate (setup + hooks + import), NOT an exact isolated hook duration. Verbose and JSON reports are kept.
 
@@ -47,6 +52,9 @@ if ($env:GENIE_MEASURE671_CANDIDATES) { $candidates = @($env:GENIE_MEASURE671_CA
 foreach ($candidate in $candidates) {
     if ($candidate -notmatch '^test/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+\.test\.tsx?$' -or -not (Test-Path -LiteralPath $candidate)) { throw "Invalid candidate test path: $candidate" }
 }
+# One real gauge control, reused as its candidate measurement: no additional large fixture or test-runtime seam.
+$gaugeCandidate = 'test/prism-harness-0103.test.ts'
+$candidates = @($gaugeCandidate) + @($candidates | Where-Object { $_ -ne $gaugeCandidate } | Select-Object -Unique)
 
 # Query-only Windows API, in the OBSERVER process; no code injected into Vitest or its children.
 Add-Type -TypeDefinition @'
@@ -82,7 +90,7 @@ function Observe-Process($rows, [int]$processId, [string]$kind) {
     $ok = $handle -ne [IntPtr]::Zero -and [Genie671.ProcessIo]::GetProcessIoCounters($handle, [ref]$io)
     $rows[$processId] = [pscustomobject]@{
         id = $processId; kind = $kind; handle = $handle; first = [double]$io.WriteBytes; last = [double]$io.WriteBytes
-        readable = $ok; final = $false; done = $false; error = $(if ($ok) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() })
+        readable = $ok; final = $false; done = $false; exitCode = $null; error = $(if ($ok) { 0 } else { [Runtime.InteropServices.Marshal]::GetLastWin32Error() })
     }
 }
 function Read-ProcessIo($row) {
@@ -92,6 +100,7 @@ function Read-ProcessIo($row) {
     else { $row.error = [Runtime.InteropServices.Marshal]::GetLastWin32Error() }
     [uint32]$processExit = 259
     if ([Genie671.ProcessIo]::GetExitCodeProcess($row.handle, [ref]$processExit) -and $processExit -ne 259) {
+        $row.exitCode = $processExit
         $row.final = [Genie671.ProcessIo]::GetProcessIoCounters($row.handle, [ref]$io)
         if ($row.final) { $row.last = [double]$io.WriteBytes }
         $row.done = $true
@@ -106,29 +115,45 @@ function Measure-Run([string]$label, [string]$candidate, [int]$index) {
     $rows = @{}
     $samples = New-Object 'System.Collections.Generic.List[object]'
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    $bornAfter = (Get-Date).AddSeconds(-1)
     $startEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $run = Start-Process -FilePath $node -ArgumentList $arguments -WorkingDirectory $repo -PassThru -WindowStyle Hidden -RedirectStandardOutput "$stem.stdout.log" -RedirectStandardError "$stem.stderr.log"
     Observe-Process $rows $run.Id 'cli'
     $lastMs = 0.0; $lastBytes = 0.0; $peak = 0.0; $discoveryErrors = 0
+    $discoveryMessages = New-Object 'System.Collections.Generic.List[object]'
+    $discoveryKeys = @{}
     try {
         do {
             # Only Node/Electron descendants of THIS run; never include another agent's Node processes. Keep ancestor IDs
             # for children already discovered even if their parent has exited between samples.
             try {
-                $live = @(Get-CimInstance Win32_Process -Filter "Name='node.exe' OR Name='electron.exe'" -Property ProcessId,ParentProcessId,CommandLine,CreationDate)
+                $discoveryStage = 'query'
+                $live = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='node.exe' OR Name='electron.exe'" -Property ProcessId,ParentProcessId,CommandLine -ErrorAction Stop)
+                $discoveryStage = 'walk-owned-tree'
                 do {
                     $added = $false
                     foreach ($p in $live) {
                         $processId = [int]$p.ProcessId
-                        if (-not $rows.ContainsKey($processId) -and $rows.ContainsKey([int]$p.ParentProcessId) -and $p.CreationDate -ge $bornAfter) {
+                        # Ancestry starts at the freshly launched Node PID. CreationDate conversion is unnecessary
+                        # and can discard a whole query result on providers with a different datetime representation.
+                        if (-not $rows.ContainsKey($processId) -and $rows.ContainsKey([int]$p.ParentProcessId)) {
                             $kind = if ($p.CommandLine -match '[/\\]vitest[/\\]dist[/\\]workers[/\\](?:vmF|f)orks\.js') { 'worker' } else { 'other-child' }
                             Observe-Process $rows $processId $kind
                             $added = $true
                         }
                     }
                 } while ($added)
-            } catch { $discoveryErrors += 1 }
+            } catch {
+                $discoveryErrors += 1
+                $message = $_.Exception.Message
+                $message = $message.Substring(0, [math]::Min(2048, $message.Length))
+                $detail = [pscustomobject]@{ stage = $discoveryStage; errorId = $_.FullyQualifiedErrorId; type = $_.Exception.GetType().FullName; line = $_.InvocationInfo.ScriptLineNumber; message = $message }
+                $key = $detail | ConvertTo-Json -Compress
+                if (-not $discoveryKeys.ContainsKey($key) -and $discoveryMessages.Count -lt 10) {
+                    $discoveryKeys[$key] = $true
+                    $discoveryMessages.Add($detail)
+                    Write-Warning "MEASURE671 discovery failure: $key"
+                }
+            }
             foreach ($row in @($rows.Values)) { Read-ProcessIo $row }
             $nowMs = $watch.Elapsed.TotalMilliseconds
             $workerBytes = [double](($rows.Values | Where-Object { $_.kind -eq 'worker' } | Measure-Object -Property last -Sum).Sum)
@@ -149,17 +174,21 @@ function Measure-Run([string]$label, [string]$candidate, [int]$index) {
         $unreadableWorkers = @($workers | Where-Object { -not $_.readable }).Count
         $notFinal = @($rows.Values | Where-Object { -not $_.final }).Count
         $summary = [pscustomobject]@{
-            phase = $phase; label = $label; exitCode = $run.ExitCode; seconds = [math]::Round($watch.Elapsed.TotalSeconds, 2)
+            # PowerShell 5.1 Start-Process/Refresh can leave Process.ExitCode null after exit. The retained native
+            # handle already supplies the exit code; never silently interpret null as a successful run.
+            phase = $phase; label = $label; exitCode = $rows[$run.Id].exitCode; seconds = [math]::Round($watch.Elapsed.TotalSeconds, 2)
             startEpochMs = $startEpoch; endEpochMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
             workersObserved = $workers.Count; workerWriteBytes = $(if ($workers.Count) { ($workers | Measure-Object -Property last -Sum).Sum } else { $null })
             cliWriteBytes = $rows[$run.Id].last; otherChildWriteBytes = ($rows.Values | Where-Object { $_.kind -eq 'other-child' } | Measure-Object -Property last -Sum).Sum
             peakWorkerWriteBytesPerSecond = [math]::Round($peak); unreadableProcesses = $unreadable; unreadableWorkers = $unreadableWorkers; missingFinalReads = $notFinal; discoveryErrors = $discoveryErrors
+            discoveryMessages = $discoveryMessages.ToArray()
             coverage = 'OS transfer bytes including IPC; Node/Electron ancestry only; short-lived children may be missed; missing final reads are lower bounds; rates sampled at discovery, not exact disk bursts'
         }
         $samples | Export-Csv -NoTypeInformation -Encoding UTF8 -Path "$stem.io.csv"
-        $rows.Values | Select-Object id,kind,first,last,readable,final,done,error | Export-Csv -NoTypeInformation -Encoding UTF8 -Path "$stem.processes.csv"
-        $summary | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath "$stem.summary.json"
-        Write-Host ('MEASURE671 ' + ($summary | ConvertTo-Json -Compress))
+        $rows.Values | Select-Object id,kind,first,last,readable,final,done,exitCode,error | Export-Csv -NoTypeInformation -Encoding UTF8 -Path "$stem.processes.csv"
+        $discoveryMessages | Export-Csv -NoTypeInformation -Encoding UTF8 -Path "$stem.discovery.csv"
+        $summary | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 -LiteralPath "$stem.summary.json"
+        Write-Host ('MEASURE671 ' + ($summary | ConvertTo-Json -Depth 5 -Compress))
         & $node scripts/ci/slow-tests.mjs $json "$stem.slow-tests.tsv" | Tee-Object -FilePath "$stem.slow-tests.log" | Write-Host
         return $summary
     } finally {
@@ -175,7 +204,16 @@ $index = 0
 foreach ($candidate in $candidates) {
     $index += 1
     $label = [IO.Path]::GetFileNameWithoutExtension($candidate)
-    $summaries.Add((Measure-Run $label $candidate $index))
+    $candidateSummary = Measure-Run $label $candidate $index
+    $summaries.Add($candidateSummary)
+    if ($index -eq 1) {
+        if ($candidateSummary.exitCode -ne 0 -or $candidateSummary.workersObserved -lt 1 -or $candidateSummary.workerWriteBytes -lt 512MB -or $candidateSummary.unreadableWorkers -gt 0 -or $candidateSummary.discoveryErrors -gt 0) {
+            $summaries | Export-Csv -NoTypeInformation -Encoding UTF8 -Path (Join-Path $out 'runs.csv')
+            Write-Output "MEASURE671 GAUGE FAIL: successful >512 MiB candidate with a readable worker required; inspect its summary/discovery logs. Remaining candidates/full suite were NOT run. artifacts=$out"
+            exit 1
+        }
+        Write-Output "MEASURE671 GAUGE PASS workers=$($candidateSummary.workersObserved) workerWriteBytes=$($candidateSummary.workerWriteBytes) exitCode=$($candidateSummary.exitCode)"
+    }
 }
 if ($env:GENIE_MEASURE671_SKIP_FULL -ne '1') {
     $machine = $null; $processes = $null

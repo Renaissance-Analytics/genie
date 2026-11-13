@@ -4,6 +4,18 @@ Static inventory at `d7c0a7d2`, before changes. These are candidates, **not meas
 `unit-disk-windows.ps1` measures them individually, then the whole suite once. Repeat the identical job after each
 accepted reduction. Keep its complete output directory, including failed runs and coverage warnings.
 
+Run on **Standard_D16ads_v5**, in genie's logged-on session with the Azure `In-Session` helper. It passes no SSH
+environment or arguments: defaults are sufficient for BEFORE. AFTER overrides must be set inside a logged-on
+wrapper script. The first SSH run `1113-120023-50f30b` at `ab628c45` is **unusable**: zero observed workers,
+unreported discovery exceptions, null process exit codes, and identity-dependent full-suite failures under SSH.
+Do not use it as a baseline or compare optimizations against it.
+
+The existing public-SDK >512 MiB case is always the first candidate and the gauge's positive control. A successful
+test run, at least one readable worker, >=512 MiB of worker transfer counts and zero discovery errors are required
+before the remaining candidates/full suite run. It reuses the same candidate, writing no extra fixture. Discovery
+exception stage, type, ID, line and message are retained (ten distinct messages maximum). No timestamps are used
+to filter the newly launched process's ancestry; native retained-handle exit status is recorded explicitly.
+
 | Candidate | Evidence / reason to measure |
 | --- | --- |
 | `test/prism-harness-0103.test.ts:43` | Streams JSONL until 540 MiB. Its public-SDK claim is the Node string-size regression above 512 MiB; keep that boundary proof. |
