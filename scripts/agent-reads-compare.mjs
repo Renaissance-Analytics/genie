@@ -16,10 +16,11 @@ const CONTROL_MIN_MS = 80;
 
 const RATIO_ROWS = [['m4_5000', 'ms'], ['m4_20000', 'ms'], ['m5', 'windowCpuMs'], ['m5', 'hostCpuMs'], ['m6', 'readMs']];
 const GAP_ROWS = [['m4_5000', 'maxGapMs'], ['m4_20000', 'maxGapMs'], ['m5', 'maxGapMs'], ['m6', 'maxGapMs']];
+const CONTROL_ROWS = [['m4_5000', 'ms'], ['m4_20000', 'ms'], ['m5', 'windowCpuMs'], ['m6', 'readMs']];
 
 const number = (run, group, key) => { const v = run?.[group]?.[key]; return typeof v === 'number' && Number.isFinite(v) ? v : null; };
 
-/** Numeric verdict only: acquisition, run identity and per-measure controls belong to the opt-in VM job. */
+/** Numeric verdicts for measurements and their controls; actual acquisition and run identity belong to the opt-in VM job. */
 export function comparePairedRuns(report) {
     const pairs = Array.isArray(report?.pairs) ? Array.from(report.pairs) : [];
     const enough = pairs.length >= 3;
@@ -65,6 +66,16 @@ export function comparePairedRuns(report) {
     });
     const heap = maximum(heaps);
     rows.push({ row: 'm5.heapAfterGc', base: null, value: heap, limit: RATIO, pass: heap !== null && heap <= RATIO });
+    for (const [group, metric] of CONTROL_ROWS) {
+        const ratios = pairs.map((pair) => {
+            const ipc = pair?.ipc?.measureControls, door = pair?.door?.measureControls;
+            if (ipc?.[group]?.metric !== metric || door?.[group]?.metric !== metric) return null;
+            return ratio(number(ipc, group, 'value'), number(door, group, 'value'));
+        });
+        const value = complete(ratios) ? median(ratios) : null;
+        // Extra work must cross the ordinary failure bound: detecting it validates the gauge, never the candidate.
+        rows.push({ row: `control.${group}`, base: null, value, limit: RATIO, pass: value !== null && value > RATIO });
+    }
     return rows;
 }
 
