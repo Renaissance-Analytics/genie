@@ -133,9 +133,10 @@ export function mainErrorLogLine(recorded: Recorded): string {
     return `${head}: ${e.message}${e.topFrame ? ` ${e.topFrame}` : ''} — seen ${e.count} times`;
 }
 
-/** The Deck's title for one error: what happened, that Genie kept running, how many times. */
+/** The Deck's title; internal failures keep their technical details in the log (#636). */
 export function mainErrorTitle(e: MainError): string {
     // Its first line is the title; the lines after it are read when the row is opened (core/deck.ts deckBody).
+    if (e.kind === 'uncaught-exception' || e.kind === 'unhandled-rejection') return 'Genie recovered from an internal error.';
     if (e.kind === 'host-copy') return (e.settled ? [HOST_COPY_WORDS.madeTitle, ...HOST_COPY_WORDS.madeText] : [HOST_COPY_WORDS.title, ...HOST_COPY_WORDS.text]).join('\n');
     const times = e.count === 1 ? '' : ` — ${e.count} times`;
     // prism-acp 0.21's supervisor could not be built or verified: its drivers refuse to start rather than run uncontained.
@@ -148,6 +149,7 @@ export function mainErrorTitle(e: MainError): string {
 
 const DISMISS = [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' as const }];
 const OPEN_LOG = { id: 'open-log', label: 'Open the log', tone: 'neutral' as const };
+const REPORT = { id: 'report', label: 'Report', tone: 'neutral' as const };
 const RETRY = { id: 'retry', label: 'Try again', tone: 'neutral' as const };
 
 /**
@@ -257,9 +259,10 @@ export class MainErrorBook {
             priority: 'high',
             at: e.firstAt,
             // Actions that do something (Tynn #693): the copy made now, the log opened; then Dismiss.
-            answer: { kind: 'inline', options: e.kind === 'host-copy' && !e.settled ? [RETRY, OPEN_LOG, ...DISMISS] : POINTS_AT_LIFECYCLE_LOG.includes(e.kind) ? [OPEN_LOG, ...DISMISS] : DISMISS },
+            answer: { kind: 'inline', options: e.kind === 'uncaught-exception' || e.kind === 'unhandled-rejection' ? [OPEN_LOG, REPORT, ...DISMISS] : e.kind === 'host-copy' && !e.settled ? [RETRY, OPEN_LOG, ...DISMISS] : POINTS_AT_LIFECYCLE_LOG.includes(e.kind) ? [OPEN_LOG, ...DISMISS] : DISMISS },
             forwardedFrom: null,
             ...(e.kind === 'host-copy' && !e.settled ? { detail: e.message } : {}),
+            ...(e.kind === 'uncaught-exception' || e.kind === 'unhandled-rejection' ? { detail: `Genie kept running, but an operation may not have finished.${e.count > 1 ? ` This happened ${e.count} times.` : ''} Open the log for technical details. If this affected your work, choose Report to describe what happened.` } : {}),
         }));
         if (this.#replaced > 0) {
             items.push({
