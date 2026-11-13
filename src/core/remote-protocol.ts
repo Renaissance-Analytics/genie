@@ -419,7 +419,8 @@ export type WireMessage =
      * window's Take Over window, for that one terminal. Beside `auth`, never in it: a saved hello's auth is rewritten.
      */
     | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile; companion?: string }
-    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string; protocol?: number; build?: string }
+    /** `readonly` (Tynn #688): the host's word that this connection may only read; absent from an older host. */
+    | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; readonly?: boolean; token?: string; protocol?: number; build?: string }
     | { kind: 'refused'; reason: string }
     /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
     | { kind: 'pairing'; host: string; expiresAt: number }
@@ -502,15 +503,25 @@ export function remoteBadge(host: string): string {
     return `● REMOTE — ${host}`;
 }
 
-/** What a guest with a share link to one workspace sees of the estate. */
+/** What the workstation's signal strip reads to a guest of one workspace: nothing of the workstation's (Tynn #688). */
+const QUIET_SIGNALS = Object.freeze({ flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false });
+
+/**
+ * What a guest with a share link to one workspace sees of the estate. ALLOW-LIST (Tynn #688): its workspace's agents,
+ * workspace, hibernated row and Deck items, a quiet signal strip and the workstation's name — never the Genie OS agent,
+ * the workstation's own counts (every workspace's flows and mail, its GitHub), or the host's safe-mode and crash notices.
+ * A field added to the snapshot later is not sent to a guest until it is placed here.
+ */
 export function filterSnapshotForWorkspace<T extends { agents?: readonly { workspaceId: string }[]; workspaces?: readonly { id: string }[] | null; hibernatedWorkspaces?: readonly { id: string }[]; deckItems?: readonly { workspaceId: string | null }[] | null }>(snapshot: T, workspaceId: string): T {
+    const s = snapshot as T & { signals?: unknown; workstation?: unknown };
     return {
-        ...snapshot,
-        ...(snapshot.agents ? { agents: snapshot.agents.filter((a) => a.workspaceId === workspaceId) } : {}),
-        ...(snapshot.workspaces ? { workspaces: snapshot.workspaces.filter((w) => w.id === workspaceId) } : {}),
-        ...(snapshot.hibernatedWorkspaces ? { hibernatedWorkspaces: snapshot.hibernatedWorkspaces.filter((w) => w.id === workspaceId) } : {}),
-        ...(snapshot.deckItems ? { deckItems: snapshot.deckItems.filter((d) => d.workspaceId === workspaceId) } : {}),
-    };
+        ...(s.agents ? { agents: s.agents.filter((a) => a.workspaceId === workspaceId) } : {}),
+        ...(s.workspaces !== undefined ? { workspaces: s.workspaces === null ? null : s.workspaces.filter((w) => w.id === workspaceId) } : {}),
+        ...(s.hibernatedWorkspaces ? { hibernatedWorkspaces: s.hibernatedWorkspaces.filter((w) => w.id === workspaceId) } : {}),
+        ...(s.deckItems !== undefined ? { deckItems: s.deckItems === null ? null : s.deckItems.filter((d) => d.workspaceId === workspaceId) } : {}),
+        ...(s.signals !== undefined ? { signals: { ...QUIET_SIGNALS } } : {}),
+        ...(s.workstation !== undefined ? { workstation: s.workstation } : {}),
+    } as unknown as T;
 }
 
 /** One end of a connection: text frames out, text frames in, a close that fires once on the peer. */
