@@ -105,6 +105,7 @@ import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 import { useFilesPopped } from './use-files-popped.js';
+import { moveFilePanel } from './file-window-action.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
 import type { AppInboxCardProps, AppInboxCardState } from './components/AppInboxCard.js';
@@ -2183,15 +2184,13 @@ function DesktopApp({ bridge }: AppProps) {
             dockNotice={dockNotice}
             onDismissDockNotice={() => setDockNotice(null)}
             onFilesDirtyChange={setFilesDirty}
-            onPopOutFiles={filesWindows ? (id) => {
-                void filesWindows.popOut(id);
+            onPopOutFiles={filesWindows ? (id) => moveFilePanel(() => filesWindows.popOut(id), () => {
                 // The route says where the panel is: on this workspace, `?files=detached`.
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && !parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', file: null, filter: null, detached: true }));
-            } : undefined}
-            onBringBackFiles={(id) => {
-                void filesWindows?.bringBack(id);
+            }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id })) : undefined}
+            onBringBackFiles={(id) => moveFilePanel(() => filesWindows?.bringBack(id), () => {
                 if (parsed.surface === 'workspace' && parsed.workspaceId === id && parsed.detached) navigate(formatRoute({ ...parsed, panel: 'files', detached: false }));
-            }}
+            }, (reason) => setDockNotice({ kind: 'refused', reason, workspaceId: id }))}
             onPauseAgent={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
             onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
             // Attachments (§6.4) are the HOST's files, picked over its disk (Tynn #835).
