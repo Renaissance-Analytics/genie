@@ -54,7 +54,46 @@ describe('failed update checks and downloads remain actionable (#670)', () => {
     it('an initial failed check has an error window and a working Retry even without a known version', async () => {
         const w = rig(); w.checkWith(async () => { throw new Error(CHECK_REASON); });
         await w.host.check();
-        expect(w.host.state()).toMatchObject({ phase: 'error', version: null });
+        expect(w.host.state()).toMatchObject({ phase: 'error', version: null, userInitiated: true });
+        expectRetryWindow(w.host, CHECK_REASON);
+        expect(w.calls).toEqual({ check: 1, download: 0, install: 0 });
+    });
+
+    it('a background scheduled check and its failure stay quiet before any user action', async () => {
+        const w = rig();
+        let rejectCheck: (error: Error) => void = () => {};
+        w.checkWith(() => new Promise((_resolve, reject) => { rejectCheck = reject; }));
+        const scheduled: Array<() => void> = [];
+        const stop = w.host.startAutoCheck((fn) => { scheduled.push(fn); return () => {}; });
+        let failed: () => void = () => {};
+        const failure = new Promise<void>((resolve) => { failed = resolve; });
+        const unlisten = w.host.onChange((s) => { if (s.phase === 'error') failed(); });
+        scheduled[0]!();
+        try {
+            expect(w.host.state().phase).toBe('checking');
+            expect(updateChip(w.host.state())).toBeNull();
+            rejectCheck(new Error(CHECK_REASON)); await failure;
+            expect(w.host.state().phase).toBe('error');
+            expect(updateChip(w.host.state())).toBeNull();
+        } finally {
+            rejectCheck(new Error(CHECK_REASON)); await failure;
+            stop(); unlisten();
+        }
+        expect(w.calls).toEqual({ check: 1, download: 0, install: 0 });
+    });
+
+    it('a person joining an in-flight background check gets its failure and Retry without a second library call', async () => {
+        const w = rig();
+        let rejectCheck: (error: Error) => void = () => {};
+        w.checkWith(() => new Promise((_resolve, reject) => { rejectCheck = reject; }));
+        const scheduled: Array<() => void> = [];
+        const stop = w.host.startAutoCheck((fn) => { scheduled.push(fn); return () => {}; });
+        scheduled[0]!();
+        const joined = w.host.check();
+        try {
+            expect(w.host.state()).toMatchObject({ phase: 'checking', version: null, userInitiated: true });
+        } finally { rejectCheck(new Error(CHECK_REASON)); await joined; stop(); }
+        expect(w.host.state()).toMatchObject({ phase: 'error', version: null, userInitiated: true });
         expectRetryWindow(w.host, CHECK_REASON);
         expect(w.calls).toEqual({ check: 1, download: 0, install: 0 });
     });

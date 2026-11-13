@@ -12,7 +12,7 @@ import { TitleBar } from '../src/renderer/components/TitleBar.js';
  * install), the progress while it downloads, nothing while there is nothing to act on. The Deck's signal strip no longer
  * carries it — one notice, in one place.
  */
-const u = (phase: string, version: string | null = '2.0.0-beta.20', percent: number | null = null) => ({ phase, version, percent, error: null, checkedAt: null }) as never;
+const u = (phase: string, version: string | null = '2.0.0-beta.20', percent: number | null = null, userInitiated = false) => ({ phase, version, percent, error: null, checkedAt: null, userInitiated }) as never;
 const bar = (update: ReturnType<typeof updateChip>) =>
     renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'alphar', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} update={update} onOpenUpdate={() => {}} />);
 
@@ -24,12 +24,14 @@ describe('the chip', () => {
         expect(updateChip(u('installing'))).toEqual({ phase: 'installing', label: 'Installing Genie 2.0.0-beta.20…', action: null, version: '2.0.0-beta.20' });
     });
 
-    it('idle, none, unknown offers and no updater stay silent; checking and errors keep the update door', () => {
+    it('idle, none, unknown offers and background checks stay silent; user actions keep the update door', () => {
         for (const p of ['idle', 'none']) expect(updateChip(u(p))).toBeNull();
         expect(updateChip(u('available', null))).toBeNull();
         expect(updateChip(null)).toBeNull();
-        expect(updateChip(u('checking', null))).toMatchObject({ phase: 'checking', version: null, action: null });
-        expect(updateChip(u('error', null))).toMatchObject({ phase: 'error', version: null, action: 'update-check' });
+        expect(updateChip(u('checking', null))).toBeNull();
+        expect(updateChip(u('error', null))).toBeNull();
+        expect(updateChip(u('checking', null, null, true))).toMatchObject({ phase: 'checking', version: null, action: null });
+        expect(updateChip(u('error', null, null, true))).toMatchObject({ phase: 'error', version: null, action: 'update-check' });
     });
 });
 
