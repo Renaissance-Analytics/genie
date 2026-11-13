@@ -156,6 +156,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
 
     const pending = new Map<number, (r: Result) => void>();
     let nextId = 0;
+    let closed = false;
     const events = new Map<string, Set<(payload: unknown) => void>>();
     const on = (channel: string, listener: (payload: unknown) => void): (() => void) => {
         const set = events.get(channel) ?? new Set();
@@ -219,6 +220,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         }
     });
     transport.onClose(() => {
+        closed = true;
         filesWatches?.dispose();
         terminalClient?.dispose();
         // A refused handshake arrives as a close with no welcome and no refused frame: say so, once.
@@ -234,9 +236,18 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     const refused = (reason: string): void => setState({ lastRefusal: reason, needsBaton: reason.endsWith(BATON_REFUSAL) });
     const call = (method: RemoteMethod | ControlMethod, ...args: unknown[]): Promise<Result> =>
         new Promise<Result>((resolve) => {
+            // A closed transport may silently drop writes. Never leave a new call waiting on it (#636).
+            if (closed) { resolve({ ok: false, reason: 'the connection closed' }); return; }
             const id = ++nextId;
+            const frame = JSON.stringify({ kind: 'call', id, method, args });
             pending.set(id, resolve);
-            transport.send(JSON.stringify({ kind: 'call', id, method, args }));
+            try { transport.send(frame); }
+            catch (error) {
+                pending.delete(id);
+                // Delivery is uncertain: refuse this request, never replay it. Reads still reject in read() below.
+                try { console.error(`[remote] Could not send ${method}.`, error); } catch { /* Reporting must not reject the call. */ }
+                resolve({ ok: false, reason: 'the connection closed' });
+            }
         }).then((r) => {
             // Every write refused for lack of the baton is kept, whatever path asked: no dead click (Tynn #529).
             if (!r.ok && r.reason.endsWith(BATON_REFUSAL)) refused(r.reason);
