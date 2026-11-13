@@ -22,9 +22,11 @@ import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createHeapSampler } from './agent-reads-heap.mjs';
 import { busyWorkProbe, ledgerProbe, snapshotProbe } from './agent-reads-probes.mjs';
-import { WIN, alive, attach, check, cleanQuit, failures, finish, gone, hostPid, killHard, launch, makeHome, readOr, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
+import { readMeasurementIdentity } from './agent-reads-process.mjs';
+import { WIN, alive, attach, check, cleanQuit, failures, finish, gone, hostPid, launch, makeHome, readOr, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
 
 refuseOffTestMachines('agent-reads-measure');
 
@@ -32,6 +34,16 @@ const arg = (name, fallback) => { const hit = process.argv.find((a) => a.startsW
 const MODE = arg('mode', 'door');
 const OUT = arg('out', `agent-reads-${MODE}.json`);
 if (!['ipc', 'door', 'door-revision'].includes(MODE)) { console.error(`unknown --mode=${MODE}`); process.exit(2); }
+
+// Check the child's actual checkout/machine before creating any home or launching anything. Only the nonce is supplied.
+const request = process.env.AGENT_READS_REQUEST ? JSON.parse(process.env.AGENT_READS_REQUEST) : null;
+const identity = readMeasurementIdentity(request?.identity?.runId ?? randomUUID());
+if (request !== null) {
+    for (const field of ['build', 'vmId', 'platform', 'runId']) {
+        if (identity[field] !== request.identity?.[field]) throw new Error(`sampler identity mismatch: ${field}`);
+    }
+    if (request.mode !== MODE || !Number.isSafeInteger(request.pairIndex) || request.pairIndex < 0) throw new Error('sampler mode or pair index does not match its request');
+}
 
 // Its own ports per run: a window left by an earlier run on the same port answers for this one, with its home already deleted.
 const PORT = Number(process.env.AGENT_READS_CDP_PORT ?? 9400 + (process.pid % 200) * 2);
@@ -46,6 +58,11 @@ const workBudget = (value) => {
 };
 
 const h = makeHome('agent-reads');
+// An inherited explicit home/binary must not reconnect this isolated measurement to another host or a real provider.
+h.env.GENIE_HOME = h.genie;
+h.env.GENIE2_CODEX_BINARY = join(process.cwd(), 'scripts', 'stub-codex.mjs');
+delete h.env.GENIE_AGENT_READS;
+delete h.env.GENIE_SNAPSHOT_PUSH;
 if (MODE === 'ipc') h.env.GENIE_AGENT_READS = 'ipc';
 if (MODE === 'door-revision') h.env.GENIE_SNAPSHOT_PUSH = 'revision';
 script(0, 0);
@@ -75,14 +92,52 @@ const windowCpu = (inspector) => inspector.evaluate(`(() => {
     return (cpu.user + cpu.system) / 1000 + tabs;
 })()`, 15_000);
 
-const cleanups = [];
-const done = finish('AGENT READS MEASURE', h, cleanups);
+// This sampler verifies its own cleanup BEFORE writing the receipt. Shared finish stays best-effort for its other users.
+const done = finish('AGENT READS MEASURE', h, []);
 let session = null;
+let launched = false, ownedWindowPid = null, ownedHostPid = null;
 /** Written whatever happens: a row that fails still leaves everything measured up to it, and every first read. */
-const result = { mode: MODE, platform: process.platform, finished: false, measureControls: {} };
+const result = { identity, samplerPid: process.pid, pairIndex: request?.pairIndex ?? 0, mode: MODE, platform: process.platform, finished: false, cleanup: { complete: false }, measureControls: {} };
 const writeResult = () => writeFileSync(OUT, `${JSON.stringify(result, null, 2)}\n`);
 /** How the agents started and ended, from the host's own lifecycle log: what a start that never came needs read. */
 const agentLifecycle = () => readOr(h.lifecycle).split(/\r?\n/).filter((l) => /kind=agent|agent .*(start|refus|fail)|host stall|stall main/.test(l)).slice(-80);
+
+/** These two roots belong to the fresh isolated home; both are launched as detached groups on Linux. */
+async function cleanupOwned() {
+    if (!launched) return { complete: true, processes: [] };
+    // A successful quit can remove host.json. Keep the PID captured while attached; on failed attach, read our own home.
+    const roots = [['host', ownedHostPid ?? hostPid(h)], ['window', ownedWindowPid]];
+    const seen = new Set([process.pid]);
+    const processes = [];
+    for (const [role, pid] of roots) {
+        const entry = { role, pid, gone: false, errors: [] };
+        processes.push(entry);
+        if (!Number.isSafeInteger(pid) || pid < 1 || seen.has(pid)) {
+            entry.errors.push('missing, duplicate or self PID');
+            check(false, `cleanup ${role}: identifiable owned process`, String(pid));
+            continue;
+        }
+        seen.add(pid);
+        try {
+            if (alive(pid)) {
+                if (WIN) execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 15_000, windowsHide: true });
+                else process.kill(-pid, 'SIGKILL');
+            }
+        } catch (error) {
+            entry.errors.push(error instanceof Error ? error.message : String(error));
+            check(false, `cleanup ${role}: stop owned process`, entry.errors.at(-1));
+        }
+        // Confirm each root independently even after another root's termination failed; never skip the remaining cleanup.
+        try {
+            entry.gone = await gone(pid, 10_000);
+            check(entry.gone, `cleanup ${role}: owned process exited`, String(pid));
+        } catch (error) {
+            entry.errors.push(error instanceof Error ? error.message : String(error));
+            check(false, `cleanup ${role}: confirm exit`, entry.errors.at(-1));
+        }
+    }
+    return { complete: processes.every((entry) => entry.gone && entry.errors.length === 0), processes };
+}
 
 /** Add an agent, start it, give it its turn; `rows` long before it streams at `rate`. */
 async function agentThat(cdp, workspaceId, name, rows, rate) {
@@ -108,15 +163,19 @@ async function main() {
     const taken = await fetch(`http://127.0.0.1:${PORT}/json/version`).then(() => true, () => false);
     if (taken) throw new Error(`something already answers on the debugging port ${PORT}: it would be measured instead of this run`);
     const app = launch(h, { port: PORT, inspect: INSPECT, label: MODE });
-    // Nothing of this run outlives it: the next mode's numbers must be its own.
-    cleanups.push(async () => {
-        for (const pid of [hostPid(h), app.child.pid]) if (typeof pid === 'number' && alive(pid)) { killHard(pid); await gone(pid, 10_000); }
-    });
+    launched = true;
+    ownedWindowPid = app.child.pid;
+    result.launchedPid = ownedWindowPid;
+    writeResult(); // Partial evidence cannot pass the parent's finished/cleanup checks.
+    if (!Number.isSafeInteger(ownedWindowPid) || ownedWindowPid < 1 || ownedWindowPid === process.pid) throw new Error('no identifiable owned window PID');
     session = await attach({ port: PORT, inspect: INSPECT, label: MODE });
+    ownedHostPid = hostPid(h); // Capture before a later natural quit can remove the record.
+    result.hostPid = ownedHostPid;
+    if (!Number.isSafeInteger(ownedHostPid) || ownedHostPid < 1 || ownedHostPid === process.pid || ownedHostPid === ownedWindowPid) throw new Error('no identifiable owned host PID');
     const { cdp, inspector } = session;
     result.windowPid = session.windowPid;
     result.launchedPid = app.child.pid;
-    check(session.windowPid === app.child.pid, 'the window being measured is the one this run launched', `window ${session.windowPid}, launched ${app.child.pid}`);
+    if (!check(session.windowPid === app.child.pid, 'the window being measured is the one this run launched', `window ${session.windowPid}, launched ${app.child.pid}`)) throw new Error('debugging port belongs to another window');
     await cdp.evaluate(GAUGE, 5_000);
     // What the first reads really answered, kept in the result: a snapshot that is empty at first is a finding, not a wait.
     const firstReads = [];
@@ -160,7 +219,7 @@ async function main() {
     const streaming = await agentThat(cdp, workspaceId, 'm5', 200, 50);
     await cdp.evaluate(`(() => { window.__updates = 0; window.__off = window.genieTest.subscribeAgent(${JSON.stringify(streaming)}, () => { window.__updates += 1; }); return true; })()`, 10_000);
     await sleep(5_000);
-    const host = hostPid(h);
+    const host = ownedHostPid;
     const heap = createHeapSampler(cdp);
     await heap.start(); // GC and baseline precede the CPU/gap window, while the watched agent/view stay alive.
     const m5Started = performance.now();
@@ -220,11 +279,18 @@ async function main() {
     await cleanQuit(inspector).catch(() => {});
 }
 
-const ending = (code) => {
-    result.failures = [...failures];
+const ending = async (code) => {
     result.agentLifecycle = agentLifecycle();
+    result.cleanup = await cleanupOwned();
+    if (session) {
+        for (const connection of [session.cdp, session.inspector]) {
+            try { check(await connection.closed(5_000), 'measurement debugger connection closed'); }
+            catch (error) { check(false, 'measurement debugger connection closed', error instanceof Error ? error.message : String(error)); }
+        }
+    }
+    result.failures = [...failures];
     writeResult();
     console.log(`  wrote ${OUT}; agent lifecycle (${result.agentLifecycle.length} lines):\n    ${result.agentLifecycle.map((l) => l.slice(0, 220)).join('\n    ')}`);
-    return done(code);
+    return done(code !== 0 || !result.cleanup.complete || failures.length > 0 ? 1 : 0);
 };
 main().then(() => ending(failures.length === 0 ? 0 : 1), (error) => { check(false, 'the run finished', error instanceof Error ? error.message : String(error)); return ending(1); });
