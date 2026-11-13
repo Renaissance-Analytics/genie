@@ -14,13 +14,16 @@
  *  M5  one agent streaming about 50 events a second for 60 s, watched: window and genie-host CPU, the longest gap, updates/s.
  *  M6  30 agents registered, 3 streaming, for 30 s: snapshot read latency (once a second), pushes/s, the longest gap.
  *
- * The gauge is proven first, in the same run: a deliberate 120 ms block of the page has to show as a gap.
+ * The gap gauge is proven first with a deliberate 120 ms page block. Each measure also records an injected-work
+ * control: real extra page work on the door, compared with the ordinary IPC observation. Control intervals stay
+ * outside ordinary timing, CPU and gap results; the paired comparator requires the controls to detect the slowdown.
  */
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHeapSampler } from './agent-reads-heap.mjs';
+import { busyWorkProbe, ledgerProbe, snapshotProbe } from './agent-reads-probes.mjs';
 import { WIN, alive, attach, check, cleanQuit, failures, finish, gone, hostPid, killHard, launch, makeHome, readOr, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
 
 refuseOffTestMachines('agent-reads-measure');
@@ -37,6 +40,10 @@ const MARKER = join(tmpdir(), 'genie-stub-codex-measure');
 /** What the stub's next turn does (scripts/stub-codex.mjs, MEASURE mode). */
 const script = (rows, rate) => writeFileSync(MARKER, JSON.stringify({ owner: process.pid, rows, rate }));
 const median = (values) => { const s = [...values].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+const workBudget = (value) => {
+    if (!Number.isFinite(value) || value < 0) throw new Error('cannot size a physical control from an invalid observation');
+    return Math.min(60_000, Math.max(250, Math.ceil(value * 2)));
+};
 
 const h = makeHome('agent-reads');
 if (MODE === 'ipc') h.env.GENIE_AGENT_READS = 'ipc';
@@ -72,7 +79,7 @@ const cleanups = [];
 const done = finish('AGENT READS MEASURE', h, cleanups);
 let session = null;
 /** Written whatever happens: a row that fails still leaves everything measured up to it, and every first read. */
-const result = { mode: MODE, platform: process.platform, finished: false };
+const result = { mode: MODE, platform: process.platform, finished: false, measureControls: {} };
 const writeResult = () => writeFileSync(OUT, `${JSON.stringify(result, null, 2)}\n`);
 /** How the agents started and ended, from the host's own lifecycle log: what a start that never came needs read. */
 const agentLifecycle = () => readOr(h.lifecycle).split(/\r?\n/).filter((l) => /kind=agent|agent .*(start|refus|fail)|host stall|stall main/.test(l)).slice(-80);
@@ -94,18 +101,7 @@ async function agentThat(cdp, workspaceId, name, rows, rate) {
 }
 
 /** Subscribe, and time the first whole detail. */
-const openOnce = (cdp, id, rows) => cdp.evaluate(`new Promise((resolve, reject) => {
-    window.__gauge.reset();
-    const started = performance.now();
-    const timer = setTimeout(() => { off(); reject(new Error('no whole detail within 120 s')); }, 120000);
-    const off = window.genieTest.subscribeAgent(${JSON.stringify(id)}, (detail) => {
-        if ((detail?.rows?.length ?? 0) < ${rows}) return;
-        clearTimeout(timer);
-        const ms = performance.now() - started;
-        off();
-        requestAnimationFrame(() => setTimeout(() => resolve({ ms, maxGapMs: window.__gauge.max() }), 0));
-    });
-})`, 130_000);
+const openOnce = (cdp, id, rows, extraWorkMs = 0) => cdp.evaluate(ledgerProbe(id, rows, extraWorkMs), 130_000);
 
 async function main() {
     step('A', `launching, mode ${MODE}`);
@@ -152,7 +148,11 @@ async function main() {
         const id = await agentThat(cdp, workspaceId, `m4-${rows}`, rows, 0);
         const runs = [];
         for (let i = 0; i < 5; i += 1) { runs.push(await openOnce(cdp, id, rows)); await sleep(500); }
-        result[`m4_${rows}`] = { ms: median(runs.map((r) => r.ms)), maxGapMs: Math.max(...runs.map((r) => r.maxGapMs)), runs };
+        const measure = `m4_${rows}`;
+        result[measure] = { ms: median(runs.map((r) => r.ms)), maxGapMs: Math.max(...runs.map((r) => r.maxGapMs)), runs };
+        const extraWorkMs = MODE === 'ipc' ? 0 : workBudget(result[measure].ms);
+        const control = extraWorkMs === 0 ? result[measure] : await openOnce(cdp, id, rows, extraWorkMs);
+        result.measureControls[measure] = { metric: 'ms', value: control.ms, extraWorkMs, maxGapMs: control.maxGapMs };
         await cdp.evaluate(`window.genieTest.stopAgent(${JSON.stringify(id)}); true`, 10_000);
     }
 
@@ -173,6 +173,15 @@ async function main() {
     const memory = await heap.finish();
     result.m5 = { windowCpuMs: after.win - before.win, hostCpuMs: after.host - before.host, maxGapMs: after.gap, elapsedMs, updatesPerSec: (after.updates - before.updates) / (elapsedMs / 1_000), ...memory };
     check(result.m5.updatesPerSec > 0, 'M5 saw updates at all', String(result.m5.updatesPerSec));
+    const extraWorkMs = MODE === 'ipc' ? 0 : workBudget(result.m5.windowCpuMs);
+    let extraCpuMs = 0;
+    if (extraWorkMs > 0) {
+        const cpuBefore = await windowCpu(inspector);
+        await cdp.evaluate(busyWorkProbe(extraWorkMs), extraWorkMs + 5_000);
+        extraCpuMs = await windowCpu(inspector) - cpuBefore;
+    }
+    // Sum two disjoint observed CPU intervals, never a requested budget or a multiplier of the reported result.
+    result.measureControls.m5 = { metric: 'windowCpuMs', value: result.m5.windowCpuMs + extraCpuMs, extraCpuMs, extraWorkMs };
     await cdp.evaluate(`window.__off(); window.genieTest.stopAgent(${JSON.stringify(streaming)}); true`, 10_000);
 
     step('M6', '30 agents registered, 3 streaming, for 30 s');
@@ -191,9 +200,7 @@ async function main() {
         const reads = [];
         const end = performance.now() + 30000;
         while (performance.now() < end) {
-            const at = performance.now();
-            await window.genieTest.snapshot();
-            reads.push(performance.now() - at);
+            reads.push(await ${snapshotProbe()});
             await new Promise((r) => setTimeout(r, 1000));
         }
         off();
@@ -202,6 +209,9 @@ async function main() {
     })()`, 60_000);
     result.m6 = m6;
     check(m6.pushesPerSec > 0, 'M6 saw snapshot pushes at all', String(m6.pushesPerSec));
+    const snapshotWorkMs = MODE === 'ipc' ? 0 : workBudget(m6.readMs);
+    const snapshotControlMs = snapshotWorkMs === 0 ? m6.readMs : await cdp.evaluate(snapshotProbe(snapshotWorkMs), snapshotWorkMs + 10_000);
+    result.measureControls.m6 = { metric: 'readMs', value: snapshotControlMs, extraWorkMs: snapshotWorkMs };
     for (const id of busy) await cdp.evaluate(`window.genieTest.stopAgent(${JSON.stringify(id)}); true`, 10_000);
 
     result.finished = true;
