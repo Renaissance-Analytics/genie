@@ -3,8 +3,9 @@ Tynn #671, opt-in BEFORE/AFTER job, Windows PowerShell 5.1. TEST VM ONLY.
 Prepare the normal unit prerequisites first: scripts/ci/windows.ps1 -Only deps,electron-binary,unit-build
 Run in genie's LOGGED-ON session, never directly over SSH. The Azure job uses:
   In-Session scripts/measure/unit-disk-windows.ps1 85
-That launcher passes no arguments or SSH environment. Defaults work for BEFORE; optional environment must be set
-INSIDE a logged-on wrapper script for overrides (including phase=after), not on the SSH side:
+That launcher passes no arguments or SSH environment. Defaults work for BEFORE. For a program-only AFTER, write
+ci-measure671.json before launching: {"phase":"after","candidates":["test/program-lookup.test.ts"],"skipFull":true}
+The gauge still runs first. Optional environment overrides the file when set INSIDE a logged-on wrapper:
   GENIE_MEASURE671_PHASE=before|after  (default before)
   GENIE_MEASURE671_OUT=<new artifact directory> (default ci-out/measure671-<phase>-<timestamp>)
   GENIE_MEASURE671_CANDIDATES=<semicolon-separated test paths> (default candidates below)
@@ -33,8 +34,23 @@ if ($env:GENIE_TEST_MACHINE -ne '1' -and $env:USERNAME -ne 'genie') { throw 'Tes
 if ($env:OS -ne 'Windows_NT') { throw 'This job measures Windows process IO.' }
 Set-Location (Resolve-Path (Join-Path $PSScriptRoot '..\..'))
 $repo = (Get-Location).Path
-$phase = if ($env:GENIE_MEASURE671_PHASE) { $env:GENIE_MEASURE671_PHASE } else { 'before' }
-if ($phase -notin @('before', 'after')) { throw 'GENIE_MEASURE671_PHASE must be before or after.' }
+$settings = [pscustomobject]@{}
+$settingsPath = Join-Path $repo 'ci-measure671.json'
+if (Test-Path -LiteralPath $settingsPath) {
+    $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+    if ($null -eq $settings -or $settings -isnot [pscustomobject]) { throw 'ci-measure671.json must be an object.' }
+    foreach ($property in $settings.PSObject.Properties) {
+        switch ($property.Name) {
+            'phase' { if ($property.Value -isnot [string] -or $property.Value -notin @('before', 'after')) { throw 'Invalid measurement phase.' } }
+            'candidates' { if ($property.Value -isnot [array] -or $property.Value.Count -lt 1 -or @($property.Value | Where-Object { $_ -isnot [string] }).Count) { throw 'Measurement candidates must be a nonempty array of strings.' } }
+            'skipFull' { if ($property.Value -isnot [bool]) { throw 'Measurement skipFull must be boolean.' } }
+            default { throw "Unknown measurement setting: $($property.Name)" }
+        }
+    }
+}
+$phase = if ($env:GENIE_MEASURE671_PHASE) { $env:GENIE_MEASURE671_PHASE } elseif ($settings.phase) { $settings.phase } else { 'before' }
+if ($phase -notin @('before', 'after')) { throw 'Measurement phase must be before or after.' }
+$skipFull = if ($env:GENIE_MEASURE671_SKIP_FULL) { $env:GENIE_MEASURE671_SKIP_FULL -eq '1' } else { $settings.skipFull -eq $true }
 $out = if ($env:GENIE_MEASURE671_OUT) { $env:GENIE_MEASURE671_OUT } else { Join-Path $repo ("ci-out\measure671-$phase-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 if (Test-Path -LiteralPath $out) { throw 'Use a new output directory: prior measurements are never overwritten.' }
 $null = New-Item -ItemType Directory -Path $out
@@ -49,6 +65,7 @@ $candidates = @(
     'test/session-engine.test.ts', 'test/inbox-flyout-actions.test.ts'
 )
 if ($env:GENIE_MEASURE671_CANDIDATES) { $candidates = @($env:GENIE_MEASURE671_CANDIDATES.Split(';') | ForEach-Object { $_.Trim() }) }
+elseif ($settings.candidates) { $candidates = @($settings.candidates) }
 foreach ($candidate in $candidates) {
     if ($candidate -notmatch '^test/(?:[a-zA-Z0-9_-]+/)*[a-zA-Z0-9_-]+\.test\.tsx?$' -or -not (Test-Path -LiteralPath $candidate)) { throw "Invalid candidate test path: $candidate" }
 }
@@ -198,7 +215,7 @@ function Measure-Run([string]$label, [string]$candidate, [int]$index) {
 
 $head = & git rev-parse HEAD
 $version = & $node --version
-@("HEAD=$head", "NODE=$version", "PHASE=$phase", 'POLL_MS=500; original concurrency and sync unchanged', 'HOOK_TIMING=outside-test estimate from existing slow-tests.mjs, includes imports', 'BYTES=OS process transfer counts, not physical disk bytes') | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $out 'metadata.txt')
+@("HEAD=$head", "NODE=$version", "PHASE=$phase", "SKIP_FULL=$skipFull", "CANDIDATES=$($candidates -join ';')", "SETTINGS_FILE=$(Test-Path -LiteralPath $settingsPath)", 'POLL_MS=500; original concurrency and sync unchanged', 'HOOK_TIMING=outside-test estimate from existing slow-tests.mjs, includes imports', 'BYTES=OS process transfer counts, not physical disk bytes') | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $out 'metadata.txt')
 $summaries = New-Object 'System.Collections.Generic.List[object]'
 $index = 0
 foreach ($candidate in $candidates) {
@@ -215,7 +232,7 @@ foreach ($candidate in $candidates) {
         Write-Output "MEASURE671 GAUGE PASS workers=$($candidateSummary.workersObserved) workerWriteBytes=$($candidateSummary.workerWriteBytes) exitCode=$($candidateSummary.exitCode)"
     }
 }
-if ($env:GENIE_MEASURE671_SKIP_FULL -ne '1') {
+if (-not $skipFull) {
     $machine = $null; $processes = $null
     try {
         $machine = Start-Process powershell.exe -ArgumentList '-NoProfile', '-File', (Quote-Argument (Join-Path $repo 'scripts/ci/machine-sampler.ps1')), '-Out', (Quote-Argument (Join-Path $out 'machine-samples.log')), '-ParentId', $PID -PassThru -WindowStyle Hidden

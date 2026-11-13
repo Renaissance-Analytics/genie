@@ -25,6 +25,19 @@ times in `beforeEach`, plus three extra executable copies (84 total). The wrappe
 size and predicted copy bytes. Isolated OS totals must confirm this before treating it as the full-run outlier's
 source; the original process CSV contains no test-file mapping.
 
+For an isolated AFTER using the base meter in the logged-on session, the SSH-side job can write:
+
+```powershell
+'{"phase":"after","candidates":["test/program-lookup.test.ts"],"skipFull":true}' | Set-Content -Encoding UTF8 ci-measure671.json
+In-Session scripts/measure/unit-disk-windows.ps1 40
+```
+
+The ignored settings file is read inside that session; no environment forwarding is needed. The original gauge
+still runs first, then the requested file, with no full-suite run. Remove the settings file after that job, or use
+`{"phase":"after"}` for the default candidates plus full suite. Unknown keys/types and invalid test paths fail.
+Environment values explicitly set inside a wrapper take precedence. Effective phase, candidates and skipFull
+are saved in metadata, so an isolated result cannot be mistaken for the complete AFTER run.
+
 | Candidate | Evidence / reason to measure |
 | --- | --- |
 | `test/prism-harness-0103.test.ts:43` | Streams JSONL until 540 MiB. Its public-SDK claim is the Node string-size regression above 512 MiB; keep that boundary proof. |
