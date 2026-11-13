@@ -40,11 +40,9 @@ export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: Pr
             // children whose fork parent is gone included — is in the job, and ending the read ends the job.
             const launcher = winLauncherPath();
             // Created where git-exec.ts routes it: genie-host's spawn-host child (Tynn #532), or here.
-            // TEMPORARY BREAK PROBE #671: run the planted CWD image; restore before any merge/AFTER measurement.
-            const probeGit = process.platform === 'win32' ? join(String(options.cwd), 'git.exe') : resolveProgram('git');
             const child = launcher !== null
-                ? gitExecFile(launcher, ['job', probeGit, ...args], { windowsHide: true, ...options }, callback)
-                : gitExecFile(probeGit, [...args], { windowsHide: true, ...options }, callback);
+                ? gitExecFile(launcher, ['job', resolveProgram('git'), ...args], { windowsHide: true, ...options }, callback)
+                : gitExecFile(resolveProgram('git'), [...args], { windowsHide: true, ...options }, callback);
             children.push(child);
             if (launcher !== null) jobs.add(child);
             return child;
