@@ -783,6 +783,8 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const { detail } = useAgentDetail(bridge, agentId);
     // A tool row's whole output, from the host, as the desktop Stream asks for it — one function per agent, so rows keep theirs.
     const toolOutput = useMemo(() => (bridge && agentId !== null ? (toolCallId: string) => bridge.agents.toolOutput(agentId, toolCallId) : undefined), [bridge, agentId]);
+    // A sent image's thumbnail, from the host (Tynn #642), as the desktop reads it: one function per agent.
+    const attachment = useMemo(() => (bridge && agentId !== null ? (attachmentId: string) => bridge.agents.attachment(agentId, attachmentId) : undefined), [bridge, agentId]);
     const [sending, setSending] = useState(false);
     const [sendRefusal, setSendRefusal] = useState<string | null>(null);
 
@@ -831,6 +833,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                 workspaces={snapshot.workspaces}
                 onAnswerForm={answerForm}
                 loadToolOutput={toolOutput}
+                loadAttachment={attachment}
                 sending={sending}
                 reconnecting={reconnecting}
                 needs={(snapshot.deckItems ?? []).filter((i) => i.agentId === agentId)}
@@ -1830,7 +1833,7 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => {
         const onKey = (e: KeyboardEvent): void => {
             // Not in Settings' key recorders — a key pressed there is being assigned.
-            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-hotkey-capture][data-capturing="true"]')) return;
+            if ((e.target as Element | null)?.closest?.('[data-prompt-hotkey], [data-react-fancy-hotkey-capture][data-state="capturing"]')) return;
             const press = { key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, typing: isTypingTarget(e.target as never) };
             const action = hotkeyAction(press, bindings, promptPlatform);
             if (action === 'open-palette') {
@@ -2154,6 +2157,7 @@ function DesktopApp({ bridge }: AppProps) {
                 return [];
             }) : undefined}
             loadToolOutput={resolvedBridge ? (agentId, toolCallId) => resolvedBridge.agents.toolOutput(agentId, toolCallId) : undefined}
+            loadAttachment={resolvedBridge ? (agentId, attachmentId) => resolvedBridge.agents.attachment(agentId, attachmentId) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}
             filesPopped={filesPopped}

@@ -74,12 +74,13 @@ export function sendKeyProblem(accelerator: string, bindings: HotkeyBindings, pr
     return prompt ? `“${prompt.label}” already has that key.` : null;
 }
 
+/** The composer's keys line, both keys as they are now: drawn inside the composer, left of Send (Tynn #641). */
+export function sendKeyHint(sendKey: string, platform: string): string {
+    return `${hotkeyLabel(sendKey, platform)} to send · ${hotkeyLabel(newlineKeyFor(sendKey), platform)} for a new line`;
+}
+
 /** The keys of an accelerator as keycaps: `['Ctrl', 'Enter']`, `['⌘', 'Enter']` on macOS. */
 export function keycaps(accelerator: string, platform: string): string[] {
     return hotkeyLabel(accelerator, platform).split('+').map((cap) => (cap === ' ' ? 'Space' : cap));
 }
 
-/** The composer's hint: both keys as they are now. */
-export function sendKeyHint(sendKey: string, platform: string): string {
-    return `${hotkeyLabel(sendKey, platform)} to send · ${hotkeyLabel(newlineKeyFor(sendKey), platform)} for a new line`;
-}

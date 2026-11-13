@@ -1,3 +1,4 @@
+import type { AttachmentReply } from '../../core/thread-store.js';
 import { activityRows } from '../../core/stream-view.js';
 import type { OutputStream } from '../../core/terminal-output-stream.js';
 import { outputViewObserver } from '../terminal-output-view.js';
@@ -279,6 +280,8 @@ export interface AgentViewProps {
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
     loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642). */
+    loadAttachment?: ((agentId: string, attachmentId: string) => Promise<AttachmentReply>) | undefined;
     initialCommits?: readonly RepoCommit[] | null | undefined;
     /** The live Take Over probe for an OBSERVED agent (§4.2): its terminal, its bursts. `null`/absent = none. */
     takeOver?: TakeOverProbe | null | undefined;
@@ -366,7 +369,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, loadAttachment, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
@@ -398,6 +401,14 @@ function AgentViewBody({
     const agentToolOutput = useMemo(
         () => (canLoadToolOutput ? (toolCallId: string) => toolOutputRef.current!(agent.id, toolCallId) : undefined),
         [agent.id, canLoadToolOutput],
+    );
+    // A sent image's thumbnail, for THIS agent (Tynn #642): stable while the agent is, as the tool output is.
+    const attachmentRef = useRef(loadAttachment);
+    attachmentRef.current = loadAttachment;
+    const canLoadAttachment = loadAttachment !== undefined;
+    const agentAttachment = useMemo(
+        () => (canLoadAttachment ? (attachmentId: string) => attachmentRef.current!(agent.id, attachmentId) : undefined),
+        [agent.id, canLoadAttachment],
     );
     const [changes, setChanges] = useState<readonly string[] | null>(initialChanges ?? null);
     const [diskChanges, setDiskChanges] = useState<readonly { path: string; at: number }[] | null>(initialDiskChanges ?? null);
@@ -1037,6 +1048,7 @@ function AgentViewBody({
                                     persona={persona}
                                     markup={streamMarkup}
                                     loadToolOutput={agentToolOutput}
+                                    loadAttachment={agentAttachment}
                                     onChat={() => onNavigate(chatRoute)}
                                     onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}
                                 />

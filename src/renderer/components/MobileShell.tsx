@@ -16,6 +16,7 @@ import type { ChatRefs } from '../../core/chat-markup.js';
 import { atThreadEnd } from '../../core/chat-width.js';
 import type { ToolOutputReply } from '../../core/tool-row-bound.js';
 import type { AgentDetail } from '../bridge.js';
+import type { AttachmentReply } from '../../core/thread-store.js';
 import { MOBILE_PANELS, deviceLabelFromUserAgent, panelAfter, swipeStep, type MobilePanel } from '../../core/mobile.js';
 import { timeLeftWords } from '../../core/pair-confirm.js';
 import { useNow } from '../use-now.js';
@@ -326,6 +327,8 @@ export interface MobileAgentProps {
     initialPanel?: MobilePanel | undefined;
     /** A tool row's whole output, asked of the host when the row is opened (the desktop Stream's). */
     loadToolOutput?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642): the chat's and the work stream's pills, as on the desktop. */
+    loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
 }
 
 /** A picked photo or file before it is sent: a chip, removable. */
@@ -388,7 +391,7 @@ function ownsSideways(target: EventTarget | null, stop: Element): boolean {
  *
  * Only the panel in view is drawn, so the screen keeps its one bounded scroller (mobile-scroll.test.tsx).
  */
-export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResumeLimit, needs = [], answering = null, onAnswer, onAnswerForm, sendRefusal = null, reconnecting = false, agents, workspaces, initialPanel = 'chat', loadToolOutput }: MobileAgentProps) {
+export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResumeLimit, needs = [], answering = null, onAnswer, onAnswerForm, sendRefusal = null, reconnecting = false, agents, workspaces, initialPanel = 'chat', loadToolOutput, loadAttachment }: MobileAgentProps) {
     const [pending, setPending] = useState<File[]>([]);
     const [panel, setPanel] = useState<MobilePanel>(initialPanel);
     const [selectedRow, setSelectedRow] = useState<string | null>(null);
@@ -501,7 +504,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                         <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>
                     ) : (
                         <div data-chat-log="" className="flex min-h-full min-w-0 flex-col justify-end gap-3 px-3 py-3 text-[14px] [overflow-wrap:anywhere]">
-                            <ChatMessages messages={messages} thread={thread} refs={PHONE_CHAT_REFS} mailOnly={thread?.fidelity === 'observed'} />
+                            <ChatMessages messages={messages} thread={thread} refs={PHONE_CHAT_REFS} mailOnly={thread?.fidelity === 'observed'} loadAttachment={loadAttachment} />
                         </div>
                     )}
                 </main>
@@ -517,6 +520,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                             agentName={detail.agent.name}
                             live={detail.session?.running === true && detail.session.turnState === 'working'}
                             loadToolOutput={loadToolOutput}
+                            loadAttachment={loadAttachment}
                         />
                     </div>
                 </main>
