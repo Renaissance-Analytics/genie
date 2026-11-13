@@ -88,8 +88,8 @@ describe('a thread log rotates at its size bound', () => {
     });
 });
 
-/** An old log written straight to disk up to `minimumBytes`, ending on a complete row; one draft near the start. */
-async function bigOldLog(id: AgentId, minimumBytes: number): Promise<number> {
+/** A big log written straight to disk, as an old Genie left it: `mb` megabytes of rows, one pending draft near the start. */
+async function bigOldLog(id: AgentId, mb: number): Promise<number> {
     const out = createWriteStream(threadLogFile(dir, id));
     const pad = 'y'.repeat(4000);
     let position = 0, bytes = 0;
@@ -97,22 +97,21 @@ async function bigOldLog(id: AgentId, minimumBytes: number): Promise<number> {
     const write = (text: string) => new Promise<void>((resolve) => { bytes += text.length; if (out.write(text)) resolve(); else out.once('drain', () => resolve()); });
     await write(line({ kind: 'turn', n: 1, by: 'you', [RUN_FIELD]: 'old-run' }));
     await write(line({ kind: 'message', speaker: 'you', peerName: null, text: 'an old draft', pending: { id: 'old-draft', content: null }, [RUN_FIELD]: 'old-run' }));
-    while (bytes < minimumBytes) await write(line({ kind: 'notice', level: 'info', message: pad, [RUN_FIELD]: 'old-run' }));
+    while (bytes < mb * 1024 * 1024) await write(line({ kind: 'notice', level: 'info', message: pad, [RUN_FIELD]: 'old-run' }));
     await new Promise<void>((resolve) => out.end(() => resolve()));
     return position;
 }
 
 describe('a big old thread costs a page, not the file, once it has rotated', () => {
-    it('deliverOwed, restart and history each take under 100 ms after appending past the default rotation bound', async () => {
+    it('deliverOwed, restart and history on a 512 MB thread each take under 100 ms after the next append', async () => {
         const id = mintAgentId();
-        // Tynn #671: keep a LARGE-history speed case: a real 64 MiB history, the default store (no tiny test cap),
-        // and all four <100 ms checks after indexing. One complete row past the cap triggers the real rotation path.
-        // This no longer benchmarks 512 MiB specifically. prism-harness-0103 keeps >512 MiB functional/string-size
-        // coverage, not these latency checks; the assertions below require the indexed segment and bounded active log.
-        const rows = await bigOldLog(id, THREAD_ROTATE_BYTES + 1);
+        // Tynn #671: retain 512 MiB: this is a large-history latency regression test, not only a rotation-bound test.
+        // The public-SDK string-size test proves functionality at that size, not these four <100 ms guarantees.
+        const rows = await bigOldLog(id, 512);
         const oldBytes = (await stat(threadLogFile(dir, id))).size;
+        expect(oldBytes).toBeGreaterThanOrEqual(512 * 1024 * 1024);
         expect(oldBytes).toBeGreaterThan(THREAD_ROTATE_BYTES);
-        expect(oldBytes).toBeLessThan(THREAD_ROTATE_BYTES + 8 * 1024);
+        expect(oldBytes).toBeLessThan(512 * 1024 * 1024 + 8 * 1024);
         const store = make(dir);
         await openAgentThread(store, id).record([{ kind: 'notice', level: 'info', message: 'new run', [RUN_FIELD]: 'new-run' }] as never);
         await store.indexing?.(keyOf(id));
