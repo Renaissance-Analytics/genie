@@ -12,7 +12,7 @@ const sampler = readFileSync(new URL('../scripts/ci/proc-sampler.ps1', import.me
 
 describe('the Windows unit row\'s sampler (scripts/ci/windows.ps1)', () => {
     it('runs the same suite with the same budget, and only adds a results file', () => {
-        expect(job).toMatch(/npm test -- --testTimeout=30000 --reporter=default --reporter=json "--outputFile\.json=\$results"/);
+        expect(job).toMatch(/npm test -- --testTimeout=30000 --hookTimeout=30000 --reporter=default --reporter=json "--outputFile\.json=\$results"/);
     });
     it('is stopped when the suite ends, whatever happened', () => {
         expect(job).toMatch(/try \{[^]*npm test[^]*\} finally \{\s*Stop-Process -Id \$sampler\.Id -Force/);
