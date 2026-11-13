@@ -6,7 +6,8 @@ import { composerKey } from '../../core/send-key.js';
 import { sendKeyNow } from '../send-key-store.js';
 import { ago, filterCounts, filterThreads, HUMAN, pairKey, THREAD_FILTERS, type ThreadFilter, type ThreadSummary } from '../../core/inbox-threads.js';
 import { UNNAMED_AGENT } from '../../core/inbox.js';
-import { highlightParts, inViewOrder, mergeWindow, ORDER_ICON, questionRef, scrollAfterInsert, searchSnippet, shortQuestionId, THREAD_BUFFER, type ThreadOrder } from '../../core/inbox-view.js';
+import { highlightParts, inViewOrder, mergeWindow, ORDER_ICON, questionHeader, questionRef, scrollAfterInsert, searchSnippet, THREAD_BUFFER, type ThreadOrder } from '../../core/inbox-view.js';
+import { personText } from '../../core/person-text.js';
 import type { AskedRecord } from '../../main/attention-store.js';
 import type { InboxMessage } from '../../main/inbox-store.js';
 import type { InboxSearchResult, InboxSection, InboxThreadView } from '../features.js';
@@ -34,7 +35,8 @@ function AppMark({ id }: { id: string }) {
  * patches one message re-renders that one card's Markdown, never every card's (the live-view rule, owner 2026-10-22).
  */
 const Markdown = memo(function Markdown({ text }: { text: string }) {
-    return <ContentRenderer clipboardWriter={genieClipboardWriter} value={text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />;
+    // No internal id is drawn (Tynn #696); the message itself keeps them — its agent needs them.
+    return <ContentRenderer clipboardWriter={genieClipboardWriter} value={personText(text)} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />;
 });
 
 /**
@@ -98,6 +100,9 @@ export type QuestionState =
     | { readonly status: 'ok'; readonly record: QuestionRecordView }
     | { readonly status: 'gone' }
     | { readonly status: 'error'; readonly error: string };
+
+/** The first question's header, once its record is read. */
+const recordHeader = (state: QuestionState | undefined): string | null => (state?.status === 'ok' ? state.record.questions[0]?.header?.trim() || null : null);
 
 export interface InboxFlyoutViewProps {
     threads: readonly ThreadSummary[];
@@ -271,6 +276,8 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
         // An FTQ answer (or dismissal) the PERSON sent names its question: the id becomes the way to see what was asked.
         const ref = m.from === HUMAN && !m.app ? questionRef(m.text) : null;
         const open = ref !== null && expanded.has(ref.id);
+        // Named by what was asked, never its id (Tynn #696): the answer's first header, else the kept record's.
+        const asked = ref ? questionHeader(ref.rest) ?? recordHeader(p.questions?.[ref.id]) ?? 'Your question' : '';
         return (
             <div
                 key={m.id}
@@ -292,7 +299,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                             <span data-app-level={m.app.level} className={`inline-flex ${APP_LEVEL_TONE[m.app.level]}`}><Icon name={APP_LEVEL_ICON[m.app.level]} size="xs" /></span>
                             <span className="min-w-0 truncate">{m.app.subject}</span>
                         </div>
-                        <p className="whitespace-pre-wrap break-words text-[13px] text-[var(--fg-2)]">{m.text}</p>
+                        <p className="whitespace-pre-wrap break-words text-[13px] text-[var(--fg-2)]">{personText(m.text)}</p>
                         {m.app.link ? (
                             <Button data-app-link={m.app.link} href={m.app.link} target="_blank" rel="noreferrer" size="xs" variant="ghost" icon="external-link" className="w-fit border border-[var(--border-1)]">
                                 {new URL(m.app.link).host}
@@ -309,13 +316,13 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                                 icon="message-circle-question"
                                 iconTrailing={open ? 'chevron-up' : 'chevron-down'}
                                 data-question-ref={ref.id}
-                                title={ref.id}
+                                title={`${open ? 'Hide' : 'Show'} the questions asked`}
                                 aria-expanded={open}
-                                aria-label={`${open ? 'Hide' : 'Show'} the questions asked, ${ref.id}`}
+                                aria-label={`${open ? 'Hide' : 'Show'} the questions asked: ${asked}`}
                                 onClick={(e: { preventDefault: () => void }) => { e.preventDefault(); p.onToggleQuestion?.(ref.id); }}
-                                className="border border-[var(--border-1)] font-mono text-[var(--accent)]"
+                                className="border border-[var(--border-1)] text-[var(--accent)]"
                             >
-                                {shortQuestionId(ref.id)}
+                                {asked}
                             </Button>
                         </div>
                         {open ? questionPanel(ref.id, p.questions?.[ref.id], p.onRetryQuestion) : null}
@@ -385,7 +392,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                             <span className="text-[var(--violet-400)]">{marked(`${nameOf(m.from)} → ${nameOf(m.to)}`, s.query)}</span>
                             <span>{ago(Date.parse(m.sentAt), p.now)}</span>
                         </span>
-                        <span className="break-words text-[13px] font-normal text-[var(--fg-2)]">{marked(searchSnippet(m.text, s.query, 90), s.query)}</span>
+                        <span className="break-words text-[13px] font-normal text-[var(--fg-2)]">{marked(searchSnippet(personText(m.text), s.query, 90), s.query)}</span>
                     </Button>
                 ))}
             </>
@@ -451,7 +458,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                                         {t.attachments > 0 ? <Icon name="paperclip" size="xs" className="text-[var(--fg-4)]" /> : null}
                                         <span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{Number.isNaN(t.lastAt) ? '' : ago(t.lastAt, p.now)}</span>
                                     </span>
-                                    <span className="truncate text-[12px] text-[var(--fg-3)]">{`${t.lastFrom}: ${t.lastPreview}`}</span>
+                                    <span className="truncate text-[12px] text-[var(--fg-3)]">{`${t.lastFrom}: ${personText(t.lastPreview)}`}</span>
                                     <span className="flex items-center gap-2 font-mono text-[11px]">
                                         {t.unread > 0 ? <span data-thread-unread={t.unread} className="text-[var(--warning)]">{`${t.unread} unread`}</span> : null}
                                         {t.waiting ? <span data-thread-waiting={t.waiting.count} className="text-[var(--violet-400)]">{`waiting on ${t.waiting.agent} · ${ago(t.waiting.since, p.now)}`}</span> : null}

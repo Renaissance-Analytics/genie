@@ -18,6 +18,7 @@ import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth 
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
+import { personText } from '../../core/person-text.js';
 import { chatFollowKey, mailSubject, waitingStepLabel, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import { toolIcon } from '../../core/stream-view.js';
 import { ago } from '../../core/inbox-threads.js';
@@ -197,9 +198,9 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
             )}
             {/* A SHORT PREVIEW, not the message (the owner, 2026-10-21: "I don't need to see so much content, that is what the
                 link to open it is for"): one plain line of it, at most two lines tall; the head opens it in full. */}
-            <p data-mail-preview={m.id} className="line-clamp-2 text-[13px] text-[var(--fg-2)]">{mailSubject(m.text)}</p>
+            <p data-mail-preview={m.id} className="line-clamp-2 text-[13px] text-[var(--fg-2)]">{mailSubject(personText(m.text))}</p>
             <span data-mail-receipt={m.delivered ? 'delivered' : 'waiting'} className="font-mono text-[11px] text-[var(--fg-3)]">{m.delivered ? 'Delivered' : 'Waiting'}</span>
-            {!m.delivered && m.reason ? <p data-mail-refusal={mailId} className="text-[12px] text-[var(--warning)]">{m.reason}</p> : null}
+            {!m.delivered && m.reason ? <p data-mail-refusal={mailId} className="text-[12px] text-[var(--warning)]">{personText(m.reason)}</p> : null}
         </div>
     );
 }
@@ -940,7 +941,7 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                     return (
                         <div key={m.id} data-chat-message={m.id} data-who="stopped" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
                             <Icon name="square" size="xs" />
-                            <span>{m.text}</span>
+                            <span>{personText(m.text)}</span>
                             {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
                         </div>
                     );
@@ -968,7 +969,7 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                     return (
                         <div key={m.id} data-chat-message={m.id} data-who="system" className="flex items-center gap-2 font-mono text-[11px] text-[var(--fg-3)]">
                             <span className="text-[var(--violet-400)]"><Icon name="arrow-right-left" size="xs" /></span>
-                            <span>{m.text}</span>
+                            <span>{personText(m.text)}</span>
                         </div>
                     );
                 }
@@ -1060,9 +1061,9 @@ export function ChatCarriedRow({ m }: { m: ChatThreadMessage }) {
         <details data-chat-message={m.id} data-who="system" data-chat-carried="" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
             <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
                 <Icon name="arrow-right-left" size="xs" />
-                <span className="group-hover:underline">{m.text}</span>
+                <span className="group-hover:underline">{personText(m.text)}</span>
             </summary>
-            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{m.carried}</pre>
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{personText(m.carried)}</pre>
         </details>
     );
 }

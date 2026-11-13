@@ -26,6 +26,7 @@ import { ChatProse } from './ChatProse.js';
 import { ProviderLogo } from './ProviderLogo.js';
 import { QuestionForm } from './QuestionForm.js';
 import { Stream } from './Stream.js';
+import { personText } from '../../core/person-text.js';
 
 /**
  * THE PHONE'S SHELL — the owner, 2026-10-30: "The mobile ui only need the workspace selector, workstation dashboard, agent
@@ -190,13 +191,14 @@ function NeedsYou({ item, host, answering, onAnswer, onAnswerForm, label, worksp
         <>
             <div className="flex items-center gap-2 text-xs text-[var(--fg-3)]">
                 {item.blocking ? <span className="size-2 rounded-full bg-[var(--warning)]" aria-label="blocking" /> : null}
-                <span className="font-medium text-[var(--fg-1)]">{label}</span>
-                <span className="font-mono">{workspace}</span>
+                {/* Names only (Tynn #696): a workspace not known here is said by nothing rather than its id. */}
+                <span className="font-medium text-[var(--fg-1)]">{personText(label)}</span>
+                <span className="font-mono">{personText(workspace)}</span>
             </div>
             {item.answer.kind === 'inline' ? (
                 <ApprovalCard approval={{ question: item.title, options: item.answer.options, why: item.why ?? null }} answering={answering} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
             ) : (
-                <p className="mt-1 text-[13px]">{item.title}</p>
+                <p className="mt-1 text-[13px]">{personText(item.title)}</p>
             )}
             {questions ? (
                 <div data-mobile-question={item.id} className={`mt-2 ${QUESTION_TOUCH}`}>

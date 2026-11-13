@@ -6,6 +6,7 @@ import type { ToolOutputReply } from '../../core/tool-row-bound.js';
 import type { CommandRunRef } from '../../core/command-run.js';
 import { chatLinkTarget, type ChatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
 import { ChatProse } from './ChatProse.js';
+import { personText } from '../../core/person-text.js';
 
 /**
  * ONE LEDGER ROW — time, icon, main, meta.
@@ -146,8 +147,9 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
                     .join(' ')}
             >
                 {/* WHO spoke, on a message: a field in its colour, never a role word. */}
-                {row.who ? <span data-who={row.who.tone} className={`mr-2 font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{row.who.label}</span> : null}
-                {expanded && row.full !== undefined ? <span data-thought-full="" className="block whitespace-pre-wrap">{row.full}</span> : row.main}
+                {row.who ? <span data-who={row.who.tone} className={`mr-2 font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{personText(row.who.label)}</span> : null}
+                {/* No internal id in what the person reads (Tynn #696); the ledger keeps them. */}
+                {expanded && row.full !== undefined ? <span data-thought-full="" className="block whitespace-pre-wrap">{personText(row.full)}</span> : personText(row.main)}
             </span>
             )}
 
@@ -174,7 +176,7 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
              */}
             {row.note ? (
                 <span data-note className="shrink-0 font-mono text-[11px] text-[var(--fg-4)]">
-                    {row.note}
+                    {personText(row.note)}
                 </span>
             ) : null}
 
@@ -183,7 +185,7 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
                     data-meta
                     className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-[var(--danger)]' : row.metaTone === 'warn' ? 'text-[var(--warning)]' : 'text-[var(--fg-4)]'}`}
                 >
-                    {row.meta}
+                    {personText(row.meta)}
                 </span>
             ) : null}
         </>
