@@ -2,7 +2,6 @@ import { createWriteStream } from 'node:fs';
 import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileLockIdentityStatus } from '@particle-academy/prism-harness';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mintAgentId, type AgentId } from '../src/core/identity.js';
 import { openAgentThread, readHistory, readPromptRows, readWholeHistory, threadLogFile, ThreadStore, THREAD_ROTATE_BYTES, RUN_FIELD } from '../src/core/thread-store.js';
@@ -16,23 +15,10 @@ type Options = { rotateBytes?: number; slowMs?: number; onSlow?: (line: string) 
 type Rotating = ThreadStore & { indexing?(key: string): Promise<void> };
 const make = (directory: string, options: Options = {}): Rotating => new (ThreadStore as unknown as new (d: string, o?: Options) => Rotating)(directory, options);
 const keyOf = (id: AgentId) => `genie:agent:${id}:thread`;
-const probeRotation = process.env.GENIE_PROBE671_ROTATION === '1';
-const probeStarted = performance.now();
-function probe(stage: string, detail: Record<string, unknown> = {}): void {
-    if (probeRotation) console.log(`PROBE671_ROTATION ${JSON.stringify({ stage, wallMs: Math.round(performance.now() - probeStarted), lock: fileLockIdentityStatus(), ...detail })}`);
-}
 
 let dir: string;
-beforeEach(async () => {
-    const started = performance.now();
-    dir = await mkdtemp(join(tmpdir(), 'genie-rotation-'));
-    probe('mkdtemp', { ms: Math.round(performance.now() - started) });
-});
-afterEach(async () => {
-    probe('cleanup.begin');
-    await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
-    probe('cleanup.end');
-});
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-rotation-')); });
+afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
 
 const segmentsOf = async (id: AgentId): Promise<string[]> => {
     const base = threadLogFile(dir, id).slice(dir.length + 1).replace(/\.jsonl$/, '');
@@ -40,7 +26,7 @@ const segmentsOf = async (id: AgentId): Promise<string[]> => {
 };
 
 /** `turns` turns written through the real store and Thread, by runs of 5 turns each; one pending draft in turn 2. */
-async function seed(store: Rotating, id: AgentId, turns: number, trace = false): Promise<number> {
+async function seed(store: Rotating, id: AgentId, turns: number): Promise<number> {
     const thread = openAgentThread(store, id);
     let rows = 0;
     for (let t = 1; t <= turns; t += 1) {
@@ -49,16 +35,7 @@ async function seed(store: Rotating, id: AgentId, turns: number, trace = false):
         if (t === 2) batch.push({ kind: 'message', speaker: 'you', peerName: null, text: 'a draft kept for later', pending: { id: 'draft-1', content: null }, [RUN_FIELD]: run }, { kind: 'prompt_delivery', id: 'draft-1', status: 'undelivered', [RUN_FIELD]: run });
         for (let i = 0; i < 6; i += 1) batch.push({ kind: 'tool', toolCallId: `c${t}-${i}`, name: null, title: `step ${i}`, status: 'completed', toolKind: 'execute', rawInput: { command: `echo ${i}` }, output: 'x'.repeat(300), [RUN_FIELD]: run });
         batch.push({ kind: 'message', speaker: 'agent', peerName: null, text: `answer ${t}`, [RUN_FIELD]: run }, { kind: 'finished', n: t, [RUN_FIELD]: run });
-        const started = trace ? performance.now() : 0;
-        if (trace && t === 1) probe('record.begin', { turn: t });
-        try {
-            await thread.record(batch as never);
-        } finally {
-            if (trace) {
-                const ms = performance.now() - started;
-                if (t === 1 || t === turns || ms >= 50) probe('record.end', { turn: t, ms: Math.round(ms) });
-            }
-        }
+        await thread.record(batch as never);
         rows += batch.length;
     }
     return rows;
@@ -66,23 +43,15 @@ async function seed(store: Rotating, id: AgentId, turns: number, trace = false):
 
 describe('a thread log rotates at its size bound', () => {
     it('the active log stays near the bound; positions run on across segments, and a restart counts them all', async () => {
-        probe('first.begin');
-        const id = mintAgentId(), store = make(dir, { rotateBytes: 16 * 1024, ...(probeRotation ? { slowMs: 50, onSlow: (line: string) => {
-            const step = /step=(\S+) ms=(\d+)/.exec(line);
-            if (step) probe('store.step', { step: step[1], ms: Number(step[2]) });
-        } } : {}) });
-        const rows = await seed(store, id, 60, probeRotation);
-        probe('seed.end');
+        const id = mintAgentId(), store = make(dir, { rotateBytes: 16 * 1024 });
+        const rows = await seed(store, id, 60);
         await store.indexing?.(keyOf(id));
-        probe('index.end');
         expect((await segmentsOf(id)).length).toBeGreaterThan(3);
         expect((await stat(threadLogFile(dir, id))).size).toBeLessThan(16 * 1024 + 8 * 1024);
         expect(await store.logLength(keyOf(id))).toBe(rows);
         // A restart: a fresh store instance, nothing cached.
         expect(await make(dir, { rotateBytes: 16 * 1024 }).logLength(keyOf(id))).toBe(rows);
-        probe('restart.end');
         const whole = await readWholeHistory(store, id);
-        probe('whole-history.end');
         expect(whole.rows.map((r) => r.position)).toEqual(Array.from({ length: rows }, (_, i) => i + 1));
     });
 

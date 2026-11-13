@@ -1,5 +1,37 @@
 # Unit-suite disk candidates (Tynn #671)
 
+Measured reductions on Standard_D16ads_v5, in genie's logged-on session:
+
+| File | BEFORE worker OS write bytes | Isolated AFTER | Evidence |
+| --- | ---: | ---: | --- |
+| `program-lookup.test.ts` | 7,314,652,919 | 87,198,385 (-98.8%) | Same 82 cases and real executable bytes; one owned Node image with hard links. Bypass probe: 5 refusal failures / 1 passing execution control. Mark-hook-off probe: 5 positive-control failures / 77 passes. Restored tests passed. |
+| `attention-bounded.test.ts` | 195,145,947 | 146,639,924 (-24.9%) | Same full owner-scale input and every assertion; one owned JSON source linked into six cases. All 8 cases pass; source-corruption probe fails only the final hash guard (1 failed / 7 passed). |
+
+These are isolated process transfer counters (including IPC), not physical-disk totals or the full-suite AFTER.
+The program-lookup AFTER has one unreadable **other-child** process; its sole measured worker has a successful
+final read, with zero unreadable workers and zero discovery errors. Unknown child traffic is excluded, not zero.
+Before/after artifacts: queues `1113-125818-43de16`, `1113-133131-f0fcea`, `1113-135457-e66dc9`.
+
+Keep `thread-rotation.test.ts`'s real **512 MiB** latency case: its four <100 ms claims are explicitly about that
+history size. Keep the public SDK's **540 MiB** case for the Node string-size boundary. Neither is reduced.
+The added rotation guard was proven with rotation disabled: 1 failed / 6 skipped at `549db581`, then the exact
+source restored. The guard fails at the segment assertion; the subsequent active-size assertion is not reached
+independently. The optional `tailscale-install-signature` reduction is outside this change.
+
+The apparent cold rotation timeout was a runner-session error, not a product/test defect: the same diagnostic
+head `f9a45d45` passes 7/7 In-Session (identity sample 328 ms, definitive; first test 693 ms), but fails the first
+test over SSH (identity sample 6390 ms, unavailable). Queues `1113-140127-cea8fd` and `1113-141427-f1557a`.
+Diagnostic instrumentation was removed; no warm-up, timeout, locking or fsync change is required. Run **every**
+Windows check In-Session. Final complete AFTER uses the same D16, default candidates and full suite:
+
+```powershell
+'{"phase":"after"}' | Set-Content -Encoding UTF8 ci-measure671.json
+In-Session scripts/measure/unit-disk-windows.ps1 85
+```
+
+Remove `ci-measure671.json` afterward. Full-suite AFTER totals, burst rate and outside-test time must be taken
+from that final-head run, rather than inferred by adding isolated savings.
+
 Static inventory at `d7c0a7d2`, before changes. These are candidates, **not measured rankings**. The Windows job
 `unit-disk-windows.ps1` measures them individually, then the whole suite once. Repeat the identical job after each
 accepted reduction. Keep its complete output directory, including failed runs and coverage warnings.
