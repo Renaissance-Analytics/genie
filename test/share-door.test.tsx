@@ -157,7 +157,8 @@ describe('where it is', () => {
     it('the app gives both the door the host decided', () => {
         const app = read('App.tsx');
         expect(app).toMatch(/const shares = shareDoor\(/);
-        expect(read('Shell.tsx')).toMatch(/share=\{onShareWorkstation \? \{ onShare: onShareWorkstation \} : undefined\}/);
-        expect(read('Shell.tsx')).toMatch(/onShare=\{workspaceOps\?\.onShare\}/);
+        // Tynn #690: and never in a workspace-share window, whatever door it was handed.
+        expect(read('Shell.tsx')).toMatch(/share=\{onShareWorkstation && !scoped \? \{ onShare: onShareWorkstation \} : undefined\}/);
+        expect(read('Shell.tsx')).toMatch(/onShare=\{scoped \? undefined : workspaceOps\?\.onShare\}/);
     });
 });

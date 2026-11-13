@@ -46,6 +46,7 @@ import { SafeMode } from './safe-mode-host.js';
 import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
+import { terminalWorkspaceOf, workspaceFolders } from './host-share-scope.js';
 import { TakeOverHost } from './take-over-host.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
@@ -975,6 +976,9 @@ async function main(): Promise<void> {
             // The phone's methods and events with every window closed (host-alone-api.ts).
             alone: () => phoneApi,
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
+            // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
+            workspaceOfTerminal: terminalWorkspaceOf(terminalHost),
+            workspacePaths: workspaceFolders(() => hostRegistry.listWorkspaces()),
         }),
     });
     // OFF BY DEFAULT (Tynn #820): the listener runs only while `remote_access` is on, applied at boot and on every change.

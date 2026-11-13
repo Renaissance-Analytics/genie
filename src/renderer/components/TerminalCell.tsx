@@ -25,23 +25,28 @@ export interface TerminalCellProps {
     readonly onData: (id: string, data: string) => void;
     readonly onResize: (id: string, size: { cols: number; rows: number }) => void;
     readonly onOpenFile?: TerminalPaneProps['onOpenFile'];
-    /** Start a terminal and put it in this cell. */
-    readonly onStart: () => void;
+    /** Start a terminal and put it in this cell. Absent = a read-only share (Tynn #691): nothing is started from here. */
+    readonly onStart?: (() => void) | undefined;
+    /** A read-only share (Tynn #691): the terminal shows output only. */
+    readonly readOnly?: boolean | undefined;
 }
 
 export function TerminalCell(p: TerminalCellProps) {
     // Started once per mount, whatever re-renders happen while the new terminal is opening.
     const started = useRef(false);
     useEffect(() => {
-        if (p.terminalId !== null || started.current) return;
+        if (p.terminalId !== null || started.current || !p.onStart) return;
         started.current = true;
         p.onStart();
     }, [p.terminalId, p.onStart]);
 
+    if (p.terminalId === null && !p.onStart) {
+        return <div data-terminal-panel-none="" className="flex min-h-0 flex-1 items-center justify-center text-[12px] text-[var(--fg-3)]">No terminal here.</div>;
+    }
     if (p.terminalId === null) {
         return <div data-terminal-panel-starting="" className="flex min-h-0 flex-1 items-center justify-center text-[12px] text-[var(--fg-3)]">Starting a terminal…</div>;
     }
-    const restart = (
+    const restart = p.onStart === undefined ? null : (
         <Button size="xs" type="button" data-action="terminal-panel-restart" onClick={p.onStart} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
             Start a new terminal
         </Button>
@@ -70,7 +75,7 @@ export function TerminalCell(p: TerminalCellProps) {
                         output={p.output}
                         {...(p.outputEnd !== undefined ? { outputEnd: p.outputEnd } : {})}
                         {...(p.outputEpoch !== undefined ? { outputEpoch: p.outputEpoch } : {})}
-                        readOnly={t.exited !== null}
+                        readOnly={p.readOnly === true || t.exited !== null}
                         onData={(data) => p.onData(t.id, data)}
                         onResize={(size) => p.onResize(t.id, size)}
                         root={p.root}
