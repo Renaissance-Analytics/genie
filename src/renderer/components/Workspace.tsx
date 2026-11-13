@@ -694,6 +694,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
               * Settings always last. Labelled tabs, never a shortcut-only door (§4.0). The + needs somewhere to keep a tab:
               * without the workspace's settings there is none, and a + that could not keep anything is not offered.
               */}
+            <ErrorBoundary surface="Tab strip" resetKeys={[workspace.id]}>
             <WorkspaceTabs
                 designed={designed}
                 agents={agentTabs}
@@ -709,6 +710,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                 onOpenAgent={(id) => onOpenAgent?.(id)}
                 onShare={ops?.onShare}
             />
+            </ErrorBoundary>
             {ops?.asleep ? (
                 <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
                     {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.

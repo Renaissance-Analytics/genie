@@ -197,8 +197,26 @@ export function spawnGenieWindow(launch: { readonly file: string; readonly args:
     delete own['ELECTRON_RUN_AS_NODE'];
     const child = spawn(launch.file, [...launch.args], { detached: true, windowsHide: false, stdio: 'ignore', env: own });
     child.on('error', () => {});
+    // HOW IT ENDS, KEPT (Tynn issue #711): the one process whose exit code and signal this process can see is its own child.
+    const pid = child.pid;
+    if (typeof pid === 'number') child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => { keepWindowExit(pid, code, signal); });
     child.unref();
     return child.pid ?? null;
+}
+
+/** The exits of the windows this process started, newest kept, by pid. */
+const windowExits = new Map<number, { code: number | null; signal: string | null }>();
+const WINDOW_EXITS_KEPT = 32;
+
+function keepWindowExit(pid: number, code: number | null, signal: string | null): void {
+    windowExits.delete(pid);
+    windowExits.set(pid, { code, signal });
+    while (windowExits.size > WINDOW_EXITS_KEPT) windowExits.delete(windowExits.keys().next().value as number);
+}
+
+/** How a window this process started ended (its exit code and signal), or `null`: still running, or not started here. */
+export function windowExitOf(pid: number): { code: number | null; signal: string | null } | null {
+    return windowExits.get(pid) ?? null;
 }
 
 export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> {

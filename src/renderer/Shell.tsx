@@ -661,6 +661,13 @@ export function Shell({
             />
 
             <div className="relative flex min-h-0 flex-1">
+                {/*
+                 * THE CHROME HAS BOUNDARIES OF ITS OWN (Tynn #662 soak, issue #712): the rail, the pair prompt, the strip above
+                 * an agent's page and the approval toasts sat outside every surface's boundary, so one of them failing to draw
+                 * (react-fancy's TabsList looping, React #185) took the WHOLE window to "Genie failed to draw". Each is its own
+                 * card now, with Retry and the error in Genie's log; the page and the chat beside it keep working.
+                 */}
+                <ErrorBoundary surface="Sidebar">
                 <Sidebar
                     route={route}
                     // The badge is what is WAITING on you (§4.5) — a finished agent's handoff is read, not resolved.
@@ -685,11 +692,14 @@ export function Shell({
                     // A paired device close to expiring: a yellow ! on Settings, naming it and the date (q_8c07b142).
                     settingsAlert={deviceExpiryAlert(features.remote?.devices ?? [], Date.now())}
                 />
+                </ErrorBoundary>
                 {/* "Pair this device?" — on every page, never focused (q_8c07b142). A remote window's snapshot carries none. */}
+                <ErrorBoundary surface="Pair prompt">
                 <PairPrompt
                     requests={features.remote?.pairRequests ?? []}
                     onAnswer={(id, allow) => (featureAsk ? featureAsk({ kind: 'remote.answerPair', id, allow }) : Promise.resolve(onFeature({ kind: 'remote.answerPair', id, allow })))}
                 />
+                </ErrorBoundary>
 
                 <main className="min-w-0 flex-1 overflow-auto">
                     {/*
@@ -802,6 +812,7 @@ export function Shell({
                         // its workspace's strip — Dashboard, every agent of the workspace, your tabs, +, Settings — one click from each.
                         <div data-agent-in-workspace={agentWorkspace?.id ?? ''} className="flex h-full min-h-0 flex-col">
                             {agentWorkspace ? (
+                                <ErrorBoundary surface="Tab strip" resetKeys={[parsed.agentId]}>
                                 <WorkspaceTabs
                                     designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
                                     agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
@@ -824,6 +835,7 @@ export function Shell({
                                     // The Active Plan column's toggle, at the strip's right end — only where the column exists.
                                     {...(agentDetail.agent.fidelity !== 'observed' ? { planToggle: { open: planOpen, onToggle: () => setPlanColumn(!planOpen) } } : {})}
                                 />
+                                </ErrorBoundary>
                             ) : null}
                             <div className="min-h-0 flex-1">
                             <ErrorBoundary surface="Agent view" resetKeys={[parsed.agentId]}>
@@ -1010,6 +1022,7 @@ export function Shell({
                  * so answering in either place clears both. Clear of the chat strip, a docked panel or an open flyout. Not
                  * drawn over the Deck itself, which shows the same requests with the same buttons.
                  */}
+                <ErrorBoundary surface="Approvals">
                 <ApprovalToasts
                     items={snapshot.deckItems ?? NO_DECK_ITEMS}
                     dnd={features.settings.values?.do_not_disturb === true}
@@ -1018,6 +1031,7 @@ export function Shell({
                     onOpenDeck={(item) => onNavigate(`genie://deck?item=${encodeURIComponent(item.id)}`)}
                     right={chatDockWidth + 16}
                 />
+                </ErrorBoundary>
                 {/* THE CHAT, always: a column of this row, after the page — never over it, never closed. */}
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ErrorBoundary surface="Chat" resetKeys={[chatThread?.agentId ?? null]}>

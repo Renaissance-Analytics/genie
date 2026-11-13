@@ -110,6 +110,7 @@ import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-record
 import { routeExecThroughSpawnHost, SpawnHostClient } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
+import { getHeapStatistics } from 'node:v8';
 import { Session as InspectorSession } from 'node:inspector';
 import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
@@ -371,14 +372,16 @@ let spawnHostNow: SpawnHostClient | null = null;
 let spawnTerminalsNow: SpawnHostClient | null = null;
 /** Live ptys a previous window started, found under genie-host at boot: the terminals' to adopt (supervised processes are the host's own since P3.3b). */
 let adoptablePtys: ListedPty[] = [];
+/** The route the main window shows (its URL after `#`), or `null`: what a stall line and a heartbeat (#711) say. */
+function mainRoute(): string | null {
+    const url = window && !window.isDestroyed() ? window.webContents.getURL() : '';
+    const at = url.indexOf('#');
+    return at === -1 ? null : url.slice(at + 1);
+}
 const stallWatchdog = new StallWatchdog({
     log: (line) => stallLog?.(line),
     onMainStall: (ms) => stallProfiler?.capture(ms),
-    routeOf: () => {
-        const url = window && !window.isDestroyed() ? window.webContents.getURL() : '';
-        const at = url.indexOf('#');
-        return at === -1 ? null : url.slice(at + 1);
-    },
+    routeOf: mainRoute,
 });
 timeIpcHandlers(ipcMain, stallWatchdog);
 /** A window's name in the log: its page (`index`, `question`, `browser`…), from its URL. */
@@ -1650,6 +1653,9 @@ async function boot(): Promise<void> {
             rss: () => process.memoryUsage.rss(),
             // The main window's page beside it: genie-host's rss line says what grew (bringBackItsPage samples it).
             rendererRss: () => pageMemory.bytes(),
+            // WHICH WINDOW, AND HOW NEAR ITS LIMIT (Tynn issue #711): a lost record names it by its route, and says its heap.
+            route: mainRoute,
+            heap: () => { const h = getHeapStatistics(); return { used: h.used_heap_size, limit: h.heap_size_limit }; },
         });
     }
     /*
@@ -2546,7 +2552,7 @@ async function boot(): Promise<void> {
     // Genie-host's remote connections follow this window's events (the snapshot, features…) while it is the newest window.
     if (remoteApiNow) {
         const api = remoteApiNow;
-        linkedRemote.forwardEvents((listener) => api.onEvent(listener));
+        linkedRemote.forwardEvents((listener, options) => api.onEvent(listener, options));
         void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
     }
     composedNow = composed;
