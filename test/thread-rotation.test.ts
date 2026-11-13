@@ -105,8 +105,10 @@ async function bigOldLog(id: AgentId, minimumBytes: number): Promise<number> {
 describe('a big old thread costs a page, not the file, once it has rotated', () => {
     it('deliverOwed, restart and history each take under 100 ms after appending past the default rotation bound', async () => {
         const id = mintAgentId();
-        // Tynn #671: this claim is rotation at the default cap, not the Node string-size boundary (the public-SDK
-        // prism-harness-0103 test keeps that >512 MiB proof). One complete row past the cap exercises the same path.
+        // Tynn #671: keep a LARGE-history speed case: a real 64 MiB history, the default store (no tiny test cap),
+        // and all four <100 ms checks after indexing. One complete row past the cap triggers the real rotation path.
+        // This no longer benchmarks 512 MiB specifically. prism-harness-0103 keeps >512 MiB functional/string-size
+        // coverage, not these latency checks; the assertions below require the indexed segment and bounded active log.
         const rows = await bigOldLog(id, THREAD_ROTATE_BYTES + 1);
         const oldBytes = (await stat(threadLogFile(dir, id))).size;
         expect(oldBytes).toBeGreaterThan(THREAD_ROTATE_BYTES);
