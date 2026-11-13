@@ -18,13 +18,25 @@ export function chatSubscriptionId(_routeName: string, detail: { agent: { id: st
 export const AGENT_DETAIL_CACHE_MAX_BYTES = 48 * 1024 * 1024;
 
 const encoder = new TextEncoder();
+/**
+ * Each row's size, measured once (Tynn #665). A pushed detail is a new object, but its rows are the rows the page already
+ * holds, by reference (core/agent-push-wire.ts): keyed by the row, a push costs the rows it added. Keyed by the detail it
+ * cost the whole ledger again — a 6,000-row thread serialised and encoded per push, ~0.8 GB a minute in #664's soak.
+ */
+const rowSizes = new WeakMap<object, number>();
+function rowBytes(row: unknown): number {
+    const keyed = row !== null && typeof row === 'object';
+    if (keyed) { const known = rowSizes.get(row); if (known !== undefined) return known; }
+    const r = row as { at?: unknown; event?: unknown } | null;
+    let size = 0;
+    try { size = encoder.encode(JSON.stringify({ event: r?.event, at: r?.at })).length; } catch { /* unmeasurable: counted as nothing */ }
+    if (keyed) rowSizes.set(row, size);
+    return size;
+}
 /** A detail's size as the history read counts it (core/thread-store.ts `rowBytes`): each row's time and event, as JSON. */
 export function detailBytes(detail: { readonly rows?: readonly unknown[] }): number {
     let bytes = 0;
-    for (const row of detail.rows ?? []) {
-        const r = row as { at?: unknown; event?: unknown };
-        try { bytes += encoder.encode(JSON.stringify({ event: r.event, at: r.at })).length; } catch { /* unmeasurable: counted as nothing */ }
-    }
+    for (const row of detail.rows ?? []) bytes += rowBytes(row);
     return bytes;
 }
 
