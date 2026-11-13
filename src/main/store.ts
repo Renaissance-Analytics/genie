@@ -86,7 +86,7 @@ const inFlight = new Map<string, Promise<void>>();
 let tmpCounter = 0;
 
 /**
- * The one way a fire-and-forget flush is written. A synchronous store method (`markSeen`, `add`)
+ * The one way a fire-and-forget flush is written. A synchronous store method (`add`)
  * cannot await its write; `void this.#flush()` made a failed write an UNHANDLED REJECTION — on CI a
  * test directory removed mid-rename turned 1529 green tests into an exit 1, and in the app the same
  * shape is a lost write that said nothing. Here the failure is reported with the store's name.

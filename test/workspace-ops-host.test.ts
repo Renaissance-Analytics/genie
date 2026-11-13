@@ -23,7 +23,7 @@ function fakes(over: { entries?: Record<string, string[]>; files?: Record<string
     const workspaces = new Map<string, { id: string; path: string; asleep: boolean }>([['tynn', { id: 'tynn', path: '/w/tynn', asleep: false }]]);
     let agents: AgentRecord[] = [rec('agent_a', 'tynn', 'atlas'), rec('agent_b', 'tynn', 'bolt'), rec('agent_c', 'fancy', 'cass')];
     let now = 1_000;
-    const finished: Array<{ id: string; agentId: string; handoff: string | null; at: string; seen: boolean; agentName: string | null }> = [];
+    const finished: Array<{ id: string; agentId: string; handoff: string | null; at: string; agentName: string | null }> = [];
     // The host joins paths with the OS's separator (backslashes on Windows); this in-memory fs keys by the posix form.
     const key = (p: string) => p.replace(/\\/g, '/');
     const ports: WorkspaceOpsPorts = {
@@ -62,7 +62,7 @@ function fakes(over: { entries?: Record<string, string[]>; files?: Record<string
             now += ms;
             // A handoff lands after the configured delay — or never.
             if (over.handoffAfterMs !== undefined && now >= 1_000 + over.handoffAfterMs) {
-                for (const id of over.running ?? []) if (!finished.some((f) => f.agentId === id)) finished.push({ id: `fin_${id}`, agentId: id, agentName: null, handoff: 'carry on', at: new Date(now).toISOString(), seen: false });
+                for (const id of over.running ?? []) if (!finished.some((f) => f.agentId === id)) finished.push({ id: `fin_${id}`, agentId: id, agentName: null, handoff: 'carry on', at: new Date(now).toISOString() });
             }
         },
     };

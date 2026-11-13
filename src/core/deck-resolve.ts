@@ -12,7 +12,7 @@ import { MAIN_ERROR_DECK_PREFIX } from './main-errors.js';
  *
  * The item id's prefix is the item's ORIGIN, decided by whoever minted it: `q_` the attention
  * store's questions, `appr_` the approval queue, `approval:<agent>` a provider's permission request
- * (the session layer), `li_` list items, `msg_` mail, `fin_` finishes, `genie:` Genie's own asks.
+ * (the session layer), `li_` list items, `msg_` mail, `genie:` Genie's own asks. (A finish is no Deck item: Tynn #658.)
  */
 
 export type DeckCommand =
@@ -22,9 +22,6 @@ export type DeckCommand =
     | { kind: 'answer-provider-approval'; agentId: string; optionId: string; note: string }
     | { kind: 'list-done'; workspaceId: string; itemId: string }
     | { kind: 'mark-read'; messageId: string }
-    | { kind: 'mark-seen'; finishedId: string }
-    | { kind: 'restart-with-handoff'; agentId: string; finishedId: string }
-    | { kind: 'navigate'; route: string }
     | { kind: 'trust-certificate' }
     | { kind: 'defer-trust-certificate' }
     /** An elevation genie-host held for a window (core/elevation-waiting.ts): the person approves it — the hosts sync, from here. */
@@ -115,8 +112,6 @@ export function deckAnswerChannel(item: DeckItem): { kind: 'provider'; agentId: 
 export type DeckAnswerRoute =
     | { kind: 'provider'; agentId: string; optionId: string; note: string }
     | { kind: 'feature' }
-    | { kind: 'navigate'; route: string }
-    | { kind: 'restart-with-handoff'; agentId: string; finishedId: string }
     | { kind: 'refused'; reason: string };
 
 /**
@@ -131,8 +126,6 @@ export function deckAnswerRoute(item: DeckItem, optionId: string, note = ''): De
     const command = resolveDeckAnswer(item, optionId, note);
     switch (command.kind) {
         case 'refused':
-        case 'navigate':
-        case 'restart-with-handoff':
             return command;
         default:
             return { kind: 'feature' };
@@ -158,10 +151,6 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
             return { kind: 'list-done', workspaceId: item.workspaceId, itemId: item.id };
         case 'unread-dm':
             return { kind: 'mark-read', messageId: item.id };
-        case 'finished-handoff':
-            if (optionId === 'open') return { kind: 'navigate', route: `genie://agent/${item.agentId}?tab=stream` };
-            if (optionId === 'restart' && item.agentId) return { kind: 'restart-with-handoff', agentId: item.agentId, finishedId: item.id };
-            return { kind: 'mark-seen', finishedId: item.id };
         case 'genie':
             // Genie's own asks, by id; one it does not know is refused, never guessed.
             if (item.id === TRUST_DECK_ID) return optionId === 'trust' ? { kind: 'trust-certificate' } : { kind: 'defer-trust-certificate' };

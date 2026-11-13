@@ -214,6 +214,8 @@ export function startRelayHost(input: {
     attach?: (transport: ServerTransport) => () => void;
     onStatus?: (status: RelayHostStatus) => void;
     reconnect?: { minMs: number; maxMs: number };
+    /** How long to wait before asking Tynn again for a first ticket that failed: doubling from `minMs` up to `maxMs`. */
+    ticketRetry?: { minMs: number; maxMs: number };
     log?: (message: string) => void;
     /** This host's `.gen` sites for the owner's windows elsewhere (relay-site.ts `dialFrontDoor`). */
     site?: RelayHostLinkDeps['site'];
@@ -228,15 +230,24 @@ export function startRelayHost(input: {
     };
     set({ state: 'connecting' });
 
+    // A FIRST TICKET THAT FAILS IS ASKED FOR AGAIN (Tynn issue #707): a drone runs with nobody at it, so a Tynn that was
+    // unreachable when the link started must not leave it off until someone toggles remote access. Said in the log.
+    const retry = input.ticketRetry ?? { minMs: 5_000, maxMs: 5 * 60_000 };
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const firstTicket = (attempt: number): Promise<{ ticket: string; relayEndpoint: string } | null> => input.ports.ticket().catch(async (error: unknown) => {
+        if (stopped) return null;
+        const reason = error instanceof Error ? error.message : String(error);
+        const wait = Math.min(retry.maxMs, retry.minMs * 2 ** attempt);
+        set({ state: 'unavailable', reason });
+        input.log?.(`unavailable: ${reason} (asking Tynn again in ${Math.round(wait / 1000)} s)`);
+        await new Promise<void>((resolve) => { retryTimer = setTimeout(resolve, wait); });
+        retryTimer = null;
+        return stopped ? null : firstTicket(attempt + 1);
+    });
+
     void (async () => {
-        let first: { ticket: string; relayEndpoint: string };
-        try {
-            first = await input.ports.ticket();
-        } catch (error) {
-            if (!stopped) set({ state: 'unavailable', reason: error instanceof Error ? error.message : String(error) });
-            return;
-        }
-        if (stopped) return;
+        const first = await firstTicket(0);
+        if (stopped || first === null) return;
         let pending: { ticket: string } | null = first;
         const relay = first.relayEndpoint;
         link = relayHostLink({
@@ -269,6 +280,7 @@ export function startRelayHost(input: {
         revalidate: async () => { await link?.revalidate(); },
         stop() {
             stopped = true;
+            if (retryTimer) clearTimeout(retryTimer);
             link?.close();
             detach?.();
             detach = null;

@@ -33,7 +33,6 @@ describe('the capability table', () => {
         expect(capabilityOf('prompt')).toBe('write');
         expect(capabilityOf('features.act')).toBe('write');
         expect(capabilityOf('terminals.write')).toBe('write');
-        expect(capabilityOf('restartWithHandoff')).toBe('write');
         // Tynn #845: the upgrade is the owner's, all of it — no baton.
         expect(capabilityOf('updates.check')).toBe('upgrade');
         expect(capabilityOf('updates.download')).toBe('upgrade');
@@ -100,7 +99,13 @@ describe('the capability table', () => {
         // 158 with a preview's run and its network (V8, Tynn #573).
         // 159 with `agents.setMcpServer` (one MCP server on or off for one agent, Tynn #628): a write, agent-scoped.
         // 160 with `workspaces.setMcpServer` (a workspace's default for its agents' MCP servers, Tynn #628): a write, workspace-scoped.
-        expect(REMOTE_METHODS.length).toBe(160);
+        // 159 without `restartWithHandoff` (Tynn #658: a handoff is for agents; the person's Restart with handoff is gone).
+        // 160 with `agents.attachment` (one image a thread kept, read when a sent pill asks, Tynn #642): a read, agent-scoped.
+        // 161 with `updates.forceDrain` (Tynn #616's graceful upgrade, its drain forced): the owner's, as every upgrade.
+        expect(capabilityOf('updates.forceDrain')).toBe('upgrade');
+        expect(REMOTE_METHODS.length).toBe(161);
+        expect(capabilityOf('agents.attachment')).toBe('read');
+        expect(AGENT_SCOPED_METHODS).toContain('agents.attachment');
         for (const method of ['marketplace.search', 'marketplace.prepare', 'marketplace.install', 'marketplace.discard'] as const) expect(capabilityOf(method)).toBe('local');
         expect(capabilityOf('features.soundData')).toBe('local');
         expect(capabilityOf('features.picked')).toBe('local');

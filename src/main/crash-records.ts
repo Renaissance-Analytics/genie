@@ -119,6 +119,25 @@ export function previousRunRecord(dir: string, startedAt: number | null): CrashR
     return null;
 }
 
+/**
+ * A window's OWN exit record (window-crash-recorder.ts: every exit path it caught), for genie-host's `lost` record (Tynn
+ * issue #711): the newest `exit` record of `pid` written at or after `since` (when that window first beat), or `null` —
+ * which, for a window that is gone, says its exit handlers never ran.
+ */
+export function exitRecordOf(dir: string, pid: number, since: number): { reason: string; code: number | null } | null {
+    const names = recordNames(dir);
+    for (let i = names.length - 1; i >= 0; i--) {
+        try {
+            const value = JSON.parse(readFileSync(join(dir, names[i]!), 'utf8')) as { kind?: unknown; at?: unknown; pid?: unknown; reason?: unknown; code?: unknown };
+            const at = typeof value.at === 'string' ? Date.parse(value.at) : Number.NaN;
+            if (!Number.isFinite(at)) continue;
+            if (at < since) break;
+            if (value.kind === 'exit' && value.pid === pid) return { reason: typeof value.reason === 'string' ? value.reason : 'unknown', code: typeof value.code === 'number' ? value.code : null };
+        } catch { /* a torn file: the one before it */ }
+    }
+    return null;
+}
+
 /** How much of the end of a log file is read for its last lines: 200 lines are far less. */
 const TAIL_BYTES = 256 * 1024;
 

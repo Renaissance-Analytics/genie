@@ -16,7 +16,9 @@ describe('Settings → General → Keyboard shortcuts', () => {
     // Tynn #697: one way to set a key on this page. Each is the capture control, showing its key as keycaps.
     const capsOf = (html: string, name: string): string[] => {
         const control = html.match(new RegExp('data-hotkey-capture="' + name + '"[^>]*>(.*?)</button>'))?.[1] ?? '';
-        return [...control.matchAll(/<kbd[^>]*>(.*?)<\/kbd>/g)].map((m) => m[1]!);
+        // The kit's HotkeyCapture (Tynn #637): the chord is ONE <kbd> with a <span> per cap; the "+" between them is aria-hidden.
+        const chord = control.match(/<kbd[^>]*>(.*?)<\/kbd>/)?.[1] ?? '';
+        return [...chord.matchAll(/<span(?![^>]*aria-hidden)[^>]*>([^<]*)<\/span>/g)].map((m) => m[1]!);
     };
     it('both keys, each as a capture control with its current key as keycaps; COUNTED', () => {
         const html = general({ ftq_nudge_hotkey: 'F6' });

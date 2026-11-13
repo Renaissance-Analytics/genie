@@ -45,6 +45,7 @@ export const ENGINE_METHODS = [
     'engine.resolvePrompt',
     'engine.recordOwed',
     'engine.deliverOwed',
+    'engine.forgetShown',
     'engine.ended',
     'engine.settled',
     'engine.drained',
@@ -60,6 +61,8 @@ export const ENGINE_METHODS = [
     'engine.historyRows',
     // A tool row's whole output, read by the host from its own store when a person opens the row (Tynn story #386).
     'engine.toolOutput',
+    // One image a thread kept, read by the host from its own store when a sent message's pill asks (Tynn #642).
+    'engine.attachment',
     // Subscriptions: an agent's ledger is sent only while the window watches it (cheap, incremental — patches only).
     'engine.watchLedger',
     'engine.unwatchLedger',
@@ -232,6 +235,8 @@ export interface EngineAgentView {
     readonly queued: readonly string[];
     /** The run's driver stopped itself and must be replaced before it takes work (SessionHost.needsNewDriver, prism-acp 0.37.0). */
     readonly needsNewDriver?: boolean;
+    /** The ledger still waits on its recorded history (SessionHost.historyPending, Tynn #659): not yet the conversation. */
+    readonly historyPending?: boolean;
 }
 
 /** `engine.agent`: one agent changed. `rows` = this run's rows; `ledger` only while the window watches it. */
@@ -242,6 +247,11 @@ export interface EngineAgentUpdate {
     readonly view: EngineAgentView;
     readonly rows: RowsPatch<TimedEvent>;
     readonly ledger?: RowsPatch<TimedEvent>;
+    /**
+     * More frames of this one change follow (a long patch cut in PATCH_CHUNK_ROWS frames, Tynn #659): the window applies
+     * it and waits for the last before it says anything changed, so a ledger is never shown in parts, oldest first.
+     */
+    readonly more?: true;
 }
 
 /** `engine.global`: what is per provider or per host rather than per agent. Sent when it changed. */

@@ -63,9 +63,11 @@ export interface HostMcpPorts {
     readonly takeOverCaller?: (id: string) => Caller | null;
     /**
      * The sites and service engines `sites` and `services` act on (Tynn #444): the host's own hosting (P5a) and its
-     * supervisor. Absent = the host's hosting did not start, and the tools say so. `sites open` / `services exec` are the window's.
+     * supervisor. Absent = the host's hosting did not start, and the tools say so. Only `sites open` needs the window.
      */
     readonly hosting?: import('./hosting-actions.js').HostingServices;
+    /** Host-owned command execution, with the existing approval, confinement and cancellation contract. */
+    readonly serviceExec?: import('./mcp-tools-hosting.js').ServiceExec;
     /** The terminals `manageTerminals` acts on (P3.3e): the host's own. Absent = the tool is the window's. */
     readonly terminals?: import('./mcp-tools-more.js').TerminalsPort;
     /** A shell an agent opens: the workspace's service variables and Genie's endpoint. */
@@ -157,7 +159,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             reportPlan: (agentId, steps) => ports.reportPlan(agentId as AgentId, steps),
             readPlan: (agentId) => ports.records().find((r) => r.id === agentId)?.plan ?? null,
             // THE WINDOW'S: these tools are forwarded whole (mcp-host-tools.ts); here they only give the tools their shape.
-            issueWatch: { forWorkspace: unavailable('checkIssues') },
+            // checkIssues is forwarded whole. With no host count provider, imDone omits its optional count.
             openFile: unavailable('openFileForUser'),
             terminals: ports.terminals ?? { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
             ...(ports.terminalEnv ? { terminalEnv: ports.terminalEnv } : {}),
@@ -166,6 +168,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.flows ? { flows: ports.flows } : {}),
             ...(ports.mail ? { mail: ports.mail } : {}),
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
+            ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },

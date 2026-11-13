@@ -22,7 +22,7 @@ export interface AgentDetailPorts {
         workspaceMcpOff?(workspaceId: string): readonly string[];
     };
     /** The session host: genie-host's own, or a window's link to it. */
-    readonly engine: Pick<AgentEngine, 'probe' | 'ledgerFor' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'> | null;
+    readonly engine: (Pick<AgentEngine, 'probe' | 'ledgerFor' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'> & Partial<Pick<AgentEngine, 'historyPending'>>) | null;
     readonly cwdFor: (record: AgentRecord) => string;
     /** A live Take Over window on it (the window's only); absent = none. */
     readonly takeOver?: (id: AgentId) => TakeOverProbe | null;
@@ -39,6 +39,8 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
     // A live Take Over window makes this agent OBSERVED here too — the same probe the Dashboard row reads, so the
     // Agent view and the board cannot disagree about what Genie can see of it (§4.2: tabs by fidelity).
     const takeOver = ports.takeOver?.(record.id) ?? null;
+    // Read FIRST: the first read is what asks the engine for the ledger, and what it then says of it is about this read.
+    const rows = host.ledgerFor(record.id);
     return {
         agent: {
             id: record.id,
@@ -75,9 +77,12 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
         },
         session: host.probe(record.id),
         // The agent's recorded history, then this run (Claude does not replay a resumed conversation).
-        rows: host.ledgerFor(record.id),
+        rows,
+        // Not yet its conversation (Tynn #659): the engine is still reading or sending it. Always said, so a later detail
+        // that is whole says so too.
+        rowsPending: host.historyPending?.(record.id) ?? false,
         // The number the Turns column shows for the latest turn, so the pill (`Turn 12 · running`) agrees with it.
-        turns: lastNumberedTurn(host.ledgerFor(record.id)) || host.turnsFor(record.id),
+        turns: lastNumberedTurn(rows) || host.turnsFor(record.id),
         // The engine's own recent words, for the process-ended block (the board's error state).
         log: host.recentStderrFor(record.id),
         // The session's running total, from the latest usage report (claude reports it; codex does not). `null` means

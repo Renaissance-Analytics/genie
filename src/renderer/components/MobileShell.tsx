@@ -1,5 +1,5 @@
 import { Button, Icon, Input, Tabs } from '@particle-academy/react-fancy';
-import { useState, type ChangeEvent, type FormEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { composerKey } from '../../core/send-key.js';
 import { sendKeyNow } from '../send-key-store.js';
 
@@ -11,24 +11,33 @@ import type { TreeNode } from '../../core/files-panel.js';
 import { limitTitle, limitWords } from '../../core/limit-words.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { DeckItem } from '../../core/deck.js';
-import { ledgerRow } from '../../core/stream-view.js';
+import { chatAgentsKey, chatFollowKey, chatThreadFrom } from '../../core/chat-view.js';
+import type { ChatRefs } from '../../core/chat-markup.js';
+import { atThreadEnd } from '../../core/chat-width.js';
+import type { ToolOutputReply } from '../../core/tool-row-bound.js';
 import type { AgentDetail } from '../bridge.js';
-import { deviceLabelFromUserAgent } from '../../core/mobile.js';
+import type { AttachmentReply } from '../../core/thread-store.js';
+import { MOBILE_PANELS, deviceLabelFromUserAgent, panelAfter, swipeStep, type MobilePanel } from '../../core/mobile.js';
 import { timeLeftWords } from '../../core/pair-confirm.js';
 import { useNow } from '../use-now.js';
 import { ApprovalCard } from './ApprovalCard.js';
+import { ChatMessages } from './ChatFlyout.js';
 import { ChatProse } from './ChatProse.js';
 import { ProviderLogo } from './ProviderLogo.js';
+import { QuestionForm } from './QuestionForm.js';
+import { Stream } from './Stream.js';
 
 /**
  * THE PHONE'S SHELL — the owner, 2026-10-30: "The mobile ui only need the workspace selector, workstation dashboard, agent
  * chat (with chat stream) and a mobile friendly file browser and viewer with upload support. I need to be able to take
- * photos and attach as file to the chat as well." And 2026-10-11: no terminals, no panels. One column, thumb-sized:
+ * photos and attach as file to the chat as well." And 2026-10-11: no terminals, and none of the desktop's docked panels.
+ * And 2026-11-12 (Tynn #652): "I should have full chat stream and work streams as slideable panels and ability answer any
+ * FTQ." One column, thumb-sized:
  *
  *  - `MobileWorkspaces`: All, then each workspace by name — how many agents, how many wait on you, asleep said;
- *  - `MobileShell` (the dashboard): the loud `● REMOTE — <host>` badge, NEEDS YOU answerable in place, the AGENTS with their
- *    state word; narrowed to the picked workspace, which also offers its Files;
- *  - `MobileAgent` (the chat): its stream — the agent's words drawn as the chat draws them, everything else one line — what
+ *  - `MobileShell` (the dashboard): the loud `● REMOTE — <host>` badge, NEEDS YOU answerable in place (a question form
+ *    too), the AGENTS with their state word; narrowed to the picked workspace, which also offers its Files;
+ *  - `MobileAgent`: three panels swiped between — the agent list, the desktop chat's rows, the desktop work stream — what
  *    it waits on you for, and a composer that takes a photo with the camera, picks from the gallery, or attaches a file;
  *  - `MobileFiles` / `MobileFileView`: a folder for the thumb, Upload and Take photo into it; markdown rendered, code as
  *    text, an image as an image, a PDF to open.
@@ -54,6 +63,8 @@ export interface MobileShellProps {
     items: readonly DeckItem[] | null;
     answering: string | null;
     onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
+    /** A question with options, multi-select or free text, answered on the phone: the desktop's own form and call. */
+    onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
     onDisconnect: () => void;
     /** The agents (dashboard); absent when the app does not offer it. */
     agents?: MobileAgentsSection | undefined;
@@ -78,6 +89,10 @@ const TONE: Record<'ok' | 'warn' | 'bad' | 'muted' | 'cool', string> = {
 };
 
 const BUTTON = 'rounded-lg border border-[var(--border-1)] px-3 py-2 text-sm font-medium active:bg-[var(--bg-2)]';
+/** A thumb's target (Tynn #652): at least 44 px each way. */
+const TOUCH = 'min-h-11 min-w-11';
+/** A question form on the phone: its options, notes and Answer at least 44 px tall; the notes at 16 px, so iOS does not zoom. */
+const QUESTION_TOUCH = '[&_button]:min-h-11 [&_textarea]:min-h-11 [&_textarea]:text-[16px]';
 const PRIMARY = 'rounded-lg bg-[var(--primary)] px-4 py-2.5 text-sm font-medium text-white active:opacity-80 disabled:opacity-60';
 
 /**
@@ -107,7 +122,7 @@ function Reconnecting() {
     );
 }
 
-export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
+export function MobileShell({ host, locked, refusal, items: reportedItems, answering, onAnswer, onAnswerForm, onDisconnect, agents, workspaces: registeredWorkspaces, selectedWorkspace: requestedWorkspace = null, onSelectWorkspace, onOpenFiles, reconnecting = false }: MobileShellProps) {
     const hibernated = new Set((registeredWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const workspaces = registeredWorkspaces?.filter((workspace) => !hibernated.has(workspace.id)) ?? registeredWorkspaces;
     const selectedWorkspace = requestedWorkspace !== null && hibernated.has(requestedWorkspace) ? null : requestedWorkspace;
@@ -156,19 +171,21 @@ export function MobileShell({ host, locked, refusal, items: reportedItems, answe
                     <ul data-mobile-items={shownItems.length} className="flex flex-col gap-3">
                         {shownItems.map((item) => (
                             <li key={item.id} data-mobile-item={item.id} className="rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3">
-                                <NeedsYou item={item} host={host} answering={answering} onAnswer={onAnswer} label={item.agentName ?? wsLabel(item.workspaceId)} workspace={wsLabel(item.workspaceId)} />
+                                <NeedsYou item={item} host={host} answering={answering} onAnswer={onAnswer} onAnswerForm={onAnswerForm} label={item.agentName ?? wsLabel(item.workspaceId)} workspace={wsLabel(item.workspaceId)} />
                             </li>
                         ))}
                     </ul>
                 )}
-                {agents ? <AgentsSection rows={shownRows} onOpen={agents.onOpen} workspaces={workspaces} /> : null}
+                {agents ? <MobileAgentList rows={shownRows} onOpen={agents.onOpen} workspaces={workspaces} /> : null}
             </main>
         </div>
     );
 }
 
 /** One thing waiting on you: an inline question as the Deck's own card; a form or a forwarded one names where to answer. */
-function NeedsYou({ item, host, answering, onAnswer, label, workspace }: { item: DeckItem; host: string; answering: string | null; onAnswer: (item: DeckItem, optionId: string, note?: string) => void; label: string | null; workspace: string | null }) {
+function NeedsYou({ item, host, answering, onAnswer, onAnswerForm, label, workspace }: { item: DeckItem; host: string; answering: string | null; onAnswer: (item: DeckItem, optionId: string, note?: string) => void; onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined; label: string | null; workspace: string | null }) {
+    // A form the phone can draw (it carries its questions) is answered here, with the desktop's own form (Tynn #652).
+    const questions = item.answer.kind === 'form' && onAnswerForm ? item.answer.questions ?? null : null;
     return (
         <>
             <div className="flex items-center gap-2 text-xs text-[var(--fg-3)]">
@@ -181,7 +198,11 @@ function NeedsYou({ item, host, answering, onAnswer, label, workspace }: { item:
             ) : (
                 <p className="mt-1 text-[13px]">{item.title}</p>
             )}
-            {item.answer.kind === 'form' ? (
+            {questions ? (
+                <div data-mobile-question={item.id} className={`mt-2 ${QUESTION_TOUCH}`}>
+                    <QuestionForm key={`${item.id}:${item.revision ?? 0}`} item={item} answering={answering} onSubmit={(selections, notes) => onAnswerForm?.(item, selections, notes)} showHeaders={questions.length > 1} />
+                </div>
+            ) : item.answer.kind === 'form' ? (
                 <p data-mobile-elsewhere={host} className="mt-2 flex items-center gap-1.5 text-xs text-[var(--fg-3)]">
                     <Icon name="list-checks" size="xs" />
                     {item.answer.fields} questions — answer them on {host}’s screen.
@@ -238,7 +259,7 @@ export function MobileWorkspaces({ workspaces: registered, agents, items, select
 }
 
 /** THE AGENTS, as the Dashboard sees them (§4.1's words: Working / Idle / Waiting on you / Broken / Unreachable), one row each; tap to open. */
-function AgentsSection({ rows, onOpen, workspaces }: { rows: readonly AgentRow[] | null; onOpen: (agentId: string) => void; workspaces?: readonly Workspace[] | null | undefined }) {
+export function MobileAgentList({ rows, onOpen, workspaces, current = null }: { rows: readonly AgentRow[] | null; onOpen: (agentId: string) => void; workspaces?: readonly Workspace[] | null | undefined; /** The agent open now (the panels' list): ringed. */ current?: string | null | undefined }) {
     return (
         <section className="flex flex-col gap-2">
             <h2 className="text-sm font-semibold">Agents</h2>
@@ -259,7 +280,7 @@ function AgentsSection({ rows, onOpen, workspaces }: { rows: readonly AgentRow[]
                             const status = statusOf(r);
                             return (
                                 <li key={r.id}>
-                                    <Button size="xs" labelClassName="contents" type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left active:bg-[var(--bg-2)] justify-start items-stretch">
+                                    <Button size="xs" labelClassName="contents" type="button" data-mobile-agent={r.id} data-state={r.state} {...(r.id === current ? { 'data-mobile-agent-open': 'true' } : {})} onClick={() => onOpen(r.id)} className={`flex min-h-11 w-full flex-col gap-1 rounded-xl border bg-[var(--bg-1)] p-3 text-left active:bg-[var(--bg-2)] justify-start items-stretch ${r.id === current ? 'border-[var(--primary)]' : 'border-[var(--border-1)]'}`}>
                                         <span className="flex items-center gap-2 text-[13px]">
                                             <span className="font-medium">{r.name}</span>
                                             <ProviderLogo provider={r.provider} />
@@ -297,6 +318,17 @@ export interface MobileAgentProps {
     /** Why the last send did not land, in words (the message and its files are kept to send again). */
     sendRefusal?: string | null | undefined;
     reconnecting?: boolean | undefined;
+    /** A question form answered here (the desktop's QuestionForm and call). */
+    onAnswerForm?: ((item: DeckItem, selections: string[][], notes: string[]) => void) | undefined;
+    /** The agent list, the first panel. */
+    agents?: MobileAgentsSection | undefined;
+    workspaces?: readonly Workspace[] | null | undefined;
+    /** The panel it opens on; absent = the chat. */
+    initialPanel?: MobilePanel | undefined;
+    /** A tool row's whole output, asked of the host when the row is opened (the desktop Stream's). */
+    loadToolOutput?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642): the chat panel's pills, as on the desktop. */
+    loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
 }
 
 /** A picked photo or file before it is sent: a chip, removable. */
@@ -318,18 +350,71 @@ export function PendingAttachments({ files, onRemove }: { files: readonly { name
     );
 }
 
+/** No links out of the phone's chat yet: a file, agent or workspace pill reads as its words. */
+const PHONE_CHAT_REFS: ChatRefs = { files: false, agents: [], workspaces: [] };
+
+/** The three panels' tabs: an icon and one short word each. */
+const PANEL_TABS: Record<MobilePanel, { icon: string; label: string }> = {
+    agents: { icon: 'users', label: 'Agents' },
+    chat: { icon: 'message-square', label: 'Chat' },
+    work: { icon: 'activity', label: 'Work' },
+};
+
+/** A key pressed while typing (the composer, a question's note) or on a tab is that control's, never a panel change. */
+const typingIn = (target: EventTarget | null): boolean =>
+    target instanceof Element && target.closest('textarea, input, select, [contenteditable="true"], [role="tab"]') !== null;
+
+/** A touch that starts in something that scrolls sideways (code, a wide table) or is typed into is that thing's, not a swipe. */
+function ownsSideways(target: EventTarget | null, stop: Element): boolean {
+    for (let el = target instanceof Element ? target : null; el && el !== stop; el = el.parentElement) {
+        if (el.matches('textarea, input, select, pre, table')) return true;
+        if (el.scrollWidth > el.clientWidth + 1 && typeof getComputedStyle === 'function') {
+            const x = getComputedStyle(el).overflowX;
+            if (x === 'auto' || x === 'scroll') return true;
+        }
+    }
+    return false;
+}
+
 /**
- * ONE AGENT on the phone: its chat stream — the agent's words drawn as the chat draws them, everything else one line,
- * oldest first — what it waits on you for, and a composer: text, a photo from the CAMERA, from the GALLERY, or any file.
- * Not running: Start instead of the composer, and the refusal (if a start was refused) in words.
+ * ONE AGENT on the phone (Tynn #652; the owner, 2026-11-12: "I should have full chat stream and work streams as slideable
+ * panels and ability answer any FTQ. I also need the ability to attach files and use my camera."). Three panels, swiped
+ * between (or the tabs, or the arrow keys):
+ *
+ *  - AGENTS: every agent with its state word, tap to open one;
+ *  - CHAT: the desktop chat's own rows (`ChatMessages`, over the thread `chatThreadFrom` derives on the desktop);
+ *  - WORK: the desktop's work stream (`Stream`), its tool rows and all.
+ *
+ * Under the chat and the work: what this agent waits on you for — an inline question as the Deck's card, a form as the
+ * desktop's QuestionForm — and the composer: words, a photo from the CAMERA, from the GALLERY, or any file. Not running:
+ * Start instead of the composer. No terminal, ever (the owner, 2026-10-11).
+ *
+ * Only the panel in view is drawn, so the screen keeps its one bounded scroller (mobile-scroll.test.tsx).
  */
-export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResumeLimit, needs = [], answering = null, onAnswer, sendRefusal = null, reconnecting = false }: MobileAgentProps) {
+export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResumeLimit, needs = [], answering = null, onAnswer, onAnswerForm, sendRefusal = null, reconnecting = false, agents, workspaces, initialPanel = 'chat', loadToolOutput, loadAttachment }: MobileAgentProps) {
     const [pending, setPending] = useState<File[]>([]);
+    const [panel, setPanel] = useState<MobilePanel>(initialPanel);
+    const [selectedRow, setSelectedRow] = useState<string | null>(null);
+    const touchFrom = useRef<{ x: number; y: number } | null>(null);
+    const chatScroll = useRef<HTMLElement | null>(null);
+    const following = useRef(true);
+    const agentRows = agents?.rows ?? null;
+    // Keyed on what the thread reads of the agents (ids, names, fidelity), not on the snapshot's array, which is new
+    // whenever any agent's status changes (genie#1340) — as the desktop chat keys it.
+    const agentsKey = chatAgentsKey(agentRows ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const thread = useMemo(() => (detail ? chatThreadFrom(detail, detail.agent.id, agentRows ?? [], Date.now) : null), [detail, agentsKey]);
+    const followKey = chatFollowKey(thread?.agentId ?? null, thread?.messages ?? []);
+    // Following the end of the chat, as the desktop's does: new words come into view unless you scrolled up to read.
+    useLayoutEffect(() => {
+        const el = chatScroll.current;
+        if (el && following.current) el.scrollTop = el.scrollHeight;
+    }, [followKey, panel]);
     if (!detail) {
         return (
             <div data-mobile-agent-view="loading" className={SCREEN} aria-busy>
                 <div data-mobile-scroll className={`${SCROLL} flex flex-col px-4 pb-4 ${SAFE_TOP}`}>
-                    <Button size="xs" type="button" data-action="back" onClick={onBack} className="self-start text-xs text-[var(--fg-3)]">← back</Button>
+                    <Button size="xs" type="button" data-action="back" onClick={onBack} className={`${TOUCH} self-start text-xs text-[var(--fg-3)]`}>← back</Button>
                     <div className="mt-4 h-6 w-40 animate-pulse rounded-md bg-[var(--bg-2)]" />
                 </div>
             </div>
@@ -338,6 +423,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     const running = detail.session !== null;
     // Held by its provider's limit (Tynn #794): the same words as every surface, and Resume now.
     const held = limitWords(detail.session?.limit);
+    const step = (s: -1 | 0 | 1) => { if (s !== 0) setPanel((p) => panelAfter(p, s)); };
     const pick = (e: ChangeEvent<HTMLInputElement>) => {
         const files = e.currentTarget.files ? [...e.currentTarget.files] : [];
         if (files.length > 0) setPending((p) => [...p, ...files]);
@@ -351,91 +437,139 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
         setPending([]);
         e.currentTarget.reset();
     };
-    const attach = 'flex size-10 cursor-pointer items-center justify-center rounded-full border border-[var(--border-1)] active:bg-[var(--bg-2)]';
+    const attach = 'flex size-11 cursor-pointer items-center justify-center rounded-full border border-[var(--border-1)] active:bg-[var(--bg-2)]';
+    const messages = thread?.messages ?? [];
     return (
-        <div data-mobile-agent-view={detail.agent.id} className={SCREEN}>
-            <header className={`flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-4 pb-3 ${SAFE_TOP}`}>
-                <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
-                <span className="text-sm font-semibold">{detail.agent.name}</span>
+        <div
+            data-mobile-agent-view={detail.agent.id}
+            data-mobile-panels={panel}
+            className={SCREEN}
+            onKeyDown={(e) => {
+                if (typingIn(e.target)) return;
+                if (e.key === 'ArrowRight') step(1);
+                else if (e.key === 'ArrowLeft') step(-1);
+            }}
+            onTouchStart={(e) => {
+                const t = e.touches[0];
+                touchFrom.current = t && !ownsSideways(e.target, e.currentTarget) ? { x: t.clientX, y: t.clientY } : null;
+            }}
+            onTouchEnd={(e) => {
+                const from = touchFrom.current;
+                touchFrom.current = null;
+                const t = e.changedTouches[0];
+                if (from && t) step(swipeStep(t.clientX - from.x, t.clientY - from.y));
+            }}
+        >
+            <header className={`flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-4 pb-2 ${SAFE_TOP}`}>
+                <Button size="xs" type="button" data-action="back" onClick={onBack} className={`${TOUCH} pr-2 text-sm text-[var(--fg-3)]`}>← back</Button>
+                <span className="truncate text-sm font-semibold">{detail.agent.name}</span>
                 <ProviderLogo provider={detail.agent.provider} />
                 <span data-running={running ? 'true' : 'false'} className={`ml-auto font-mono text-[11px] ${running ? 'text-[var(--success)]' : 'text-[var(--fg-4)]'}`}>{running ? 'running' : 'not running'}</span>
             </header>
+            {/* THE PANELS' TABS — react-fancy Tabs (a menu, not buttons: the owner, 2026-11-01), thumb-sized. */}
+            <nav data-mobile-panel-tabs aria-label="Panels" className="shrink-0 border-b border-[var(--border-1)] px-2 py-1">
+                <Tabs variant="pills" activeTab={panel} onTabChange={(id) => setPanel(id as MobilePanel)}>
+                    <Tabs.List className="w-full gap-1">
+                        {MOBILE_PANELS.map((p) => (
+                            <Tabs.Tab key={p} value={p} data-mobile-panel-tab={p} className="flex min-h-11 flex-1 items-center justify-center gap-1.5 px-2 text-sm">
+                                <Icon name={PANEL_TABS[p].icon} size="sm" />
+                                <span>{PANEL_TABS[p].label}</span>
+                                {p === 'chat' && needs.length > 0 ? <span data-mobile-needs-count={needs.length} className="rounded-full bg-[var(--warning)] px-1.5 text-[11px] font-semibold text-black">{needs.length}</span> : null}
+                            </Tabs.Tab>
+                        ))}
+                    </Tabs.List>
+                </Tabs>
+            </nav>
             {reconnecting ? <Reconnecting /> : null}
             {detail.refusal ? <p data-refusal className="shrink-0 border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{detail.refusal}</p> : null}
             {held ? (
                 <div data-mobile-limit className="flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-xs">
                     <span className="text-[var(--warning)]" {...(limitTitle(detail.session?.limit) ? { title: limitTitle(detail.session?.limit)! } : {})}>Paused · {held}</span>
-                    <Button size="xs" type="button" data-action="resume-limit" onClick={onResumeLimit} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 font-medium">Resume now</Button>
+                    <Button size="xs" type="button" data-action="resume-limit" onClick={onResumeLimit} className={`${TOUCH} ml-auto rounded-lg border border-[var(--border-1)] px-2.5 font-medium`}>Resume now</Button>
                 </div>
             ) : null}
-            <main data-mobile-activity data-mobile-scroll className={`${SCROLL} flex flex-col gap-2 px-4 py-3`}>
-                {detail.rows.length === 0 ? (
-                    <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>
-                ) : (
-                    detail.rows.map((r) => {
-                        const row = ledgerRow(r, { agentName: detail.agent.name });
-                        if (row.prose) {
-                            return (
-                                <div key={row.id} data-mobile-row={row.id} data-prose className="rounded-xl bg-[var(--bg-1)] px-3 py-2 text-[14px]">
-                                    <ChatProse text={row.main} />
-                                </div>
-                            );
-                        }
-                        const mine = row.who?.tone === 'you';
-                        return (
-                            <div key={row.id} data-mobile-row={row.id} className={`flex items-start gap-2 text-[13px] ${mine ? 'self-end rounded-xl bg-[var(--primary)]/15 px-3 py-2' : ''}`}>
-                                {mine ? null : <Icon name={row.icon} size="xs" className="mt-0.5 shrink-0 text-[var(--fg-4)]" />}
-                                <span className={`min-w-0 flex-1 ${row.mono ? 'font-mono text-xs' : ''} ${row.italic ? 'italic text-[var(--fg-3)]' : ''} ${row.clamp ? 'truncate' : 'whitespace-pre-wrap break-words'}`}>{row.main}</span>
-                                {row.meta ? <span className={`shrink-0 font-mono text-[11px] ${row.metaTone === 'bad' ? 'text-[var(--danger)]' : 'text-[var(--fg-4)]'}`}>{row.meta}</span> : null}
-                            </div>
-                        );
-                    })
-                )}
-            </main>
-            {needs.length > 0 ? (
+            {panel === 'agents' ? (
+                <main data-mobile-panel="agents" data-mobile-scroll className={`${SCROLL} flex flex-col gap-2 px-4 py-3 ${SAFE_BOTTOM}`}>
+                    <MobileAgentList rows={agentRows ?? []} onOpen={(id) => agents?.onOpen(id)} workspaces={workspaces} current={detail.agent.id} />
+                </main>
+            ) : panel === 'chat' ? (
+                <main
+                    ref={(el) => { chatScroll.current = el; }}
+                    data-mobile-panel="chat"
+                    data-mobile-scroll
+                    onScroll={(e) => { const el = e.currentTarget; following.current = atThreadEnd(el.scrollTop, el.scrollHeight, el.clientHeight); }}
+                    className={`${SCROLL} relative flex flex-col`}
+                >
+                    {messages.length === 0 ? (
+                        <p className="py-4 text-center text-[13px] text-[var(--fg-3)]">Nothing yet.</p>
+                    ) : (
+                        <div data-chat-log="" className="flex min-h-full min-w-0 flex-col justify-end gap-3 px-3 py-3 text-[14px] [overflow-wrap:anywhere]">
+                            <ChatMessages messages={messages} thread={thread} refs={PHONE_CHAT_REFS} mailOnly={thread?.fidelity === 'observed'} loadAttachment={loadAttachment} />
+                        </div>
+                    )}
+                </main>
+            ) : (
+                <main data-mobile-panel="work" data-mobile-scroll className={`${SCROLL} flex flex-col`}>
+                    <div className="min-h-0 flex-1">
+                        <Stream
+                            rows={detail.rows}
+                            lanes={null}
+                            at={null}
+                            selectedId={selectedRow}
+                            onSelect={setSelectedRow}
+                            agentName={detail.agent.name}
+                            live={detail.session?.running === true && detail.session.turnState === 'working'}
+                            loadToolOutput={loadToolOutput}
+                        />
+                    </div>
+                </main>
+            )}
+            {panel !== 'agents' && needs.length > 0 ? (
                 <section data-mobile-waiting className="flex max-h-[40dvh] shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain border-t border-[var(--warning)]/40 bg-[var(--warning)]/5 px-4 py-3">
                     <h2 className="text-xs font-semibold text-[var(--warning)]">Waiting on you</h2>
                     {needs.map((item) => (
                         <div key={item.id} data-mobile-item={item.id}>
-                            <NeedsYou item={item} host={detail.agent.name} answering={answering} onAnswer={(i, o, n) => onAnswer?.(i, o, n)} label={null} workspace={null} />
+                            <NeedsYou item={item} host={detail.agent.name} answering={answering} onAnswer={(i, o, n) => onAnswer?.(i, o, n)} onAnswerForm={onAnswerForm} label={null} workspace={null} />
                         </div>
                     ))}
                 </section>
             ) : null}
-            <footer className="shrink-0 border-t border-[var(--border-1)] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-                {running ? (
-                    <form data-mobile-composer onSubmit={submit} className="flex flex-col gap-2">
-                        {sendRefusal ? <p data-send-refusal className="text-xs text-[var(--danger)]">{sendRefusal}</p> : null}
-                        <PendingAttachments files={pending} onRemove={(i) => setPending((p) => p.filter((_, j) => j !== i))} />
-                        <textarea name="text" rows={2} aria-label={`Message ${detail.agent.name}`} placeholder={`Tell ${detail.agent.name} what to do next`} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-2 text-[16px]"
-                            onKeyDown={(e) => {
-                                // A hardware keyboard only (Tynn issue #697): on a touch keyboard Enter stays a new line, and Send is the button.
-                                if (!hasHardwareKeyboard()) return;
-                                if (composerKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode }, sendKeyNow()) !== 'send') return;
-                                e.preventDefault();
-                                e.currentTarget.form?.requestSubmit();
-                            }} />
-                        <div className="flex items-center gap-2">
-                            <label className={attach} aria-label="Take a photo">
-                                <Icon name="camera" size="sm" />
-                                <input type="file" accept="image/*" capture="environment" data-attach="camera" className="hidden" onChange={pick} />
-                            </label>
-                            <label className={attach} aria-label="Choose photos">
-                                <Icon name="image" size="sm" />
-                                <input type="file" accept="image/*" multiple data-attach="gallery" className="hidden" onChange={pick} />
-                            </label>
-                            <label className={attach} aria-label="Attach a file">
-                                <Icon name="paperclip" size="sm" />
-                                <input type="file" multiple data-attach="file" className="hidden" onChange={pick} />
-                            </label>
-                            <span className="flex-1" />
-                            <Button size="xs" type="submit" data-action="send-prompt" disabled={sending} className={PRIMARY}>{sending ? 'Sending…' : 'Send'}</Button>
-                        </div>
-                    </form>
-                ) : (
-                    <Button size="xs" type="button" data-action="start-agent" onClick={onStart} className={`w-full ${PRIMARY}`}>Start {detail.agent.name}</Button>
-                )}
-            </footer>
+            {panel !== 'agents' ? (
+                <footer className="shrink-0 border-t border-[var(--border-1)] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                    {running ? (
+                        <form data-mobile-composer onSubmit={submit} className="flex flex-col gap-2">
+                            {sendRefusal ? <p data-send-refusal className="text-xs text-[var(--danger)]">{sendRefusal}</p> : null}
+                            <PendingAttachments files={pending} onRemove={(i) => setPending((p) => p.filter((_, j) => j !== i))} />
+                            <textarea name="text" rows={2} aria-label={`Message ${detail.agent.name}`} placeholder={`Tell ${detail.agent.name} what to do next`} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-2 text-[16px]"
+                                onKeyDown={(e) => {
+                                    // A hardware keyboard only (Tynn issue #697): on a touch keyboard Enter stays a new line, and Send is the button.
+                                    if (!hasHardwareKeyboard()) return;
+                                    if (composerKey({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode }, sendKeyNow()) !== 'send') return;
+                                    e.preventDefault();
+                                    e.currentTarget.form?.requestSubmit();
+                                }} />
+                            <div className="flex items-center gap-2">
+                                <label className={attach} aria-label="Take a photo">
+                                    <Icon name="camera" size="sm" />
+                                    <input type="file" accept="image/*" capture="environment" data-attach="camera" className="hidden" onChange={pick} />
+                                </label>
+                                <label className={attach} aria-label="Choose photos">
+                                    <Icon name="image" size="sm" />
+                                    <input type="file" accept="image/*" multiple data-attach="gallery" className="hidden" onChange={pick} />
+                                </label>
+                                <label className={attach} aria-label="Attach a file">
+                                    <Icon name="paperclip" size="sm" />
+                                    <input type="file" multiple data-attach="file" className="hidden" onChange={pick} />
+                                </label>
+                                <span className="flex-1" />
+                                <Button size="xs" type="submit" data-action="send-prompt" disabled={sending} className={`${PRIMARY} min-h-11`}>{sending ? 'Sending…' : 'Send'}</Button>
+                            </div>
+                        </form>
+                    ) : (
+                        <Button size="xs" type="button" data-action="start-agent" onClick={onStart} className={`w-full min-h-11 ${PRIMARY}`}>Start {detail.agent.name}</Button>
+                    )}
+                </footer>
+            ) : null}
         </div>
     );
 }

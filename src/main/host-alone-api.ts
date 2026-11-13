@@ -31,7 +31,7 @@ import { startForWork, startForYourMessage } from './start-on-demand.js';
  * with a window open, the window answers as before. Anything outside the phone's set is refused with what to do.
  */
 export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
-    'snapshot', 'agentDetail', 'prompt', 'answerApproval', 'restartWithHandoff', 'agents.restart', 'resumeLimit', 'features.act',
+    'snapshot', 'agentDetail', 'prompt', 'answerApproval', 'agents.restart', 'resumeLimit', 'features.act',
     'files.children', 'files.open', 'files.readMedia', 'files.upload',
 ]);
 
@@ -42,7 +42,7 @@ export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
 export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
     'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope',
     'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions',
-    'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput',
+    'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput', 'agents.attachment',
 ]);
 
 /** The Dashboard's lanes and rate limits (Tynn #553, P5d.5b). */
@@ -72,8 +72,8 @@ export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMetho
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
     'probe' | 'start' | 'stop' | 'ended' | 'deliverOwed' | 'cancel' | 'resumeLimit' | 'prompt' | 'promptWith' | 'resolvePrompt' | 'answerApproval'
-    | 'subscribe' | 'needsNewDriver' | 'notice' | 'ledgerFor' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'
-    | 'modelState' | 'switchModel' | 'settleParked' | 'historyRows' | 'toolOutput'>;
+    | 'subscribe' | 'needsNewDriver' | 'notice' | 'ledgerFor' | 'historyPending' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'
+    | 'modelState' | 'switchModel' | 'settleParked' | 'historyRows' | 'toolOutput' | 'forgetShown' | 'attachment'>;
 
 export interface HostAlonePorts {
     readonly hostName: string;
@@ -193,7 +193,6 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             subscribe: (listener) => ports.engine()?.subscribe(listener) ?? (() => {}),
         },
         registerAgent: async () => { throw new Error(needsWindow('a new agent')); },
-        attention: { finished: () => ports.attention.finished(), markSeen: (id) => ports.attention.markSeen(id) },
         terminals: windowOnly<HostApiDeps['terminals']>('terminals', ports.terminals),
         uploads: windowOnly<HostApiDeps['uploads']>('inbox.sendFile'),
         files: ports.files,

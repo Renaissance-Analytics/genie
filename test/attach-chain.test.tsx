@@ -51,8 +51,10 @@ describe('the session', () => {
         session.prompt('plain', 'you');
         expect(prompted).toEqual([content, 'plain']);
         await vi.waitFor(() => expect(rows.filter((r) => r.kind === 'message')).toHaveLength(2));
+        // The image is kept with the thread (Tynn #642): the row names it by a 32-hex id the session mints, with its type
+        // and size (the three bytes sent), so the pill can ask for it later. The plain message keeps nothing.
         expect(rows.filter((r) => r.kind === 'message')).toEqual([
-            { kind: 'message', speaker: 'you', peerName: null, text: 'see this', attachments: ['shot.png'] },
+            { kind: 'message', speaker: 'you', peerName: null, text: 'see this', attachments: ['shot.png'], attachmentRefs: [{ id: expect.stringMatching(/^[0-9a-f]{32}$/), name: 'shot.png', mimeType: 'image/png', bytes: 3 }] },
             { kind: 'message', speaker: 'you', peerName: null, text: 'plain' },
         ]);
     });

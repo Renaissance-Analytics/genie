@@ -3,7 +3,7 @@ import { isSleeping } from './agent-status.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import { repeatsCompaction, type TimedEvent } from './stream-view.js';
-import type { StreamEvent, ToolKind } from './stream-event.js';
+import type { AttachmentRef, StreamEvent, ToolKind } from './stream-event.js';
 import type { Attachment } from './prompt-content.js';
 import { promptDeliveries } from './prompt-delivery.js';
 import { messageLines } from './chat-window.js';
@@ -83,6 +83,8 @@ export interface ChatMessage {
     carried?: string;
     /** The names of the files sent with it (your message only); absent when there were none. */
     attachments?: readonly string[];
+    /** The images among them the host kept (Tynn #642): what a pill asks for to show its image. Absent when none was kept. */
+    attachmentRefs?: readonly AttachmentRef[];
     /** Why an undelivered draft was not sent, when the host said; absent = the agent is not running. */
     reason?: string;
     /** An undelivered draft only: how it is sent now — `send` while its agent runs again, else `restart` (start it, then send). */
@@ -154,6 +156,8 @@ export interface ChatDetail {
     rows: readonly TimedEvent[];
     /** The agent's AgentInbox mail (both directions); absent or `null` = not read, which adds no rows. */
     comms?: readonly MailLike[] | null | undefined;
+    /** `rows` are not yet its conversation (Tynn #659, `AgentDetail.rowsPending`): the thread is not loaded, and shows no mail alone. */
+    rowsPending?: boolean | undefined;
 }
 
 export function chatContext(detail: ChatDetail): ChatContext {
@@ -248,7 +252,8 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
             ...(queued && detail.session?.starting === true ? { queuedForStart: true }
                 : queued && detail.session?.turnState === 'idle' && detail.session.inTurn !== true ? { queuedForProvider: true } : {}),
             ...(queued ? { silentSince: lastOutputAt } : {}),
-            ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
+            ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}),
+            ...(e.attachmentRefs && e.attachmentRefs.length > 0 ? { attachmentRefs: e.attachmentRefs } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;
 }
@@ -356,8 +361,11 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
     // loaded for another agent is never drawn under this one's name.
     const own = detail !== null && (detail.agent.id === subjectId || detail.agent.id === row?.id || detail.agent.name === subjectId);
     if (!own) detail = null;
-    const start = detail && lines !== undefined ? chatTailStart(detail.rows, lines) : 0;
-    const messages = detail ? tailMessages(detail, rows, start) : [];
+    // ROWS STILL COMING (Tynn #659): the mail is there at once and the replies are not, so drawing it would be a chat of
+    // mail cards alone — the switch the owner saw. Not loaded: the chat draws loading until the conversation is whole.
+    const conversation = detail !== null && detail.rowsPending !== true ? detail : null;
+    const start = conversation && lines !== undefined ? chatTailStart(conversation.rows, lines) : 0;
+    const messages = conversation ? tailMessages(conversation, rows, start) : [];
     return {
         agentId: subjectId,
         name: detail?.agent.name ?? row?.name ?? subjectId,
@@ -365,9 +373,9 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         unread: null,
         messages,
         context: detail ? chatContext(detail) : null,
-        loaded: detail !== null,
+        loaded: conversation !== null,
         earlier: start > 0,
-        arriving: detail ? arrivingMessageId(detail, messages) : null,
+        arriving: conversation ? arrivingMessageId(conversation, messages) : null,
     };
 }
 

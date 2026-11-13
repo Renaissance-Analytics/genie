@@ -2,8 +2,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileLockIdentityStatus, warmLockIdentity } from '@particle-academy/prism-harness';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessInfo, ProcessTree } from '../src/core/process-tree.js';
 import { CANCEL_STATE_UNCERTAIN, CANCEL_STATE_UNCERTAIN_CODE, RESTARTED_FOR_QUEUE, type DriverEvents, type SessionDriver, type TurnOutcomeLike } from '../src/core/session.js';
@@ -25,6 +26,13 @@ import { ChatQueueBar } from '../src/renderer/components/ChatQueueBar.js';
 const CANCELLED: TurnOutcomeLike = { stopReason: 'cancelled', isError: false, raw: 'cancelled' };
 const DROPPED: TurnOutcomeLike = { stopReason: 'cancelled', isError: false, raw: 'dropped by cancel' };
 const MISMATCH: TurnOutcomeLike = { stopReason: 'cancelled', isError: false, raw: 'cancel accounting mismatch' };
+
+// Match host startup and the thread-write suites: keep the cold Windows CIM identity read
+// outside each test's 5 s budget while exercising the real native file lock and disk ledger.
+beforeAll(async () => {
+    await warmLockIdentity();
+    console.log(`[#661] ${process.platform} lock identity read once: ${Math.round(fileLockIdentityStatus().sample_duration_ms)} ms`);
+}, 30_000);
 
 describe('Genie ends its own tool calls for the agent interrupted', () => {
     const forever: Registration = { definition: { name: 'services', description: 'x', inputSchema: { type: 'object' } } as never, handler: (_a, context) => new Promise((resolve) => { context.signal?.addEventListener('abort', () => resolve({ text: 'the command was ended', isError: true })); }) };
@@ -129,6 +137,7 @@ describe('SessionHost: an interrupt keeps the agent and sends the queue', () => 
     }
 
     it('interrupt during a Genie tool call: the call is ended, the turn cancels, and the queue goes to the SAME agent, no restart', async () => {
+        expect(fileLockIdentityStatus().sampled, 'native lock identity is sampled before the test, as at host startup').toBe(true);
         const w = world();
         w.host.start(w.record, dir);
         w.host.prompt(w.record.id, 'run the tests', 'you');

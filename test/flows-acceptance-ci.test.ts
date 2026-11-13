@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { linuxRow, linuxRows, linuxSh } from './helpers/ci-scripts.js';
 import { WINDOW_PATH, flowsDependencySet, importGraph, runtimeImports, srcFiles, touchedFlows } from '../scripts/flows-paths.mjs';
 
 /**
@@ -13,10 +14,6 @@ import { WINDOW_PATH, flowsDependencySet, importGraph, runtimeImports, srcFiles,
  * run against real paths, so a pattern that silently matches nothing (or everything) is caught here, in the default suite.
  */
 
-// Comments stripped by line first: a step mentioned in a comment is not a step.
-const code = (yaml: string) => yaml.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
-const ci = code(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
-const job = ci.slice(ci.indexOf('\n  flows:'), ci.indexOf('\n  test-windows:'));
 const repo = fileURLToPath(new URL('..', import.meta.url));
 
 describe('the Flows acceptance suite', () => {
@@ -28,30 +25,11 @@ describe('the Flows acceptance suite', () => {
         expect('test/flows-acceptance/triggers.accept.ts').not.toMatch(/\.test\.(ts|tsx)$/);
     });
 
-    it('CI has a `flows acceptance` job that always reports and runs the suite only when Flows changed', () => {
-        expect(job).toContain('name: flows acceptance');
-        // No job-level `if:` and no `on.paths` filter: a required check that never reports blocks every other PR.
-        expect(job).not.toMatch(/\n {4}if:/);
-        expect(ci).not.toMatch(/\n\s+paths:/);
-        expect(job).toMatch(/- run: npm run verify:flows\n\s+if: steps\.changed\.outputs\.flows == 'true'/);
-    });
-
-    it('it asks scripts/flows-paths.mjs which changed files touch Flows (not a rule on names), and checks the fancy-flow dependency', () => {
-        expect(job).toContain('git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed.txt"');
-        expect(job).toContain('node scripts/flows-paths.mjs --touched "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/touched.txt"');
-        expect(job).toMatch(/if \[ -s "\$RUNNER_TEMP\/touched\.txt" \]; then [^\n]*flows=true; fi/);
-        expect(job).toContain(`git diff "$BASE" HEAD -- package.json > "$RUNNER_TEMP/package.diff"`);
-        expect(job).toContain(`if grep -qE '^[+-].*"@particle-academy/fancy-flow"' "$RUNNER_TEMP/package.diff"; then flows=true; fi`);
-        expect(job).toContain(`git diff "$BASE" HEAD -- package-lock.json > "$RUNNER_TEMP/package-lock.diff"`);
-        expect(job).toContain(`if grep -qE '^[+-].*fancy-flow-[0-9]' "$RUNNER_TEMP/package-lock.diff"; then flows=true; fi`);
-        // Nothing piped into grep: `grep -q` exits at its first match, the writer dies of SIGPIPE, and pipefail reads a
-        // match as none — the suite would be skipped exactly when the dependency changed.
-        expect(job).not.toMatch(/\|\s*grep/);
-        // node makes the decision, so node is set up before it — for every change, not only the ones that touch Flows.
-        const setup = job.indexOf('uses: actions/setup-node@v4');
-        expect(setup).toBeGreaterThan(-1);
-        expect(setup).toBeLessThan(job.indexOf('node scripts/flows-paths.mjs'));
-        expect(job.slice(setup, job.indexOf('- name: did this change touch Flows?'))).not.toContain('if:');
+    it('the Linux gate runs it in its own row (scripts/ci/linux.sh), after zip64\'s place in the order and on its own', () => {
+        expect(linuxRows).toContain('flows');
+        expect(linuxRow('flows')).toMatch(/npm run verify:flows/);
+        // Run by exactly one row.
+        expect(linuxSh.match(/npm run verify:flows/g)).toHaveLength(1);
     });
 
     it('its decision covers every file Flows are made of — not only the files named flow (genie#1302 broke the editor through core/address.ts, and the job never ran)', () => {

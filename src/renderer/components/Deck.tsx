@@ -20,7 +20,6 @@ import {
     isDismissable,
     needsYouCount,
     signalStrip,
-    sinceYouLooked,
     staleLabel,
     type DeckItem,
     type DeckSection,
@@ -121,8 +120,6 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
     const waiting = needsYouCount(items);
     const staleItems = dismissableStale(band);
     const staleCount = band.length - waiting;
-    // SINCE YOU LOOKED (§4.5): finished agents with their handoff notes — read here, newest first; never in the count.
-    const looked = sinceYouLooked(items);
     const strip = signalStrip(signals);
     const old = dismissableOlderThan(band, now, DAY_MS);
     const focusRef = useRef<HTMLDivElement | null>(null);
@@ -258,25 +255,6 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                             <div key={item.id}>
                                 <span data-deck-earlier-workspace={item.workspaceId ?? ''} className="block px-7 pt-2 text-[11px] text-[var(--fg-3)]">{item.workspaceId === null ? GENIE_SECTION : (item.workspaceName ?? UNNAMED_WORKSPACE)}</span>
                                 <DeckRow item={item} answering={answering} onAnswer={onAnswer} onOpenItem={onOpenItem} onAnswerForm={onAnswerForm} formRefusal={formRefusal} focusId={focusId} focusRef={focusRef} onDismiss={onDismiss} now={now} />
-                            </div>
-                        ))}
-                    </div>
-                ) : null}
-
-                {looked.length > 0 ? (
-                    <div data-deck-band="since-you-looked" className="mt-2">
-                        <h2 className="px-7 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Since you looked</h2>
-                        {looked.map((item) => (
-                            <div key={item.id} data-deck-item={item.id} data-priority={item.priority} className="border-b border-[var(--border-1)] px-7 py-3">
-                                <div className="flex items-center gap-2 text-[13px]">
-                                    {item.agentName ? (
-                                        <Button size="xs" type="button" data-deck-agent={item.agentId} onClick={() => onOpenItem(item)} className="shrink-0 font-medium">{item.agentName}</Button>
-                                    ) : null}
-                                    <span className="min-w-0 flex-1 text-[var(--fg-2)]">{item.title}</span>
-                                </div>
-                                {item.answer.kind === 'inline' ? (
-                                    <InlineOptions options={item.answer.options} answering={answeringFor(answering, item.agentId ?? '', null)} onAnswer={(optionId) => onAnswer(item, optionId)} />
-                                ) : null}
                             </div>
                         ))}
                     </div>

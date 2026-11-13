@@ -97,7 +97,6 @@ describe('its own waiting-on-you', () => {
                 item({ id: 'approval:a', agentId: 'a', answer: { kind: 'inline', options: [] }, title: 'Run rm?' }),
                 item({ id: 'qb', agentId: 'b', title: 'Which drawer?' }),
                 item({ id: 'stale', agentId: 'a', stale: 'agent-gone' }),
-                item({ id: 'done', agentId: 'a', source: 'finished-handoff', blocking: false }),
             ],
         });
         expect(v.lanes.find((l) => l.id === 'a')!.waiting.map((w) => w.id)).toEqual(['q1', 'approval:a']);

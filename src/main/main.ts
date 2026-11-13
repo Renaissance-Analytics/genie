@@ -101,7 +101,6 @@ import { mkdir, readdir, readFile as readFileText, writeFile as writeFileText } 
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
-import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
@@ -111,6 +110,7 @@ import { crashHeader, removeCrashRecord, writeCrashRecord } from './crash-record
 import { routeExecThroughSpawnHost, SpawnHostClient } from './spawn-host-client.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
+import { getHeapStatistics } from 'node:v8';
 import { Session as InspectorSession } from 'node:inspector';
 import { stallStacksWanted, startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
@@ -154,12 +154,13 @@ import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, t
 import { panelRestart } from '../core/panel-restart.js';
 import { LeftRunningMark } from './left-running.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { runCliRepair } from './cli-repair.js';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
-import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
 import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
 import { defaultPathEntries } from '../core/toolchain-defaults.js';
@@ -371,14 +372,16 @@ let spawnHostNow: SpawnHostClient | null = null;
 let spawnTerminalsNow: SpawnHostClient | null = null;
 /** Live ptys a previous window started, found under genie-host at boot: the terminals' to adopt (supervised processes are the host's own since P3.3b). */
 let adoptablePtys: ListedPty[] = [];
+/** The route the main window shows (its URL after `#`), or `null`: what a stall line and a heartbeat (#711) say. */
+function mainRoute(): string | null {
+    const url = window && !window.isDestroyed() ? window.webContents.getURL() : '';
+    const at = url.indexOf('#');
+    return at === -1 ? null : url.slice(at + 1);
+}
 const stallWatchdog = new StallWatchdog({
     log: (line) => stallLog?.(line),
     onMainStall: (ms) => stallProfiler?.capture(ms),
-    routeOf: () => {
-        const url = window && !window.isDestroyed() ? window.webContents.getURL() : '';
-        const at = url.indexOf('#');
-        return at === -1 ? null : url.slice(at + 1);
-    },
+    routeOf: mainRoute,
 });
 timeIpcHandlers(ipcMain, stallWatchdog);
 /** A window's name in the log: its page (`index`, `question`, `browser`…), from its URL. */
@@ -770,7 +773,10 @@ const dashboardComms = new CommsCache((agentId) => (services ? services.inbox.in
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
 /** The updater as this window reads and drives it: genie-host's, through a replica (P5b). */
-let updates: Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> | null = null;
+let updates: (Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> & { prepareQuit?: () => Promise<unknown>; forceDrain?: () => boolean | Promise<boolean>; cancelDrain?: () => void | Promise<void> }) | null = null;
+/** Repeated quit requests cannot skip the pending safe-point wait or overwrite its final record. */
+let quitPreparation: Promise<unknown> | null = null;
+let updateQuitReady = false;
 /**
  * ONE QUIT (core/quit.ts `quitSequence`): asked at most once, the running set recorded at most once (§7.6 — an
  * upgrade's drain records it itself, so the quit does not overwrite it with the empty list it leaves), the shutdown
@@ -1647,6 +1653,9 @@ async function boot(): Promise<void> {
             rss: () => process.memoryUsage.rss(),
             // The main window's page beside it: genie-host's rss line says what grew (bringBackItsPage samples it).
             rendererRss: () => pageMemory.bytes(),
+            // WHICH WINDOW, AND HOW NEAR ITS LIMIT (Tynn issue #711): a lost record names it by its route, and says its heap.
+            route: mainRoute,
+            heap: () => { const h = getHeapStatistics(); return { used: h.used_heap_size, limit: h.heap_size_limit }; },
         });
     }
     /*
@@ -1806,6 +1815,7 @@ async function boot(): Promise<void> {
         const replica = agentEngineLink.client.updates();
         replica.onInstalling(() => {
             lifecycleLog('update: the host is installing; this window quits');
+            updateQuitReady = true;
             quit.markRecorded();
             quit.choose('shut-down');
             setTimeout(() => { app.quit(); }, QUIT_DELAY_MS);
@@ -2491,7 +2501,6 @@ async function boot(): Promise<void> {
             },
             registerAgent: (workspaceId, input) => createAgent(agentCreatePorts(), workspaceId, input),
             rosterChanged: () => registry?.touch(),
-            attention: { finished: () => services!.attention.finished(), markSeen: (id) => services!.attention.markSeen(id) },
             terminals: {
                 open: (options) => terminals!.open(options),
                 write: (id, data) => terminals!.write(id, data),
@@ -2528,6 +2537,7 @@ async function boot(): Promise<void> {
                       state: () => updates!.state(),
                       check: () => updates!.check(),
                       download: () => updates!.download(),
+                      forceDrain: () => updates!.forceDrain?.() ?? false,
                       install: () => {
                           const pending = updates!.install();
                           return pending ? pending.then((done) => { console.log(`[updater] ${done.report}`); return { report: done.report }; }) : null;
@@ -2542,7 +2552,7 @@ async function boot(): Promise<void> {
     // Genie-host's remote connections follow this window's events (the snapshot, features…) while it is the newest window.
     if (remoteApiNow) {
         const api = remoteApiNow;
-        linkedRemote.forwardEvents((listener) => api.onEvent(listener));
+        linkedRemote.forwardEvents((listener, options) => api.onEvent(listener, options));
         void linkedRemote.refresh().catch((error: unknown) => console.error(`[remote] ${error instanceof Error ? error.message : String(error)}`));
     }
     composedNow = composed;
@@ -2563,6 +2573,7 @@ async function boot(): Promise<void> {
     composed.flows.onChange(pushFeatures);
     composed.settings.onChange(pushFeatures);
     composed.supervisor.onChange(pushFeatures);
+    composed.supervisor.onForget?.(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
     // window not in front asks for attention (taskbar flash / urgency) WITHOUT taking focus (q_8c07b142).
@@ -3147,6 +3158,16 @@ async function boot(): Promise<void> {
             openLog: () => shell.openPath(join(runtimeDir(genieRoot()), 'lifecycle.log')).then((failed) => failed || null),
         },
         toolchain: {
+            // A Broken agent CLI's Repair (Tynn #698): the vendor's installer, step by step, judged by checking it again.
+            repairCli: (provider, progress) => runCliRepair(provider, {
+                platform: process.platform,
+                env: processEnv,
+                isFile: (path) => { try { return statSync(path).isFile(); } catch { return false; } },
+                run: (binary, args, options) => execFileRunner(binary, args, { timeoutMs: options.timeoutMs }),
+                refreshPath: () => refreshPersistedPath({ platform: process.platform as Platform, run: execFileRunner, env: processEnv }),
+                check: (p) => providerHealth.refresh(p),
+                progress,
+            }),
             // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
             login: (provider) => { const started = loginHost?.start(provider) ?? { ok: false as const, reason: 'Genie’s login window is not ready yet; try again in a moment' }; return started.ok ? { ok: true } : started; },
             // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).
@@ -3589,6 +3610,11 @@ app.on('before-quit', (event) => {
     // A launch that never booted (a second instance, a `--quit` with no Genie running) owns nothing to shut down — and
     // clearing the genie-running file below would clear the RUNNING Genie's. It exits without a quit; this is the guard.
     if (launch.kind !== 'boot') return;
+    if (quitPreparation !== null) { event.preventDefault(); return; }
+    // An install already owns the shutdown/restore record. Its onInstalling callback quits this
+    // window once the report is returned at `restarting`, never in the middle of the agent wait.
+    const installing = updates?.state();
+    if (installing?.phase === 'installing' && installing.installing?.reason !== 'quit' && !updateQuitReady) { event.preventDefault(); return; }
     // QUIT CONFIRMATION (§6.5): defaults to the safe thing. Asked once; a confirmed quit proceeds. The steps and their
     // once-only guarantees are core/quit.ts `quitSequence`; a cancelled quit changes nothing — the window keeps hiding.
     const step = quit.beforeQuit({
@@ -3610,7 +3636,14 @@ app.on('before-quit', (event) => {
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
     if (step === 'record') {
         event.preventDefault();
-        void recordShutdownNow().catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
+        // The window remains responsive: pending names and Quit now use the same progress surface
+        // as an upgrade. Record AFTER the wait so only turns actually cut off are resumed.
+        revealMainWindow('waiting for agents before quitting');
+        quitPreparation = Promise.resolve(updates?.prepareQuit?.())
+            .catch((error: unknown) => { console.warn('[quit] safe-point wait failed', error); })
+            .then(() => recordShutdownNow())
+            .catch(() => { /* an unsaved list means no restore, never a blocked quit */ })
+            .finally(() => { quitPreparation = null; app.quit(); });
         return;
     }
     // The shutdown already ran (a second quit request arrived while the running set was being written): nothing twice.
@@ -3623,7 +3656,7 @@ app.on('before-quit', (event) => {
     // runQuit runs to its end: the drain bounded inside it, then the host ended, itself bounded (agent-engine.ts). A race
     // around the whole of it let the window exit before the host was told to end (ss-repeat5, 2026-11-05).
     void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
-        .catch(() => { /* an unwritten row never blocks a quit */ })
+        .catch(async () => { try { await updates?.cancelDrain?.(); } catch { /* the host may already be gone */ } })
         // No host: this window was the run, and its clean end writes the marker, last (Tynn #386). With a host: nothing.
         .finally(() => { crashRecorder.cleanQuit(); heartbeatNow?.bye(); app.quit(); });
 });

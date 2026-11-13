@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
 import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
+import { makeServiceExec } from './service-exec.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, osaHomeDir, runtimeDir } from './paths.js';
@@ -20,7 +21,7 @@ import type { TynnBoardPorts } from './tynn-board-client.js';
 import { StallWatchdog } from './stall-watchdog.js';
 import { HangWatchdog } from './hang-watchdog.js';
 import { CrashStateHost } from './crash-state-host.js';
-import { crashHeader, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
+import { crashHeader, exitRecordOf, previousRunCause, previousRunRecord, readLifecycleTail, writeCrashRecord } from './crash-records.js';
 import { runningAgentNote } from '../core/crash-record.js';
 import { providerBinary, realListModels, SessionHost } from './session-host.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
@@ -52,8 +53,9 @@ import { scratchArea } from './scratch-area.js';
 import { TakeOverService } from './take-over-service.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
-import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
+import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess, windowExitOf } from './engine-launch.js';
 import { clearUpdateFailed, helperLaunch, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
+import { AgentShutdownDrain } from '../core/agent-shutdown-drain.js';
 import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
 import { windowReleased } from './window-release.js';
 import { channelFrom } from '../core/update-channel.js';
@@ -87,6 +89,7 @@ import { openHostKeychain } from './host-keychain.js';
 import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
+import { relayFetchOver } from './host-relay-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
 import { chmod, mkdir, readFile as readFileText } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
@@ -691,6 +694,16 @@ async function main(): Promise<void> {
      * (the window's, so an AppImage's `APPIMAGE` reaches it). An install is a person's, from a window; never by itself.
      */
     const runningVersion = build.split('+')[0] ?? build;
+    const agentShutdown = new AgentShutdownDrain({
+        agents: () => hostRegistry.listAgents().map(({ id, name }) => {
+            const session = host.probe(id as AgentId);
+            return { id, name, running: session?.running === true, inTurn: session?.inTurn === true };
+        }),
+        // A queued shutdown notice is no longer relevant after restart; it must not become owed work.
+        notify: (id, text) => { host.handOff(id as AgentId, text, 'genie', { retold: true }); },
+        hold: () => host.holdForShutdown(),
+        release: () => host.releaseAfterShutdown(),
+    });
     const updatesService = new UpdatesService({
         ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
         host: {
@@ -711,6 +724,15 @@ async function main(): Promise<void> {
             agents: hostDrainAgents({
                 agents: () => hostRegistry.listAgents(),
                 probe: (id) => host.probe(id as AgentId),
+                waitForSafe: (reason, progress) => agentShutdown.begin(reason, progress).then((outcome) => {
+                    if (outcome.interrupted.length) {
+                        const line = `${reason}: stopping mid-turn: ${outcome.interrupted.map((a) => a.name).join(', ')}${outcome.timedOut ? ' (120-second wait expired)' : outcome.forced ? ' (proceed now chosen)' : ' (early acknowledgement)'}`;
+                        say(line); lifecycleLog(line);
+                    }
+                    return outcome;
+                }),
+                force: () => agentShutdown.force(),
+                release: () => agentShutdown.release(),
                 writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
                 writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
                 stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
@@ -722,7 +744,7 @@ async function main(): Promise<void> {
         startHelper: (launch) => { startOwnDetached('updater', helperLaunch(launch), updaterHelperEnv(process.env, home), 'genie-updater.log', true, () => { spawnUpdaterProcess(helperLaunch(launch), { logsDir: join(home, 'logs'), env: updaterHelperEnv(process.env, home) }); }); },
         defaultLaunch: updaterDefaultLaunch(process.env, process.execPath),
         windowConnected: () => engineRef?.windowConnected() ?? false,
-        exit: () => { void shutdown('an update is installing'); },
+        exit: () => shutdown('an update is installing'),
         log: (line) => { say(line); lifecycleLog(line); },
         // A failed install's reason, for the first window after it, once.
         failed: readUpdateFailed(home),
@@ -754,6 +776,9 @@ async function main(): Promise<void> {
         // The new window after the ended one has let go of its process and sockets (Tynn #400), bounded at 10 s.
         released: (pid) => windowReleased(pid, { alive: pidAlive, sockets: tcpSocketsOwnedByAsync }),
         alive: pidAlive,
+        // HOW A LOST WINDOW ENDED (Tynn issue #711): the exit this host saw for a window it started, else the window's own record.
+        exitOf: windowExitOf,
+        ownExit: (pid, since) => exitRecordOf(join(runtime, 'crash'), pid, since),
         hostRss: () => process.memoryUsage.rss(),
         cpuMs: () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; },
         agents: () => {
@@ -892,9 +917,11 @@ async function main(): Promise<void> {
      * THIS MACHINE ON THE TYNN RELAY, AS A HOST (Tynn #410, host split P5d.3): registered with Tynn, its role read, and the
      * link run here, so a Pilot or a share link reaches this machine with every window closed.
      */
+    // Its Tynn calls over this host's HTTPS client, adapted in the open (Tynn issue #707: a cast here sent no signal and
+    // read a json() the client does not have, so no 61.x drone reached the relay).
     const relayFetch = async (url: string, init?: RequestInit): Promise<Response> => {
         const memory = await proxyMemory;
-        return hostHttpsFetch({ proxyRoutes: (target) => memory.routesFor(target), log: say })(url, init as never) as unknown as Response;
+        return relayFetchOver(hostHttpsFetch({ proxyRoutes: (target) => memory.routesFor(target), log: say }))(url, init);
     };
     const relayHostService: RelayHostService = new RelayHostService({
         account: () => tynnAccountNow,
@@ -1448,10 +1475,14 @@ async function main(): Promise<void> {
         probe: (id) => host.probe(id),
         lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,
         reportPlan: (id, steps) => host.reportPlan(id, steps),
+        serviceExec: makeServiceExec(systemProcessTree, processSupervisor, (id, run) => { host.commandStarted(id as AgentId, run); }),
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         capabilities,
-        signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
+        signal: (signal) => {
+            if (signal.kind === 'action' && signal.action === 'thumbsup' && signal.reason?.trim().toLowerCase() === 'shutdown') agentShutdown.acknowledge(signal.agentId);
+            engine.callback({ name: 'toolSignal', signal });
+        },
         forwardedCalls,
         processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
         terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), scrollbackCap: 1_000_000 },
@@ -1464,7 +1495,7 @@ async function main(): Promise<void> {
         // THE AGENTS' `mail` (Genie Mail G6): the inbox book and the shared Mailpit, both this host's.
         ...(hostingStack?.mail ? { mail: hostingStack.mail } : {}),
         // THE AGENTS' `sites` AND `services` (Tynn #444): this host's own hosting (P5a) under its own supervisor — what the
-        // Hosting and Services tabs show. Only `sites open` and `services exec` still go to a window.
+        // Hosting and Services tabs show. Only `sites open` still goes to a window.
         ...(hostingStack ? {
             hosting: {
                 sites: hostingStack.sites,
@@ -1562,36 +1593,43 @@ async function main(): Promise<void> {
     async function shutdown(why: string): Promise<void> {
         if (shuttingDown) return;
         shuttingDown = true;
-        hangWatchdog.shuttingDown();
-        say(`shutting down: ${why}`);
-        if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
-        lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
-        browserService.quit();
-        const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
-        // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
-        // host nobody wants.
-        await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
-        files?.close();
-        issueWatch.stop();
-        await mcp?.stop();
-        approvals.cancelAll('Genie is shutting down');
-        own.knowledge.close();
-        // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
-        // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
-        // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
-        await stopHostedOnce();
-        await appInboxDoor.close().catch(() => undefined);
-        await gappServer?.close().catch(() => undefined);
-        server.close();
-        // Only this host's record: a newer host may already have written its own.
-        const current = parseHostRecord(readOrNull(recordFile));
-        if (current?.pid === process.pid) {
-            rmSync(recordFile, { force: true });
-            rmSync(tokenFile, { force: true });
+        try {
+            hangWatchdog.shuttingDown();
+            say(`shutting down: ${why}`);
+            if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
+            lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
+            browserService.quit();
+            const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
+            // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
+            // host nobody wants.
+            await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
+            files?.close();
+            issueWatch.stop();
+            await mcp?.stop();
+            approvals.cancelAll('Genie is shutting down');
+            own.knowledge.close();
+            // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
+            // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
+            // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
+            await stopHostedOnce();
+            await appInboxDoor.close().catch(() => undefined);
+            await gappServer?.close().catch(() => undefined);
+            server.close();
+            // Only this host's record: a newer host may already have written its own.
+            const current = parseHostRecord(readOrNull(recordFile));
+            if (current?.pid === process.pid) {
+                rmSync(recordFile, { force: true });
+                rmSync(tokenFile, { force: true });
+            }
+            // THE CLEAN-EXIT MARKER, LAST (Tynn #386): everything above ended; its absence at the next boot is safe mode.
+            safeMode.writeCleanExit(why);
+            process.exit(0);
+        } finally {
+            // Normal exit never returns. If teardown throws or an exit hook returns, this host
+            // must not retain a permanent work hold or an updater stuck in installing.
+            try { updatesService.updates.cancelDrain(); }
+            finally { shuttingDown = false; }
         }
-        // THE CLEAN-EXIT MARKER, LAST (Tynn #386): everything above ended; its absence at the next boot is safe mode.
-        safeMode.writeCleanExit(why);
-        process.exit(0);
     }
     // The updater's own clock (AUTO_CHECK): stopped with the host's other clocks, first, at "Shut down everything".
     clocks.push({ stop: updatesService.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); }) });

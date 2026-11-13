@@ -691,26 +691,38 @@ if (!approvalEnabled) {
          * 32b. A CLICK ON THAT SAME WAITING AGENT IN ITS WORKSPACE'S OWN DASHBOARD OPENS ITS TAB, AND THE CHAT FOLLOWS (the
          * owner, 2026-10-29: "if I am clicking on an agent in a workspace dashboard then I go to that agent tab that shows
          * the activity and chat stream"). Its approval is still parked (CONTROL, read back again), so a pending item is
-         * there to divert the click to the Deck the way #1327's bug did. The docked chat is reset to genie first, so
-         * "the chat is the codex agent's" afterwards is the click's doing, not 32a's.
+         * there to divert the click to the Deck the way #1327's bug did. The docked chat is moved off the codex agent
+         * first, so "the chat is the codex agent's" afterwards is the click's doing, not 32a's.
+         *
+         * MOVED BY A PICK, NOT BY NAVIGATING (Tynn #639): the chat stays on the agent last picked wherever the person goes,
+         * so a visit to the Deck no longer resets it — on the 62b gate it stayed on codex from 32a and 32b read
+         * `chatBefore` = codex. Another agent's Dashboard row is clicked instead (a Dashboard click picks the chat and
+         * nothing else), and `chatBefore` is read on the workspace dashboard itself, just before the click: the pick
+         * survived the navigation there, as #639 says it must.
          */
         const codexWs = await cdp.evaluate(`window.genie.snapshot().then((s) => (s.agents ?? []).find((a) => a.id === '${codexRow}')?.workspaceId ?? null)`);
-        await cdp.evaluate(`window.location.hash = '#genie://deck'; true`);
-        await waitFor(cdp, `Boolean(document.querySelector('[data-surface="deck"]'))`, 'the Deck, to reset the docked chat');
-        const chatBefore = await cdp.evaluate(`document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null`);
+        const otherRow = `[...document.querySelectorAll('[data-surface="dashboard"] [data-agent]')].find((e) => e.getAttribute('data-agent') !== '${codexRow}')`;
+        const chatOffCodex = async (why) => {
+            await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
+            await waitFor(cdp, `Boolean(${otherRow})`, `another agent’s row on the Dashboard (${why})`);
+            await cdp.evaluate(`${otherRow}.click(); true`);
+            await waitFor(cdp, `(document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? '${codexRow}') !== '${codexRow}'`, `the docked chat off the codex agent (${why})`);
+        };
+        await chatOffCodex('32b');
         await cdp.evaluate(`window.location.hash = '#genie://workspace/' + ${JSON.stringify(String(codexWs))}; true`);
         const onLane = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'))`, 'the codex lane on its workspace dashboard');
+        const chatBefore = await cdp.evaluate(`document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null`);
         const stillBlocking = await cdp.evaluate(`window.genie.snapshot().then((s) => (s.deckItems ?? []).some((i) => i.agentId === '${codexRow}' && i.source === 'agent-question' && i.blocking))`);
         await cdp.evaluate(`document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]').click(); true`);
         const toTab = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'the codex agent tab with its chat docked');
         await new Promise((r) => setTimeout(r, 750));
         const landed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agent: Boolean(document.querySelector('[data-surface="agent"]')), deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, stream: document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('aria-selected') ?? null, address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
-        check(typeof codexWs === 'string' && chatBefore !== codexRow && onLane && stillBlocking === true && toTab && landed.agent && !landed.deck && !landed.workspace
+        check(typeof codexWs === 'string' && typeof chatBefore === 'string' && chatBefore !== codexRow && onLane && stillBlocking === true && toTab && landed.agent && !landed.deck && !landed.workspace
             && landed.agentId === codexRow && landed.stream === 'true' && !String(landed.address ?? '').includes('deck') && landed.subject === codexRow,
             '32b. clicking a WAITING agent on its workspace dashboard opens that agent’s tab (stream), not the Deck, and the docked chat follows', JSON.stringify({ codexWs, chatBefore, onLane, stillBlocking, toTab, ...landed }));
-        // 32c. The keyboard does the same: Enter on the focused lane (the real window's own key path, Card and all).
-        await cdp.evaluate(`window.location.hash = '#genie://deck'; true`);
-        await waitFor(cdp, `Boolean(document.querySelector('[data-surface="deck"]'))`, 'the Deck, to reset the docked chat');
+        // 32c. The keyboard does the same: Enter on the focused lane (the real window's own key path, Card and all). The
+        // chat is moved off the codex agent first, as for 32b, so "its chat" is the key's doing.
+        await chatOffCodex('32c');
         await cdp.evaluate(`window.location.hash = '#genie://workspace/' + ${JSON.stringify(String(codexWs))}; true`);
         await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'))`, 'the codex lane again');
         const focused = await cdp.evaluate(`(() => { const l = document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'); l.focus(); const ok = document.activeElement === l; l.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return ok; })()`);

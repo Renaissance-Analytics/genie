@@ -8,7 +8,7 @@ import { entryFor } from '../src/core/entry-mode.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
-import { spawnGenieWindow, spawnUpdaterProcess } from '../src/main/engine-launch.js';
+import { spawnGenieWindow, spawnUpdaterProcess, windowExitOf } from '../src/main/engine-launch.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
@@ -569,6 +569,24 @@ describe('a failed install, told to the next window once', () => {
         expect(spawnGenieWindow({ file: exe, args: ['/app'] }, { ELECTRON_RUN_AS_NODE: '1', PATH: '/usr/bin' }, fakeSpawn)).toBe(5150);
         expect(spawned[0]).toMatchObject({ file: exe, args: ['/app'], options: { detached: true } });
         expect(spawned[0]!.options.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    });
+
+    it('a window it started: its exit code and signal are kept by pid, for a lost record (Tynn issue #711)', () => {
+        const exits = new Map<number, (code: number | null, signal: string | null) => void>();
+        let pid = 6100;
+        const fakeSpawn = (() => {
+            const mine = ++pid;
+            return { pid: mine, on: (event: string, fn: (code: number | null, signal: string | null) => void) => { if (event === 'exit') exits.set(mine, fn); }, unref: () => {} };
+        }) as never;
+        const a = spawnGenieWindow({ file: exe, args: ['/app'] }, {}, fakeSpawn)!;
+        const b = spawnGenieWindow({ file: exe, args: ['/app'] }, {}, fakeSpawn)!;
+        expect(windowExitOf(a)).toBeNull();
+        exits.get(a)!(null, 'SIGKILL');
+        exits.get(b)!(3221225477, null);
+        expect(windowExitOf(a)).toEqual({ code: null, signal: 'SIGKILL' });
+        expect(windowExitOf(b)).toEqual({ code: 3221225477, signal: null });
+        // CONTROL: a pid it never started has no exit here.
+        expect(windowExitOf(4242)).toBeNull();
     });
 
     it('wired: the helper records and relaunches; the host reads, clears and relaunches; the window says it on the Deck', () => {

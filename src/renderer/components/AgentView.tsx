@@ -1,4 +1,5 @@
 import { activityRows } from '../../core/stream-view.js';
+import { formatRoute } from '../../core/route.js';
 import type { OutputStream } from '../../core/terminal-output-stream.js';
 import { outputViewObserver } from '../terminal-output-view.js';
 import { terminalAction, watchTerminal } from '../local-terminal-client.js';
@@ -383,6 +384,7 @@ function AgentViewBody({
             else if (t.kind === 'agent') go(`genie://agent/${encodeURIComponent(t.id)}`);
             else go(`genie://workspace/${encodeURIComponent(t.id)}`);
         },
+        onCommandRun: (run) => navigateRef.current(formatRoute({ surface: 'hosting', tab: 'processes', commandRun: { processId: run.processId, workspaceId: run.workspaceId }, chat: null, pin: null })),
     }), [agent.workspaceId, chatRefs]);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
     const indexStore = indexStorage === undefined ? (typeof localStorage === 'undefined' ? null : localStorage) : indexStorage;

@@ -178,14 +178,16 @@ describe("Genie 1's background processes, imported once at boot", () => {
         expect(about('t-shell')).toEqual([]);
     });
 
-    it("nothing starts that v1 would not have: the restore starts the wanted ones and holds back a hibernated workspace's", async () => {
+    it("restore respects the imported restart policy: never stays stopped, other wanted processes restore and hibernation holds them back", async () => {
         writeV1(v1File, rows);
         const book = await open();
         expect(started).toEqual([]); // the import itself starts nothing
         const restored = book.restore();
-        expect(restored.started.sort()).toEqual(['proc_v1_p-once', 'proc_v1_p-shell', 'proc_v1_p-web', 'proc_v1_p-win']);
+        expect(restored.started.sort()).toEqual(['proc_v1_p-shell', 'proc_v1_p-web', 'proc_v1_p-win']);
         expect(restored.heldBack).toEqual(['proc_v1_p-sleepy']);
-        expect(started.map((s) => s.id).sort()).toEqual(['proc_v1_p-once', 'proc_v1_p-shell', 'proc_v1_p-web', 'proc_v1_p-win']);
+        expect(started.map((s) => s.id).sort()).toEqual(['proc_v1_p-shell', 'proc_v1_p-web', 'proc_v1_p-win']);
+        expect(book.list(WS.id).find((p) => p.id === 'proc_v1_p-once')).toMatchObject({ state: 'stopped', reason: expect.stringMatching(/stopped by restart/i) });
+        expect(book.kept().find((p) => p.id === 'proc_v1_p-once')).toMatchObject({ restart: 'never', wanted: true });
     });
 
     it('once: what the person removed, stopped or added in Genie 2 is kept as they left it, and a later v1 row is not picked up', async () => {

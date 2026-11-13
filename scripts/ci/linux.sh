@@ -11,7 +11,7 @@
 # `scripts/omarchy-run.sh <repo-dir> 'bash scripts/ci/linux.sh'` does exactly that on the omarchy-test VM. NEVER on a
 # person's desktop: the rows open real windows, start real hosts and write to ~/.genie.
 #
-# Each row is a step of a Linux job in .github/workflows/ci.yml, run with the same command and the same time limit, and
+# Each row is a step of a Linux job of the removed .github/workflows/ci.yml, run with the same command and time limit, and
 # it passes or fails on the same thing. One line per row, `ROW <name> PASS|FAIL <seconds>`, then `CI LINUX PASS|FAIL`;
 # the exit status is non-zero when any row failed. A row's whole output is in ci-out/<name>.log, and the end of it is
 # printed when the row fails. A failed row does not stop the run: every later row still reports.
@@ -266,6 +266,7 @@ need_keyring() {
 #   - at the end the app, every process under it, and its genie-host (by the pid its host.json names) are ended and
 #     checked gone.
 APP_PID=''
+SAMPLER_PID=''
 APP_HOME=''
 app=''
 app_why=''
@@ -633,14 +634,19 @@ ceiling() {
         *) echo 600 ;;
     esac
 }
-# The watchdog: after the ceiling, it marks the row timed out and ends every process under this script but itself and
-# the shared app's tree. The row's command then returns, failing, and the loop reads the mark.
+# The watchdog: after the ceiling, it marks the row timed out and ends every process under this script but itself, the
+# machine sampler's tree (Tynn #660) and the shared app's tree. The row's command then returns, failing, and the loop reads the mark.
 watchdog() {
-    local name="$1" limit="$2" mark="$3" token="$4"
-    sleep "$limit"
+    local name="$1" limit="$2" mark="$3" token="$4" s
+    # Its sleep ends with it, and never holds the gate's output (Tynn issue #709): a sleep left behind by a killed
+    # watchdog kept an SSH-run gate open until the longest ceiling had passed.
+    sleep "$limit" >/dev/null 2>&1 </dev/null &
+    s=$!
+    trap 'kill "$s" 2>/dev/null; exit 0' TERM
+    wait "$s" || return 0
     printf '%s\n' "$token" >"$mark"
     local keep p
-    keep=" $BASHPID $(app_tree | tr '\n' ' ') "
+    keep=" $BASHPID $(tree_of "$SAMPLER_PID" | tr '\n' ' ') $(app_tree | tr '\n' ' ') "
     for p in $(tree_of $$); do
         [ "$p" = "$$" ] && continue
         case "$keep" in *" $p "*) continue ;; esac
@@ -651,22 +657,53 @@ watchdog() {
 # --- run them ---------------------------------------------------------------------------------------------------------
 
 mkdir -p "$OUT" "$SETUP"
+# THE MACHINE BESIDE EVERY ROW (Tynn #660): scripts/ci/machine-sampler.sh writes one MACHINE line every ~2 s for the
+# whole run into ci-out/machine-samples.log, and ends with this script. The watchdog spares it (SAMPLER_PID).
+MACHINE_SAMPLES="$OUT/machine-samples.log"
+infra=()
+bash scripts/ci/machine-sampler.sh "$MACHINE_SAMPLES" "$$" >/dev/null 2>&1 </dev/null &
+SAMPLER_PID=$!
 # THE MACHINE'S TWO CLOCKS, read before and after: a test VM restored from a snapshot has its wall clock corrected while
 # it runs, and a row that times something by the wall clock can then read a time that never passed. Said, not judged.
 clock_wall() { date +%s.%N; }
 clock_mono() { cut -d' ' -f1 /proc/uptime; }
 wall0="$(clock_wall)"; mono0="$(clock_mono)"
 echo "CI LINUX rows: ${selected[*]}"
-for name in "${selected[@]}"; do
-    started=$SECONDS
-    echo "=== $name"
-    machine_line "$name"
-    case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse " in
-        *" $name "*) reap_leftovers "$name" ;;
-    esac
+
+# >>> THE ROW LOOP (test/ci-infra-rerun-linux.test.ts runs this block, as it is, with stub rows)
+#
+# STALL-AWARE ROWS (Tynn #660; the owner: "we are wasting so much time on failing test infrastructure"). A row that
+# FAILS while the machine sampler recorded a stall during it (scripts/ci/stall.mjs: the disk waiting with the CPU idle,
+# every task stalled on io, the hypervisor stealing the CPU, or the VM paused) is INFRA: said, and run ONCE more on this
+# machine; its ROW line is the rerun's, marked INFRA, and the summary names it. A row that fails with no stall is never
+# run again: its failure is the code's. A row an earlier row's need stopped (`not run`) is not its own failure, and is
+# not run again either. What stall.mjs found, or that it found nothing in N samples, is printed under the failure.
+now_ms() { date +%s%3N; }
+machine_stall() { node scripts/ci/stall.mjs "$MACHINE_SAMPLES" "$1" "$2"; }
+
+# The needs a row can set. One that FAILED during a row is asked again by its rerun, never read from that failure.
+NEED_STATES=(installed electron_ok built display_ready keyring_ready app)
+needs_before=()
+needs_snapshot() { local v; needs_before=(); for v in "${NEED_STATES[@]}"; do needs_before+=("${!v}"); done; }
+needs_reset_failed_here() {
+    local i v
+    for i in "${!NEED_STATES[@]}"; do
+        v="${NEED_STATES[$i]}"
+        if [ "${!v}" != "${needs_before[$i]}" ] && [ "${!v}" != ok ]; then
+            [ "$v" = app ] && stop_app
+            printf -v "$v" '%s' "${needs_before[$i]}"
+        fi
+    done
+}
+
+# ONE RUN OF ONE ROW, its output appended to ci-out/<name>.log and the end of it printed when it fails. Sets row_verdict
+# (PASS, FAIL or SKIP), row_line (its ROW line, printed by run_rows) and row_own (0 when an earlier row's need stopped it).
+run_row() {
+    local name="$1" started=$SECONDS limit mark token watch_pid row_status timed_out
     blocked=''
     blocked_here=''
     skip_reason=''
+    row_own=1
     limit="$(ceiling "$name")"
     mark="$SETUP/timed-out-$name"
     # This row's own token (windows.ps1 read a list as a timeout once): a mark that is not this row's is not a timeout.
@@ -675,7 +712,7 @@ for name in "${selected[@]}"; do
     watchdog "$name" "$limit" "$mark" "$token" &
     watch_pid=$!
     row_status=0
-    "row_$name" >"$OUT/$name.log" 2>&1 || row_status=$?
+    "row_$name" >>"$OUT/$name.log" 2>&1 || row_status=$?
     # A ROW THAT ENDS BEFORE ITS CEILING CANNOT READ AS TIMED OUT: the mark holds this row's token, and the time passed.
     timed_out=''
     if [ -f "$mark" ] && [ "$(cat -- "$mark")" = "$token" ] && [ $((SECONDS - started)) -ge $((limit - 5)) ]; then timed_out=1; fi
@@ -684,25 +721,25 @@ for name in "${selected[@]}"; do
         grep -E '^(UNIT|DOCKER|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
         if [ -n "$skip_reason" ]; then
             # Not needed by this change: said as such, and neither a pass nor a fail.
-            echo "ROW $name SKIP ($skip_reason)"
+            row_verdict=SKIP; row_line="ROW $name SKIP ($skip_reason)"
         else
-            echo "ROW $name PASS $((SECONDS - started))"
+            row_verdict=PASS; row_line="ROW $name PASS $((SECONDS - started))"
         fi
     elif [ -n "$timed_out" ]; then
         wait "$watch_pid" 2>/dev/null
         echo "--- the end of ci-out/$name.log"
         tail -40 "$OUT/$name.log"
-        echo "ROW $name FAIL $((SECONDS - started)) (timed out after $limit s)"
-        failed+=("$name")
+        row_verdict=FAIL; row_line="ROW $name FAIL $((SECONDS - started)) (timed out after $limit s)"
     elif [ -n "$blocked" ]; then
         kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
         # It could not run: what it needed failed, and the words are that need's, said once in the first row that met it.
         if [ -n "$blocked_here" ]; then
             echo "--- the end of ci-out/$name.log"
             tail -40 "$OUT/$name.log"
+        else
+            row_own=0
         fi
-        echo "ROW $name FAIL $((SECONDS - started)) (not run: $blocked)"
-        failed+=("$name")
+        row_verdict=FAIL; row_line="ROW $name FAIL $((SECONDS - started)) (not run: $blocked)"
     else
         kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
         echo "--- the end of ci-out/$name.log"
@@ -712,15 +749,62 @@ for name in "${selected[@]}"; do
             tail -30 "$OUT/electron.log"
         fi
         grep -E '^(UNIT|DOCKER|UI_LAG MEASURED|ARTBOARD MEASURED) ' "$OUT/$name.log" || true
-        echo "ROW $name FAIL $((SECONDS - started))"
-        failed+=("$name")
+        row_verdict=FAIL; row_line="ROW $name FAIL $((SECONDS - started))"
     fi
-done
+}
+
+run_rows() {
+    local name from stall stalled
+    for name in "${selected[@]}"; do
+        echo "=== $name"
+        machine_line "$name"
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag trust-step site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse " in
+            *" $name "*) reap_leftovers "$name" ;;
+        esac
+        from="$(now_ms)"
+        needs_snapshot
+        : >"$OUT/$name.log"
+        run_row "$name"
+        if [ "$row_verdict" = FAIL ] && [ "$row_own" = 1 ]; then
+            stalled=0
+            stall="$(machine_stall "$from" "$(now_ms)")" && stalled=1
+            echo "$stall"
+            if [ "$stalled" = 1 ]; then
+                local secs="${row_line#ROW "$name" FAIL }"
+                echo "INFRA $name FAIL ${secs%% *}: the machine stalled during the row ($(head -1 <<<"$stall")); running it once more on this machine"
+                printf '\n=== INFRA: the machine stalled during the run above; the rerun follows\n' >>"$OUT/$name.log"
+                needs_reset_failed_here
+                run_row "$name"
+                if [ "$row_verdict" != FAIL ]; then
+                    echo "$row_line (INFRA: the first run failed during a machine stall; the rerun passed)"
+                    infra+=("$name (rerun PASS)")
+                else
+                    echo "$row_line (INFRA: the first run failed during a machine stall; the rerun failed too)"
+                    infra+=("$name (rerun FAIL)")
+                    failed+=("$name")
+                fi
+                continue
+            fi
+        fi
+        echo "$row_line"
+        [ "$row_verdict" = FAIL ] && failed+=("$name")
+    done
+    return 0
+}
+
+infra_summary() {
+    if [ "${#infra[@]}" -gt 0 ]; then echo "INFRA ROWS: ${infra[*]}"; else echo "INFRA ROWS: none"; fi
+}
+# <<< THE ROW LOOP
+
+run_rows
 
 stop_app
+kill "$SAMPLER_PID" 2>/dev/null
 left_at_end="$(genie_processes | tr '\n' ' ')"
 [ -n "${left_at_end// /}" ] && notes+=("Genie processes still alive at the end of the run: $left_at_end")
 for n in "${notes[@]}"; do echo "NOTE $n"; done
+infra_summary
 echo "CLOCK $(awk -v w0="$wall0" -v w1="$(clock_wall)" -v m0="$mono0" -v m1="$(clock_mono)" 'BEGIN { printf "the wall clock advanced %.1f s while %.1f s passed (a difference of %+.1f s)", w1 - w0, m1 - m0, (w1 - w0) - (m1 - m0) }')"
 # TEST FILES THE UNIT SUITE DID NOT RUN HERE, each with its own reason: a file that runs on Windows only carries
 # `// CI: WINDOWS ONLY (<reason>)` (test/ci-windows-only-files.test.ts holds that), and scripts/ci/windows.ps1 runs it.

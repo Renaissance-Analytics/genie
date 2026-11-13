@@ -52,8 +52,9 @@ describe('the Tynn row', () => {
 
 /**
  * A DRONE CANNOT BROWSE (genie#1278 W5). What this machine is comes from Tynn (`role`, set by main from
- * `GET /api/v1/workstations/me`). On a drone, "Drive another machine" and the tailnet's device count are not drawn.
- * Hiding is not the boundary — Tynn refuses a drone's list and grants, and the relay refuses a member without a grant —
+ * `GET /api/v1/workstations/me`). On a drone the tailnet's device count is not drawn, and the title bar's host picker is
+ * not given to it (Shell: `!mayBrowse(role)`). Since Tynn #640 that picker is the one way to another machine: Settings →
+ * Remote access draws "Drive another machine" for nobody (test/remote-settings-own-only.test.tsx). Hiding is not the boundary — Tynn refuses a drone's list and grants, and the relay refuses a member without a grant —
  * but a drone offers nothing it would only be refused.
  */
 describe('a drone hides browsing and discovery', () => {
@@ -71,15 +72,17 @@ describe('a drone hides browsing and discovery', () => {
         expect(html).toContain('data-workstation-role="drone"');
     });
 
-    it('a pilot (CONTROL): both are drawn', () => {
+    it('a pilot (CONTROL): the tailnet device count is drawn; driving another machine is the host picker’s, not this page’s', () => {
         const html = draw('pilot');
-        expect(html).toContain('Drive another machine');
+        expect(html).not.toContain('Drive another machine');
+        expect(html).not.toContain('data-form="connect-remote"');
         expect(html).toMatch(/1 device on your tailnet/);
         expect(html).toContain('data-workstation-role="pilot"');
     });
 
     it('not on the Tynn network (signed out): nothing of Tynn to restrict; tailnet pairing stays as it was', () => {
         const html = renderToStaticMarkup(<RemoteAccess remote={{ ...base, tailscale, tynnWorkstation: { registered: false, reason: 'sign in to Tynn to register this machine', role: null } }} workspaces={[]} onAction={() => {}} connect={connect} />);
-        expect(html).toContain('Drive another machine');
+        expect(html).toMatch(/1 device on your tailnet/);
+        expect(html).not.toContain('Drive another machine');
     });
 });

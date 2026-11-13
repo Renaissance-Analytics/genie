@@ -126,10 +126,12 @@ import {
 } from '../core/session.js';
 import type { NativeStopVerdict } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
+import type { CommandRunRef } from '../core/command-run.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
 import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD, ThreadStore } from '../core/thread-store.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
@@ -559,6 +561,15 @@ export class SessionHost {
     readonly #stopped = new Set<AgentSession>();
     /** Each agent's recorded history, read once per run: `before` is the run it was read for (`null` = not running). */
     readonly #histories = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[]; turns: number } | 'loading'>();
+    /**
+     * WHAT EACH AGENT'S LEDGER LAST SHOWED (Tynn #647): while a new run's history is being read — the first send after a
+     * quiet spell starts a session, a restart starts a run — the rows already shown stand in for it, so no reply a person
+     * saw disappears until the read lands. It used to be this run's rows alone, leaving only the inbox's mail rows.
+     */
+    readonly #lastShown = new Map<AgentId, readonly TimedEvent[]>();
+    readonly #renamedRows = new WeakMap<TimedEvent, TimedEvent>();
+    /** The stand-in each agent's ledger is serving, and the run it was built for (`before`, as `#histories`). */
+    readonly #standIns = new Map<AgentId, { before: number | null; rows: readonly TimedEvent[] }>();
     #listeners = new Set<(agentId: AgentId) => void>();
     #runs = 0;
 
@@ -956,9 +967,28 @@ export class SessionHost {
      * a second. §6.2 is explicit about it, and the alternative is two provider processes
      * answering as one agent — which is how a user ends up unable to stop something.
      */
+    #shutdownPending = false;
+    readonly #shutdownAgents = new Set<AgentId>();
+
+    /** Let current turns finish; keep queued/new work for the next run, without cancelling a tool. */
+    holdForShutdown(): void {
+        if (this.#shutdownPending) return;
+        for (const id of this.#running.keys()) this.#shutdownAgents.add(id);
+        this.#shutdownPending = true;
+    }
+    /** Resume held work only if shutdown is abandoned or this host survived it. */
+    releaseAfterShutdown(): void {
+        this.#shutdownPending = false;
+        this.#shutdownAgents.clear();
+        for (const [id, entry] of this.#running) { entry.session.releaseWork(); this.#emit(id); }
+    }
+
     start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
         if (existing) return { ok: true };
+        // A setting/crash replacement of an existing identity must still get its session in the
+        // host, so the final restore record cannot drop it. Its work remains held by mayTakeWork.
+        if (this.#shutdownPending && !this.#shutdownAgents.has(record.id)) return { ok: false, reason: 'Genie is shutting down; new agent sessions wait for restart.' };
 
         /*
          * ONE PROVIDER PER AGENT, IN-PROCESS, AT ALL TIMES (hosting plan 1.3; Tynn #796). A run that is still stopping,
@@ -1127,7 +1157,7 @@ export class SessionHost {
                 askWhy: () => askedWhy(this.#approvalWhere(record)),
             } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
-            mayTakeWork: () => !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
+            mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
             onLimitBreach: (reason) => this.#limitBreach(record.id, record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
@@ -1581,6 +1611,15 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.needsNewDriver ?? false;
     }
 
+    /** A host-authored live command reference in this agent's ledger; never starts an absent session (#633). */
+    commandStarted(agentId: AgentId, run: CommandRunRef): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        entry.session.commandStarted(run);
+        this.#emit(agentId);
+        return true;
+    }
+
     /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */
     notice(agentId: AgentId, message: string): boolean {
         const entry = this.#running.get(agentId);
@@ -1619,8 +1658,9 @@ export class SessionHost {
 
     /**
      * STOP THE TURN, keep the agent: `Stop this turn` in the chat and the Agent view. The session stays in the map — its
-     * slot, its provider and its conversation untouched — and the turn ends when the provider reports it cancelled.
-     * Ending the agent is `stop` below, a different action. `not-running` for an agent with no session here.
+     * slot and conversation stay. A confirmed cancel keeps its provider; an unconfirmed one ends the old run after
+     * the session's bounded wait, preserving input for the existing same-conversation restart path (Tynn #661).
+     * Ending the agent explicitly is `stop` below. `not-running` for an agent with no session here.
      */
     cancel(agentId: AgentId, by: string | null = 'you', intent: CancelIntent = 'stop'): CancelOutcome {
         const entry = this.#running.get(agentId);
@@ -1786,6 +1826,23 @@ export class SessionHost {
     }
 
     /**
+     * ONE IMAGE A THREAD KEPT (Tynn #642): what a sent message's pill shows, read from this host's own store beside the
+     * agent's ledger when the pill asks. An id this host did not make, or one no longer kept (the thread's bounds let the
+     * oldest go), is a refusal with its reason.
+     */
+    async attachment(agentId: AgentId, attachmentId: string): Promise<AttachmentReply> {
+        await this.settled();
+        const store = this.#store();
+        if (!(store instanceof ThreadStore)) return { ok: false, reason: 'this agent’s history keeps no images' };
+        try {
+            const kept = await store.readAttachment(threadKeyFor(agentId), attachmentId);
+            return kept === null ? { ok: false, reason: 'this image is no longer kept' } : { ok: true, ...kept };
+        } catch (error) {
+            return { ok: false, reason: `the image could not be read (${error instanceof Error ? error.message : String(error)})` };
+        }
+    }
+
+    /**
      * WHAT THE AGENT VIEW AND THE CHAT SHOW: the agent's recorded history, then this run. Claude resumes a conversation
      * without replaying it, so this run alone showed one turn of an agent holding 740k tokens of context (the owner,
      * beta.21) — and a stopped agent showed nothing at all. The history is read from the thread the session writes,
@@ -1807,11 +1864,15 @@ export class SessionHost {
                     this.#histories.set(agentId, { before, rows, turns: lastNumberedTurn(rows) });
                     this.#emit(agentId);
                 })
-                .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); });
+                // Announced too (Tynn #659): a window waiting on the read must hear it is over, or it waits for good.
+                .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); this.#emit(agentId); });
         }
         const loaded = cached !== undefined && cached !== 'loading' && cached.before === before ? cached : null;
-        const history = loaded ? loaded.rows : NO_ROWS;
-        if (!entry) return history;
+        // Built ONCE per run (`#standInFor`), so serving it costs nothing per event: built per call, it walked the whole
+        // ledger three times a read (test/agent-stream-perf.test.ts: 359,502 old rows read per event at 60k rows).
+        if (loaded) this.#standIns.delete(agentId);
+        const history = loaded ? loaded.rows : this.#standInFor(agentId, entry, before);
+        if (!entry) { this.#lastShown.set(agentId, history); return history; }
         /*
          * SERVED FROM WHAT IS KEPT (the owner, 2026-10-20: the window lagged seconds behind a busy agent): built again only
          * when a row changed, from rows that keep their identity while unchanged — which is what lets main send the window
@@ -1833,7 +1894,64 @@ export class SessionHost {
         }
         const rows = [...history, ...marker, ...run];
         entry.ledger = { history: loaded, rows };
+        this.#lastShown.set(agentId, rows);
         return rows;
+    }
+
+    /**
+     * WHETHER THE LEDGER IS STILL WAITING ON ITS HISTORY (Tynn #659): the recorded history is being read and no rows already
+     * shown stand in for it (#647), so what `ledgerFor` answers is not yet the agent's conversation — a window draws it as
+     * loading, never as a chat of mail rows alone. Never asked, or read: not pending.
+     */
+    historyPending(agentId: AgentId): boolean {
+        if (this.#histories.get(agentId) !== 'loading') return false;
+        return (this.#standIns.get(agentId)?.rows.length ?? 0) === 0;
+    }
+
+    /**
+     * The history to show while the real one is read (Tynn #647), built once for the run it stands in for (`before`) and
+     * then served as it is: the ledger built over it is grown in place, so it is never walked again per event.
+     */
+    #standInFor(agentId: AgentId, entry: Running | undefined, before: number | null): readonly TimedEvent[] {
+        const kept = this.#standIns.get(agentId);
+        if (kept && kept.before === before) return kept.rows;
+        const rows = this.#standIn(agentId, entry);
+        this.#standIns.set(agentId, { before, rows });
+        return rows;
+    }
+
+    /**
+     * What this agent's ledger last showed, without this run's own rows and its marker (they follow it). Nothing shown yet →
+     * nothing.
+     */
+    #standIn(agentId: AgentId, entry: Running | undefined): readonly TimedEvent[] {
+        const shown = this.#lastShown.get(agentId);
+        if (!shown) return NO_ROWS;
+        if (!entry) return shown;
+        const mine = new Set<TimedEvent>(entry.rows);
+        if (entry.numbered) for (const r of entry.numbered.rows) mine.add(r);
+        // A previous run's own rows were numbered from 0 (`<agent>:<n>`) as this run's are and will be. Built once, the
+        // stand-in cannot see the ids this run has not made yet, so EVERY such row is renamed for this run, not only one
+        // colliding now: no two rows of one ledger share an id as the run grows. The same object each time it is built
+        // for this run, so the window is not sent it again.
+        const prefix = `${agentId}:`;
+        const runRow = (id: string) => id.startsWith(prefix) && /^\d+$/.test(id.slice(prefix.length));
+        return shown.filter((r) => !mine.has(r) && r.id !== entry.marker.id).map((r) => {
+            if (!runRow(r.id)) return r;
+            const id = `${r.id}~before-run-${entry.run}`;
+            let renamed = this.#renamedRows.get(r);
+            if (!renamed || renamed.id !== id) { renamed = { ...r, id }; this.#renamedRows.set(r, renamed); }
+            return renamed;
+        });
+    }
+
+    /**
+     * AN AGENT DELETED OR UNMOUNTED (Tynn #647 review): what its ledger last showed goes with it, so nothing of it stands in
+     * again (and nothing of it is kept for the life of the host).
+     */
+    forgetShown(agentId: AgentId): void {
+        this.#lastShown.delete(agentId);
+        this.#standIns.delete(agentId);
     }
 
     /** THIS RUN's ledger only (what the doctor channel and file attribution read). Empty for one not running. */

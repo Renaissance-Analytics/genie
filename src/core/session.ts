@@ -1,10 +1,11 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
+import type { CommandRunRef } from './command-run.js';
 import { openAgentThread, readHistory, RUN_FIELD, ThreadStore } from './thread-store.js';
 import { boundToolEvent, utf8Bytes } from './tool-row-bound.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
-import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
+import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type AttachmentRef, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import { threadKeyFor, type AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
@@ -299,6 +300,9 @@ export const CANCEL_STATE_UNCERTAIN = 'cancel state uncertain; driver stopped';
 export const RESTARTED_FOR_QUEUE = 'The provider did not confirm the interrupt in time, so Genie restarted the agent on the same conversation; your messages are sent now.';
 export const CANCEL_STATE_UNCERTAIN_CODE = 'claude_cancel_state_uncertain';
 
+/** A provider gets this long to confirm the turn ended; a receipt alone is not a stopped turn (Tynn #661). */
+export const TURN_CANCEL_WAIT_MS = 2_000;
+
 /**
  * COOLING (the owner, 2026-11-01): "a state they enter right after finishing a turn (coming out of the work state).
  * Instead of immediately marking them as idle, they are "Cooling" down for 15 seconds then become Idle. This way I can
@@ -518,6 +522,8 @@ export class AgentSession {
      * meanwhile was ended by the Stop (the CLI killed under it), whatever the dying CLI said: stopped, never a limit hit.
      */
     #stopWindow = false;
+    /** One confirmation deadline per turn; repeated Stop clicks cannot extend it. */
+    #cancelPending: { by: string | null; intent: CancelIntent; cancel: () => void } | null = null;
     /** The run's tree as it was when the Stop was asked, read before any kill can orphan a tool (Tynn #556). */
     #stopCapture: Promise<readonly ProcessInfo[]> | null = null;
     /**
@@ -640,7 +646,7 @@ export class AgentSession {
      * Rows waiting for the next write on the chain (Tynn #550): rows emitted together go to the thread together, as one
      * `record`, in order — one lock, one append, one sync — never one each.
      */
-    #pendingRows: Array<{ event: StreamEvent; whole: string | null }> = [];
+    #pendingRows: Array<{ event: StreamEvent; whole: string | null; images: readonly KeptImage[] }> = [];
     /** The chained write that will take `#pendingRows`, while it has not started. */
     #pendingWrite: Promise<void> | null = null;
     /**
@@ -1156,8 +1162,9 @@ export class AgentSession {
     #queuePrompt(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, context: PromptContext): string {
         const id = randomUUID();
         this.#afterTurn.push({ id, text, by, sent, context });
-        const row = promptRow(text, by, sent, context);
-        if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: sent?.content ?? null } });
+        const kept = this.#keptImages(sent);
+        const row = promptRow(text, by, sent, context, kept.refs);
+        if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: sent?.content ?? null } }, kept.files);
         this.#changed();
         return id;
     }
@@ -1269,8 +1276,9 @@ export class AgentSession {
         if (p.context.retold === true) return;
         const id = randomUUID();
         if (this.#needsNewDriver || !this.running || (this.#stoppedByYou && p.by !== 'you')) {
-            const row = promptRow(p.text, p.by, p.sent, p.context);
-            if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: p.sent?.content ?? null } });
+            const kept = this.#keptImages(p.sent);
+            const row = promptRow(p.text, p.by, p.sent, p.context, kept.refs);
+            if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: p.sent?.content ?? null } }, kept.files);
             // Kept for the next run after an unconfirmed interrupt (Tynn #702), never "Not delivered".
             void this.#emitRow({ kind: 'prompt_delivery', id, status: this.#carryQueue ? 'carried' : 'undelivered' });
             return;
@@ -1445,6 +1453,7 @@ export class AgentSession {
                     }),
                 onTurnEnd: (outcome) => {
                     if (this.#ended) { this.#straggler(); return; }
+                    this.#clearCancelWait();
                     // Two turns are two replies even with nothing between them. Without this a
                     // whole conversation would accumulate into one unbounded row.
                     this.#closeMessage();
@@ -1492,6 +1501,7 @@ export class AgentSession {
                     const failed = crashed && !endedByStop;
                     // Ended by the limit: a reading said so during the turn, or the turn's own failure does (Tynn #791).
                     const readingSaidSo = this.#limitThisTurn;
+                    const stoppedAtLimit = readingSaidSo && this.#stopWindow;
                     const byLimit = failed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
                     // Ended by the LOGIN (the owner, 2026-10-18): the provider says this account is not signed in.
                     // Ended by the ACCOUNT (the owner, 2026-10-21: a payment failure paused it): checked before the login,
@@ -1509,6 +1519,7 @@ export class AgentSession {
                         else this.#carryOver ??= carried;
                     }
                     this.#limitThisTurn = false;
+                    if (stoppedAtLimit && !byLimit) this.#sayStoppedAtLimit();
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
                         // Broken; the agent waits for the limit to reset and is resumed then.
@@ -1622,6 +1633,7 @@ export class AgentSession {
                 },
                 onStopVerdict: (verdict) => { this.#nativeVerdict = verdict; },
                 onExit: (code, signal) => {
+                    this.#clearCancelWait();
                     this.#leaveQueuedAsDrafts();
                     // A retry waiting out an overload has nobody to send to now.
                     this.#overloadCancel?.();
@@ -1916,7 +1928,7 @@ export class AgentSession {
         // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
         // Instruction text is never drawn: one line says it was sent (Tynn #615).
         if (held !== null) void this.#emitRow(heldShownAs !== null ? { kind: 'notice', level: 'info', message: heldShownAs } : promptRow(held, 'genie', null, {}));
-        if (record) void this.#emitRow(promptRow(text, by, sent, context));
+        if (record) { const kept = this.#keptImages(sent); void this.#emitRow(promptRow(text, by, sent, context, kept.refs), kept.files); }
         // A provider that DOES echo it is not recorded twice (see `#handle`) — the carry-over and held text above it included.
         this.#echo = `${above}${handed}`;
         this.#echoSeen = '';
@@ -1943,6 +1955,7 @@ export class AgentSession {
      */
     stop(signal: NodeJS.Signals = 'SIGTERM', options: { graceMs?: number } = {}): Promise<StopVerdict> {
         if (this.#stopping) return this.#stopping;
+        this.#clearCancelWait();
         this.#ended = true;
         this.#overloadCancel?.();
         this.#overloadCancel = null;
@@ -2153,8 +2166,8 @@ export class AgentSession {
      *   and attributed as ever. Codex queues nothing (one prompt in flight).
      * - **A parked approval is answered `cancelled`**, ACP's rule for a cancelled turn: an unanswered request would
      *   outlive the turn and park the provider.
-     * - **A driver that cannot cancel is never killed instead**, and neither is one that refuses the interrupt: the
-     *   stream says so, the turn runs on, and Stop agent remains the way to end it.
+     * - **A driver that cannot cancel is never killed instead.** A supported cancel that remains unconfirmed is
+     *   bounded: Genie ends that run, keeps what it owes, and a new driver resumes the same conversation when needed.
      */
     /**
      * A PLAN THE AGENT REPORTED THROUGH GENIE'S `plan` TOOL (the owner, 2026-10-20: the Active Plan column had no way to
@@ -2163,6 +2176,14 @@ export class AgentSession {
      */
     reportPlan(entries: readonly { content: string; status: string }[]): void {
         void this.#emitRow({ kind: 'plan', entries: entries.map((e) => ({ content: e.content, status: e.status })) });
+        this.#changed();
+    }
+
+    /** A host-authored link to the command's existing Processes entry, published before it finishes (#633). */
+    commandStarted(run: CommandRunRef): void {
+        // Internal executor metadata includes credentials; only these safe fields belong in the ledger.
+        const commandRun = { processId: run.processId, workspaceId: run.workspaceId, command: run.command };
+        void this.#emitRow({ kind: 'notice', level: 'info', message: `Started ${commandRun.command} via services`, commandRun });
         this.#changed();
     }
 
@@ -2219,18 +2240,28 @@ export class AgentSession {
             this.#changed();
             return { ok: false, reason: 'unsupported' };
         }
-
         this.#stopAskedBy = by;
         this.#stopIntent = intent;
-        if (intent === 'interrupt') this.#interruptAsked = true;
+        this.#interruptAsked = intent === 'interrupt';
         this.#stopWindow = true;
+        if (this.#cancelPending !== null) {
+            this.#cancelPending.by = by;
+            this.#cancelPending.intent = intent;
+            return { ok: true };
+        }
+        const pending = { by, intent, cancel: (): void => {} };
+        this.#cancelPending = pending;
+        pending.cancel = this.#later(TURN_CANCEL_WAIT_MS, () => {
+            if (this.#cancelPending !== pending) return;
+            this.#clearCancelWait();
+            this.#endUnconfirmedTurn(pending.by, pending.intent);
+        });
         this.#captureForStop();
         const refused = (cause: unknown): void => {
-            this.#stopAskedBy = null;
-            this.#stopIntent = 'stop';
-            this.#stopWindow = false;
+            // The provider's promise can settle after its turn ended, even after another Stop was asked.
+            if (this.#cancelPending !== pending) return;
             const why = cause instanceof Error ? cause.message : String(cause);
-            void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn could not be stopped: ${why}. It is still running; Stop agent ends the session.` });
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn could not be stopped: ${why}. Genie will end this run if the turn does not stop within ${TURN_CANCEL_WAIT_MS / 1000} seconds.` });
             this.#changed();
         };
         try {
@@ -2247,6 +2278,44 @@ export class AgentSession {
         this.#parkedAt = null;
         this.#changed();
         return { ok: true };
+    }
+
+    #clearCancelWait(): void {
+        const pending = this.#cancelPending;
+        this.#cancelPending = null;
+        pending?.cancel();
+    }
+
+    #sayStoppedAtLimit(): void {
+        void this.#emitRow({ kind: 'notice', level: 'warning', message: 'The provider reported a rate limit during this turn. The turn is stopped; your queued messages remain available when the limit clears.' });
+    }
+
+    /** No turn-end frame arrived. End the old run instead of claiming an idle provider that is still working. */
+    #endUnconfirmedTurn(by: string | null, intent: CancelIntent): void {
+        if (this.#ended || !this.#inTurn) return;
+        const limited = this.#limitThisTurn;
+        this.#interruptAsked = intent === 'interrupt';
+        this.#driverStoppedItself();
+        // Accepted mid-turn prompts normally get separate cancelled frames from the provider. A silent one sends
+        // none: retain those prompts using the same draft/carry rules before stop() clears its in-flight queue.
+        for (const prompt of this.#queued) this.#dropped(prompt);
+        this.#closeMessage();
+        this.#turns += 1;
+        this.#endedThisRun += 1;
+        this.#lastTurnEnd = 'stopped';
+        this.#stoppedByYou = by === 'you' && intent === 'stop';
+        if (!this.#carryQueue) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by });
+        if (limited) this.#sayStoppedAtLimit();
+        const failed = (error: unknown): void => {
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `The turn ended, but Genie could not confirm its processes stopped: ${error instanceof Error ? error.message : String(error)}` });
+            this.#changed();
+        };
+        try {
+            void this.stop('SIGTERM', { graceMs: 0 }).then((verdict) => {
+                if (!verdict.verified) failed(new Error(`${verdict.reason}${verdict.survivors.length > 0 ? ` Still running: ${describeProcesses(verdict.survivors)}.` : ''}`));
+            }).catch(failed);
+        } catch (error) { failed(error); }
+        this.#changed();
     }
 
     /** Tell whoever is watching that something a surface renders has changed. */
@@ -2347,8 +2416,8 @@ export class AgentSession {
      * cannot be saved is counted (`unpersistedEvents`) AND said in the ledger, once per run (`#sayNotSaved`).
      */
     /** `whole`: a tool's output that did not fit its row's preview, kept beside the ledger first (Tynn story #386). */
-    #record(event: StreamEvent, whole: string | null = null): Promise<void> {
-        this.#pendingRows.push({ event, whole });
+    #record(event: StreamEvent, whole: string | null = null, images: readonly KeptImage[] = []): Promise<void> {
+        this.#pendingRows.push({ event, whole, images });
         // A write already waiting on the chain takes this row too; otherwise one is chained for it.
         if (this.#pendingWrite !== null) return this.#pendingWrite;
         const write = async (): Promise<void> => {
@@ -2373,9 +2442,16 @@ export class AgentSession {
     }
 
     /** One batch of rows to the thread, in order, as ONE record — retried as a row was (genie#1315). */
-    async #writeBatch(rows: ReadonlyArray<{ event: StreamEvent; whole: string | null }>): Promise<void> {
+    async #writeBatch(rows: ReadonlyArray<{ event: StreamEvent; whole: string | null; images: readonly KeptImage[] }>): Promise<void> {
         const store = this.#options.store;
-        for (const { event, whole } of rows) {
+        for (const { event, whole, images } of rows) {
+            // Before the row that names them, as a tool's whole output is. An image that cannot be kept leaves the row: its
+            // pill then says the image was not kept, and the conversation is still saved.
+            if (images.length > 0 && store instanceof ThreadStore) {
+                for (const image of images) {
+                    try { await store.writeAttachment(threadKeyFor(this.agentId), image.id, image.mimeType, image.data); } catch { /* the name stands */ }
+                }
+            }
             if (whole !== null && event.kind === 'tool' && store instanceof ThreadStore) {
                 // Before the row that names it. A sidecar that cannot be written leaves the row and its preview: the
                 // whole is then "not kept" when a person opens it, and the conversation is still saved.
@@ -2614,10 +2690,29 @@ export class AgentSession {
     }
 
     /**
+     * THE IMAGES A MESSAGE SENDS, KEPT (Tynn #642): one id each, for the row to name and the store to keep them under. The
+     * blocks after the message's own text are its attachments, in order, so each image block is matched to its name. A store
+     * that keeps no files beside its log (a test's memory store) keeps none, and the row names none.
+     */
+    #keptImages(sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null): { refs: readonly AttachmentRef[]; files: readonly KeptImage[] } {
+        if (!sent || sent.attachments.length === 0 || !(this.#options.store instanceof ThreadStore)) return { refs: [], files: [] };
+        const blocks = sent.content.length > sent.attachments.length ? sent.content.slice(sent.content.length - sent.attachments.length) : sent.content;
+        const refs: AttachmentRef[] = [], files: KeptImage[] = [];
+        blocks.forEach((block, i) => {
+            if (block.type !== 'image') return;
+            const id = randomUUID().replace(/-/g, '');
+            const name = sent.attachments[i] ?? 'image';
+            refs.push({ id, name, mimeType: block.mimeType, bytes: Buffer.byteLength(block.data, 'base64') });
+            files.push({ id, mimeType: block.mimeType, data: block.data });
+        });
+        return { refs, files };
+    }
+
+    /**
      * One row that is not a message chunk — from the wire or minted here (a turn marker): closes the open message,
      * reaches the renderer synchronously, and is written to the thread after the message it closed.
      */
-    async #emitRow(raw: StreamEvent): Promise<void> {
+    async #emitRow(raw: StreamEvent, images: readonly KeptImage[] = []): Promise<void> {
         this.#closeMessage();
 
         /*
@@ -2632,9 +2727,12 @@ export class AgentSession {
         // ON THE SAME CHAIN as the message writes: waiting for the chain and then writing outside it let two rows
         // emitted together (a turn marker and your message) reach the thread in either order. A storage fault must not
         // take the turn down with it — and must not vanish either (`#record`).
-        await this.#record(event, whole);
+        await this.#record(event, whole, images);
     }
 }
+
+/** An image a message sent, to be kept under the id its row names (Tynn #642). */
+interface KeptImage { readonly id: string; readonly mimeType: string; readonly data: string }
 
 /**
  * Why a command did not run, in words: prism-acp's `CommandUnsupported` carries a fixed `reason`
@@ -2676,8 +2774,8 @@ function replayOf(update: Record<string, unknown>): { summary: string | null } |
     return { summary: `Resumed the thread: the provider replayed ${count(turns, 'turn')} (${count(items, 'item')}) of its history${ended}; not recorded again (already in this history).` };
 }
 
-function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext): StreamEvent {
-    const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
+function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext, kept: readonly AttachmentRef[] = []): StreamEvent {
+    const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments, ...(kept.length > 0 ? { attachmentRefs: kept } : {}) } : {};
     const mail = context.mail && context.mail.length > 0 ? { mail: context.mail } : {};
     return by === null || by === 'you'
         ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments }
