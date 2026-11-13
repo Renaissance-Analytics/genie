@@ -213,7 +213,7 @@ export interface ShellProps {
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386); absent = previews only. */
     loadToolOutput?: ((agentId: string, toolCallId: string) => Promise<ToolOutputReply>) | undefined;
-    /** Read one image a sent message kept, from the host (Tynn #642): the chat's and the agent view's pills. */
+    /** Read one image a sent message kept, from the host (Tynn #642): the chat's pills (messages are drawn only in the chat). */
     loadAttachment?: ((agentId: string, attachmentId: string) => Promise<AttachmentReply>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
     tynnBoard?: TynnTabHost | undefined;
@@ -857,7 +857,6 @@ export function Shell({
                                 lanes={parseLanes(parsed.lane)}
                                 readCommits={readCommits}
                                 loadToolOutput={loadToolOutput}
-                                loadAttachment={loadAttachment}
                                 at={parsed.at}
                                 layout={parsed.layout}
                                 selectedId={selectedRowId}

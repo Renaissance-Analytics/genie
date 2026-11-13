@@ -1,4 +1,3 @@
-import type { AttachmentReply } from '../../core/thread-store.js';
 import { Button, Icon, VirtualList } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -67,8 +66,6 @@ export interface StreamProps {
     markup?: StreamMarkup | undefined;
     /** A tool row's whole output, asked of the host when a person opens the row (Tynn story #386). Keep it stable. */
     loadToolOutput?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
-    /** Read one image a sent message kept (Tynn #642). */
-    loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
 }
 
 /**
@@ -82,7 +79,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup, loadToolOutput, loadAttachment }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup, loadToolOutput }: StreamProps) {
     countRender('Stream');
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
@@ -223,7 +220,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onUnseenChange={setUnseen}
                 scrollToId={at}
                 renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} loadFull={loadToolOutput} loadAttachment={loadAttachment} />
+                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} loadFull={loadToolOutput} />
                 )}
             />
 

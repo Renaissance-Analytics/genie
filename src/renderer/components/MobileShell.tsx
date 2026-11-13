@@ -327,7 +327,7 @@ export interface MobileAgentProps {
     initialPanel?: MobilePanel | undefined;
     /** A tool row's whole output, asked of the host when the row is opened (the desktop Stream's). */
     loadToolOutput?: ((toolCallId: string) => Promise<ToolOutputReply>) | undefined;
-    /** Read one image a sent message kept, from the host (Tynn #642): the chat's and the work stream's pills, as on the desktop. */
+    /** Read one image a sent message kept, from the host (Tynn #642): the chat panel's pills, as on the desktop. */
     loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
 }
 
@@ -520,7 +520,6 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                             agentName={detail.agent.name}
                             live={detail.session?.running === true && detail.session.turnState === 'working'}
                             loadToolOutput={loadToolOutput}
-                            loadAttachment={loadAttachment}
                         />
                     </div>
                 </main>

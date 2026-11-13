@@ -1,4 +1,3 @@
-import { attachmentPills, type SentAttachment } from './sent-attachments.js';
 import { headroomLine } from './headroom.js';
 import { computeDiff } from '@particle-academy/fancy-file-commons';
 import { DIFF_TOO_LARGE, editLabel } from './file-edits.js';
@@ -94,8 +93,6 @@ export interface LedgerRow {
     prose?: boolean | undefined;
     /** A thought's WHOLE text, drawn when the row is expanded (the owner: click the thinking line to see the reasoning). */
     full?: string | undefined;
-    /** A message's files, each with the image the host kept for it (Tynn #642). Absent when it sent none. */
-    attachments?: readonly SentAttachment[] | undefined;
     /**
      * A tool call's answer, opened under the row (Tynn story #386). `text` is what the window holds — the row's preview,
      * at most 16 KB; `cut` says it is not the whole; `whole` is the whole's size when the host kept it (fetched only
@@ -384,7 +381,6 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
                 clamp: false, expandable: true, lane: 'messages', who,
                 // An agent's or a peer's words are PROSE, drawn with the chat's markup (genie#1263); yours stay as typed.
                 prose: row.event.speaker !== 'you',
-                ...(row.event.attachments && row.event.attachments.length > 0 ? { attachments: attachmentPills(row.event.attachments, row.event.attachmentRefs) } : {}),
             };
         }
 
