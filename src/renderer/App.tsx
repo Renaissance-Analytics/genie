@@ -316,8 +316,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     const hosts = typeof window === 'undefined' ? null : knownHosts(window.localStorage, {
         hosts: () => pairedNow.current,
         forget: (url) => {
-            pairedNow.current = pairedNow.current.filter((u) => u !== url);
-            void forgetPairedHost(() => link?.forget(url), readPaired, (reason) => setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: reason })));
+            void forgetPairedHost(() => link?.forget(url), readPaired, (reason) => setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: reason })), () => { pairedNow.current = pairedNow.current.filter((u) => u !== url); });
         },
     });
     const [remembered, setRemembered] = useState<string[]>([]);

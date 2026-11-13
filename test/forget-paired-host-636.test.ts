@@ -9,6 +9,16 @@ const plain = (refused: ReturnType<typeof vi.fn>) => {
 };
 
 describe('Forget pairing owns the local owner read/write chain (#636)', () => {
+    it('keeps the cached pairing until the host confirms that it was forgotten', async () => {
+        let complete: (forgot: boolean) => void = () => {};
+        const reply = new Promise<boolean>((resolve) => { complete = resolve; });
+        let paired = ['host_fixture'];
+        const action = forgetPairedHost(() => reply, async () => {}, vi.fn(), () => { paired = []; });
+        try { expect(paired).toEqual(['host_fixture']); }
+        finally { complete(true); await action; }
+        expect(paired).toEqual([]);
+    });
+
     it('owns a rejected forget, reports it plainly and never repeats the uncertain write', async () => {
         const forget = vi.fn(async () => { throw failure(); }); const refresh = vi.fn(async () => {}); const refused = vi.fn();
         await expect(forgetPairedHost(forget, refresh, refused)).resolves.toBeUndefined();

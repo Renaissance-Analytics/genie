@@ -3,7 +3,9 @@ export function forgetPairedHost(
     forget: () => Promise<boolean> | undefined,
     refresh: () => Promise<void>,
     refused: (reason: string) => void,
+    onForgot: () => void = () => {},
 ): Promise<void> {
+    onForgot();
     const request = forget();
     if (!request) return Promise.resolve();
     return request.then((forgot) => {
