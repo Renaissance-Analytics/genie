@@ -220,6 +220,13 @@ export interface WorkspaceProps {
     onResumeAgent?: ((agent: string, path: string) => void) | undefined;
     /** The strip's starting state — for tests that render tabs server-side. Defaults to empty. */
     initialState?: WorkspaceState | undefined;
+    /** The terminal pane to draw with, given rather than loaded (a server render has no xterm). Absent = fancy-term's, loaded client-side. */
+    terminalPane?: ComponentType<TerminalPaneProps> | undefined;
+    /**
+     * A READ-ONLY SHARE (Tynn #691): its terminals show output only — drawn read-only, typing and resizing send nothing,
+     * and no terminal is opened or closed from here. The host refuses all of it anyway; this does not offer it.
+     */
+    readOnly?: boolean | undefined;
     /**
      * Which view of the workspace (`core/route.ts`): `home` — the board's workspace surface, its AGENTS and what
      * changed — is the default; `terminals` is §4.6; `settings` holds governs, the workspace settings and the repos.
@@ -249,7 +256,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, onOpenScratchTerminal, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], pluginEntries, issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, tynnIssues, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile, terminalPane, readOnly = false }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     const [terminalError, setTerminalError] = useState<string | null>(null);
     // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
@@ -294,8 +301,9 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
      * `react-dom/server`. Until it resolves the pane renders nothing; the empty state and the
      * tab strip do not wait for it.
      */
-    const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(null);
+    const [Pane, setPane] = useState<ComponentType<TerminalPaneProps> | null>(() => terminalPane ?? null);
     useEffect(() => {
+        if (terminalPane) return;
         let live = true;
         void import('./TerminalPane.js').then((m) => { if (live) setPane(() => m.TerminalPane); });
         return () => { live = false; };
@@ -449,6 +457,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                             >
                                 <Icon name="eye-off" className="h-3 w-3" />
                             </button>
+                            {readOnly ? null : (
                             <button
                                 type="button"
                                 aria-label="Close terminal"
@@ -458,6 +467,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                             >
                                 <Icon name="x" className="h-3 w-3" />
                             </button>
+                            )}
                         </div>
                     );
                 })}
@@ -499,6 +509,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                         </div>
                     );
                 })}
+                {readOnly ? null : (
                 <button
                     type="button"
                     data-terminal-add=""
@@ -508,6 +519,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                     <Icon name="plus" className="h-3.5 w-3.5" />
                     terminal
                 </button>
+                )}
                 {files ? (
                     <button type="button" data-action="add-code" title="Open a file as its own pane: pick it in the file panel, then ⧉ on its tab" onClick={() => { if (panel !== 'files') onTogglePanel?.(); }} className="flex items-center gap-1.5 px-3 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]">
                         <Icon name="plus" className="h-3.5 w-3.5" />
@@ -585,11 +597,11 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                                             output={state.output[id] ?? ''}
                                             outputEnd={terminalOutput(state, id).end}
                                             outputEpoch={terminalOutput(state, id).epoch}
-                                            readOnly={t.exited !== null}
-                                            onData={(data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
+                                            readOnly={readOnly || t.exited !== null}
+                                            onData={(data) => { if (!readOnly) terminalAction(() => terminals.write(id, data), setTerminalError); }}
                                             onResize={({ cols, rows }) => {
                                                 lastSize.current = { cols, rows };
-                                                terminalAction(() => terminals.resize(id, cols, rows), setTerminalError);
+                                                if (!readOnly) terminalAction(() => terminals.resize(id, cols, rows), setTerminalError);
                                             }}
                                             root={workspace.path}
                                             onOpenFile={(file) => {
@@ -606,6 +618,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                 ) : (
                     <div data-terminal-empty="" className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-[var(--fg-3)]">
                         <p>No terminals open in {workspace.name ?? workspace.id}.</p>
+                        {readOnly ? null : (
                         <button
                             type="button"
                             data-terminal-add-empty=""
@@ -614,6 +627,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                         >
                             Open a terminal
                         </button>
+                        )}
                     </div>
                 )}
             </div>
@@ -982,10 +996,11 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                                         {...(p.ref === null ? {} : { outputEnd: terminalOutput(state, p.ref).end, outputEpoch: terminalOutput(state, p.ref).epoch })}
                                         Pane={Pane}
                                         root={workspace.path}
-                                        onData={(id, data) => terminalAction(() => terminals.write(id, data), setTerminalError)}
-                                        onResize={(id, { cols, rows }) => { lastSize.current = { cols, rows }; terminalAction(() => terminals.resize(id, cols, rows), setTerminalError); }}
+                                        readOnly={readOnly}
+                                        onData={(id, data) => { if (!readOnly) terminalAction(() => terminals.write(id, data), setTerminalError); }}
+                                        onResize={(id, { cols, rows }) => { lastSize.current = { cols, rows }; if (!readOnly) terminalAction(() => terminals.resize(id, cols, rows), setTerminalError); }}
                                         onOpenFile={(file) => { const target = workspaceFileOf(workspace.path, file); if (target) onOpenFile?.(target.path, target.line); }}
-                                        onStart={() => { if (at >= 0) void openTerminal().then((id) => placeTerminal(tab.id, at, id)).catch(() => {}); }}
+                                        onStart={readOnly ? undefined : () => { if (at >= 0) void openTerminal().then((id) => placeTerminal(tab.id, at, id)).catch(() => {}); }}
                                     />
                                 );
                             }

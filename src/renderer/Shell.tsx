@@ -1,3 +1,4 @@
+import { readOnlyTerminals } from './read-only-terminals.js';
 import { routeInScope, workspaceHome, WORKSTATION_SCOPE, type WindowScope } from '../core/workspace-window.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import { useActivityFeeds } from './use-activity-feeds.js';
@@ -464,6 +465,8 @@ export function Shell({
     const readOnly = scoped?.readonly === true;
     const route = routeInScope(askedRoute, windowScope, snapshot.agents);
     const remoteShown = remote && readOnly ? { ...remote, onTakeControl: undefined } : remote;
+    // A read-only share's terminals send nothing that acts (Tynn #691), wherever one is drawn. One object per bridge.
+    const shownTerminals = useMemo(() => (readOnly ? readOnlyTerminals(terminals) : terminals), [readOnly, terminals]);
     const parsed = parseRoute(route);
     // The open workspace's agents' activity feeds, kept live by the host's pushes — its Dashboard's lanes.
     const activityFeeds = useActivityFeeds(activity, parsed.surface === 'workspace' ? parsed.workspaceId : null);
@@ -920,7 +923,8 @@ export function Shell({
                                 onAccountRetry={scoped ? undefined : onAccountRetry}
                                 onDesignLogin={scoped ? undefined : onDesignLogin}
                                 onStart={readOnly ? undefined : onStartAgent}
-                                terminals={terminals}
+                                terminals={shownTerminals}
+                                terminalsReadOnly={readOnly}
                             />
                             </ErrorBoundary>
                             </div>
@@ -943,7 +947,8 @@ export function Shell({
                             // Settings → Hosting opens the same modals as the row's indicators.
                             onOpenRuntime={scoped ? undefined : (kind) => setRuntimeModal({ kind, workspaceId: parsed.workspaceId })}
                             workspace={workspaceFor(parsed.workspaceId)!}
-                            terminals={terminals}
+                            terminals={shownTerminals}
+                            readOnly={readOnly}
                             files={files}
                             {...(onOpenScratchTerminal && !readOnly ? { onOpenScratchTerminal: () => onOpenScratchTerminal(parsed.workspaceId) } : {})}
                             sitePanels={sitePanels}

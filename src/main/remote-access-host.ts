@@ -37,6 +37,10 @@ export interface HostRemoteApiPorts {
     readonly takeOverEnded?: (terminalId: string) => void;
     /** The workspace an agent is in (a guest is held to its own), from the host's roster. */
     readonly workspaceOfAgent?: (agentId: string) => string | null;
+    /** The workspace a terminal is in (Tynn #691): a guest reaches its own workspace's terminals and no other. Absent = none. */
+    readonly workspaceOfTerminal?: (terminalId: string) => string | null;
+    /** Each workspace's folder (Tynn #691): how far a guest may browse. Absent = a guest browses nothing. */
+    readonly workspacePaths?: () => Readonly<Record<string, string>>;
 }
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
@@ -57,6 +61,8 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             return () => { offWindow(); offAlone(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
+        ...(ports.workspaceOfTerminal ? { workspaceOfTerminal: ports.workspaceOfTerminal } : {}),
+        ...(ports.workspacePaths ? { workspacePaths: ports.workspacePaths } : {}),
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),
     };
 }
