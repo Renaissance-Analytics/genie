@@ -217,7 +217,7 @@ const detailCache = new AgentDetailCache<AgentDetail>();
  * — and the Shell renders a not-found for the second. Merging them would flash an error on
  * every navigation to a perfectly good agent while its detail loaded.
  */
-function useAgentDetail(
+export function useAgentDetail(
     bridge: GenieBridge | undefined,
     agentId: string | null,
     /** Settle an agent ROUTE reached by name on its id. Off for the chat subject: its id must not rewrite the agent route. */
