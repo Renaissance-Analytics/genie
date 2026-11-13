@@ -106,6 +106,7 @@ import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 import { useFilesPopped } from './use-files-popped.js';
 import { moveFilePanel } from './file-window-action.js';
+import { useAppInboxView } from './use-app-inbox-view.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
 import type { AppInboxCardProps, AppInboxCardState } from './components/AppInboxCard.js';
@@ -1382,16 +1383,7 @@ function DesktopApp({ bridge }: AppProps) {
      * driving another machine. Each action shows itself in flight, then its result; a new script key is shown once.
      */
     const appInboxBridge = !remote.state?.connected ? ownWindowBridge()?.appInbox : undefined;
-    const [appInboxView, setAppInboxView] = useState<{ workspaceId: string; state: AppInboxCardState | null; busy: AppInboxCardProps['busy']; revealed: AppInboxCardProps['revealed']; outcome: AppInboxCardProps['outcome'] } | null>(null);
-    useEffect(() => {
-        if (!appInboxBridge || !workspaceId) { setAppInboxView(null); return; }
-        let live = true;
-        setAppInboxView({ workspaceId, state: null, busy: null, revealed: null, outcome: null });
-        void appInboxBridge.state(workspaceId).then((r) => {
-            if (live) setAppInboxView((v) => (v && v.workspaceId === workspaceId ? { ...v, state: r.ok ? r.state : null, outcome: r.ok ? v.outcome : { ok: false, text: r.reason } } : v));
-        });
-        return () => { live = false; };
-    }, [appInboxBridge, workspaceId, wsSettings]);
+    const [appInboxView, setAppInboxView] = useAppInboxView(appInboxBridge, workspaceId, wsSettings);
     const appInboxAct = (busy: NonNullable<AppInboxCardProps['busy']>, run: () => Promise<{ ok: true; state: AppInboxCardState; text?: string; token?: string; name?: string } | { ok: false; reason: string }>, done: string): void => {
         const forWorkspace = workspaceId;
         const attempt = (): void => {
