@@ -2,7 +2,6 @@ import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { agentFileText, agentSlug, newAgentRefusal } from '../src/core/agent-create.js';
-import { parseAgentManifest } from '../src/core/agent-manifest.js';
 import { createAgent, type AgentCreatePorts } from '../src/main/agent-create-host.js';
 import { NewAgentView } from '../src/renderer/components/NewAgentModal.js';
 import { control } from './helpers/control-markup.js';
@@ -37,11 +36,9 @@ describe('the form’s rules', () => {
         expect(newAgentRefusal({ ...ok, name: 'genie', sacredName: 'tynn' })).toMatch(/reserved/);
     });
 
-    it('AGENT.md says the name and the purpose — no provider (Tynn story #380) — and reads back as itself', () => {
-        const text = agentFileText({ name: 'scout', purpose: 'Reads issues and triages them', provider: 'codex' });
-        expect(text).toMatch(/^---\nname: scout\npurpose: Reads issues and triages them\n---\n/);
-        expect(text).toContain('You are scout. Reads issues and triages them');
-        expect(parseAgentManifest(text, 'scout')).toEqual({ name: 'scout' });
+    it('AGENT.md is only the persona: the purpose, once — no front matter, no provider (Tynn #380, #694)', () => {
+        const text = agentFileText({ name: 'scout', purpose: 'Reads issues and triages them' });
+        expect(text).toBe('Reads issues and triages them\n');
     });
 });
 
@@ -51,33 +48,38 @@ describe('creating it on the host', () => {
         const written: Array<[string, string]> = [];
         const registered: unknown[] = [];
         const file = join(WS, '.agents', 'scout', 'AGENT.md');
+        const manifest = join(WS, 'project.json');
+        const project = `${JSON.stringify({ $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.4.0/schemas/workspace/project.schema.json', name: 'shop' }, null, 2)}\n`;
         const p: AgentCreatePorts = {
             workspace: (id) => (id === 'shop' ? { id: 'shop', path: WS } : null),
             agentsOf: () => (opts.agents ?? []).map((name) => ({ name })),
             exists: async (path) => path === file && opts.existingFile !== undefined,
             mkdirp: async () => {},
-            writeText: async (path, text) => { written.push([path, text]); },
+            listDirs: async () => { throw new Error('ENOENT'); },
+            readText: async (path) => (path === manifest ? project : null),
+            writeTextAtomic: async (path, text) => { written.push([path, text]); },
             register: async (input) => { registered.push(input); return { id: 'agent_new', name: input.name }; },
             sacredName: async () => null,
         };
-        return { p, written, registered, file };
+        return { p, written, registered, file, manifest };
     };
 
-    it('writes .agents/<name>/AGENT.md, then registers it with that file as its instructions, on the chosen provider', async () => {
-        const { p, written, registered, file } = ports();
+    it('writes its config to project.json, then .agents/<name>/AGENT.md, then registers it with that file as its instructions, on the chosen provider', async () => {
+        const { p, written, registered, file, manifest } = ports();
         const r = await createAgent(p, 'shop', { name: 'Scout', purpose: 'Reads issues and triages them', provider: 'codex' });
         expect(r).toEqual({ ok: true, id: 'agent_new', name: 'scout' });
-        expect(written).toHaveLength(1);
-        expect(written[0]![0]).toBe(file);
-        expect(written[0]![1]).toContain('purpose: Reads issues and triages them');
+        expect(written.map(([path]) => path)).toEqual([manifest, file]);
+        expect(JSON.parse(written[0]![1]).agents).toEqual({ scout: { purpose: 'Reads issues and triages them', provider: 'codex' } });
+        expect(written[1]![1]).toBe('Reads issues and triages them\n');
         expect(registered).toEqual([{ workspaceId: 'shop', provider: 'codex', name: 'scout', instructions: '.agents/scout/AGENT.md' }]);
     });
 
     it('never overwrites an AGENT.md that is already there: it is kept, and the agent registers on it', async () => {
-        const { p, written, registered } = ports({ existingFile: 'their own words' });
+        const { p, written, registered, manifest } = ports({ existingFile: 'their own words' });
         const r = await createAgent(p, 'shop', { name: 'scout', purpose: 'Something new', provider: 'claude' });
         expect(r).toMatchObject({ ok: true });
-        expect(written).toEqual([]);
+        // Only its config is written; the persona is theirs.
+        expect(written.map(([path]) => path)).toEqual([manifest]);
         expect(registered).toHaveLength(1);
     });
 

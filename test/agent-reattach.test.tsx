@@ -30,7 +30,9 @@ let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-reattach-')); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-const PERSONA = '---\nname: atlas\ntuis: [codex]\n---\n\n# Atlas\n\nKeeps the maps.\n';
+const PERSONA = '# Atlas\n\nKeeps the maps.\n';
+/** Its config, project.json's (Tynn #694). */
+const PROJECT = `${JSON.stringify({ $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.4.0/schemas/workspace/project.schema.json', name: 'acme', agents: { atlas: { purpose: 'Keeps the maps.', provider: 'codex' } } }, null, 2)}\n`;
 
 /** The ports main.ts passes, over a real registry and a real folder. */
 function hostPorts(registry: Registry): { adoption: AgentAdoptionPorts; ops: AgentOpsPorts } {
@@ -39,6 +41,7 @@ function hostPorts(registry: Registry): { adoption: AgentAdoptionPorts; ops: Age
         agentsOf: (id) => registry.agentsOf(id),
         listDirs: async (d) => (await readdir(d, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name),
         readText: async (p) => { try { return await readFile(p, 'utf8'); } catch { return null; } },
+        writeTextAtomic: async (p, text) => { await writeFile(p, text, 'utf8'); },
         register: async (input) => { const r = await registry.register(input); return { id: r.id, name: r.name }; },
     };
     const removed: string[] = [];
@@ -47,7 +50,6 @@ function hostPorts(registry: Registry): { adoption: AgentAdoptionPorts; ops: Age
         host: { start: () => ({ ok: true }), stop: () => true, probe: () => null },
         cwdFor: () => join(dir, 'acme'),
         workspacePathFor: () => join(dir, 'acme'),
-        readManifest: async () => null,
         removeDir: async (p: string) => { removed.push(p); },
         removeHandoff: async () => {},
         linkedSystems: () => [],
@@ -64,6 +66,7 @@ describe('unmount, then reattach (host, a real registry and a real folder)', () 
         await mkdir(join(ws, '.agents', '_genie'), { recursive: true });
         const file = join(ws, '.agents', 'atlas', 'AGENT.md');
         await writeFile(file, PERSONA, 'utf8');
+        await writeFile(join(ws, 'project.json'), PROJECT, 'utf8');
         const registry = new Registry(new Store(join(dir, 'home')));
         await registry.load({ name: 'test', healthy: true });
         await registry.addWorkspace({ id: 'acme', path: ws });
@@ -100,7 +103,7 @@ function findAll(node: ReactNode, match: (p: Props) => boolean, out: Props[] = [
     return out;
 }
 const noop = () => {};
-const onDisk = importedAgents({ files: [{ folder: 'atlas', text: PERSONA }, { folder: 'tynn', text: '' }], registered: [{ name: 'bolt' }] });
+const onDisk = importedAgents({ files: [{ folder: 'atlas' }, { folder: 'tynn' }], configs: { atlas: { purpose: 'Keeps the maps.', tuis: ['codex'] } }, registered: [{ name: 'bolt' }] });
 const roster = { registered: [{ id: 'agent_b', name: 'bolt', provider: 'claude' }], onDisk, busy: null, notice: null, error: null, onReattach: noop };
 
 describe('the workspace’s agent roster (Genie 1’s Registered / On disk only)', () => {

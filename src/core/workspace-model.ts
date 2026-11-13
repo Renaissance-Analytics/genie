@@ -83,7 +83,11 @@ export function gitAddPlan(input: { url: string; parent: string; folderExists: b
     return { ok: true, source: 'git', url, path, kind: 'simple-repo', steps: [{ action: `git clone ${url} into ${path}`, path, writes: true }, ...planAdd('simple-repo', path)] };
 }
 
-export const SCHEMA_REVISION = '0.3.0';
+/**
+ * Civicognita/shared-schemas publishes the envelope schema by git tag; this Genie writes this revision. v0.4.0 adds
+ * `agents` (Tynn #693/#694: an agent's config); every v0.3.0 document is a valid v0.4.0 one once its `$schema` moves.
+ */
+export const SCHEMA_REVISION = '0.4.0';
 const SCHEMA_BASE = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v';
 const SCHEMA_TAIL = '/schemas/workspace/project.schema.json';
 

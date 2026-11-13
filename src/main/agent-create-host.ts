@@ -1,6 +1,8 @@
 import { join } from 'node:path';
+import { agentConfigWrite } from '../core/agent-config.js';
 import { agentFileText, agentSlug, newAgentRefusal } from '../core/agent-create.js';
 import type { AcpProvider } from '../core/engine.js';
+import { moveAgentFrontmatter, type AgentConfigFs } from './agent-config-host.js';
 
 /**
  * A NEW AGENT ON THE HOST (Genie 1's `registerAgentInWorkspace`, the one core its form and its MCP tool shared): the form
@@ -8,14 +10,18 @@ import type { AcpProvider } from '../core/engine.js';
  * one that is already there, whose words are someone's — and then the agent registered with that file as its
  * instructions, on the provider chosen. The file is what makes Unmount safe: an agent with nothing on disk was lost the
  * moment it was unmounted (genie#1113's finding). Every port is injected; main.ts passes the real ones.
+ *
+ * THE CONFIG IN project.json, THE PERSONA IN AGENT.md (Tynn #694): the purpose and provider are written to the workspace's
+ * project.json `agents.<name>` (core/agent-config.ts) FIRST — a project.json Genie may not write refuses the create before
+ * anything is written — and AGENT.md is only the persona, the purpose said once. Any old front matter in the workspace is
+ * moved first (main/agent-config-host.ts): creating an agent is reading its workspace.
  */
 
-export interface AgentCreatePorts {
+export interface AgentCreatePorts extends AgentConfigFs {
     workspace(id: string): { id: string; path: string } | null;
     agentsOf(workspaceId: string): readonly { name: string }[];
     exists(path: string): Promise<boolean>;
     mkdirp(dir: string): Promise<void>;
-    writeText(path: string, text: string): Promise<void>;
     register(input: { workspaceId: string; provider: AcpProvider; name: string; instructions: string }): Promise<{ id: string; name: string }>;
     /** The workspace's sacred grant from its linked Tynn project; a failure grants nothing. */
     sacredName?(workspaceId: string): Promise<string | null>;
@@ -43,11 +49,20 @@ export async function createAgent(
         const refusal = newAgentRefusal({ name, purpose: input.purpose, provider: input.provider, existing: ports.agentsOf(workspaceId).map((a) => a.name), sacredName });
         if (refusal !== null) return { ok: false, reason: refusal };
 
+        await moveAgentFrontmatter(ports, workspace.path);
+        const manifestPath = join(workspace.path, 'project.json');
+        const purpose = input.purpose.replace(/\s+/g, ' ').trim();
+        const config = agentConfigWrite(await ports.readText(manifestPath), { [name]: { purpose, provider: input.provider } });
+        if (!config.ok) return { ok: false, reason: `the agent was not created: ${config.reason}` };
+        if (config.changed) {
+            if (config.backup) await ports.writeTextAtomic(join(workspace.path, config.backup.name), config.backup.text);
+            await ports.writeTextAtomic(manifestPath, config.text);
+        }
         const dir = join(workspace.path, '.agents', name);
         const file = join(dir, 'AGENT.md');
         if (!(await ports.exists(file))) {
             await ports.mkdirp(dir);
-            await ports.writeText(file, agentFileText({ name, purpose: input.purpose, provider: input.provider }));
+            await ports.writeTextAtomic(file, agentFileText({ name, purpose }));
         }
         const record = await ports.register({ workspaceId, provider: input.provider as AcpProvider, name, instructions: `.agents/${name}/AGENT.md` });
         return { ok: true, id: record.id, name: record.name };
