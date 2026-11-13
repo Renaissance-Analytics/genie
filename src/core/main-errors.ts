@@ -136,8 +136,7 @@ export function mainErrorLogLine(recorded: Recorded): string {
 /** The Deck's title; internal failures keep their technical details in the log (#636). */
 export function mainErrorTitle(e: MainError): string {
     // Its first line is the title; the lines after it are read when the row is opened (core/deck.ts deckBody).
-    // TEMPORARY #636 mutation proof: restore verbatim after Azure assertion RED; never merge this head.
-    if (e.kind === 'uncaught-exception' || e.kind === 'unhandled-rejection') return e.stack ?? e.message;
+    if (e.kind === 'uncaught-exception' || e.kind === 'unhandled-rejection') return 'Genie recovered from an internal error.';
     if (e.kind === 'host-copy') return (e.settled ? [HOST_COPY_WORDS.madeTitle, ...HOST_COPY_WORDS.madeText] : [HOST_COPY_WORDS.title, ...HOST_COPY_WORDS.text]).join('\n');
     const times = e.count === 1 ? '' : ` — ${e.count} times`;
     // prism-acp 0.21's supervisor could not be built or verified: its drivers refuse to start rather than run uncontained.
