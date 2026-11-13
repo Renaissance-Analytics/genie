@@ -21,6 +21,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { isGeniePage } from '../cdp-main-window.mjs';
 
 const label = process.argv[2] ?? 'run';
 const PHASE_S = Number(process.argv[3] ?? 90);
@@ -106,7 +107,7 @@ await main.eval(`(() => {
 })()`);
 console.log(`main attached at +${since(Date.now())} ms`);
 
-const page = await Cdp.connect(await target(9222, (t) => t.type === 'page' && t.webSocketDebuggerUrl && /index\.html/.test(t.url)));
+const page = await Cdp.connect(await target(9222, (t) => t.type === 'page' && t.webSocketDebuggerUrl && isGeniePage(t.url)));
 await page.send('Profiler.enable');
 await page.send('Profiler.setSamplingInterval', { interval: 1000 });
 await page.send('Profiler.start');

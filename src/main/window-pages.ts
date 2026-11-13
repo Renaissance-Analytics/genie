@@ -183,10 +183,11 @@ function answer(root: string, port: () => number) {
             res.statusCode = 200;
             res.setHeader('Content-Type', file.contentType);
             res.setHeader('Cache-Control', file.cache);
-            if (file.relative.endsWith('.html')) {
-                res.setHeader('Content-Security-Policy', WINDOW_CSP);
-                res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-            }
+            // No Cross-Origin-Opener-Policy: a window's first load comes from its initial about:blank, and COOP makes that
+            // load swap to a new browsing-context group (a new renderer) mid-navigation — the debugger's page session and
+            // execution context went away under every CI row that attached early (gate 1113-181034-c9ede2). A Genie window
+            // has no opener to cut off: window.open is refused (external-links.ts), and framing is refused by the CSP.
+            if (file.relative.endsWith('.html')) res.setHeader('Content-Security-Policy', WINDOW_CSP);
             res.setHeader('Content-Length', body.byteLength);
             if (req.method === 'HEAD') res.end(); else res.end(body);
         })().catch(() => { if (!res.headersSent) res.statusCode = 500; res.end(); });

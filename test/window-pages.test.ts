@@ -128,6 +128,8 @@ describe('the server', () => {
         expect(csp).not.toMatch(/unsafe-eval|script-src[^;]*unsafe-inline|\*/);
         expect(r.headers['cross-origin-resource-policy']).toBe('same-origin');
         expect(r.headers['referrer-policy']).toBe('no-referrer');
+        // No COOP: it swapped a window's first load into a new renderer mid-navigation (gate 1113-181034-c9ede2).
+        expect(r.headers['cross-origin-opener-policy']).toBeUndefined();
         const js = await get(s.port, '/assets/index-AbC123.js', `genie.localhost:${s.port}`);
         expect(js.status).toBe(200);
         expect(js.headers['content-type']).toBe('text/javascript; charset=utf-8');

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { isHostWaitWindow, isMainWindow, mainWindow } from '../scripts/cdp-main-window.mjs';
 
@@ -42,5 +42,27 @@ describe('every CI row script picks it through the helper', () => {
         expect(code).toMatch(/from '\.\/cdp-main-window\.mjs'/);
         expect(code).not.toMatch(/\.find\(\(t\) => t\.type === 'page' && t\.webSocketDebuggerUrl\)/);
         expect(code).not.toMatch(/t\.type === 'page' && \/index\\\.html\/\.test\(t\.url\)/);
+    });
+});
+
+describe("Genie's own page, by one rule (Tynn #683)", () => {
+    it('matches http://genie.localhost:<port>/<page>.html and the built file it replaced; nothing else', async () => {
+        const { isGeniePage, geniePageSource } = await import('../scripts/cdp-main-window.mjs');
+        for (const url of ['http://genie.localhost:24567/index.html', 'http://genie.localhost:1/index.html#genie://dashboard', 'http://genie.localhost:1/index.html?remote=x',
+            'file:///C:/Genie/resources/app.asar/dist/renderer/index.html', 'file:///home/genie/work/genie/dist/renderer/index.html#genie://files/tynn'])
+            expect(isGeniePage(url), url).toBe(true);
+        for (const url of ['http://genie.localhost:1/host-wait.html', 'http://localhost:1/index.html', 'http://evil.example/index.html', 'https://genie.localhost:1/index.html',
+            'http://genie.localhost:1/index.htmlx', 'https://com-example-realapp.apps.gen/app/index.html', 'file:///x/app/index.html', 'data:text/html,index.html', '', undefined])
+            expect(isGeniePage(url), String(url)).toBe(false);
+        expect(isGeniePage('http://genie.localhost:9/question.html', 'question')).toBe(true);
+        // The source is what a row builds inside Electron's main: the same rule there.
+        expect(new RegExp(geniePageSource('index')).test('http://genie.localhost:24567/index.html#genie://flow/f1')).toBe(true);
+    });
+
+    it('no CI script finds Genie\'s page by a bare index.html or renderer path of its own', () => {
+        const dir = 'scripts';
+        const files = readdirSync(dir, { recursive: true }).map(String).filter((f) => f.endsWith('.mjs') && !f.endsWith('cdp-main-window.mjs'));
+        const own = files.filter((f) => /\/index\\+\.html\/\.test\(|renderer\[\\+\/\]index/.test(readFileSync(`${dir}/${f}`, 'utf8')));
+        expect(own).toEqual([]);
     });
 });
