@@ -1,9 +1,13 @@
 import type { CustomPublishOptions, GithubOptions, UpdateInfo } from 'builder-util-runtime';
 import type { AppUpdater } from 'electron-updater';
-import { GitHubProvider } from 'electron-updater/out/providers/GitHubProvider.js';
-import { parseUpdateInfo, type ProviderRuntimeOptions } from 'electron-updater/out/providers/Provider.js';
+import gitHubProviderModule from 'electron-updater/out/providers/GitHubProvider.js';
+import providerModule from 'electron-updater/out/providers/Provider.js';
+import type { ProviderRuntimeOptions } from 'electron-updater/out/providers/Provider.js';
 import { compareGenieVersions } from '../core/update-notes.js';
 import { selectPublishedUpdate, type PublishedUpdateRelease } from './published-update.js';
+
+const { GitHubProvider } = gitHubProviderModule;
+const { parseUpdateInfo } = providerModule;
 
 /** Published metadata chooses the tag; the inherited resolver and stock updater still own downloads/verification. */
 export class PublishedGitHubProvider extends GitHubProvider {
