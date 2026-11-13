@@ -78,7 +78,7 @@ class Cdp {
     on(method, fn) { this.listeners.set(method, fn); return () => this.listeners.delete(method); }
     static async connect(url, label) {
         const c = new Cdp(); c.label = label; c.socket = new WebSocket(url); let timer;
-        c.socket.addEventListener('message', (event) => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; if (frame.method) c.listeners.get(frame.method)?.(frame.params); const done = c.pending.get(frame.id); if (typeof done === 'function') { c.pending.delete(frame.id); done(frame); } });
+        c.socket.addEventListener('message', (event) => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; if (typeof frame.method === 'string') { const listener = c.listeners.get(frame.method); if (typeof listener === 'function') listener(frame.params); } const done = c.pending.get(frame.id); if (typeof done === 'function') { c.pending.delete(frame.id); done(frame); } });
         c.socket.addEventListener('close', () => { c.dead ??= `${label}: CDP closed`; for (const done of c.pending.values()) done({ error: { message: c.dead } }); c.pending.clear(); });
         try { await Promise.race([new Promise((ok, no) => { c.socket.addEventListener('open', ok, { once: true }); c.socket.addEventListener('error', no, { once: true }); }), new Promise((_, no) => { timer = setTimeout(() => no(new Error('CDP connect timed out')), 10000); })]); }
         finally { clearTimeout(timer); }
