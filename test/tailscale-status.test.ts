@@ -48,7 +48,7 @@ describe('parseTailscaleStatus', () => {
         expect(s.peers.find((p) => p.hostname === 'phone')?.online).toBe(false);
     });
 
-    it('reports not-running + surfaces the auth URL for a NeedsLogin backend', () => {
+    it('reports not-running for a NeedsLogin backend, and keeps no auth URL (it may be long expired, Tynn #675)', () => {
         const s = parseTailscaleStatus(
             JSON.stringify({
                 BackendState: 'NeedsLogin',
@@ -58,7 +58,7 @@ describe('parseTailscaleStatus', () => {
             }),
         );
         expect(s.running).toBe(false);
-        expect(s.authUrl).toBe('https://login.tailscale.com/a/abc');
+        expect('authUrl' in s).toBe(false);
         expect(s.peers).toEqual([]);
         expect(s.self).toBeNull();
     });

@@ -2610,7 +2610,6 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                     {remote.tailscale.remedy?.command ? <code className="basis-full rounded-md bg-[var(--bg-2)] px-2 py-1 font-mono text-xs">{remote.tailscale.remedy.command}</code> : null}
                                     {remote.tailscale.state === 'absent' ? <Button size="xs" type="button" data-action="tailscale-install" className={button} onClick={() => onAction({ kind: 'tailscale.install' })}>Install Tailscale</Button> : null}
                                     {remote.tailscale.state === 'needs-login' ? <Button size="xs" type="button" data-action="tailscale-up" className={button} onClick={() => onAction({ kind: 'tailscale.up' })}>Connect</Button> : null}
-                                    {remote.tailscale.state === 'needs-login' && remote.tailscale.authUrl ? <Button size="xs" data-action="tailscale-signin" href={remote.tailscale.authUrl} target="_blank" rel="noreferrer" iconTrailing="arrow-right" className={button}>Sign in</Button> : null}
                                 </>
                             )}
                             {remote.tailscaleOutcome ? <span data-tailscale-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.tailscaleOutcome}</span> : null}

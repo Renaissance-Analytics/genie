@@ -113,9 +113,12 @@ describe('the icons react-fancy Buttons are given (icon=, iconTrailing=, alertIc
             for (const m of source.matchAll(/\s(?:icon|iconTrailing|alertIcon)=\{?["']([a-z0-9-]+)["']/g)) used.add(m[1] as string);
         }
 
-        // POSITIVE CONTROL: the Dashboard's Buttons were read (its group header's trailing arrow, its Chat button's icon).
-        expect(used).toContain('arrow-right');
+        // POSITIVE CONTROL: Buttons across the renderer were read, both props: the Dashboard's Chat button's `icon`, and an
+        // Inbox attachment's trailing `download` (a name only ever given as `iconTrailing`). The trailing 'arrow-right' this
+        // used to name went with the Dashboard's group header and then Tailscale's kept-link Sign in (Tynn #675); the
+        // arrow itself is still drawn, through `<Icon name>`, which the scan above holds.
         expect(used).toContain('message-square');
+        expect(used).toContain('download');
 
         expect([...used].filter((name) => !ICON_NAMES.includes(name))).toEqual([]);
     });

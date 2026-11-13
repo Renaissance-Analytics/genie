@@ -2229,6 +2229,15 @@ async function boot(): Promise<void> {
             openHttps(r.authUrl);
             await refreshTailscale();
             if (r.ok) await remoteAccessNow?.apply();
+            // A sign-in hands back its link while `up` waits for the login (Tynn #675): when that `up` ends, read Tailscale
+            // again, and a node the login brought online re-applies the remote-access switch, as a Connect that succeeded does.
+            void r.online
+                ?.then(async (online) => {
+                    await refreshTailscale();
+                    if (online) await remoteAccessNow?.apply();
+                })
+                .catch((error: unknown) => console.warn(`[genie] remote access after the Tailscale login: ${error instanceof Error ? error.message : String(error)}`))
+                .finally(() => requestFeaturePush());
             return r;
         },
         install: async () => {
