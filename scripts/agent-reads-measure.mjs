@@ -110,7 +110,7 @@ async function cleanupOwned() {
     const seen = new Set([process.pid]);
     const processes = [];
     for (const [role, pid] of roots) {
-        const entry = { role, pid, gone: false, errors: [] };
+        const entry = { role, pid, gone: false, errors: [], diagnostics: [] };
         processes.push(entry);
         if (!Number.isSafeInteger(pid) || pid < 1 || seen.has(pid)) {
             entry.errors.push('missing, duplicate or self PID');
@@ -120,12 +120,16 @@ async function cleanupOwned() {
         seen.add(pid);
         try {
             if (alive(pid)) {
-                if (WIN) execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 15_000, windowsHide: true });
+                if (WIN) {
+                    const output = execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024, timeout: 15_000, windowsHide: true });
+                    if (output) entry.diagnostics.push(String(output).slice(0, 8_000));
+                }
                 else process.kill(-pid, 'SIGKILL');
             }
         } catch (error) {
-            entry.errors.push(error instanceof Error ? error.message : String(error));
-            check(false, `cleanup ${role}: stop owned process`, entry.errors.at(-1));
+            // taskkill /T can fail after an already-exited descendant: the independent exit reading below judges it.
+            entry.diagnostics.push(error instanceof Error ? error.message : String(error));
+            for (const output of [error?.stdout, error?.stderr]) if (output) entry.diagnostics.push(String(output).slice(0, 8_000));
         }
         // Confirm each root independently even after another root's termination failed; never skip the remaining cleanup.
         try {
@@ -135,6 +139,7 @@ async function cleanupOwned() {
             entry.errors.push(error instanceof Error ? error.message : String(error));
             check(false, `cleanup ${role}: confirm exit`, entry.errors.at(-1));
         }
+        if (entry.diagnostics.length) console.log(`  cleanup ${role} command diagnostics: ${entry.diagnostics.join('\n')}`);
     }
     return { complete: processes.every((entry) => entry.gone && entry.errors.length === 0), processes };
 }
@@ -144,9 +149,19 @@ async function agentThat(cdp, workspaceId, name, rows, rate) {
     const added = await cdp.evaluate(`window.genieTest.addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'measure', provider: 'codex' })`, 15_000);
     if (!check(added?.ok === true, `agent ${name} added`, added?.reason ?? '')) throw new Error(`agent ${name} not added`);
     script(rows, rate);
-    await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(added.id)}, "graceful"); true`, 15_000);
+    // Keep the real reply: a refused restart does not emit a start phase, so a running-only timeout loses its cause.
+    const restartAt = Date.now();
+    const restart = await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(added.id)}, "graceful")`, 15_000);
+    (result.agentStarts ??= []).push({ id: added.id, name, restart, elapsedMs: Date.now() - restartAt });
+    writeResult();
+    console.log(`  agent ${name} restart reply: ${JSON.stringify(restart)}`);
+    if (restart?.ok !== true) throw new Error(`${name} restart refused: ${restart?.reason ?? 'missing restart reply'}`);
     const started = await until(() => cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)}).then((d) => d?.session?.running === true)`, 15_000), 60_000);
-    if (!check(started === true, `${name} is running`)) throw new Error(`${name} did not start`);
+    if (!check(started === true, `${name} is running`)) {
+        result.failedStart = { id: added.id, name, detail: await cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)}).then((d) => ({ session: d?.session, refusal: d?.refusal, log: (d?.log ?? []).slice(-10) }))`, 15_000).catch((error) => ({ unread: String(error) })) };
+        writeResult();
+        throw new Error(`${name} did not start: ${JSON.stringify(result.failedStart)}`);
+    }
     await cdp.evaluate(`window.genieTest.prompt(${JSON.stringify(added.id)}, 'measure')`, 15_000);
     if (rows > 0) {
         const reached = await until(() => cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(added.id)}).then((d) => (d?.rows?.length ?? 0) >= ${rows})`, 30_000), 240_000, 2_000);
