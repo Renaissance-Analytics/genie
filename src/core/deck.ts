@@ -377,6 +377,8 @@ export interface UpdateSignalInput {
     percent: number | null;
     /** A failed check/download remains actionable, even before a version is known. */
     error?: string | null;
+    /** Explicit user request or an open update window; routine background checks leave this unset. */
+    userInitiated?: boolean;
     /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
     changelog?: import('./update-notes.js').UpdateChangelog | 'unavailable' | null;
 }

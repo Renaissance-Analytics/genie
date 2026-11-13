@@ -3,8 +3,8 @@ import type { UpdateChangelog } from './update-notes.js';
 
 /**
  * THE UPDATE, IN THE HEADER (the owner, 2026-10-13: "the update notice should be in the header, not buried in the deck
- * page"). Idle and none stay silent. A pending check keeps an open update window present, and a failure keeps a
- * door to its reason and Retry. An available update offers download, then restart to install.
+ * page"). Idle and none stay silent, as do background checks/failures with no known offer. A user request or an open
+ * update window keeps checking/error visible; a known offer keeps its door to the reason and Retry.
  * The title bar draws it on every surface; the Deck no longer does — one notice, in one place.
  */
 export interface UpdateChip {
@@ -19,7 +19,9 @@ export interface UpdateChip {
 }
 
 export function updateChip(u: UpdateSignalInput | null | undefined): UpdateChip | null {
-    if (!u || (!u.version && u.phase !== 'checking' && u.phase !== 'error')) return null;
+    if (!u) return null;
+    const requested = u.userInitiated === true && (u.phase === 'checking' || u.phase === 'error');
+    if (!u.version && !requested) return null;
     const chip = phaseChip(u);
     return chip ? { ...chip, version: u.version, ...(u.changelog !== undefined ? { changelog: u.changelog } : {}) } : null;
 }

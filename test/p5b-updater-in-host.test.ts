@@ -506,10 +506,10 @@ describe('electron-updater: the helper mode imports it; main statically and geni
         expect(main.files.has(port)).toBe(false);
     });
 
-    it('only electron-updater-port.ts names the package', () => {
+    it('only the real port and published provider name the package, including subpaths', () => {
         const helper = graph('src/main/updater-process.ts', false);
         const naming = [...helper.files].filter((f) => importsOf(f).static.some((spec) => packageOf(spec) === 'electron-updater'));
-        expect(naming).toEqual([port]);
+        expect(naming.sort()).toEqual([port, resolve('src/main/published-github-provider.ts')].sort());
     });
 });
 

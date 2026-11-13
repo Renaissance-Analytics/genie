@@ -467,6 +467,12 @@ export function Shell({
     const restartScreen = installScreen(updateState, installAsked);
     // The update window (what is in the update): open from the header's update button until closed.
     const [updateOpen, setUpdateOpen] = useState(false);
+    // An open window is itself a user action. A completed no-update answer ends that interaction, so a later
+    // scheduled check cannot reopen an old window or leave an offline error in the header (#670).
+    useEffect(() => {
+        if (updateState?.phase === 'idle' || updateState?.phase === 'none') setUpdateOpen(false);
+    }, [updateState?.phase]);
+    const updateNotice = updateChip(updateState && { ...updateState, userInitiated: updateOpen || updateState.userInitiated === true });
     // A workspace row's process / site indicator opened that workspace's config (Genie 1's modals).
     const [runtimeModal, setRuntimeModal] = useState<{ kind: 'processes' | 'sites'; workspaceId: string } | null>(null);
     const runtimeWorkspace = runtimeModal ? (snapshot.workspaces ?? []).find((w) => w.id === runtimeModal.workspaceId) ?? null : null;
@@ -585,7 +591,7 @@ export function Shell({
                 onNavigate={onNavigate}
                 onOpenPalette={onOpenPalette}
                 paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
-                update={updateChip(updateState)}
+                update={updateNotice}
                 version={features.version ?? null}
                 onOpenUpdate={() => { setUpdateOpen(true); void updates.notes?.(); }}
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
@@ -604,9 +610,9 @@ export function Shell({
                 <RemoteRefusalBar refusal={remote.refusal ?? null} needsBaton={remote.needsBaton === true && !remote.driving} driver={remote.driver} onTakeControl={remote.onTakeControl} onDismiss={() => remote.onDismissRefusal?.()} />
             ) : null}
             {/* WHAT IS IN THIS UPDATE (Genie 1's upgrade window; the owner, 2026-10-19), opened from the header's update button. */}
-            {updateOpen && updateChip(updateState) ? (
+            {updateOpen && updateNotice ? (
                 <UpdateWindow
-                    update={updateChip(updateState)!}
+                    update={updateNotice}
                     onClose={() => setUpdateOpen(false)}
                     onAction={(action) => {
                         if (action === 'update-download') void updates.download();

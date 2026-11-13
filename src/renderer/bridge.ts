@@ -601,6 +601,8 @@ export interface UpdateState {
     percent: number | null;
     error: string | null;
     checkedAt: number | null;
+    /** Explicit check intent from the host; omitted for background checks and successful answers. */
+    userInitiated?: boolean;
     /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
     changelog?: import('../core/update-notes.js').UpdateChangelog | 'unavailable' | null;
     /** Restart to install, as it goes (genie#1201): the restart screen's progress. */
