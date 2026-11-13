@@ -223,6 +223,7 @@ import type { TerminalsApi } from './terminals-host.js';
 import type { ProcessBookApi } from './processes-host.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
+import { watchRegistryRefresh } from './registry-refresh.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -1669,7 +1670,7 @@ async function boot(): Promise<void> {
         // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them through the host, and
         // re-reads them when another window (or the host) wrote — two windows, one registry. Before its load, below.
         theRegistry.useStore(new HostRegistryStore(engineLink.stores()));
-        engineLink.stores().onRegistryChanged(() => { void theRegistry.refresh(); });
+        watchRegistryRefresh(engineLink.stores(), theRegistry, (error) => console.error('[registry] Background refresh failed; waiting for the next host update.', error));
         // This window reaches the `processes` child (exec and streams). Supervised processes and terminals are the host's
         // own (P3.3b, P3.3e): their state comes by replica, so nothing here is taken back after a loss.
         const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
