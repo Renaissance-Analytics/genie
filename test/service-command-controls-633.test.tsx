@@ -16,7 +16,8 @@ const running: HostedProcess = { id: 'command-633', workspaceId: 'work', name: '
 const workspaces = [{ id: 'work', path: '/fixture' }];
 const markup = (process: HostedProcess, now = NOW) => renderToStaticMarkup(<ProcessesPanel processes={[process]} workspaces={workspaces} onAction={() => {}} now={now} />);
 const row = (html: string) => html.slice(html.indexOf('data-process="command-633"'));
-const words = (html: string) => row(html).replace(/<[^>]*>/g, '');
+// Tags stripped until none is left, so a nested or split tag cannot survive one pass (code-scanning #108).
+const words = (html: string) => { let text = row(html); for (let prev = ''; prev !== text;) { prev = text; text = text.replace(/<[^>]*>/g, ''); } return text; };
 let host: HTMLDivElement; let root: Root;
 beforeEach(() => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
