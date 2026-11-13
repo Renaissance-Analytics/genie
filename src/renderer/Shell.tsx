@@ -702,6 +702,10 @@ export function Shell({
                     rateLimitAlert={rateLimitAlert(rateLimits ?? {})}
                     // A paired device close to expiring: a yellow ! on Settings, naming it and the date (q_8c07b142).
                     settingsAlert={deviceExpiryAlert(features.remote?.devices ?? [], Date.now())}
+                    // THE AGENT LIST (Tynn #687): every agent of an awake workspace — a hibernated one's are ghosts — and a
+                    // click picks the chat, as a Dashboard row does, without leaving the page on screen.
+                    agents={snapshot.agents.filter((agent) => !hiddenWorkspaces.has(agent.workspaceId))}
+                    onChatAgent={onChatAgent}
                 />
                 </ErrorBoundary>
                 {/* "Pair this device?" — on every page, never focused (q_8c07b142). A remote window's snapshot carries none. */}
