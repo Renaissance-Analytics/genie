@@ -84,7 +84,6 @@ import { PanelHostContext } from './components/PluginPane.js';
 import type { ClaimingEditor } from '../core/plugin-editors.js';
 
 const NO_PLUGIN_EDITORS: readonly ClaimingEditor[] = [];
-import type { ShareLink } from '../main/tynn-share-links.js';
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
@@ -107,6 +106,7 @@ import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 import { useFilesPopped } from './use-files-popped.js';
 import { moveFilePanel } from './file-window-action.js';
 import { useAppInboxView } from './use-app-inbox-view.js';
+import { useShareView } from './use-share-view.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
 import type { AppInboxCardProps, AppInboxCardState } from './components/AppInboxCard.js';
@@ -1374,10 +1374,7 @@ function DesktopApp({ bridge }: AppProps) {
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839, #587): this machine's, or the host's while its owner drives it; a guest has none.
     const shares = shareDoor({ connected: remote.state?.connected === true, isOwner: remote.state?.isOwner === true, own: ownWindowBridge()?.tynnNetwork?.shares, remote: remote.client?.shares });
-    const [share, setShare] = useState<{ workspaceId: string | null; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
-    const readShares = (forWorkspace: string | null) => {
-        void shares?.list(forWorkspace).then((r) => setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, links: r.ok ? r.links : [], problem: r.ok ? s.problem : r.reason } : s)));
-    };
+    const { share, setShare, readShares, mintShare } = useShareView(shares);
     /*
      * APPS AND SCRIPTS (genie#1345): the workspace's keys, read from THIS host's local protocol — never from a window
      * driving another machine. Each action shows itself in flight, then its result; a new script key is shown once.
@@ -2320,14 +2317,7 @@ function DesktopApp({ bridge }: AppProps) {
                 problem={share.problem}
                 busy={share.busy}
                 onClose={() => setShare(null)}
-                onMint={(input) => {
-                    const forWorkspace = share.workspaceId;
-                    setShare((s) => (s ? { ...s, busy: true, problem: null, minted: null } : s));
-                    void shares.mint({ workspaceId: input.whole ? null : forWorkspace, capability: input.capability, expiresInDays: input.expiresInDays }).then((r) => {
-                        setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, busy: false, minted: r.ok ? r.link : null, problem: r.ok ? null : r.reason } : s));
-                        if (r.ok) readShares(forWorkspace);
-                    });
-                }}
+                onMint={mintShare}
                 onRevoke={(link) => {
                     // The row shows where its Revoke stands (ShareWorkspaceForm); the list is read again after it.
                     const forWorkspace = share.workspaceId;
