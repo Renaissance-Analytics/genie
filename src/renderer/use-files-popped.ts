@@ -7,7 +7,14 @@ export function useFilesPopped(filesWindows: GenieBridge['files']['windows']): r
     useEffect(() => {
         if (!filesWindows) { setFilesPopped([]); return; }
         let live = true;
-        void filesWindows.list().then((l) => { if (live) setFilesPopped(l); });
+        const failed = (error: unknown): void => {
+            if (!live) return;
+            try { console.error('[files] Could not read detached file windows; waiting for the next update.', error); }
+            catch { /* Diagnostic reporting must not reject this background read. */ }
+        };
+        // Keep the current list on failure; a later real push can still recover it (#636).
+        try { void filesWindows.list().then((l) => { if (live) setFilesPopped(l); }).catch(failed); }
+        catch (error) { failed(error); }
         const off = filesWindows.onChange((l) => { if (live) setFilesPopped(l); });
         return () => { live = false; off(); };
     }, [filesWindows]);
