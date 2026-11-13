@@ -41,7 +41,7 @@ describe('a re-ask brings a put-off question back to the window', () => {
         const log: string[] = [];
         const views: QuestionView[] = [];
         let changes = 0;
-        const items = (): DeckItem[] => deckItemsFrom({ questions: store.pending(), userList: [], unreadDms: [], finished: [], agents: {}, workspaceNames: {} });
+        const items = (): DeckItem[] => deckItemsFrom({ questions: store.pending(), userList: [], unreadDms: [], agents: {}, workspaceNames: {} });
         const ctl = new QuestionWindow({
             items,
             open: () => { log.push('open'); return { show: (v: QuestionView) => { views.push(v); log.push(`show ${v.item.id}`); }, close: () => log.push('close') }; },
@@ -118,7 +118,7 @@ describe('a re-asked question is judged live from its LATEST ask', () => {
             const firstAt = clock;
             // The agent's session restarts at 09:05 and asks the same question at 09:06.
             const startedAt = Date.parse('2026-10-15T09:05:00.000Z');
-            const judge = () => deckItemsFrom({ questions: store.pending(), userList: [], unreadDms: [], finished: [], agents: { [agent]: { name: 'kai', workspaceId: 'ws_shop' } }, asker: () => ({ running: true, startedAt }) })[0]!;
+            const judge = () => deckItemsFrom({ questions: store.pending(), userList: [], unreadDms: [], agents: { [agent]: { name: 'kai', workspaceId: 'ws_shop' } }, asker: () => ({ running: true, startedAt }) })[0]!;
             // Control: before the re-ask it IS stale — asked by the earlier run.
             expect(judge().stale).toBe('earlier-run');
             clock = Date.parse('2026-10-15T09:06:00.000Z');

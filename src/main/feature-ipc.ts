@@ -20,7 +20,7 @@ import { importFlowDocument } from './flow-kinds.js';
 import { flowToolDefinitions } from './flow-tools.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
-import { HUMAN } from '../core/inbox.js';
+import { HUMAN, UNNAMED_AGENT } from '../core/inbox.js';
 import { inboxThreads, pairOf, searchThread, threadKeyOfMessage, threadWindow, uncollected } from '../core/inbox-threads.js';
 import { answerDeck } from './deck-answer.js';
 import type { ToolStatus } from '../core/toolchain.js';
@@ -130,6 +130,10 @@ export interface FeaturePorts {
         preview?(tool: string): Promise<InstallPreview>;
         /** T2: Check and repair. */
         repair?(): Promise<RepairReport>;
+        /** Open a provider's own login (LoginHost, the Agent view's Log in), for a row that says Not signed in (Tynn #698). */
+        login?(provider: string): { ok: true } | { ok: false; reason: string };
+        /** Repair a provider's CLI (Tynn #698, main/cli-repair.ts): each step pushed while it runs; never throws by contract, guarded anyway. */
+        repairCli?(provider: string, progress: (step: string | null) => void): Promise<{ readonly kind: 'repaired'; readonly words: string } | { readonly kind: 'failed' | 'refused'; readonly reason: string }>;
         /** T4: Genie-managed PHP versions. `pins` are the sites' PHP pins, which a removal is refused against. */
         php?: {
             list(pins: readonly SitePin[]): Promise<PhpVersionsView>;
@@ -193,7 +197,7 @@ export interface FeaturePorts {
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
     /** The main process's record of errors it caught and survived (core/main-errors.ts): the Deck's Dismiss on one. */
-    readonly mainErrors?: { dismiss(id: string): boolean };
+    readonly mainErrors?: { dismiss(id: string): boolean; retryHostCopy?(id: string): Promise<{ ok: true } | { ok: false; reason: string }>; openLog?(id?: string): Promise<string | null>; report?(id: string): Promise<string | null> };
     /** What's New for the running version, once (Tynn #762): `null` when seen or there are no notes for it. */
     readonly whatsNew?: (shown: boolean) => { version: string; notes: string } | null;
     /** The running version (Tynn #763: the header shows it). */
@@ -377,6 +381,9 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
 }
 
 const sameRow = (r: ToolchainRefusal, tool: string, version: string | undefined): boolean => r.tool === tool && r.version === version;
+
+/** The Toolchain rows whose CLI repair is running now (`toolchain.repairCli`): one repair per CLI at a time. */
+const repairingCli = new Set<string>();
 
 /** A row's next action starts clean: its old refusal goes; every other row's stays. */
 function clearRefusal(next: FeatureState, tool: string, version?: string): void {
@@ -606,7 +613,7 @@ const USER = { kind: 'user' } as const;
 function participantNamer(roster: ReadonlyArray<{ agentId: string; name: string }>, mail: ReadonlyArray<{ from: string; app?: { label: string } }> = []): (participant: string) => string {
     const apps = new Map<string, string>();
     for (const m of mail) if (m.app) apps.set(m.from, m.app.label);
-    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? participant);
+    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? UNNAMED_AGENT);
 }
 
 /** An agent a flow would prompt must be one address on the roster NOW — the same rule the run resolves it by. */
@@ -1022,6 +1029,44 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 next.toolchainResult = `${label} ${outcome.from ?? ''}${outcome.from ? ' → ' : ''}${outcome.to}.${notes.length > 0 ? ` ${notes.join(' ')}` : ''}${outcome.note ? ` (${outcome.note})` : ''}`;
             }
             // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
+            await rescanToolchain(next, tc, sitePins(services));
+            break;
+        }
+        case 'toolchain.login': {
+            clearRefusal(next, action.tool);
+            // The row's tool is the provider's CLI: claude-code is Claude's, codex is Codex's (Tynn #698).
+            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
+            const login = ports.toolchain?.login;
+            const opened = login ? login(provider) : { ok: false as const, reason: 'no login is wired into this Genie' };
+            if (!opened.ok) refuse(next, action.tool, opened.reason);
+            break;
+        }
+        case 'toolchain.repairCli': {
+            // ONE REPAIR AT A TIME per CLI (PR #1881 review): a second click while one runs does nothing. Two installers
+            // writing the same folder race, and the second's end would clear the first's progress off the row.
+            if (repairingCli.has(action.tool)) break;
+            clearRefusal(next, action.tool);
+            const tc = ports.toolchain;
+            if (!tc?.repairCli) {
+                refuse(next, action.tool, 'no repair is wired into this Genie; nothing was changed');
+                break;
+            }
+            const provider = action.tool === 'claude-code' ? 'claude' : action.tool;
+            const row = (step: string) => tc.updating?.({ tool: action.tool, step });
+            // Taken in the same synchronous run as the check above, so no second click can slip between them.
+            repairingCli.add(action.tool);
+            try {
+                row('Starting');
+                const outcome = await tc.repairCli(provider, (step) => { if (step) row(step); });
+                if (outcome.kind === 'repaired') next.toolchainResult = outcome.words;
+                else refuse(next, action.tool, outcome.reason);
+            } catch (error) {
+                refuse(next, action.tool, `The repair stopped: ${error instanceof Error ? error.message : String(error)}`);
+            } finally {
+                tc.updating?.(null);
+                repairingCli.delete(action.tool);
+            }
+            // The row shows what the check finds now, never the repair's word for it.
             await rescanToolchain(next, tc, sitePins(services));
             break;
         }
@@ -1707,6 +1752,11 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'plugins.setNetworkAllowed':
             if (!(await services.plugins.setNetworkAllowed(action.id, action.allowed))) throw new Error(`${action.id}: its network can only be allowed or blocked while it is an Unverified plugin here`);
             break;
+        case 'workspace.untrust': {
+            // The person's Untrust: the only thing that ends a workspace's trust (Tynn #618).
+            if ((await services.workspaceTrust.untrust(action.workspaceId)) === null) throw new Error(`There is no workspace "${action.workspaceId}" to untrust.`);
+            break;
+        }
         case 'workspace.syncAgentFiles':
             // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.
             await services.syncAgentDocs(action.workspacePath, 'you');

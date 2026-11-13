@@ -38,7 +38,8 @@ export const PRIORITIES: readonly Priority[] = ['urgent', 'high', 'normal', 'low
  * Only `agent-question` produces items today. The others are declared because the ranking has
  * to be right before they arrive — not because anything is faking them.
  */
-export type DeckSource = 'agent-question' | 'user-list' | 'unread-dm' | 'finished-handoff' | 'genie';
+// No `finished-handoff`: a finished agent's handoff is for agents, never an item for the person (Tynn #658).
+export type DeckSource = 'agent-question' | 'user-list' | 'unread-dm' | 'genie';
 // `genie`: Genie ITSELF asks — no agent behind it (agentId/agentName null). Its ids start `genie:`; today the one is
 // trusting Genie's certificate so https://<name>.gen works in the browser (core/gen-ca.ts trustDeckItem).
 
@@ -94,6 +95,8 @@ export interface DeckItem {
     stale?: StaleReason | undefined;
     /** Why this was asked although its agent is Autonomous (Tynn #439), in words. Absent = nothing to explain. */
     why?: string | undefined;
+    /** The technical detail (an error, its paths): drawn once, folded with the rest of the item, never in its title (Tynn #693). */
+    detail?: string | undefined;
 }
 
 /** Why a question's agent no longer waits for it. */
@@ -262,8 +265,6 @@ export function deckBand(items: readonly DeckItem[]): readonly DeckItem[] {
     const rank = (p: Priority): number => PRIORITIES.indexOf(p);
 
     return items
-        // A finished agent is not waiting on anybody: its handoff belongs to the SECOND band (§4.5 "Since you looked").
-        .filter((item) => item.source !== 'finished-handoff')
         .map((item) =>
             // A forwarded question must be answered on the host that raised it. Answering the
             // local copy marks it done while the real one waits forever — an agent blocked on
@@ -285,15 +286,7 @@ export function deckBand(items: readonly DeckItem[]): readonly DeckItem[] {
 }
 
 /**
- * **Since you looked** (§4.5): finished agents with their handoff notes, newest first — `Open`, `Restart with this`,
- * `mark read`. Read, not resolved: nothing here blocks anybody, which is why it is not in the band or its count.
- */
-export function sinceYouLooked(items: readonly DeckItem[]): readonly DeckItem[] {
-    return items.filter((item) => item.source === 'finished-handoff').slice().sort((a, b) => b.at - a.at);
-}
-
-/**
- * The rail's badge and the header's count: what is WAITING on you — never a finished agent, and never a STALE question:
+ * The rail's badge and the header's count: what is WAITING on you — never a STALE question:
  * its agent is not waiting, so it is not a number that asks for the person. Stale ones are said beside it, by name.
  */
 export function needsYouCount(items: readonly DeckItem[]): number {
@@ -361,7 +354,7 @@ export function deckSections(items: readonly DeckItem[]): readonly DeckSection[]
 export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent' | 'update';
 
 /** The one kind of door that is an action rather than a place: the update's next step. */
-export type SignalAction = 'update-download' | 'update-install';
+export type SignalAction = 'update-check' | 'update-download' | 'update-install';
 
 export interface Signal {
     kind: SignalKind;
@@ -382,6 +375,10 @@ export interface UpdateSignalInput {
     phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
     version: string | null;
     percent: number | null;
+    /** A failed check/download remains actionable, even before a version is known. */
+    error?: string | null;
+    /** Explicit user request or an open update window; routine background checks leave this unset. */
+    userInitiated?: boolean;
     /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
     changelog?: import('./update-notes.js').UpdateChangelog | 'unavailable' | null;
 }

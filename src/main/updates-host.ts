@@ -74,7 +74,7 @@ export interface UpdatesServiceOptions {
     readonly defaultLaunch: HelperLaunch;
     readonly windowConnected: () => boolean;
     /** This host's own end, after the helper has the install. */
-    readonly exit: () => void;
+    readonly exit: () => void | Promise<void>;
     readonly helperPatienceMs?: number;
     readonly installWaitMs?: number;
     readonly defer?: (fn: () => void, ms: number) => void;
@@ -191,7 +191,7 @@ export class UpdatesService {
             check: async () => (await this.#request('check')) as { version: string } | null,
             download: async (onProgress) => { await this.#request('download', onProgress); },
             prepareInstall: async () => { await this.#request('prepare'); },
-            quitAndInstall: () => { void this.#handOver(); },
+            quitAndInstall: () => this.#handOver(),
         };
         this.#host = new UpdateHost({
             ...options.host,
@@ -236,6 +236,16 @@ export class UpdatesService {
     /** A window's (or, through it, an owner's remote) call. */
     async call(method: string, args: readonly unknown[], caller: UpdatesCaller): Promise<unknown> {
         switch (method) {
+            case 'prepareQuit':
+                if (!caller.window) throw new Error('Only a local window can prepare a quit.');
+                return this.#host.prepareQuit();
+            case 'cancelDrain':
+                if (!caller.window) throw new Error('Only a local window can abandon its shutdown.');
+                this.#host.cancelDrain();
+                return true;
+            case 'forceDrain':
+                if (!caller.window) throw new Error(NO_WINDOW_INSTALL);
+                return this.#host.forceDrain();
             case 'state':
                 return this.#host.state();
             case 'check':
@@ -378,7 +388,7 @@ export class UpdatesService {
                 }
             }
         }
-        this.#options.exit();
+        await this.#options.exit();
     }
 }
 
@@ -403,8 +413,14 @@ export function hostDrainAgents(input: {
     writeInterruptedAtQuit: (ids: readonly AgentId[]) => Promise<void>;
     stopAll: (onLeft?: (left: number) => void) => Promise<void>;
     onRecordError?: (error: unknown) => void;
+    waitForSafe?: DrainAgentsPort['waitForSafe'];
+    force?: () => boolean;
+    release?: () => void;
 }): DrainAgentsPort {
     return {
+        ...(input.waitForSafe ? { waitForSafe: input.waitForSafe } : {}),
+        ...(input.force ? { force: input.force } : {}),
+        ...(input.release ? { release: input.release } : {}),
         live: () => input.agents().filter((a) => input.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
         stopAll: recordThenStopAll({
             markRecorded: () => {},

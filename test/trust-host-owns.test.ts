@@ -94,14 +94,17 @@ describe('1. the window fails closed', () => {
 });
 
 describe('2. a revocation reaches the window before anything else runs', () => {
-    it('the key changes: the host records it, pushes at once, and the window’s next git read is refused', async () => {
+    it('the person untrusts it: the host records it, pushes at once, and the window’s next git read is refused', async () => {
         const w = await r.window();
         windowPolicy(w.replica);
         await w.replica.trust.trust('ws');
         // CONTROL: trusted, and git runs.
         expect(await gitMayRun(r.ws)).toBe(true);
+        // A changed key does not end it (Tynn #618: trust is given once and stays).
         git('config', 'core.fsmonitor', `${tool.replace(/\\/g, '/')} --other`);
-        expect(await r.stack.trust.refresh('ws')).toMatchObject({ trusted: false, changed: true });
+        expect(await r.stack.trust.refresh('ws')).toMatchObject({ trusted: true, changed: false });
+        // Only the person's Untrust does.
+        expect(await r.stack.trust.untrust('ws')).toMatchObject({ trusted: false });
         // The host's record moved first; one turn of the link later (well inside any coalescing), the window has it.
         expect(r.stack.trust.view('ws')).toMatchObject({ trusted: false });
         await tick(1);

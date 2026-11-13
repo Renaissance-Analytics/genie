@@ -13,7 +13,7 @@ import type { SettingsStore } from './settings-store.js';
  */
 export type InboxApi = Pick<InboxStore, 'onSend' | 'onRead' | 'onMessagesChanged' | 'involving' | 'all' | 'hasWritten' | 'unread' | 'unreadCount' | 'receipts' | 'send' | 'receive' | 'markDelivered' | 'recordDeliveryRefusal' | 'deleteThread' | 'attachmentForPerson'>;
 
-export type AttentionApi = Pick<AttentionStore, 'pending' | 'finished' | 'allUserItems' | 'lastHandoff' | 'asked' | 'leftOutcome' | 'answer' | 'dismiss' | 'dismissMany' | 'dismissOlderThan' | 'markSeen' | 'onChange' | 'onLeave' | 'lists' | 'withdraw'>;
+export type AttentionApi = Pick<AttentionStore, 'pending' | 'finished' | 'allUserItems' | 'lastHandoff' | 'asked' | 'leftOutcome' | 'answer' | 'dismiss' | 'dismissMany' | 'dismissOlderThan' | 'onChange' | 'onLeave' | 'lists' | 'withdraw'>;
 
 type MaybePromise<T> = T | Promise<T>;
 

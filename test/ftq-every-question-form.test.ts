@@ -12,7 +12,7 @@ const ask = (questions: PendingQuestion['questions']): PendingQuestion => ({
     id: 'q_one', key: 'k', agentId: 'agent_a' as PendingQuestion['agentId'], agentName: 'atlas', workspaceId: 'ws',
     questions, priority: 'normal', askedAt: '2026-10-14T20:00:00.000Z',
 });
-const items = (q: PendingQuestion) => deckItemsFrom({ questions: [q], userList: [], unreadDms: [], finished: [], agents: {} });
+const items = (q: PendingQuestion) => deckItemsFrom({ questions: [q], userList: [], unreadDms: [], agents: {} });
 
 describe('an agent question', () => {
     it('ONE single-select question is a form carrying that question — and so it opens the question window', () => {

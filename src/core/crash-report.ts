@@ -225,6 +225,36 @@ export function redactCrashText(text: string, ctx: RedactionContext): string {
 }
 
 /**
+ * WHICH NAMES REDACTION WOULD TAKE OUT of `text` (Tynn #598): each workspace or agent name found, as written, with what it
+ * is. The person is told exactly which word went, since an ordinary word can also be a workspace's name.
+ */
+export function namesRedacted(text: string, ctx: RedactionContext): Array<{ readonly word: string; readonly as: 'workspace' | 'agent' }> {
+    const found: Array<{ word: string; as: 'workspace' | 'agent' }> = [];
+    const seen = new Set<string>();
+    const look = (names: readonly string[], as: 'workspace' | 'agent') => {
+        for (const n of [...new Set(names.map((x) => x.trim()).filter((x) => x.length >= 3))]) {
+            for (const m of text.matchAll(new RegExp(`(?<![\\w-])${escape(n)}(?![\\w-])`, 'giu'))) {
+                if (seen.has(m[0].toLowerCase())) continue;
+                seen.add(m[0].toLowerCase());
+                found.push({ word: m[0], as });
+            }
+        }
+    };
+    look(ctx.workspaceNames, 'workspace');
+    look(ctx.agentNames, 'agent');
+    return found;
+}
+
+/** What redaction took out, in words: the names by name, anything else as private details. */
+export function redactionWords(text: string, ctx: RedactionContext): string {
+    const names = namesRedacted(text, ctx);
+    const named = names.map((n) => `“${n.word}” (${n.as === 'workspace' ? 'a workspace name' : 'an agent name'})`);
+    const only = names.length > 0 && redactCrashText(text, { workspaceNames: [], agentNames: [] }) === text;
+    if (named.length === 0) return 'private details';
+    return only ? named.join(', ') : `${named.join(', ')} and other private details`;
+}
+
+/**
  * WHAT IS SENT IS WHAT THE PERSON SAW: text that redaction leaves as it is goes as written; text it would change is not
  * sent — the cleaned version comes back to be looked at again.
  */

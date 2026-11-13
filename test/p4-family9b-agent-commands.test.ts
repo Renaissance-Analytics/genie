@@ -63,7 +63,8 @@ function serve(api: HostApi) {
 const preloadWith = (old: unknown) => new Proxy({ snapshot: async () => ({ workspaces: null }), subscribeAgentWire: () => () => {}, workspaces: {}, features: {} } as Record<string, unknown>, {
     get: (t, k) => (typeof k === 'string' && NINE.includes(k) ? old : t[k as string]),
 }) as unknown as PreloadBridge;
-const NINE = ['openAgent', 'stopAgent', 'resumeLimit', 'cancelTurn', 'prompt', 'resolvePrompt', 'answerApproval', 'addAgent', 'restartWithHandoff'];
+// Restart with handoff left with the Deck's handoff band (Tynn #658): eight commands now.
+const NINE = ['openAgent', 'stopAgent', 'resumeLimit', 'cancelTurn', 'prompt', 'resolvePrompt', 'answerApproval', 'addAgent'];
 const bridgeOn = (port: LocalFramePort, old: unknown = vi.fn()) => { vi.stubGlobal('window', { genieLocalProtocol: port }); return pageBridge(preloadWith(old)); };
 function fakeApi(result: unknown = { ok: true }) {
     const invoke = vi.fn(async () => result);
@@ -83,7 +84,6 @@ const rows: Array<{ method: string; args: unknown[]; call: (b: GenieBridge) => u
     { method: 'resolvePrompt', args: ['a1', 'p1', 'send'], call: (b) => b.resolvePrompt('a1', 'p1', 'send'), answers: true },
     { method: 'answerApproval', args: ['a1', 'allow', 'note'], call: (b) => b.answerApproval('a1', 'allow', 'note'), answers: true },
     { method: 'addAgent', args: ['ws', { name: 'n', purpose: '', provider: 'claude' }], call: (b) => b.addAgent('ws', { name: 'n', purpose: '', provider: 'claude' } as never), answers: true },
-    { method: 'restartWithHandoff', args: ['a1', 'fin_1'], call: (b) => b.restartWithHandoff('a1', 'fin_1'), answers: true },
 ];
 
 describe('the nine cross the door', () => {
@@ -137,14 +137,6 @@ describe('a refusal lands where the IPC path put it', () => {
         expect(await api.invoke('answerApproval', ['nope', 'allow'])).toEqual({ ok: false, reason: 'Genie does not know this agent' });
         expect(await api.invoke('answerApproval', ['agent_a', 7])).toEqual({ ok: false, reason: 'no option was chosen' });
         expect(await api.invoke('addAgent', [null, {}])).toEqual({ ok: false, reason: 'no workspace named' });
-    });
-
-    it('a restart with its handoff says the roster changed, as the IPC handler did', async () => {
-        const deps = protocolContractDeps(dir);
-        const rosterChanged = vi.fn();
-        Object.assign(deps, { rosterChanged });
-        await buildHostApi(deps).invoke('restartWithHandoff', ['agent_a', 'fin_x']);
-        expect(rosterChanged).toHaveBeenCalledOnce();
     });
 });
 

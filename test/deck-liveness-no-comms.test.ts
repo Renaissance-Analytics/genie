@@ -60,7 +60,7 @@ const question = (agentId: string, i: number): PendingQuestion => ({
 
 function deckRefresh(ids: readonly string[], engine: AskerLiveDeps['engine']) {
     return deckItemsFrom({
-        questions: ids.map(question), userList: [], unreadDms: [], finished: [],
+        questions: ids.map(question), userList: [], unreadDms: [],
         agents: Object.fromEntries(ids.map((id) => [id, { name: id, workspaceId: 'ws' }])),
         asker: askerLiveFrom({ known: () => true, engine, takeOvers: () => null }),
     });

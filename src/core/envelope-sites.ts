@@ -246,10 +246,11 @@ export function firstStartWords(site: ServableSite): { runs: string; folder: str
  */
 export interface TrustBook {
     readonly version: 1;
-    readonly carried: readonly string[];
+    /** Workspaces trusted because they were here at the first upgrade. The person's Untrust takes one out. */
+    carried: string[];
     pendingCarry: string[];
     sites: Record<string, string>;
-    /** A workspace id to the hash of the list the person said yes to, or that it carried over with (core/workspace-trust.ts). */
+    /** The workspaces the person said yes to (core/workspace-trust.ts): being here IS the yes, kept until their Untrust. The value is the list's hash as it was then, for the record only; nothing is compared with it (Tynn #618). */
     workspaces: Record<string, string>;
 }
 

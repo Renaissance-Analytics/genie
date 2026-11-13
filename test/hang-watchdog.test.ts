@@ -18,7 +18,7 @@ import { HangWatchdog } from '../src/main/hang-watchdog.js';
 const MB = 1024 * 1024;
 const HEADER: CrashHeader = { schema: 1, version: '2.0.0-beta.60', build: '2.0.0-beta.60+abc123def456', os: 'linux', osRelease: '6.1.0', arch: 'x64', uptimeS: 42 };
 
-function rig(options: { agents?: () => RunningAgentNote[]; alive?: (pid: number) => boolean; lifecycle?: () => string[] } = {}) {
+function rig(options: { agents?: () => RunningAgentNote[]; alive?: (pid: number) => boolean; lifecycle?: () => string[]; exitOf?: (pid: number) => { code: number | null; signal: string | null } | null; ownExit?: (pid: number, since: number) => { reason: string; code: number | null } | null } = {}) {
     let t = 1_700_000_000_000;
     let tick: (() => void) | null = null;
     const records: CrashRecord[] = [];
@@ -35,6 +35,8 @@ function rig(options: { agents?: () => RunningAgentNote[]; alive?: (pid: number)
         lifecycle: options.lifecycle ?? (() => ['2026-11-06T10:00:00.000Z boot pid=4242 version=t', '2026-11-06T10:00:01.000Z stall main ms=1800 route=/', '2026-11-06T10:00:02.000Z host stall main ms=1200 route=-']),
         log: (line) => lines.push(line),
         header: () => HEADER,
+        ...(options.exitOf ? { exitOf: options.exitOf } : {}),
+        ...(options.ownExit ? { ownExit: options.ownExit } : {}),
     });
     dog.start();
     /** One second of the clock, with the watchdog's own tick (as its 1 s interval would). */
@@ -122,7 +124,89 @@ describe('genie-host hears window main beat, and records a hang', () => {
         expect(r.killed).toEqual([4242]);
         // Each late tick was said, with what the host itself spent meanwhile.
         expect(r.lines.filter((l) => /clock jumped/.test(l))).toHaveLength(3);
-        expect(r.lines.find((l) => /clock jumped/.test(l))).toMatch(/the window waits pause/);
+        expect(r.lines.find((l) => /clock jumped/.test(l))).toMatch(/the window waits are judged again after 3000 ms/);
+    });
+
+    /*
+     * THE SECOND HOLD ON A LOADED MACHINE (omarchy-test, the 61.2 gate's hang row, 2026-11-12: H2 failed twice). In a 40 s
+     * hold genie-host's loop came 3.5, 8.4 and 11.6 s late (lifecycle.log `host stall main`), so taking the host's stalled
+     * time off left about 16 s of silence and the hang was never recorded, though the window was silent all 40 s. A stall
+     * says nothing about the window: beats it sent meanwhile wait in the socket and land just after the late tick. So a
+     * late tick holds judgment for a few seconds, for those beats; then the window's real silence is what counts.
+     */
+    it('(c) the 61.2 gate\'s second hold: stalls of 3.5, 8.4 and 11.6 s inside a 40 s silence still end in a hang', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(7);
+        r.jump(3_500); r.second(1);
+        r.second(8);
+        r.jump(8_400); r.second(1);
+        r.second(3);
+        r.jump(11_600); r.second(1);
+        // About 40 s since the last beat, 16 s of it with the host awake.
+        r.second(4);
+        expect(r.records.map((x) => x.kind)).toEqual(['hang']);
+        expect(r.killed).toEqual([4242]);
+    });
+
+    it('CONTROL for (c): a host stall with the window\'s beats queued behind it is not a hang', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(5);
+        for (const held of [3_500, 8_400, 11_600, 25_000]) {
+            // The late tick comes first; the beats the window sent meanwhile are read just after it.
+            r.jump(held); r.second(1);
+            r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+            r.second(4, () => r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB }));
+        }
+        expect(r.records).toEqual([]);
+    });
+
+    it('(d) after a sleep, a window that beats within a couple of seconds of waking is not ended', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(20);
+        r.jump(600_000);
+        r.second(2);
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(20, () => r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB }));
+        expect(r.records).toEqual([]);
+    });
+
+    /*
+     * A LONG SLEEP IS NOT A HOST STALL (review of #1885). A late tick holds judgment only 3 s, then counts silence from the
+     * window's last beat BEFORE the gap. After the machine slept for minutes, a window that is slow to wake (a loaded
+     * machine, a throttled window) and has not beaten within those 3 s would be declared hung and its pid killed: a false
+     * hang ends the owner's window. So a gap far beyond any loop stall (the machine slept) gives every window a full wait
+     * from the wake; silence before the sleep does not count. The repeated short stalls of (c) are still not sleeps.
+     */
+    for (const [before, after] of [[20, 5], [20, 8], [25, 8], [29, 12]] as const) {
+        it(`(e) a window silent ${before} s before a 10-minute sleep and beating ${after} s after waking is not ended`, () => {
+            const r = rig();
+            r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+            r.second(before);
+            r.jump(600_000);
+            r.second(after);
+            r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+            r.second(60, () => r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB }));
+            expect(r.records).toEqual([]);
+            expect(r.killed).toEqual([]);
+        });
+    }
+
+    it('CONTROL for (e): a window still silent well past the wake grace after a long sleep IS a hang, and is ended', () => {
+        const r = rig();
+        r.dog.beat('conn-1', { pid: 4242, rss: 512 * MB });
+        r.second(20);
+        r.jump(600_000);
+        // Well past any wake grace (and every case of (e)), still nothing recorded: the wait runs from the wake.
+        r.second(20);
+        expect(r.records).toEqual([]);
+        expect(r.killed).toEqual([]);
+        // 30 s of silence since the wake (its first tick was the first of those 20 s): a hang.
+        r.second(11);
+        expect(r.records.map((x) => x.kind)).toEqual(['hang']);
+        expect(r.killed).toEqual([4242]);
     });
 
     it('CONTROL for (a): the same jumps with the window beating between them: no hang', () => {
@@ -288,5 +372,72 @@ describe('a window connection that drops without a clean goodbye is LOST', () =>
         r.dog.dropped('conn-1');
         r.second(60);
         expect(r.records.map((x) => x.kind)).toEqual(['hang']);
+    });
+});
+
+/**
+ * A LOST RECORD SAYS WHICH WINDOW, AND HOW IT ENDED (Tynn issue #711). The owner's 61.2, 2026-11-12: two windows connected,
+ * one stopped beating at 14:40:58 and its link dropped 10 s later; the record said its pid, its last beat and 368 MB, and
+ * nothing that told the two windows apart or why the process ended. Now: the window (when it first beat, the route it
+ * showed, its V8 heap against its limit, and how long it was silent before its link dropped), and its exit: the code and
+ * signal genie-host saw for a window it started itself, else the window's own exit record, else plainly that neither was
+ * seen and what that leaves (its exit handlers never ran: ended from outside, a native crash, or out of memory).
+ */
+describe('a lost record names the window and its exit (Tynn issue #711)', () => {
+    const beat = { pid: 4242, rss: 700 * MB, route: 'genie://AlphaR/liftpoint/lift', heapUsed: 3_100 * MB, heapLimit: 4_096 * MB };
+
+    it('the window: its first beat, the route it showed, its heap against its limit, and its silence before the drop', () => {
+        const r = rig({ alive: () => false });
+        r.dog.beat('conn-1', beat);
+        const first = r.now();
+        r.second(5, () => r.dog.beat('conn-1', beat));
+        const lastBeat = r.now();
+        r.second(9);
+        r.dog.dropped('conn-1');
+        const droppedAt = r.now();
+        r.second(10);
+        expect(r.records).toHaveLength(1);
+        expect(r.records[0]).toMatchObject({
+            kind: 'lost',
+            windowPid: 4242,
+            window: { pid: 4242, firstBeatAt: new Date(first).toISOString(), route: 'genie://AlphaR/liftpoint/lift', heapMb: 3100, heapLimitMb: 4096, silentMsBeforeDrop: droppedAt - lastBeat },
+        });
+    });
+
+    it('a window genie-host started itself: the exit code and signal it saw', () => {
+        const r = rig({ alive: () => false, exitOf: (pid) => (pid === 4242 ? { code: null, signal: 'SIGKILL' } : null) });
+        r.dog.beat('conn-1', beat);
+        r.dog.dropped('conn-1');
+        r.second(10);
+        expect(r.records[0]).toMatchObject({ kind: 'lost', exit: { code: null, signal: 'SIGKILL', seenBy: 'genie-host' } });
+    });
+
+    it('a window the person started: its own exit record, written since it first beat', () => {
+        const since: number[] = [];
+        const r = rig({ alive: () => false, ownExit: (pid, from) => { since.push(from); return pid === 4242 ? { reason: 'exit', code: 7 } : null; } });
+        r.dog.beat('conn-1', beat);
+        const first = r.now();
+        r.dog.dropped('conn-1');
+        r.second(10);
+        expect(r.records[0]).toMatchObject({ kind: 'lost', exit: { code: 7, signal: null, seenBy: 'window', reason: 'exit' } });
+        expect(since).toEqual([first]);
+    });
+
+    it('CONTROL: neither seen: no exit, and the record says what that leaves', () => {
+        const r = rig({ alive: () => false, exitOf: () => null, ownExit: () => null });
+        r.dog.beat('conn-1', beat);
+        r.dog.dropped('conn-1');
+        r.second(10);
+        const record = r.records[0] as Extract<CrashRecord, { kind: 'lost' }>;
+        expect(record.exit).toBeNull();
+        expect(record.exitUnseen).toMatch(/exit handlers never ran/);
+    });
+
+    it('an older window’s beat (pid and RSS only) still makes a lost record, its window fields unknown', () => {
+        const r = rig({ alive: () => false });
+        r.dog.beat('conn-1', { pid: 4242, rss: 700 * MB });
+        r.dog.dropped('conn-1');
+        r.second(10);
+        expect(r.records[0]).toMatchObject({ kind: 'lost', window: { pid: 4242, route: null, heapMb: null, heapLimitMb: null } });
     });
 });

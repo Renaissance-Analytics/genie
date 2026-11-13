@@ -7,6 +7,7 @@
  * Every wait is bounded and every step prints before it acts, so a run never hangs silently. They launch Electron, so they
  * refuse to run anywhere but CI or a test VM (CRASH_CDP_ALLOW=1).
  */
+import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -138,7 +139,7 @@ export function launch(h, { port, inspect, label }) {
 async function targetOn(port, kind, ms) {
     return until(async () => {
         const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3_000) })).json();
-        return targets.find((x) => (kind === 'page' ? x.type === 'page' && !String(x.url).startsWith('devtools') : true) && x.webSocketDebuggerUrl) ?? null;
+        return kind === 'page' ? mainWindow(targets) : targets.find((x) => x.webSocketDebuggerUrl) ?? null;
     }, ms);
 }
 export class Cdp {

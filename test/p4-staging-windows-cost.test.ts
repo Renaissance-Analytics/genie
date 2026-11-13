@@ -21,6 +21,7 @@ async function acls(paths: string[]) {
     return JSON.parse(stdout);
 }
 
+// CI: WINDOWS ONLY (native Windows staging ACLs)
 describe.skipIf(process.platform !== 'win32')('native Windows local staging cost and protection', () => {
     it('measures raw Node child-file ownership separately from inherited owner-only access', async () => {
         useAclHelper(null);

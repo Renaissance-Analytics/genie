@@ -31,7 +31,7 @@ import { startForWork, startForYourMessage } from './start-on-demand.js';
  * with a window open, the window answers as before. Anything outside the phone's set is refused with what to do.
  */
 export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
-    'snapshot', 'agentDetail', 'prompt', 'answerApproval', 'restartWithHandoff', 'agents.restart', 'resumeLimit', 'features.act',
+    'snapshot', 'agentDetail', 'prompt', 'answerApproval', 'agents.restart', 'resumeLimit', 'features.act',
     'files.children', 'files.open', 'files.readMedia', 'files.upload',
 ]);
 
@@ -41,8 +41,8 @@ export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
  */
 export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
     'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope',
-    'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions',
-    'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput',
+    'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions',
+    'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput', 'agents.attachment',
 ]);
 
 /** The Dashboard's lanes and rate limits (Tynn #553, P5d.5b). */
@@ -60,7 +60,7 @@ export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new S
     'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects',
     'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn',
     'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.locateRepo',
-    'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor',
+    'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.setMcpServer',
 ]);
 
 /** The Tynn tab, read and changed (Tynn #553, P5d.5f). A live view's change reads stay the local window's. */
@@ -72,8 +72,8 @@ export const HOST_ALONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMetho
 /** genie-host's session host, as this API drives it. */
 export type HostAloneEngine = Pick<SessionHost,
     'probe' | 'start' | 'stop' | 'ended' | 'deliverOwed' | 'cancel' | 'resumeLimit' | 'prompt' | 'promptWith' | 'resolvePrompt' | 'answerApproval'
-    | 'subscribe' | 'needsNewDriver' | 'notice' | 'ledgerFor' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'
-    | 'modelState' | 'switchModel' | 'settleParked' | 'historyRows' | 'toolOutput'>;
+    | 'subscribe' | 'needsNewDriver' | 'notice' | 'ledgerFor' | 'historyPending' | 'turnsFor' | 'recentStderrFor' | 'rowsFor' | 'refusals'
+    | 'modelState' | 'switchModel' | 'settleParked' | 'historyRows' | 'toolOutput' | 'forgetShown' | 'attachment'>;
 
 export interface HostAlonePorts {
     readonly hostName: string;
@@ -86,6 +86,8 @@ export interface HostAlonePorts {
     /** Each provider's model list, asked of its CLI once and kept. */
     readonly models: AgentOpsWiring['models'];
     readonly providerInstalled: AgentOpsWiring['providerInstalled'];
+    /** What the provider's status call last said (Tynn #698). Absent = not measured here, so nothing is claimed. */
+    readonly signedIn?: AgentOpsWiring['signedIn'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     readonly inbox: DeckAnswerPorts['inbox'] & { involving(id: AgentId, limit: number): readonly InboxMessage[] };
@@ -138,6 +140,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         startRefusal: ports.startRefusal,
         finished: () => ports.attention.finished(),
         providerInstalled: ports.providerInstalled,
+        signedIn: ports.signedIn ?? (() => true),
         applyOnStart: (id) => settingApplier.requested(id),
     });
     // A model change waiting for its agent to be free applies the moment it is, with or without a window.
@@ -169,7 +172,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         subscribeSnapshot: (listener) => registry.subscribe(listener),
         subscribeAgentRecords: (listener) => registry.subscribeAgentRecords(listener),
         find: (id) => registry.find(id as AgentId),
-        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit) }, id as AgentId),
+        detailFor: (id) => agentDetailFor({ registry, engine: ports.engine(), cwdFor: ports.cwdFor, takeOver: ports.takeOver, mail: (agentId, limit) => ports.inbox.involving(agentId, limit), ...(ports.signedIn ? { providerSignedIn: ports.signedIn } : {}) }, id as AgentId),
         cwdFor: ports.cwdFor,
         startForWork: startOnDemand,
         startForYourMessage: (record) => startForYourMessage({
@@ -190,7 +193,6 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
             subscribe: (listener) => ports.engine()?.subscribe(listener) ?? (() => {}),
         },
         registerAgent: async () => { throw new Error(needsWindow('a new agent')); },
-        attention: { finished: () => ports.attention.finished(), markSeen: (id) => ports.attention.markSeen(id) },
         terminals: windowOnly<HostApiDeps['terminals']>('terminals', ports.terminals),
         uploads: windowOnly<HostApiDeps['uploads']>('inbox.sendFile'),
         files: ports.files,

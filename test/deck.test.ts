@@ -168,7 +168,7 @@ describe('the signal strip — silent unless something is true', () => {
 
 describe('the update — §7, now in the header (the owner, 2026-10-13), never on the Deck strip', () => {
     const quiet = { flowsRunning: 0, uncollectedMail: 0, githubBlocked: false, osAgentWorking: false };
-    const upd = (phase: string, version: string | null = '0.0.1', percent: number | null = null) => ({ phase, version, percent }) as never;
+    const upd = (phase: string, version: string | null = '0.0.1', percent: number | null = null, userInitiated = false) => ({ phase, version, percent, userInitiated }) as never;
 
     it('the strip carries no update in ANY phase — counted, so one leaking phase is named', () => {
         const phases = ['idle', 'checking', 'none', 'error', 'available', 'downloading', 'downloaded', 'installing'];
@@ -176,10 +176,30 @@ describe('the update — §7, now in the header (the owner, 2026-10-13), never o
         expect(leaked).toEqual([]);
     });
 
-    it('the chip is silent while there is nothing to act on — idle, checking, none, error, and no updater at all', () => {
-        const phases = ['idle', 'checking', 'none', 'error'];
-        expect(phases.map((p) => updateChip(upd(p))).filter(Boolean)).toEqual([]);
+    it('idle, none and no updater stay silent even after the person acted', () => {
+        for (const p of ['idle', 'none']) {
+            expect(updateChip(upd(p))).toBeNull();
+            expect(updateChip(upd(p, null, null, true))).toBeNull();
+        }
         expect(updateChip(null)).toBeNull();
+    });
+
+    it('a background auto-check without a known version makes no checking chip', () => {
+        expect(updateChip(upd('checking', null))).toBeNull();
+    });
+
+    it('a failed background auto-check without a known version makes no error chip', () => {
+        expect(updateChip(upd('error', null))).toBeNull();
+    });
+
+    it('a person-initiated check stays visible through checking and failure, with Retry on the failure', () => {
+        expect(updateChip(upd('checking', null, null, true))).toMatchObject({ phase: 'checking', version: null, action: null });
+        expect(updateChip(upd('error', null, null, true))).toMatchObject({ phase: 'error', version: null, action: 'update-check' });
+    });
+
+    it('a known version keeps checking and failure visible even without a new user action', () => {
+        expect(updateChip(upd('checking'))).toMatchObject({ phase: 'checking', version: '0.0.1', action: null });
+        expect(updateChip(upd('error'))).toMatchObject({ phase: 'error', version: '0.0.1', action: 'update-check' });
     });
 
     it('announces an AVAILABLE version and offers the download as the door', () => {

@@ -6,8 +6,10 @@ import { MarketplacePane } from './MarketplacePane.js';
 import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, Kbd, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
+import { DEFAULT_SEND_KEY, SEND_KEY_SETTING, keycaps, newlineKeyFor, sendKeyFrom, sendKeyProblem } from '../../core/send-key.js';
+import { HotkeyCapture } from './HotkeyCapture.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
@@ -68,6 +70,7 @@ interface SurfaceProps {
     readonly onCloseForm?: (() => void) | undefined;
     /** Which tab a tabbed surface opens on; the surface’s own default otherwise. */
     readonly tab?: string | undefined;
+    readonly commandRun?: { processId: string; workspaceId: string } | undefined;
     readonly data: FeatureData;
     /**
      * App.tsx's answers with a Promise<ActOutcome>, so a control that shows its progress can tell success from a refusal
@@ -536,7 +539,7 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
     );
 }
 
-export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm, workspaces = [], tab }: SurfaceProps) {
+export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm, workspaces = [], tab, commandRun }: SurfaceProps) {
     const hosting = data.hosting;
     return (
         <div data-surface="hosting" className="flex h-full min-h-0 flex-col">
@@ -601,7 +604,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">
-                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} />
+                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} {...(commandRun ? { commandRun } : {})} />
                         </Tabs.Panel>
                         <Tabs.Panel value="services">
                             <ServicesPanel services={data.services} workspaces={workspaces} onAction={onAction} onNavigate={onNavigate} />
@@ -676,7 +679,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
-export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now() }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number }) {
+export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string } }) {
     const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
     const button = 'text-[13px]';
     return (
@@ -723,6 +726,9 @@ export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now
                     Add a process
                 </Button>
             </form>
+            {commandRun && !processes.some((p) => p.commandRun && p.id === commandRun.processId && p.workspaceId === commandRun.workspaceId) ? (
+                <p role="status" className="px-5 py-2 text-sm text-[var(--fg-3)]">This command is not in the current process history.</p>
+            ) : null}
             {processes.length === 0 ? (
                 <Empty>No background processes yet. Add one — a queue worker, a watcher, a dev server — and Genie keeps it running and brings it back after a restart.</Empty>
             ) : (
@@ -730,34 +736,73 @@ export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now
                     {processes.map((p) => {
                         const up = p.state === 'running' || p.state === 'restarting';
                         // Drawn in place (no hooks): the row's own buttons stay in this list's element tree.
-                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now, onAction })}</Fragment>;
+                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now: now ?? Date.now(), onAction })}</Fragment>;
                         return (
-                            <li key={p.id} data-process={p.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
+                            <ProcessRow key={p.id} id={p.id} selected={Boolean(p.commandRun && commandRun?.processId === p.id && commandRun.workspaceId === p.workspaceId)}>
                                 <span className="font-medium">{p.name}</span>
                                 <Badge variant="soft" size="sm">{p.state}</Badge>
                                 {p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
+                                {p.commandRun ? <CommandRunFacts process={p} now={now} /> : null}
                                 {p.reason ? <span className="text-sm text-[var(--danger)]">{p.reason}</span> : null}
                                 <span className="ml-auto flex shrink-0 items-center gap-3">
                                     {up ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.stopProcess', processId: p.id })}>Stop</Button> : null}
-                                    {up || !p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</Button> : null}
-                                    {!up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</Button> : null}
-                                    {!up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
+                                    {!p.commandRun && (up || !p.durable) ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</Button> : null}
+                                    {!p.commandRun && !up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</Button> : null}
+                                    {!p.commandRun && !up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
                                 </span>
-                                {p.log && p.log.lines > 0 ? (
+                                {p.commandRun || (p.log && p.log.lines > 0) ? (
                                     <details data-process-log={p.id} className="basis-full">
                                         <summary className="cursor-pointer text-xs text-[var(--fg-3)]">
-                                            Log · last {p.log.lines} line{p.log.lines === 1 ? '' : 's'}{p.log.dropped > 0 ? ' (earlier output was cut)' : ''}
+                                            {p.log && p.log.lines > 0 ? <>Log · last {p.log.lines} line{p.log.lines === 1 ? '' : 's'}{p.log.dropped > 0 ? ' (earlier output was cut)' : ''}</> : 'Log'}
                                         </summary>
-                                        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{p.log.text}</pre>
+                                        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{p.log?.text || (p.commandRun ? (up ? 'No output yet' : 'No output recorded') : '')}</pre>
                                     </details>
                                 ) : null}
-                            </li>
+                            </ProcessRow>
                         );
                     })}
                 </ul>
             )}
         </div>
     );
+}
+
+/** Focus changes only with the selected target, so live output never steals focus from the person's controls. */
+function ProcessRow({ id, selected, children }: { id: string; selected: boolean; children: React.ReactNode }) {
+    const ref = useRef<HTMLLIElement>(null);
+    useEffect(() => {
+        if (!selected) return;
+        const row = ref.current;
+        const log = row?.querySelector<HTMLDetailsElement>('[data-process-log]');
+        if (!row || !log) return;
+        log.open = true;
+        row.focus({ preventScroll: true });
+        row.scrollIntoView?.({ block: 'nearest' });
+    }, [selected]);
+    return <li ref={ref} data-process={id} tabIndex={selected ? -1 : undefined} className="flex flex-wrap items-center gap-3 px-5 py-2">{children}</li>;
+}
+
+/** Only this small clock ticks; the process list's forms, buttons and log DOM remain mounted in place. */
+function CommandRunFacts({ process: p, now }: { process: NonNullable<FeatureData['hosting']>['processes'][number]; now: number | undefined }) {
+    const [clock, setClock] = useState(() => Date.now());
+    const up = p.state === 'running' || p.state === 'restarting';
+    useEffect(() => {
+        if (!up || now !== undefined) return;
+        setClock(Date.now());
+        const timer = setInterval(() => setClock(Date.now()), 1_000);
+        return () => clearInterval(timer);
+    }, [up, now]);
+    const start = p.startedAt ?? (up ? p.since : undefined);
+    const end = up ? (now ?? clock) : p.since;
+    const facts: string[] = [];
+    if (start !== undefined && Number.isFinite(start) && Number.isFinite(end)) {
+        const seconds = Math.floor(Math.max(0, end - start) / 1_000);
+        const duration = seconds >= 3_600 ? `${Math.floor(seconds / 3_600)}h ${Math.floor(seconds % 3_600 / 60)}m ${seconds % 60}s`
+            : seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+        facts.push(`${up ? 'Elapsed' : 'Duration'} ${duration}`);
+    }
+    if (!up && p.exitCode !== null) facts.push(`exit ${p.exitCode}`);
+    return facts.length > 0 ? <span className="text-xs text-[var(--fg-3)]">{facts.join(' · ')}</span> : null;
 }
 
 /**
@@ -976,6 +1021,25 @@ type ToolchainData = NonNullable<FeatureData['toolchain']>;
  * other tool's "Update to <latest>". While its update runs the row shows the step with a spinner and every button is
  * off; it ends updated (the new version), or failed — the reason, and Retry. Hook-free: what it renders is what is tested.
  */
+/**
+ * A BROKEN AGENT CLI'S ONE ACTION (Tynn #698): Repair, Genie running the vendor's installer itself. While it runs the row
+ * shows its step on the busy button; it ends repaired (the row re-checked) or failed, the reason on the row and Repair again.
+ */
+export function CliRepairAction({ t, busy, updating, onAction }: { t: ToolStatus; busy: boolean; updating?: ToolchainData['updating'] | null; onAction: SurfaceProps['onAction'] }) {
+    if (updating && updating.tool === t.tool) {
+        return (
+            <span data-tool-updating={t.tool} className="ml-auto flex items-center gap-2">
+                <Button type="button" size="sm" color="blue" loading disabled data-action="toolchain-repair-cli">{updating.step}</Button>
+            </span>
+        );
+    }
+    return (
+        <Button type="button" size="sm" color="red" className="ml-auto" disabled={busy || (updating ?? null) !== null} data-action="toolchain-repair-cli" onClick={() => onAction({ kind: 'toolchain.repairCli', tool: t.tool })}>
+            Repair
+        </Button>
+    );
+}
+
 export function ToolUpdateActions({ t, busy, updating, updated, refusal, onAction }: { t: ToolStatus; busy: boolean; updating?: ToolchainData['updating'] | null; updated?: ToolchainData['updated'] | null; refusal?: ToolchainRefusal | null; onAction: SurfaceProps['onAction'] }) {
     const update = (version?: string) => onAction({ kind: 'toolchain.update', tool: t.tool, ...(version ? { version } : {}) });
     if (updating && updating.tool === t.tool) {
@@ -1135,10 +1199,19 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                     {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
                                     {t.tone === 'security-update' ? (
                                         <span data-tool-security={t.tool} className="rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{word}</span>
-                                    ) : word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{word}</Badge> : null}
+                                    ) : word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : t.tone === 'broken' ? { color: 'red' as const } : {})}>{word}</Badge> : null}
                                     {t.advisory ? <span data-tool-advisory={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.advisory}</span> : null}
+                                    {/* Tynn #698: an agent CLI the health check found cannot run says why; an Update cannot fix it (the repair is its own action). */}
+                                    {t.problem ? <span data-tool-problem={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.problem}</span> : null}
+                                    {/* It runs and is signed out: a login matter, never Broken. The provider's own login, as the Agent view's Log in opens it. */}
+                                    {t.signedOut ? (
+                                        <>
+                                            <Badge variant="soft" size="sm" color="amber" data-tool-signed-out={t.tool}>Not signed in</Badge>
+                                            <Button type="button" size="sm" color="blue" disabled={busy !== null} data-action="toolchain-login" onClick={() => onAction({ kind: 'toolchain.login', tool: t.tool })}>Log in</Button>
+                                        </>
+                                    ) : null}
                                     {/* Update from here (genie#1306): real buttons — a language's patch first, another line second; the step while it runs; the end, either way. */}
-                                    {t.installed !== null ? <ToolUpdateActions t={t} busy={busy !== null} updating={updating} updated={tc.updated ?? null} refusal={refusal} onAction={onAction} /> : null}
+                                    {t.tone === 'broken' ? <CliRepairAction t={t} busy={busy !== null} updating={updating} onAction={onAction} /> : t.installed !== null ? <ToolUpdateActions t={t} busy={busy !== null} updating={updating} updated={tc.updated ?? null} refusal={refusal} onAction={onAction} /> : null}
                                     {plan && 'label' in plan ? (
                                         <>
                                             <span data-install-command={t.tool} className="ml-auto truncate font-mono text-xs text-[var(--fg-3)]">{plan.label}{plan.elevated ? ' — asks for permission' : ''}</span>
@@ -1147,7 +1220,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                     ) : plan ? (
                                         <span data-install-refused={t.tool} className="ml-auto text-xs text-[var(--fg-3)]">{plan.refused}</span>
                                     ) : null}
-                                    {refusal && t.installed === null ? <span data-tool-refusal={t.tool} className="basis-full text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
+                                    {refusal && (t.installed === null || t.tone === 'broken') ? <span data-tool-refusal={t.tool} className="basis-full text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
                                 </li>
                             );
                         })}
@@ -1857,30 +1930,44 @@ const pressOf = (e: React.KeyboardEvent): { key: string; ctrlKey: boolean; metaK
 function GenieHotkeys({ values, onAction }: { values: Readonly<Record<string, boolean | string>> | null; onAction: SurfaceProps['onAction'] }) {
     const [platform, setPlatform] = useState('generic');
     useEffect(() => { setPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
-    const [refused, setRefused] = useState<{ name: BindingName; reason: string } | null>(null);
     const bindings = bindingsFrom(values);
     const prompts = parsePromptLibrary(typeof values?.['saved_prompts'] === 'string' ? values['saved_prompts'] : undefined);
-    const set = (name: BindingName, value: string): void => { setRefused(null); onAction({ kind: 'settings.set', key: BINDING_SETTING[name], value }); };
-    const record = (name: BindingName, e: React.KeyboardEvent<HTMLInputElement>): void => {
-        if (e.key === 'Tab') return;
-        e.preventDefault();
-        const bare = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
-        if (bare && (e.key === 'Backspace' || e.key === 'Delete')) { set(name, ''); return; }
-        if (bare && e.key === 'Escape') { e.currentTarget.blur(); return; }
-        const accelerator = acceleratorFromPress(pressOf(e), platform);
-        if (accelerator === null) return;
+    const set = (name: BindingName, value: string): void => onAction({ kind: 'settings.set', key: BINDING_SETTING[name], value });
+    // One way to set a key on this page (Tynn issue #697): pressed into the capture control, refused in words there.
+    const capture = (name: BindingName) => (accelerator: string): string | null => {
         const problem = bindingProblem(accelerator, name, bindings, prompts, platform);
-        if (problem !== null) { setRefused({ name, reason: problem }); return; }
+        if (problem !== null) return problem;
         // Genie's default is stored as empty, so it follows Genie's default.
         set(name, accelerator === DEFAULT_HOTKEYS[name] ? '' : accelerator);
+        return null;
     };
     const rows: Array<{ name: BindingName; label: string; desc: string }> = [
         { name: 'commandWindow', label: 'Command Window', desc: 'Search, jump and run — prompts, actions, workspaces, agents.' },
         { name: 'ftqNudge', label: 'ForceTheQuestion nudge', desc: 'Tells the agent in front of you to ask its question through ForceTheQuestion, where you will see it.' },
     ];
+    // THE COMPOSER'S SEND KEY (Tynn issue #697): pressed, never typed; the new-line key follows from it.
+    const sendKey = sendKeyFrom(values);
+    const captureSendKey = (accelerator: string): string | null => {
+        const problem = sendKeyProblem(accelerator, bindings, prompts, platform);
+        if (problem !== null) return problem;
+        // Genie's default is stored as empty, so it follows Genie's default.
+        onAction({ kind: 'settings.set', key: SEND_KEY_SETTING, value: accelerator === DEFAULT_SEND_KEY ? '' : accelerator });
+        return null;
+    };
     return (
         <section data-genie-hotkeys className="border-b border-[var(--border-1)] px-5 py-3">
-            <div className="text-sm font-medium">Keyboard shortcuts</div>
+            <div className="text-sm font-medium">Writing to an agent</div>
+            <div data-send-key-setting="" className="flex items-start gap-4 py-2">
+                <div className="flex-1">
+                    <div className="text-sm">Send message</div>
+                    <div className="text-xs text-[var(--fg-3)]">
+                        New line: <span data-newline-key="" className="inline-flex items-center gap-1 align-middle">{keycaps(newlineKeyFor(sendKey), platform).map((cap, i) => <Fragment key={cap}>{i > 0 ? '+' : null}<Kbd>{cap}</Kbd></Fragment>)}</span>
+                    </div>
+                </div>
+                <HotkeyCapture value={sendKey} platform={platform} label="Send message" onCapture={captureSendKey}
+                    onReset={sendKey === DEFAULT_SEND_KEY ? undefined : () => onAction({ kind: 'settings.set', key: SEND_KEY_SETTING, value: '' })} />
+            </div>
+            <div className="mt-2 text-sm font-medium">Keyboard shortcuts</div>
             <ul className="mt-1 flex flex-col">
                 {rows.map(({ name, label, desc }) => {
                     const raw = values?.[BINDING_SETTING[name]];
@@ -1888,23 +1975,13 @@ function GenieHotkeys({ values, onAction }: { values: Readonly<Record<string, bo
                     const current = bindings[name];
                     return (
                         <li key={name} className="flex flex-col gap-1 py-2">
-                            <div className="flex items-center gap-4">
+                            <div className="flex items-start gap-4">
                                 <div className="flex-1">
                                     <div className="text-sm">{label}</div>
                                     <div className="text-xs text-[var(--fg-3)]">{current === null ? `“${stored}” is not a key Genie can read — this shortcut is off until you set it again.` : desc}</div>
                                 </div>
-                                <Input
-                                    data-binding={name}
-                                    aria-label={`Key for ${label}`}
-                                    readOnly
-                                    value={current === null ? '' : hotkeyLabel(current, platform)}
-                                    placeholder="Click, then press keys"
-                                    onKeyDown={(e) => record(name, e)}
-                                    className="w-44"
-                                />
-                                {stored !== '' ? <Button data-action={`binding-reset-${name}`} size="sm" variant="ghost" onClick={() => set(name, '')}>Reset</Button> : null}
+                                <HotkeyCapture name={name} value={current ?? ''} platform={platform} label={label} onCapture={capture(name)} onReset={stored !== '' ? () => set(name, '') : undefined} />
                             </div>
-                            {refused?.name === name ? <div data-binding-refused={name} className="text-xs text-[var(--danger,#dc2626)]">{refused.reason}</div> : null}
                         </li>
                     );
                 })}
@@ -2469,6 +2546,17 @@ function githubCapabilityList(rows: readonly GithubCapability[]) {
     );
 }
 
+/** Upgrade the host this window drives (its owner only): the button, or where an upgrade in flight has got to. */
+function HostUpgradeRow({ host, upgrade, onUpgradeHost }: { host: string; upgrade: HostUpgradeStep | null; onUpgradeHost: () => void }) {
+    const upgrading = upgrade !== null && upgrade.kind !== 'up-to-date' && upgrade.kind !== 'done' && upgrade.kind !== 'failed' && upgrade.kind !== 'lost';
+    return (
+        <div data-remote-host-upgrade="" className="flex flex-wrap items-center gap-3 text-sm">
+            {upgrade ? <span data-host-upgrade={upgrade.kind} className="text-xs text-[var(--fg-3)]">{upgradeWords(upgrade, host)}</span> : null}
+            {upgrading ? null : <Button size="xs" type="button" data-action="upgrade-host" className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={onUpgradeHost}>Upgrade {host}</Button>}
+        </div>
+    );
+}
+
 /**
  * REMOTE ACCESS (§6.8) — the PIN this screen shows, the paired devices (Revoke each), who is connected
  * and who is driving, the lock as one button. No transport → the section says devices cannot connect. Sharing is a Tynn
@@ -2484,18 +2572,19 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
     return (
         <section data-remote className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
             <h2 className="text-sm font-semibold">Remote access</h2>
-            {remote === null ? (
+            {/* THIS MACHINE'S OWN, OR THE HOST THIS WINDOW DRIVES (Tynn #640; the owner: "that is for settings on the host I am
+                connected to"). Connecting to other machines is the title bar's host picker alone (Genie 1's HostsButton); a
+                connected window's Disconnect is its host badge's. Upgrading the host this window drives is about that host. */}
+            {connect?.state?.connected === true && connect.state.host && connect.state.isOwner && connect.onUpgradeHost ? (
+                <HostUpgradeRow host={connect.state.host} upgrade={connect.upgrade ?? null} onUpgradeHost={connect.onUpgradeHost} />
+            ) : null}
+            {remote === null && connect?.state?.connected === true && connect.state.host ? (
+                // A host with no window open sends no Remote access of its own yet (#1231): said, never a skeleton for ever.
+                <p data-remote-host-settings="unavailable" className="text-xs text-[var(--fg-3)]">{`Open Genie on ${connect.state.host} to see its settings.`}</p>
+            ) : remote === null ? (
                 <Skeletons rows={3} />
             ) : (
                 <>
-                    {/* DRIVE ANOTHER MACHINE FIRST (genie#1278 C1): this page is where the title bar's Connect lands, so the way to
-                        another machine is the first thing on it. Never on a drone (W5): Tynn refuses it every connect-grant. */}
-                    {connect && browse ? (
-                        <div data-drive-another="">
-                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
-                            <ConnectRemote {...connect} />
-                        </div>
-                    ) : null}
                     {/* THE SWITCH (Tynn #820; the owner: "Off by default", as Genie 1 had it): off, nothing listens. It is ALSO what
                         makes this machine reachable through the Tynn relay (main.ts relayAfterSwitch), so it says Tynn first. */}
                     <div data-remote-enabled={remote.enabled ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 text-sm">
@@ -2521,7 +2610,6 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                     {remote.tailscale.remedy?.command ? <code className="basis-full rounded-md bg-[var(--bg-2)] px-2 py-1 font-mono text-xs">{remote.tailscale.remedy.command}</code> : null}
                                     {remote.tailscale.state === 'absent' ? <Button size="xs" type="button" data-action="tailscale-install" className={button} onClick={() => onAction({ kind: 'tailscale.install' })}>Install Tailscale</Button> : null}
                                     {remote.tailscale.state === 'needs-login' ? <Button size="xs" type="button" data-action="tailscale-up" className={button} onClick={() => onAction({ kind: 'tailscale.up' })}>Connect</Button> : null}
-                                    {remote.tailscale.state === 'needs-login' && remote.tailscale.authUrl ? <Button size="xs" data-action="tailscale-signin" href={remote.tailscale.authUrl} target="_blank" rel="noreferrer" iconTrailing="arrow-right" className={button}>Sign in</Button> : null}
                                 </>
                             )}
                             {remote.tailscaleOutcome ? <span data-tailscale-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.tailscaleOutcome}</span> : null}

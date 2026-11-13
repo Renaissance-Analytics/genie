@@ -1,7 +1,7 @@
 import { Button, ContentRenderer } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import { CONTAINED_PROSE } from '../prose-contain.js';
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { DeckItem } from '../../core/deck.js';
 import { toggleChoice, unansweredCount } from '../../core/deck-resolve.js';
 import type { QuestionDraft } from '../../core/question-drafts.js';
@@ -80,6 +80,18 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
         setNotes(next);
         onDraft?.({ selections, notes: next });
     };
+    // Arrows move between a question's cards, wrapping; Home and End go to the first and the last (Tynn #646).
+    const moveFocus = (e: KeyboardEvent<HTMLDivElement>) => {
+        const cards = [...e.currentTarget.querySelectorAll<HTMLButtonElement>('button[data-question-option]')];
+        const at = cards.indexOf(document.activeElement as HTMLButtonElement);
+        if (at < 0) return;
+        const next = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? (at + 1) % cards.length
+            : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? (at - 1 + cards.length) % cards.length
+                : e.key === 'Home' ? 0 : e.key === 'End' ? cards.length - 1 : -1;
+        if (next < 0) return;
+        e.preventDefault();
+        cards[next]!.focus({ preventScroll: true });
+    };
     const submit = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (remaining > 0 || sending) return;
@@ -98,24 +110,43 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                     <div data-question-text={i} className="min-w-0 [overflow-wrap:anywhere]">
                         <ContentRenderer clipboardWriter={genieClipboardWriter} value={q.question} format="markdown" lineSpacing={1.6} className={`font-sans text-[13px] text-[var(--fg-1)] ${CONTAINED_PROSE}`} />
                     </div>
-                    {/* TOGGLE OPTIONS (Genie 1's): a button per option, pressed when picked; a picked option clicked again clears.
-                        A radio could not be unpicked. */}
-                    <div role="group" aria-label={q.header} className="flex min-w-0 flex-wrap gap-1.5">
-                        {q.options.map((o) => {
-                            const on = (selections[i] ?? []).includes(o.label);
+                    {/* OPTIONS AS CARDS (Tynn #646): one column, every card as wide as the question; the title bold on its own line,
+                        broken only between words; the description under it, muted. A radio (one choice) or a check (several)
+                        fills when picked, with the accent border and background; a hover is a light tint, never the picked look.
+                        Every colour is given for dark mode too: Fancy's Button brings its own dark background, border and hover,
+                        and in Genie's dark theme they covered the picked look (a likely cause of "I can't tell what is selected").
+                        Still Genie 1's TOGGLE (a picked option pressed again clears; a radio could not be unpicked). Arrows move
+                        between the cards, Space and Enter press one, and only one card per question takes Tab. */}
+                    <div role="group" aria-label={q.header} onKeyDown={moveFocus} className="flex w-full min-w-0 flex-col gap-1.5">
+                        {q.options.map((o, k) => {
+                            const picked = selections[i] ?? [];
+                            const on = picked.includes(o.label);
+                            const multi = q.multiSelect === true;
+                            // The one Tab stop: the first picked card, else the first.
+                            const stop = picked.length > 0 ? on && q.options.findIndex((x) => picked.includes(x.label)) === k : k === 0;
                             return (
-                                <Button size="xs" labelClassName="contents"
+                                <Button size="sm" labelClassName="contents"
                                     key={o.label}
                                     type="button"
                                     data-question-option={o.label}
-                                    data-select={q.multiSelect ? 'multi' : 'single'}
+                                    data-select={multi ? 'multi' : 'single'}
                                     aria-pressed={on}
-                                    onClick={() => pick(i, o.label, q.multiSelect === true)}
-                                    title={o.description ?? undefined}
-                                    className={`justify-start max-w-full [overflow-wrap:anywhere] rounded-lg border px-2.5 py-1 text-left text-[13px] leading-snug ${on ? 'border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_18%,transparent)] text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
+                                    tabIndex={stop ? 0 : -1}
+                                    onClick={() => pick(i, o.label, multi)}
+                                    className={`flex h-auto w-full min-w-0 items-start justify-start gap-2.5 rounded-lg border px-3 py-2 text-left font-normal outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] focus-visible:ring-offset-1 ${on ? 'border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_14%,transparent)] text-[var(--fg-1)] dark:border-[var(--primary)] dark:bg-[color-mix(in_srgb,var(--primary)_14%,transparent)] dark:text-[var(--fg-1)] hover:bg-[color-mix(in_srgb,var(--primary)_18%,transparent)] dark:hover:bg-[color-mix(in_srgb,var(--primary)_18%,transparent)]' : 'border-[var(--border-1)] bg-transparent text-[var(--fg-1)] dark:border-[var(--border-1)] dark:bg-transparent dark:text-[var(--fg-1)] hover:bg-[var(--bg-2)] dark:hover:bg-[var(--bg-2)] hover:border-[var(--border-1)] dark:hover:border-[var(--border-1)]'}`}
                                 >
-                                    <span className="font-medium">{o.label}</span>
-                                    {o.description ? <span className="block text-[12px] text-[var(--fg-3)]">{o.description}</span> : null}
+                                    <span
+                                        aria-hidden="true"
+                                        data-option-indicator={multi ? 'checkbox' : 'radio'}
+                                        data-on={on ? 'true' : 'false'}
+                                        className={`mt-0.5 flex size-4 shrink-0 items-center justify-center border-2 ${multi ? 'rounded-[4px]' : 'rounded-full'} ${on ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--fg-4)] bg-transparent'}`}
+                                    >
+                                        {on ? (multi ? <svg viewBox="0 0 12 12" className="size-3" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M2.5 6.2 5 8.6 9.5 3.6" /></svg> : <span className="size-1.5 rounded-full bg-white" />) : null}
+                                    </span>
+                                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                        <span data-option-title="" className="block break-normal text-[13px] font-semibold leading-snug">{o.label}</span>
+                                        {o.description ? <span data-option-description="" className="block break-normal text-[12px] leading-snug text-[var(--fg-3)]">{o.description}</span> : null}
+                                    </span>
                                 </Button>
                             );
                         })}

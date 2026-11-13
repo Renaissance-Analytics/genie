@@ -69,6 +69,8 @@ describe('who can ask for a shell line at all', () => {
     it('these, each decided on. A new one fails here until someone has read what reaches it', () => {
         const callers = walk('src/main').filter((file) => /\bshell: true\b/.test(code(file))).sort();
         expect(callers).toEqual([
+            // A held login's account (Tynn #699): the same status line, from login-host's statusCommandFor (checked path).
+            'src/main/genie-host.ts',
             // Constant lines and a checked path (above).
             'src/main/login-host.ts',
             // The status line beside it, through Node's own shell: true.

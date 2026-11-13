@@ -3,7 +3,7 @@ import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import { Baton, PairingPins } from '../core/remote.js';
 import type { CallContext, RemoteMethod, ServerTransport } from '../core/remote-protocol.js';
 import { DeviceStore, type Device } from './remote-devices.js';
-import { RemoteHost, type HostApi } from './remote-host.js';
+import { RemoteHost, type EventWants, type HostApi } from './remote-host.js';
 import { HOST_ALONE_METHODS } from './host-alone-api.js';
 
 /**
@@ -71,6 +71,8 @@ export interface RemoteAccessStatus {
     readonly devices: Device[];
     readonly connections: ReturnType<RemoteHost['connections']>;
     readonly pairRequests: ReturnType<PairApprovals['requests']>;
+    /** What the connections want of the window's events (Tynn #662); absent from an older host = everything. */
+    readonly wants?: EventWants;
 }
 
 export interface RemoteAccessHostOptions {
@@ -117,7 +119,7 @@ export class RemoteAccessHost {
 
     status(): RemoteAccessStatus {
         const r = this.remote;
-        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests() };
+        return { host: r.hostName, url: r.url(), unavailable: r.unavailable(), locked: r.locked(), pin: r.activePin(), devices: r.devices(), connections: r.connections(), pairRequests: this.pairing.requests(), wants: r.wanted() };
     }
 
     issuePin(options: { replaces?: string } = {}): { code: string; expiresAt: number } {

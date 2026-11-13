@@ -6,7 +6,7 @@ import { connectRemote, type RemoteClient } from './remote-bridge.js';
 import type { LocalFilesBridge } from './local-files-client.js';
 
 export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'commitsSince'
-    | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'onSettingsChanged'
+    | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer' | 'onSettingsChanged'
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
     | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn'
@@ -45,7 +45,7 @@ const LINK_DOWN = 'Genie isn’t answering this window yet. Try that again in a 
 const REPLACED = 'this window opened a replacement protocol connection';
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'restartWithHandoff'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     let wasReady = false;
     const everReady = () => wasReady;
@@ -170,7 +170,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     const answered = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T | { ok: false; reason: string }> => {
         try { return await read(call); } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
     };
-    const agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'restartWithHandoff'> = {
+    const agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent'> = {
         openAgent: (id) => { void read(async (b) => { b.openAgent(id); }).catch(() => {}); },
         stopAgent: (id) => { void read(async (b) => { b.stopAgent(id); }).catch(() => {}); },
         resumeLimit: (id) => answered((b) => b.resumeLimit(id)),
@@ -179,7 +179,6 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         resolvePrompt: (id, promptId, action) => answered((b) => b.resolvePrompt(id, promptId, action)) as never,
         answerApproval: (id, optionId, note) => answered((b) => b.answerApproval(id, optionId, note)),
         addAgent: (workspaceId, input) => answered((b) => b.addAgent(workspaceId, input)),
-        restartWithHandoff: (id, finishedId) => answered((b) => b.restartWithHandoff(id, finishedId)),
     };
     return {
         agentCommands,
@@ -265,6 +264,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             check: () => read((bridge) => bridge.updates.check()),
             download: () => read((bridge) => bridge.updates.download()),
             install: () => read((bridge) => bridge.updates.install()),
+            forceDrain: () => read((bridge) => bridge.updates.forceDrain?.() ?? Promise.resolve(false)),
             notes: () => read((bridge) => bridge.updates.notes!()),
             subscribe: (listener) => subscribe((bridge) => bridge.updates.subscribe(listener)),
         },
@@ -286,12 +286,14 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             setAutoApprove: (id, on) => requestAgent((agents) => agents.setAutoApprove(id, on)),
             setManageTabs: (id, on) => requestAgent((agents) => agents.setManageTabs(id, on)),
             setDrivePages: (id, on) => requestAgent((agents) => agents.setDrivePages(id, on)),
+            setMcpServer: (id, name, on) => requestAgent((agents) => agents.setMcpServer(id, name, on)),
             setIssueWatch: (id, setting) => requestAgent((agents) => agents.setIssueWatch(id, setting)),
             setPermissions: (id, permissions) => requestAgent((agents) => agents.setPermissions(id, permissions)),
             setModel: (id, model) => requestAgent((agents) => agents.setModel(id, model)),
             models: (id, refresh) => requestAgent((agents) => agents.models!(id, refresh)),
             diagnose: (id) => requestAgent((agents) => agents.diagnose(id)),
             toolOutput: (id, toolCallId) => requestAgent((agents) => agents.toolOutput(id, toolCallId)),
+            attachment: (id, attachmentId) => requestAgent((agents) => agents.attachment(id, attachmentId)),
         },
         workspaces: {
             previewAdd: (path) => request((ws) => ws.previewAdd(path)),
@@ -328,6 +330,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             resetSetting: (id, key) => request((ws) => ws.resetSetting(id, key)),
             setGoverns: (id, children) => request((ws) => ws.setGoverns(id, children)),
             setDefaultAgent: (id, agentId) => request((ws) => ws.setDefaultAgent(id, agentId)),
+            setMcpServer: (id, name, on) => request((ws) => ws.setMcpServer(id, name, on)),
             setColor: (id, color) => request((ws) => ws.setColor!(id, color)),
             onSettingsChanged: (listener) => { settingsListeners.add(listener); return () => { settingsListeners.delete(listener); }; },
             // The Tynn tab (P4 family 12): reads and actions reject on a failed connection, as the IPC calls did.

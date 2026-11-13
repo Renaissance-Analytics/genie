@@ -31,4 +31,5 @@ while (Date.now() - streamFrom < ms) {
     const rest = TICK_MS - (Date.now() - tickStart);
     if (rest > 0) await new Promise((r) => setTimeout(r, rest));
 }
-process.stdout.write(`UI_LAG_FLOOD_DONE ${run}\n`);
+// END closes the marker: the reader joins wrapped rows with whitespace out (ui-lag-analyze.mjs floodEnded).
+process.stdout.write(`UI_LAG_FLOOD_DONE ${run} END\n`);

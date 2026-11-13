@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { budgetVerdict, capVerdict, createGapGauge, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, capVerdict, createGapGauge, floodEnded, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pageVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps, type CpuProfile } from '../scripts/perf-lag/ui-lag-analyze.mjs';
 
 /*
  * THE UI-LAG ROW'S GAUGES READ WHAT THEY CLAIM (Tynn #274 / #429). The row in scripts/ui-lag-cdp.mjs decides on these
@@ -194,6 +194,42 @@ describe('the throughput budget: input the page keeps up with, terminal on again
     });
 });
 
+describe('the terminal past its output cap, against itself hidden AT THE SAME MOMENTS (Tynn #692)', () => {
+    /*
+     * The past-cap slices used to be one phase of their own, compared with below-cap slices taken a minute earlier: a slower
+     * minute on the machine read as a cost of the cap (Azure run 2: 0.79; run 3: 1.02). Now each past slice has a control
+     * next to it in time, the same terminal still streaming past the cap with its pane hidden, and the verdict reads the
+     * PAIRS: each past slice against its own control.
+     */
+    const slice = (count: number, scriptMsPerS = 60, worstGapMs = 0) => ({ count, p95: 20, worstGapMs, scriptMsPerS });
+    const paired = { paired: true, control: 'its pane hidden at the same moments' } as const;
+    it('a machine that slows down halfway moves both sides of each pair, and passes', () => {
+        const control = [slice(70), slice(71), slice(69), slice(40), slice(38), slice(41)];
+        const past = [slice(69), slice(70), slice(70), slice(39), slice(38), slice(40)];
+        const v = capVerdict({ below: control, past }, paired);
+        expect(v.reasons).toEqual([]);
+        expect(v.ratio).toBe(0.99);
+        // CONTROL: the same slices read unpaired (medians of each side) fail on the slowdown alone.
+        expect(capVerdict({ below: [slice(70), slice(71), slice(69), slice(70), slice(70), slice(71)], past }).ok).toBe(false);
+    });
+    it('a past side that falls behind its own controls fails, in words that name the control', () => {
+        const v = capVerdict({ below: [slice(70), slice(71), slice(69)], past: [slice(50), slice(52), slice(49)] }, paired);
+        expect(v.ok).toBe(false);
+        expect(v.reasons).toEqual(['mouse events acknowledged past the output cap: 0.71 of its pane hidden at the same moments, median of 3 pairs (bound 0.9; past 50, control 70)']);
+    });
+    it('script time is read by pair too: over its own control by more than the bound fails', () => {
+        // Pair differences 40, 40, 280: the median is 40, under the bound. Unpaired, the same slices fail (340 against 120).
+        const below = [slice(70, 100), slice(70, 300), slice(70, 120)], past = [slice(70, 140), slice(70, 340), slice(70, 400)];
+        expect(capVerdict({ below, past }, paired).reasons).toEqual([]);
+        expect(capVerdict({ below, past }).ok).toBe(false);
+        const busy = capVerdict({ below: [slice(70, 100), slice(70, 100), slice(70, 100)], past: [slice(70, 200), slice(70, 220), slice(70, 180)] }, paired);
+        expect(busy.reasons).toEqual(['page script time past the output cap: 100 ms per second over its pane hidden at the same moments, median of 3 pairs (bound 50; past 200, control 100)']);
+    });
+    it('needs as many controls as past slices, and enough of them', () => {
+        expect(capVerdict({ below: [slice(70), slice(70)], past: [slice(70), slice(70), slice(70)] }, paired).reasons).toEqual(['too few pairs: 2 past slices with a control beside them (need 3)']);
+    });
+});
+
 describe('the terminal past its output cap, against below it (Tynn #542)', () => {
     const slice = (count: number, worstGapMs = 0, scriptMsPerS = 60) => ({ count, p95: 20, worstGapMs, scriptMsPerS });
     it('fails a page whose script time past the cap is far over below it, though its input keeps up (run 0d892cff)', () => {
@@ -222,6 +258,31 @@ describe('what a terminal view holds after a flood (Tynn #544)', () => {
         expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: 3_100_000 }).ok).toBe(true);
         expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: 12_400_000 }).reasons).toEqual(['the view held 12.4 MB more after a 12 MB flood (bound 6 MB: the 2 MB cap and 4 MB besides)']);
         expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: Number.NaN }).reasons).toEqual(['the heap was not read before and after the flood']);
+    });
+
+    it('says the flood\'s end was not seen when that is what happened, not that the heap was not read', () => {
+        // Run 1113-081447 on Linux: both readings taken (9964936 and 14741820), the end marker not matched.
+        expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: Number.NaN, done: false }).reasons).toEqual(['the flood\'s end was not seen in the window, so the heap after it was not judged']);
+        expect(heldVerdict({ floodBytes: 12_000_000, growthBytes: 4_776_884, done: true }).ok).toBe(true);
+    });
+});
+
+describe('the flood\'s end marker in a terminal\'s rows', () => {
+    it('finds it when a narrow terminal wraps it across rows (Hyprland\'s 29-column Take Over window, run 1113-081447)', () => {
+        // The rows' innerText from that run, with the marker as ui-lag-flood.mjs now prints it: split after "takeover138".
+        const rows = '[flood takeover13810] [ 462] \nstreaming past the cap ......\n.............................\n....\nUI_LAG_FLOOD_DONE takeover138\n10 END\n[genie@gt-11130814-3025537e w\norkspace]$  ';
+        expect(floodEnded(rows, 'takeover13810')).toBe(true);
+        // Wrapped at a space, with the row's trailing space dropped.
+        expect(floodEnded('UI_LAG_FLOOD_DONE\ntakeover13810\nEND\n$ ', 'takeover13810')).toBe(true);
+        expect(floodEnded('x\nUI_LAG_FLOOD_DONE takeover13810 END\n$ ', 'takeover13810')).toBe(true);
+    });
+
+    it('does not find it before the end, for another run, or in the command line that started the flood', () => {
+        expect(floodEnded('$ node flood.mjs 12000000 23200 takeover13810\n[flood takeover13810] [ 462] streaming', 'takeover13810')).toBe(false);
+        expect(floodEnded('UI_LAG_FLOOD_DONE takeover1381 END\n$ ', 'takeover13810')).toBe(false);
+        // A run whose id is a prefix of another's (`takeover${Date.now() % 100000}` has no fixed width).
+        expect(floodEnded('UI_LAG_FLOOD_DONE takeover13810 END\n$ ', 'takeover1381')).toBe(false);
+        expect(floodEnded('', 'takeover13810')).toBe(false);
     });
 });
 

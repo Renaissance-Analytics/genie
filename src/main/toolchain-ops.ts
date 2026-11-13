@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { putOnPath } from './cli-repair.js';
 import { join } from 'node:path';
 import { NODE_LTS_DEFAULT } from '../core/node-versions.js';
 import { HOST_TOOLS, PREREQUISITES, parseVersionOutput, planInstall, vcRuntimeFiles, type PackageManager, type Platform } from '../core/toolchain.js';
@@ -157,6 +158,8 @@ export async function installTool(tool: string, consent: boolean, ports: Toolcha
         }
         ports.progress?.(`Checking that ${tool} answers`);
         await refreshPersistedPath(ports);
+        // A vendor installer (Tynn #698) puts the CLI in its own folder, which Genie's PATH may not have yet.
+        if (def?.ownUpdater?.manager === 'vendor') putOnPath(tool === 'claude-code' ? 'claude' : tool, { platform: ports.platform, env: ports.env, isFile: (p) => ports.fs.exists(p) });
         const after = await measure();
         if (after === null) return { kind: 'not-installed', reason: `${plan.label} exited ${exitCode}${tail(output)}, and ${tool} still does not answer; nothing Genie can find was installed` };
         const version = def ? after : null;
