@@ -398,8 +398,7 @@ export class ThreadStore extends FileSessionStore {
         try {
             await mkdir(this.#directory, { recursive: true });
             const current = await sizeOf(path);
-            // TEMPORARY BREAK PROBE #671: rotation off against the retained 512 MiB latency fixture. Never ship.
-            if (current !== null && current >= this.#rotateBytes && false) await this.#rotate(key, path);
+            if (current !== null && current >= this.#rotateBytes) await this.#rotate(key, path);
             else if ((await this.#index(key)).some((seg) => seg.summary === null)) this.#summarise(key);
             const known = this.#counts.get(key);
             const before = await this.#repairTail(key, path);
