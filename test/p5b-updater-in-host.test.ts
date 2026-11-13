@@ -452,6 +452,11 @@ function importsOf(file: string): { readonly static: string[]; readonly dynamic:
     return { static: stat, dynamic: dyn };
 }
 
+/** Normalize package subpaths exactly as the import graph does. */
+function packageOf(spec: string): string {
+    return spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!;
+}
+
 /** Every file and bare package reachable from `entry` (dynamic imports followed only when asked). */
 function graph(entry: string, followDynamic: boolean): { files: Set<string>; packages: Set<string> } {
     const files = new Set<string>();
@@ -467,7 +472,7 @@ function graph(entry: string, followDynamic: boolean): { files: Set<string>; pac
                 const hit = ['.ts', '.tsx'].map((x) => base + x).find((p) => existsSync(p));
                 if (hit) visit(hit);
             } else {
-                packages.add(spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!);
+                packages.add(packageOf(spec));
             }
         }
     };
@@ -501,10 +506,10 @@ describe('electron-updater: the helper mode imports it; main statically and geni
         expect(main.files.has(port)).toBe(false);
     });
 
-    it('only electron-updater-port.ts names the package', () => {
+    it('only the real port and published provider name the package, including subpaths', () => {
         const helper = graph('src/main/updater-process.ts', false);
-        const naming = [...helper.files].filter((f) => importsOf(f).static.includes('electron-updater'));
-        expect(naming).toEqual([port]);
+        const naming = [...helper.files].filter((f) => importsOf(f).static.some((spec) => packageOf(spec) === 'electron-updater'));
+        expect(naming.sort()).toEqual([port, resolve('src/main/published-github-provider.ts')].sort());
     });
 });
 

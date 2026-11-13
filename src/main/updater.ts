@@ -49,6 +49,8 @@ export interface UpdateState {
     error: string | null;
     /** When the last check ANSWERED (not when it started). */
     checkedAt: number | null;
+    /** This check was explicitly requested; absent for scheduled checks and completed successful answers. */
+    userInitiated?: boolean;
     /**
      * What is in the update (Genie 1's upgrade window): every version after the running one up to the offered one, with
      * its "What's new" — from GitHub's releases (core/update-notes.ts). `null` = still fetching; `'unavailable'` = could
@@ -256,7 +258,7 @@ export class UpdateHost {
                     arm(timing.intervalMs);
                     return;
                 }
-                void this.check().catch(() => undefined).finally(() => { if (!stopped) arm(timing.intervalMs); });
+                void this.check(false).catch(() => undefined).finally(() => { if (!stopped) arm(timing.intervalMs); });
             }, ms);
         };
         arm(timing.initialMs);
@@ -306,11 +308,17 @@ export class UpdateHost {
         return this.#notesInFlight;
     }
 
-    /** Ask the feed. Rejoins a check already in flight. Resolves to the resulting state. */
-    check(): Promise<UpdateState> {
+    /** Explicit checks (including tray/IPC) retain attention on failure; the scheduler opts out. */
+    check(userInitiated = true): Promise<UpdateState> {
         this.retryInstallState = null;
-        if (this.inFlight) return this.inFlight;
-        this.set({ phase: 'checking', version: null, percent: null, error: null, checkedAt: this.current.checkedAt });
+        if (this.inFlight) {
+            // A person can join a scheduled check. Keep its single library call, but own the answer as requested.
+            if (userInitiated && this.current.phase === 'checking' && !this.current.userInitiated) this.set({ ...this.current, userInitiated: true });
+            return this.inFlight;
+        }
+        // A recheck has not disproved the known offer. Keep its window present until a new answer arrives (#670).
+        const heldOffer = { version: this.current.version, ...(this.current.changelog !== undefined ? { changelog: this.current.changelog } : {}) };
+        this.set({ phase: 'checking', ...heldOffer, percent: null, error: null, checkedAt: this.current.checkedAt, ...(userInitiated ? { userInitiated: true } : {}) });
         this.inFlight = this.options.port.check().then(
             (found) => {
                 const checkedAt = this.clock();
@@ -324,7 +332,8 @@ export class UpdateHost {
             },
             (error: unknown) => {
                 const message = error instanceof Error ? error.message : String(error);
-                this.set({ phase: 'error', version: null, percent: null, error: message, checkedAt: this.clock() });
+                // Read the current intent, so a user who joined this background check is not lost.
+                this.set({ phase: 'error', ...heldOffer, percent: null, error: message, checkedAt: this.clock(), ...(this.current.userInitiated ? { userInitiated: true } : {}) });
                 return this.current;
             },
         ).finally(() => { this.inFlight = null; });

@@ -18,20 +18,26 @@ export interface UpdateWindowProps {
 
 export function UpdateWindow({ update, onAction, onClose }: UpdateWindowProps) {
     const c = update.changelog ?? null;
-    const groups = c && c !== 'unavailable' ? c.groups : [];
+    const showNotes = update.phase !== 'checking' && update.phase !== 'error';
+    const groups = showNotes && c && c !== 'unavailable' ? c.groups : [];
     const state = c === null ? 'loading' : c === 'unavailable' ? 'unavailable' : groups.length === 0 ? 'none' : c.partial ? 'partial' : 'complete';
     return (
         <Modal open onClose={onClose} size="lg">
-            <Modal.Header>What’s in Genie {update.version}</Modal.Header>
+            <Modal.Header>{update.version ? <>What’s in Genie {update.version}</> : 'Genie update'}</Modal.Header>
             <Modal.Body>
-                <div data-update-window={update.version} className="flex max-h-[60vh] flex-col gap-5 overflow-auto">
+                <div data-update-window={update.version ?? ''} className="flex max-h-[60vh] flex-col gap-5 overflow-auto">
+                    {update.phase === 'error' ? (
+                        <p data-update-error="" role="alert" className="text-[13px] text-[var(--danger)]">{update.error}</p>
+                    ) : update.phase === 'checking' ? (
+                        <p role="status" className="text-[13px] text-[var(--fg-3)]">Checking for updates…</p>
+                    ) : null}
                     {groups.map((g) => (
                         <section key={g.version} data-update-notes-version={g.version} className="flex flex-col gap-2">
                             <h3 className="text-sm font-semibold text-[var(--fg-1)]">Genie {g.version}</h3>
                             <ContentRenderer clipboardWriter={genieClipboardWriter} value={g.notes} format="markdown" lineSpacing={1.4} className="text-[13px] text-[var(--fg-2)]" />
                         </section>
                     ))}
-                    {state === 'complete' ? null : (
+                    {!showNotes || state === 'complete' ? null : (
                         <p data-update-notes-state={state} className="text-[13px] text-[var(--fg-3)]">
                             {state === 'loading'
                                 ? 'Fetching the release notes…'
@@ -56,7 +62,7 @@ export function UpdateWindow({ update, onAction, onClose }: UpdateWindowProps) {
                             onClick={() => onAction(update.action!)}
                             className="rounded-md bg-[var(--primary)] px-3 py-1 text-[13px] font-medium text-white hover:opacity-90"
                         >
-                            {update.action === 'update-install' ? `Restart to install Genie ${update.version}` : `Download Genie ${update.version}`}
+                            {update.action === 'update-check' ? 'Retry' : update.action === 'update-install' ? `Restart to install Genie ${update.version}` : `Download Genie ${update.version}`}
                         </Button>
                     ) : (
                         <span className="text-[13px] text-[var(--fg-3)]">{update.label}</span>
