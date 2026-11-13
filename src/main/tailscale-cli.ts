@@ -76,8 +76,8 @@ export interface TailscaleStatus {
     /** This node's tailnet identity (null before the first `up`). */
     self: { ip: string | null; hostname: string; online: boolean; dnsName: string | null } | null;
     peers: TailnetPeer[];
-    /** A login URL Tailscale surfaces when the node needs interactive auth. */
-    authUrl?: string | null;
+    // No login link here (Tynn #675): `status --json` reports the daemon's LAST one until a login completes, and a
+    // Tailscale login link expires, so a kept link is the "this link has expired" page. A sign-in asks `up` for a new one.
     /** How to get out of `state`; null when nothing is wrong (or nothing is known). */
     remedy?: TailscaleRemedy | null;
 }
@@ -184,6 +184,10 @@ export function classifyTailscaleFailure(
 ): Exclude<TailscaleState, 'running'> {
     const text = `${f.stdout ?? ''}\n${f.stderr ?? ''}\n${f.message ?? ''}`;
 
+    // `up` refusing to drop settings it was not given (up.go's accidentalUpPrefix). Its suggested command can carry
+    // `--operator=...`, which is not a denial: this user may drive Tailscale. Unknown, so its own words are shown (Tynn #675).
+    if (/changing settings via 'tailscale up' requires mentioning all/i.test(text)) return 'unknown';
+
     // The binary is gone (or unusable). NEVER read this as "installed, offline".
     if (typeof f.code === 'string' && ['ENOENT', 'EACCES', 'ENOTDIR'].includes(f.code)) {
         return 'absent';
@@ -282,7 +286,6 @@ export function parseTailscaleStatus(
 ): Omit<TailscaleStatus, 'installed' | 'state' | 'remedy'> {
     let data: {
         BackendState?: string;
-        AuthURL?: string;
         Self?: { TailscaleIPs?: string[]; HostName?: string; Online?: boolean; DNSName?: string };
         Peer?: Record<
             string,
@@ -316,7 +319,6 @@ export function parseTailscaleStatus(
         running: data.BackendState === 'Running',
         self,
         peers,
-        authUrl: data.AuthURL ?? null,
     };
 }
 
@@ -421,8 +423,44 @@ export interface TailscaleUpResult {
     command?: string;
 }
 
+/** How long `up` may wait for the node to come online (or print a login link) before Genie stops waiting. */
+const UP_TIMEOUT_MS = 30_000;
+
+/** The daemon's BackendState, or null when status does not answer with its JSON (the `up` failure then says why). */
+async function backendState(cli: string, run: NonNullable<TailscaleCliDeps['run']>): Promise<string | null> {
+    let stdout: string;
+    try {
+        stdout = (await run(cli, ['status', '--json'], 8000)).stdout;
+    } catch (e) {
+        stdout = (e as TailscaleCliFailure)?.stdout ?? '';
+    }
+    if (!looksLikeStatusJson(stdout)) return null;
+    const state = (JSON.parse(stdout) as { BackendState?: unknown }).BackendState;
+    return typeof state === 'string' ? state : null;
+}
+
+/**
+ * What a failed `up` said, in Tailscale's words: execFile's message opens with a "Command failed: <path> <args>" line that
+ * names no reason, and a run Genie's timeout stopped may have printed nothing at all (Tynn #675).
+ */
+function failureWords(err: TailscaleCliFailure & { killed?: boolean }): string {
+    // execFile's message is that line followed by what the CLI wrote to stderr; without it, the CLI's own output.
+    const said = (err.message ?? '').replace(/^Command failed: [^\n]*\n?/, '').trim() || `${err.stderr ?? ''}\n${err.stdout ?? ''}`.trim();
+    if (err.killed) {
+        const waited = `Tailscale did not come online within ${UP_TIMEOUT_MS / 1000} seconds.`;
+        return said ? `${waited} ${said}` : `${waited} Check it with: tailscale status`;
+    }
+    return said || 'tailscale up failed';
+}
+
 /**
  * Bring this node online (`tailscale up`).
+ *
+ * A node that needs a login is brought up with `--force-reauth` (Tynn #675). A bare `up` asks for a new login only when
+ * the node has no key yet (up.go: `if upArgs.forceReauth || !st.HaveNodeKey { StartLoginInteractive }`), so a node that
+ * was signed in before printed nothing and waited out the timeout, while the link `status` still reported had expired.
+ * `--force-reauth` asks the control server for a new login, and `up` never prints the link status already held. Only a
+ * node that NEEDS a login gets it: a signed-in node that is merely down comes up with a bare `up`, no forced re-login.
  *
  * genie#396: this used to recognise exactly ONE failure — an auth URL — and
  * return a truncated raw error for everything else, which is what both standard
@@ -439,11 +477,12 @@ export async function tailscaleUp(deps: TailscaleCliDeps = {}): Promise<Tailscal
         return { ok: false, state: 'absent', message: remedy?.message };
     }
     const run = deps.run ?? runCli;
+    const args = (await backendState(cli, run)) === 'NeedsLogin' ? ['up', '--force-reauth'] : ['up'];
     try {
-        await run(cli, ['up'], 30000);
+        await run(cli, args, UP_TIMEOUT_MS);
         return { ok: true, state: 'running' };
     } catch (e) {
-        const err = e as TailscaleCliFailure;
+        const err = e as TailscaleCliFailure & { killed?: boolean };
         const out = `${err?.stdout ?? ''}\n${err?.stderr ?? ''}\n${err?.message ?? ''}`;
         const state = classifyTailscaleFailure(err ?? {});
         if (state === 'needs-login') {
@@ -468,11 +507,11 @@ export async function tailscaleUp(deps: TailscaleCliDeps = {}): Promise<Tailscal
                 ...(remedy.command ? { command: remedy.command } : {}),
             };
         }
-        // Unrecognised — surface the real error rather than invent a cause.
+        // Unrecognised — surface Tailscale's own words rather than invent a cause.
         return {
             ok: false,
             state,
-            message: (err?.message ?? 'tailscale up failed').slice(0, 300),
+            message: failureWords(err ?? {}).slice(0, 600),
         };
     }
 }
