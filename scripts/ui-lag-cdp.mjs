@@ -29,7 +29,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
-import { budgetVerdict, capVerdict, createGapGauge, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
+import { budgetVerdict, capVerdict, createGapGauge, floodEnded, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
 const WIN = process.platform === 'win32', OUT = resolve('smoke-out'), PORT = 9362, INSPECT = 9363, HOST_INSPECT = 9364, started = Date.now(), sessions = [];
 // Ten pairs (the coordinator's (b), Tynn #536): a stable median of paired differences on the Linux runner.
@@ -310,7 +310,7 @@ try {
     await until('the terminal pane', () => page.evaluate(`Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-pane] .xterm-rows'))`), 30000);
     await sleep(1500);
     console.log(`UI_LAG_COMPOSITED terminal-placed ${JSON.stringify(await page.evaluate(`(${uiLagComposited.toString()})()`))}`.slice(0, 6000));
-    const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').replace(/\\n/g, '')`;
+    const rowsText = `(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '')`;
 
     await main.evaluate(`(${installMainGauge.toString()})((${createGapGauge.toString()}))`);
     await hostCdp.evaluate(`(${installHostGauge.toString()})((${createGapGauge.toString()}))`);
@@ -441,7 +441,8 @@ try {
         await page.evaluate(hidePane(false));
         await noDialog(`after the ${label} pass's slices past the output cap`);
         phases.push({ ...p, end: await mark('terminal-past-cap-end'), input: { mouse: pastMouse, keys: pastKeys }, slices: pastSlices, flooded });
-        await until('the flood to end', () => page.evaluate(`${rowsText}.includes('UI_LAG_FLOOD_DONE ${run}')`), 60000).catch(() => null);
+        const ended = await until('the flood to end', async () => floodEnded(await page.evaluate(rowsText), run), 60000).catch(() => false);
+        if (ended !== true) console.log(`UI_LAG_FLOOD_NOT_DONE ${label} ${JSON.stringify(await page.evaluate(`${rowsText}.slice(-500)`).catch((e) => String(e)))}`);
         const profiles = {};
         for (const [name, c] of profiled ? [['main', main], ['page', page], ['host', hostCdp]] : [['host', hostCdp]]) { profiles[name] = (await c.request('Profiler.stop', {})).profile; await c.request('Profiler.disable', {}); }
         return { label, profiled, run, build, phases, profiles };
@@ -495,10 +496,17 @@ try {
             }
         }
         await tk.evaluate(hidePane(false));
-        const tkDone = await until('the Take Over flood to end', () => tk.evaluate(`(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').includes('UI_LAG_FLOOD_DONE ${run}')`), 120000).catch(() => false);
+        const tkWaitFrom = Date.now();
+        const tkDone = await until('the Take Over flood to end', async () => floodEnded(await tk.evaluate(`(document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '')`), run), 120000).catch(() => false);
+        if (tkDone !== true) {
+            // WHAT THE WINDOW SHOWED when its flood's end was not seen: its rows, whether it draws, and the window as main sees it.
+            const seen = await tk.evaluate(`new Promise((done) => { let n = 0; const t0 = performance.now(); const tick = () => { n += 1; if (performance.now() - t0 < 1000) requestAnimationFrame(tick); else done({ visibility: document.visibilityState, focus: document.hasFocus(), rafPerS: n, rows: document.querySelector('[data-terminal-pane] .xterm-rows')?.children.length ?? null, tail: (document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').slice(-700) }); }; requestAnimationFrame(tick); setTimeout(() => done({ visibility: document.visibilityState, focus: document.hasFocus(), rafPerS: n, rafStalled: true, tail: (document.querySelector('[data-terminal-pane] .xterm-rows')?.innerText ?? '').slice(-700) }), 3000); })`).catch((e) => ({ error: String(e) }));
+            const win = await main.evaluate("JSON.stringify(process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').BrowserWindow.getAllWindows().map((w) => ({ url: w.webContents.getURL().replace(/^.*#/, ''), visible: w.isVisible(), focused: w.isFocused(), minimized: w.isMinimized(), bounds: w.getBounds(), throttled: w.webContents.getBackgroundThrottling() })))").catch((e) => JSON.stringify({ error: String(e) }));
+            console.log(`UI_LAG_TAKEOVER_NOT_DONE after ${Date.now() - tkWaitFrom} ms ${JSON.stringify({ seen, windows: JSON.parse(win) })}`);
+        }
         await sleep(1000);
         const heap1 = await heap();
-        result.takeoverHeld = { done: tkDone === true, heap0, heap1, ...heldVerdict({ floodBytes: TAKEOVER_FLOOD_BYTES, growthBytes: tkDone === true ? heap1 - heap0 : Number.NaN }) };
+        result.takeoverHeld = { done: tkDone === true, box: tkBox, heap0, heap1, ...heldVerdict({ floodBytes: TAKEOVER_FLOOD_BYTES, growthBytes: heap1 - heap0, done: tkDone === true }) };
         console.log(`UI_LAG_TAKEOVER_HELD ${JSON.stringify(result.takeoverHeld)}`);
         const st = await tk.evaluate('(() => { const s = window.__uiLag; return { frames: s.frames.splice(0), frameTimes: s.frameTimes.splice(0), inputs: s.inputs.splice(0) }; })()');
         result.takeover = { flooded, slices: tkSlices.map((sl) => {

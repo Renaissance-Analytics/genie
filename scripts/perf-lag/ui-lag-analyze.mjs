@@ -215,11 +215,26 @@ export function sliceVerdict({ on, off }, { p95SlackMs = 10, maxFrameGapMs = 100
  * collection. A view that keeps its terminal's newest `capChars` holds that and `slackBytes` besides (xterm's own
  * scrollback, the page's churn); one that keeps everything holds the flood.
  */
-export function heldVerdict({ floodBytes, growthBytes }, { capChars = 2_000_000, slackBytes = 4_000_000 } = {}) {
+export function heldVerdict({ floodBytes, growthBytes, done }, { capChars = 2_000_000, slackBytes = 4_000_000 } = {}) {
     const mb = (v) => Math.round(v / 100_000) / 10, bound = capChars + slackBytes, reasons = [];
-    if (!Number.isFinite(growthBytes)) reasons.push('the heap was not read before and after the flood');
+    // The heap after the flood means nothing until the flood has ended, so a flood whose end was not seen is said as that:
+    // run 1113-081447 read both heaps and was reported as "not read" when the end marker was what went unmatched.
+    if (done === false) reasons.push('the flood\'s end was not seen in the window, so the heap after it was not judged');
+    else if (!Number.isFinite(growthBytes)) reasons.push('the heap was not read before and after the flood');
     else if (growthBytes > bound) reasons.push(`the view held ${mb(growthBytes)} MB more after a ${mb(floodBytes)} MB flood (bound ${mb(bound)} MB: the ${mb(capChars)} MB cap and ${mb(slackBytes)} MB besides)`);
     return { ok: reasons.length === 0, floodBytes, growthBytes, boundBytes: bound, reasons };
+}
+
+/**
+ * THE FLOOD'S END, IN A TERMINAL'S ROWS: ui-lag-flood.mjs ends with `UI_LAG_FLOOD_DONE <run> END`. `rowsText` is the
+ * `.xterm-rows` innerText, one line per ROW, so a terminal narrower than the marker splits it across rows: on Hyprland the
+ * Take Over window came up 237x160, 29 columns, and the marker read "UI_LAG_FLOOD_DONE takeover138\n10" (run 1113-081447),
+ * every time, while the Windows window (1100x700) never wrapped it. Compared with all whitespace out, so a wrap at a space
+ * whose row drops its trailing blank matches too; the closing END keeps a run id from matching a longer one it prefixes.
+ */
+export function floodEnded(rowsText, run) {
+    const flat = (s) => String(s ?? '').replace(/\s+/g, '');
+    return flat(rowsText).includes(flat(`UI_LAG_FLOOD_DONE ${run} END`));
 }
 
 /**
