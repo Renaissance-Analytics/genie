@@ -234,7 +234,8 @@ describe('getTailscaleStatus — five distinguishable states (genie#380, genie#3
         });
         expect(s.installed).toBe(true);
         expect(s.state).toBe('needs-login');
-        expect(s.authUrl).toBe('https://login.tailscale.com/a/abc');
+        // The link status reports may be long expired; a sign-in asks for a fresh one (Tynn #675).
+        expect('authUrl' in s).toBe(false);
     });
 
     it('reports RUNNING off a healthy status', async () => {
