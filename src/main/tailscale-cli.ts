@@ -335,8 +335,56 @@ export interface TailscaleCliDeps {
         args: string[],
         timeoutMs: number,
     ) => Promise<{ stdout: string; stderr: string }>;
+    /** Starts `tailscale up`, whose output is read AS IT IS WRITTEN (Tynn #675); see {@link TailscaleUpRun}. */
+    start?: (cli: string, args: string[], timeoutMs: number) => TailscaleUpRun;
     /** The platform whose remedies apply. */
     platform?: NodeJS.Platform;
+}
+
+/**
+ * A running `tailscale up`. It prints a login link and then WAITS for the login to complete, so its output cannot be read
+ * only once it ends (execFile) without the person waiting out the whole timeout for the login page (Tynn #675).
+ */
+export interface TailscaleUpRun {
+    /** Each piece the CLI writes, stdout or stderr, as it writes it. */
+    onOutput(listener: (text: string) => void): void;
+    /** Resolves when it exits 0; rejects with a {@link TailscaleCliFailure} (`killed` when Genie had to stop it). */
+    done: Promise<void>;
+}
+
+/** The real `start`: a spawned CLI, stopped at `timeoutMs`; a failure carries execFile's shape, so it reads the same. */
+function startCli(cli: string, args: string[], timeoutMs: number): TailscaleUpRun {
+    const listeners: ((text: string) => void)[] = [];
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+    const child = spawn(cli, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (text: string) => {
+        stdout += text;
+        for (const l of listeners) l(text);
+    });
+    child.stderr.on('data', (text: string) => {
+        stderr += text;
+        for (const l of listeners) l(text);
+    });
+    const timer = setTimeout(() => {
+        killed = true;
+        child.kill();
+    }, timeoutMs);
+    const done = new Promise<void>((resolve, reject) => {
+        child.once('error', (e: NodeJS.ErrnoException) => {
+            clearTimeout(timer);
+            reject({ code: e.code, stdout, stderr, message: e.message });
+        });
+        child.once('close', (code: number | null) => {
+            clearTimeout(timer);
+            if (code === 0) resolve();
+            else reject({ code: code ?? undefined, stdout, stderr, killed, message: `Command failed: ${cli} ${args.join(' ')}\n${stderr}` });
+        });
+    });
+    return { onOutput: (l) => void listeners.push(l), done };
 }
 
 function runCli(
@@ -421,10 +469,22 @@ export interface TailscaleUpResult {
     state?: TailscaleState;
     /** The exact command that clears `state`, when there is one. */
     command?: string;
+    /**
+     * With a login link: whether the login it opened brought the node online (true) or `up` ended without that (false).
+     * `up` is left running to finish the login; this settles when it exits.
+     */
+    online?: Promise<boolean>;
 }
 
-/** How long `up` may wait for the node to come online (or print a login link) before Genie stops waiting. */
-const UP_TIMEOUT_MS = 30_000;
+/**
+ * How long `up` waits for the login, passed as Tailscale's own `--timeout` ("maximum amount of time to wait for tailscaled
+ * to enter a Running state; default (0s) blocks forever"): `up` ends itself, and says so in its words, when it passes.
+ */
+const UP_WAIT_S = 300;
+/** Genie stops `up` itself only if it outlives its own timeout by this much (a CLI too old for `--timeout`, a hang). */
+const UP_BACKSTOP_MS = (UP_WAIT_S + 30) * 1000;
+/** A login link, complete: the whitespace after it shows a piece written mid-link is not read as the whole link. */
+const AUTH_URL_DONE = /(https:\/\/login\.tailscale\.com\/[^\s]+)\s/;
 
 /** The daemon's BackendState, or null when status does not answer with its JSON (the `up` failure then says why). */
 async function backendState(cli: string, run: NonNullable<TailscaleCliDeps['run']>): Promise<string | null> {
@@ -447,7 +507,7 @@ function failureWords(err: TailscaleCliFailure & { killed?: boolean }): string {
     // execFile's message is that line followed by what the CLI wrote to stderr; without it, the CLI's own output.
     const said = (err.message ?? '').replace(/^Command failed: [^\n]*\n?/, '').trim() || `${err.stderr ?? ''}\n${err.stdout ?? ''}`.trim();
     if (err.killed) {
-        const waited = `Tailscale did not come online within ${UP_TIMEOUT_MS / 1000} seconds.`;
+        const waited = `Tailscale did not come online within ${UP_WAIT_S / 60} minutes.`;
         return said ? `${waited} ${said}` : `${waited} Check it with: tailscale status`;
     }
     return said || 'tailscale up failed';
@@ -477,9 +537,24 @@ export async function tailscaleUp(deps: TailscaleCliDeps = {}): Promise<Tailscal
         return { ok: false, state: 'absent', message: remedy?.message };
     }
     const run = deps.run ?? runCli;
-    const args = (await backendState(cli, run)) === 'NeedsLogin' ? ['up', '--force-reauth'] : ['up'];
+    const reauth = (await backendState(cli, run)) === 'NeedsLogin' ? ['--force-reauth'] : [];
+    const up = (deps.start ?? startCli)(cli, ['up', ...reauth, `--timeout=${UP_WAIT_S}s`], UP_BACKSTOP_MS);
+    // THE LINK THE MOMENT IT IS PRINTED (Tynn #675). `up` prints it, then waits for the login; read only once `up` ended,
+    // it reached the person after the whole wait. It is handed back at once and `up` is LEFT RUNNING, not stopped: `up`
+    // is what reports the node online, bounded by its own `--timeout`, and `online` tells the window when it ends.
+    let written = '';
+    const link = new Promise<string>((resolve) => {
+        up.onOutput((text) => {
+            written += text;
+            const url = AUTH_URL_DONE.exec(written)?.[1];
+            if (url) resolve(url);
+        });
+    });
+    const online = up.done.then(() => true, () => false);
+    const first = await Promise.race([link.then((url) => ({ url })), online.then(() => ({ url: null }))]);
+    if (first.url) return { ok: false, state: 'needs-login', authUrl: first.url, message: 'Tailscale needs you to log in.', online };
     try {
-        await run(cli, args, UP_TIMEOUT_MS);
+        await up.done;
         return { ok: true, state: 'running' };
     } catch (e) {
         const err = e as TailscaleCliFailure & { killed?: boolean };
