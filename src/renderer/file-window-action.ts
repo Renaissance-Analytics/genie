@@ -3,7 +3,7 @@ export function moveFilePanel(
     run: () => Promise<void> | undefined,
     moved: () => void,
     refused: (reason: string) => void,
-    _stillCurrent: () => boolean = () => true,
+    stillCurrent: () => boolean = () => true,
 ): void {
     const failed = (error: unknown): void => {
         try { console.error('[files] Could not move the file panel.', error); }
@@ -14,6 +14,6 @@ export function moveFilePanel(
     try {
         const pending = run();
         if (!pending) { refused('File panels can only be moved from this Genie window.'); return; }
-        void pending.then(moved).catch(failed);
+        void pending.then(() => { if (stillCurrent()) moved(); }).catch(failed);
     } catch (error) { failed(error); }
 }
