@@ -265,8 +265,7 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
         folder = mkdtempSync(join(tmpdir(), 'lookup-'));
         mark = join(folder, 'mark.txt');
         hook = join(folder, 'hook.cjs');
-        // TEMPORARY BREAK PROBE #671: disable the mark; execution-positive controls must fail. Restore before AFTER.
-        writeFileSync(hook, 'process.exit(0);\n');
+        writeFileSync(hook, `require('node:fs').writeFileSync(${JSON.stringify(mark)}, process.execPath);\nprocess.exit(0);\n`);
         for (const name of ['git.exe', 'reg.exe', 'taskkill.exe']) linkSync(nodeImage, join(folder, name));
         process.env.NODE_OPTIONS = `--require ${JSON.stringify(hook)}`;
         // Set on a machine, it would hide what these look for: resolving must hold with it gone.
