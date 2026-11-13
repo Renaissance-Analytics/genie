@@ -64,7 +64,7 @@ describe('each tab’s page', () => {
 
 describe('the chrome', () => {
     it('loads browser.html with its own preload, sandboxed; the preload exposes genieBrowser and nothing else', () => {
-        expect(win).toMatch(/loadFile\(join\(options\.here, '\.\.\/renderer\/browser\.html'\), key\.startsWith\(SINGLE\) \? \{ search: 'single=1' \} : undefined\)/);
+        expect(win).toMatch(/loadWindowPage\(window\.webContents, 'browser', key\.startsWith\(SINGLE\) \? \{ search: 'single=1' \} : undefined\)/);
         expect(count(preload, /exposeInMainWorld\(/g)).toBe(1);
         expect(preload).toMatch(/exposeInMainWorld\('genieBrowser'/);
     });

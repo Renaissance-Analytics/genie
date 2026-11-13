@@ -10,11 +10,11 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, resolve } from 'node:path';
 import { SourceMap } from 'node:module';
 import { measureFilesPage } from './files-content-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { builtFramePath } from './built-frame-path.mjs';
 
 const WIN = process.platform === 'win32', started = Date.now(), OUT = resolve('smoke-out');
 const PORT = 9344, INSPECT = 9345, reports = [], sessions = [];
@@ -59,8 +59,7 @@ class Cdp {
 function cpuSummary(profile) {
     // Map only this checkout's own built files. No paths from a profile can escape dist.
     for (const node of profile.nodes) {
-        const frame = node.callFrame; if (!frame.url?.startsWith('file:')) continue;
-        const path = fileURLToPath(frame.url); if (!path.startsWith(resolve('dist') + sep) || !existsSync(path + '.map')) continue;
+        const frame = node.callFrame; const path = builtFramePath(frame.url); if (!path || !existsSync(path + '.map')) continue;
         let map = sourceMaps.get(path); if (!map) { map = new SourceMap(json(path + '.map')); sourceMaps.set(path, map); }
         const entry = map.findEntry(frame.lineNumber, frame.columnNumber);
         if (entry.originalSource) { frame.url = entry.originalSource; frame.lineNumber = entry.originalLine; }

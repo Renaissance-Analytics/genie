@@ -26,8 +26,9 @@ import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, mkdtempSync,
 import { SourceMap } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { builtFramePath } from './built-frame-path.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
 import { budgetVerdict, capVerdict, createGapGauge, floodEnded, heldVerdict, firstSampleWith, indexProfile, pagingVerdict, pushVerdict, retryOnTimeout, sliceVerdict, summarize, throughputVerdict, traceSummary, windowProfile, worstGaps } from './perf-lag/ui-lag-analyze.mjs';
 
@@ -224,11 +225,11 @@ function sourceMapper() {
     const mapFor = (url) => {
         if (maps.has(url)) return maps.get(url);
         let map = null;
-        try { const path = fileURLToPath(url); if (existsSync(`${path}.map`)) map = new SourceMap(JSON.parse(readFileSync(`${path}.map`, 'utf8'))); } catch { map = null; }
+        try { const path = builtFramePath(url); if (path && existsSync(`${path}.map`)) map = new SourceMap(JSON.parse(readFileSync(`${path}.map`, 'utf8'))); } catch { map = null; }
         maps.set(url, map); return map;
     };
     return (f) => {
-        if (!f.url?.startsWith('file:')) return null;
+        if (!builtFramePath(f.url)) return null;
         const map = mapFor(f.url.split('?')[0]);
         if (!map || f.lineNumber < 0) return null;
         const e = map.findEntry(f.lineNumber, Math.max(0, f.columnNumber ?? 0));
