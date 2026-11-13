@@ -18,6 +18,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
 import { heldLimiter, localPageClient, localUploadClient } from './local-content-client.js';
+import { measureAgentRead, measureAgentReadAsync } from '../core/agent-read-timing.js';
 import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
@@ -633,11 +634,16 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
          * THE FEATURE SNAPSHOT (P4 family 11, Tynn #560): it has no bound of its own, so it crosses inline when small and
          * as one blob when not; a change is pushed as a revision, and the window re-reads: one read at a time, the latest last.
          */
-        const decodeJson = <T>(read0: () => Promise<unknown>): Promise<T> => limit(async () => {
+        const decodeJson = <T>(read0: () => Promise<unknown>, agentId?: string): Promise<T> => limit(async () => {
             const result = await read0();
             if (!result || typeof result !== 'object' || !('jsonContent' in result)) return result as T;
             const content = (result as { jsonContent: { ref: string; blob: string } }).jsonContent;
-            try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await blobs!.readAll('features-json', content.blob))) as T; }
+            try {
+                const readBytes = () => blobs!.readAll('features-json', content.blob);
+                const bytes = agentId === undefined ? await readBytes() : await measureAgentReadAsync(agentId, 'blob', readBytes);
+                const decode = () => JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as T;
+                return agentId === undefined ? decode() : measureAgentRead(agentId, 'decode', decode);
+            }
             finally { await blobRead('content.release', content.ref); }
         });
         const snapshotNow = (): Promise<FeatureData> => decodeJson<FeatureData>(() => read('features.snapshot'));
@@ -683,7 +689,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         on(LOCAL_EVENTS.agent, (raw) => {
             const { agentId, payload } = raw as { agentId: string; payload: unknown };
             orders.set(agentId, (orders.get(agentId) ?? Promise.resolve()).then(async () => {
-                const value = await decodeJson<LocalAgentPayload>(async () => payload);
+                const value = await decodeJson<LocalAgentPayload>(async () => payload, agentId);
                 for (const listener of [...(wires.get(agentId) ?? [])]) listener(value);
             }).catch((error: unknown) => { console.warn(`[genie] an agent's detail could not be read: ${error instanceof Error ? error.message : String(error)}`); }));
         });

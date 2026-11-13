@@ -3,22 +3,23 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunIdentity, SampleRequest } from '../scripts/agent-reads-acquire.mjs';
 
-interface Report { identity?: RunIdentity; samplerPid?: number; finished?: boolean; cleanup?: { complete?: boolean; processes?: { role: string; diagnostics?: string[] }[] }; failures?: string[] }
+interface Report { identity?: RunIdentity; samplerPid?: number; finished?: boolean; scope?: string; m4_5000?: { ms: number; runs: unknown[] }; m4_20000?: { runs: unknown[] }; m4Stages?: Record<string, unknown>; m5?: unknown; m6?: unknown; cleanup?: { complete?: boolean; processes?: { role: string; diagnostics?: string[] }[] }; failures?: string[] }
 // Import the actual executable with OS/CDP ports mocked. No real home, Electron, socket, process or provider is used.
 const io = vi.hoisted(() => ({
     identity: vi.fn(), write: vi.fn(), exec: vi.fn(), launch: vi.fn(), attach: vi.fn(), makeHome: vi.fn(),
-    alive: vi.fn(), gone: vi.fn(), killHard: vi.fn(), hostPid: vi.fn(), finish: vi.fn(), check: vi.fn(),
+    alive: vi.fn(), gone: vi.fn(), killHard: vi.fn(), hostPid: vi.fn(), finish: vi.fn(), check: vi.fn(), stages: vi.fn(), until: vi.fn(), sleep: vi.fn(),
     failures: [] as string[], order: [] as string[], reports: [] as { value: Report; goneCalls: number }[], windows: process.platform === 'win32',
 }));
 vi.mock('node:fs', () => ({ writeFileSync: io.write }));
 vi.mock('node:child_process', () => ({ execFileSync: io.exec }));
 vi.mock('../scripts/agent-reads-process.mjs', () => ({ readMeasurementIdentity: io.identity }));
+vi.mock('../scripts/agent-reads-m4-stages.mjs', () => ({ measureM4Stages: io.stages }));
 vi.mock('../scripts/crash-cdp-lib.mjs', () => ({
     get WIN() { return io.windows; }, alive: io.alive, attach: io.attach, check: io.check,
     cleanQuit: vi.fn(async () => 'ok'), failures: io.failures, finish: io.finish, gone: io.gone,
     hostPid: io.hostPid, killHard: io.killHard, launch: io.launch, makeHome: io.makeHome,
-    readOr: vi.fn(() => ''), refuseOffTestMachines: vi.fn(), sleep: vi.fn(async () => {}),
-    step: vi.fn(), until: vi.fn(),
+    readOr: vi.fn(() => ''), refuseOffTestMachines: vi.fn(), sleep: io.sleep,
+    step: vi.fn(), until: io.until,
 }));
 
 const root = join(tmpdir(), 'agent-reads-sampler-fixture');
@@ -32,7 +33,8 @@ let throws: number | undefined;
 
 beforeEach(() => {
     vi.resetModules();
-    for (const mock of [io.identity, io.write, io.exec, io.launch, io.attach, io.makeHome, io.alive, io.gone, io.killHard, io.hostPid, io.finish, io.check]) mock.mockReset();
+    for (const mock of [io.identity, io.write, io.exec, io.launch, io.attach, io.makeHome, io.alive, io.gone, io.killHard, io.hostPid, io.finish, io.check, io.stages, io.until, io.sleep]) mock.mockReset();
+    io.sleep.mockResolvedValue(undefined);
     io.failures.length = 0; io.order.length = 0; io.reports.length = 0;
     live = new Set([101, 202]); stuck = undefined; throws = undefined; io.windows = process.platform === 'win32';
     const stop = (pid: number) => {
@@ -68,6 +70,57 @@ beforeEach(() => {
     vi.stubEnv('AGENT_READS_REQUEST', JSON.stringify(request));
     vi.stubEnv('AGENT_READS_PROBE_ONLY', '1'); // Stop after startup reads; the test concerns ownership, not timed workloads.
     process.argv = [process.execPath, 'agent-reads-measure.mjs', '--mode=door', `--out=${output}`];
+});
+
+describe('actual sampler adopts M4-only scope (Tynn #564)', () => {
+    function diagnostic() {
+        vi.stubEnv('AGENT_READS_PROBE_ONLY', '0'); process.argv.push('--scope=m4-diagnostic');
+        let nextAgent = 0, opens = 0;
+        const expressions: string[] = [];
+        const cdp = { closed: vi.fn(async () => true), evaluate: vi.fn(async (expression: string) => {
+            expressions.push(expression);
+            if (expression.includes('Promise.all(')) return { workspaces: ['fixture-workspace'] };
+            if (expression.includes('agent with') || expression.includes('streaming')) throw new Error('unexpected workload');
+            if (expression.includes('genieTest.addAgent')) return { ok: true, id: `fixture-agent-${++nextAgent}` };
+            if (expression.includes('genieTest.agents.restart')) return { ok: true };
+            if (expression.includes('subscribeAgent')) { opens += 1; return { ms: 10 + opens, maxGapMs: 12 }; }
+            if (expression.includes('120; while')) return 120;
+            return true;
+        }) };
+        const inspector = { closed: vi.fn(async () => true) };
+        io.attach.mockResolvedValue({ windowPid: 101, cdp, inspector }); io.until.mockResolvedValue(true);
+        io.stages.mockImplementation(async () => {
+            io.order.push(`stages after ${opens} opens`);
+            return { producerMs: 1, decodeMs: 2, rebuildMs: 3, totalMs: 999 };
+        });
+        return { expressions, cdp, inspector };
+    }
+
+    it('runs both ledger sizes with five ordinary opens, then controls/stages, and no M5/M6 work', async () => {
+        const r = diagnostic(); const result = await runSampler();
+        expect(result.code).toBe(0); expect(result.report?.scope).toBe('m4-diagnostic'); expect(result.report?.finished).toBe(true);
+        expect(result.report?.m4_5000?.runs).toHaveLength(5); expect(result.report?.m4_5000?.ms).toBe(13);
+        expect(result.report?.m4_20000?.runs).toHaveLength(5);
+        expect(result.report?.m4Stages).toEqual({ m4_5000: { producerMs: 1, decodeMs: 2, rebuildMs: 3, totalMs: 999 }, m4_20000: { producerMs: 1, decodeMs: 2, rebuildMs: 3, totalMs: 999 } });
+        expect(io.order.filter((value) => value.startsWith('stages'))).toEqual(['stages after 6 opens', 'stages after 12 opens']);
+        expect(io.sleep.mock.calls.filter(([ms]) => ms === 500)).toHaveLength(10);
+        expect(io.stages.mock.calls.map(([ports]) => ports)).toEqual([
+            expect.objectContaining({ agentId: 'fixture-agent-1', mode: 'door', cdp: r.cdp, inspector: r.inspector, openExtra: expect.any(Function) }),
+            expect.objectContaining({ agentId: 'fixture-agent-2', mode: 'door', cdp: r.cdp, inspector: r.inspector, openExtra: expect.any(Function) }),
+        ]);
+        expect(r.expressions.filter((text) => text.includes('genieTest.addAgent'))).toHaveLength(2);
+        expect(r.expressions.some((text) => text.includes('m5') || text.includes('m6-'))).toBe(false);
+        expect(result.report?.m5).toBeUndefined(); expect(result.report?.m6).toBeUndefined();
+        expect(result.report?.cleanup?.complete).toBe(true);
+    });
+
+    it('fails unfinished with owned cleanup when actual extra-stage acquisition fails', async () => {
+        diagnostic(); io.stages.mockRejectedValueOnce(new Error('stage acquisition failed'));
+        const result = await runSampler();
+        expect(result.code).toBe(1); expect(result.report?.finished).toBe(false);
+        expect(result.report?.cleanup?.complete).toBe(true); expect(io.stages).toHaveBeenCalledTimes(1);
+        expect(result.report?.failures).toContain('the run finished');
+    });
 });
 afterEach(() => { process.argv = [...originalArgv]; vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 

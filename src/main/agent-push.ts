@@ -1,5 +1,6 @@
 import { heldRows, rowsPatch, type AgentPushPayload, type HeldRows } from '../core/agent-push-wire.js';
 import { Coalescer } from '../core/coalesce.js';
+import { measureAgentRead } from '../core/agent-read-timing.js';
 import { asAgentId, type AgentId } from '../core/identity.js';
 import type { InboxApi } from './agent-stores-api.js';
 
@@ -78,16 +79,19 @@ export class AgentPush<D extends { readonly rows: readonly R[] }, R> {
 
     #push(agentId: string): void {
         if (!this.#watched.has(agentId)) return;
-        const detail = this.#ports.detailFor(agentId);
-        const rows = detail?.rows ?? [];
-        const seq = ++this.#seq;
-        const patch = rowsPatch(this.#held.get(agentId) ?? null, rows);
-        this.#held.set(agentId, heldRows(seq, rows));
-        let rest: Omit<D, 'rows'> | null = null;
-        if (detail !== null) {
-            const { rows: _rows, ...others } = detail;
-            rest = others;
-        }
-        this.#ports.send(agentId, { seq, detail: rest, rows: patch });
+        const payload = measureAgentRead(agentId, 'producer', () => {
+            const detail = this.#ports.detailFor(agentId);
+            const rows = detail?.rows ?? [];
+            const seq = ++this.#seq;
+            const patch = rowsPatch(this.#held.get(agentId) ?? null, rows);
+            this.#held.set(agentId, heldRows(seq, rows));
+            let rest: Omit<D, 'rows'> | null = null;
+            if (detail !== null) {
+                const { rows: _rows, ...others } = detail;
+                rest = others;
+            }
+            return { seq, detail: rest, rows: patch };
+        });
+        measureAgentRead(agentId, 'send', () => this.#ports.send(agentId, payload));
     }
 }

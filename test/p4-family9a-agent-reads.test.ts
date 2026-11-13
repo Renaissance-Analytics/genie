@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_FRAME_LIMIT_BYTES, type LocalFramePort } from '../src/core/local-frame.js';
+import { AGENT_READ_TRACE, type AgentReadTrace } from '../src/core/agent-read-timing.js';
 import { Baton, PairingPins } from '../src/core/remote.js';
 import { inMemoryPair, parseMessage, type ServerConnection, type WireMessage } from '../src/core/remote-protocol.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
@@ -94,7 +95,7 @@ const bridgeOn = (port: LocalFramePort, old: PreloadBridge = preload()) => { vi.
 const agentFrames = (texts: readonly string[]) => texts.filter((t) => t.includes('"channel":"local-agent"'));
 
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-p4-9a-')); let n = 0; devices = await DeviceStore.open(dir, { now: Date.now, random: () => `r-${++n}` }); });
-afterEach(async () => { for (const c of closers.splice(0)) c(); vi.unstubAllGlobals(); await settle(); await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { delete (globalThis as unknown as Record<symbol, unknown>)[AGENT_READ_TRACE]; for (const c of closers.splice(0)) c(); vi.unstubAllGlobals(); await settle(); await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
 
 describe('M2: only the agents a view shows', () => {
     it('an agent no view shows is never built and never sent', async () => {
@@ -159,6 +160,8 @@ describe('M1: a patch is as cheap as the IPC one', () => {
 
 describe('M3: nothing reaches the frame cap', () => {
     it('a ledger over 1 MiB arrives whole, no frame over the cap, the connection up', async () => {
+        const trace: AgentReadTrace = { agentId: 'a1', events: [] };
+        (globalThis as unknown as Record<symbol, unknown>)[AGENT_READ_TRACE] = trace;
         const h = host();
         h.ledgers.set('a1', rowsOf(6000, 400));
         const d = serve(h.api).door();
@@ -169,6 +172,10 @@ describe('M3: nothing reaches the frame cap', () => {
         expect(d.overCap()).toBe(false);
         expect(Math.max(...d.frames)).toBeLessThanOrEqual(LOCAL_FRAME_LIMIT_BYTES);
         expect(b.localProtocol!.state().phase).toBe('ready');
+        // The real blob delivery path, not just the stopwatch seam, supplies these separate diagnostic intervals.
+        for (const stage of ['producer', 'blob', 'decode', 'rebuild']) {
+            expect(trace.events.some((event) => event.stage === stage && event.ms >= 0)).toBe(true);
+        }
     });
 
     it('a single patch over 1 MiB arrives, and the patch after it still applies', async () => {

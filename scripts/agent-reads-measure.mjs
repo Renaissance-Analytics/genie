@@ -24,6 +24,8 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createHeapSampler } from './agent-reads-heap.mjs';
+import { measureM4Block } from './agent-reads-m4-block.mjs';
+import { measureM4Stages } from './agent-reads-m4-stages.mjs';
 import { busyWorkProbe, ledgerProbe, snapshotProbe } from './agent-reads-probes.mjs';
 import { readMeasurementIdentity } from './agent-reads-process.mjs';
 import { WIN, alive, attach, check, cleanQuit, failures, finish, gone, hostPid, launch, makeHome, readOr, refuseOffTestMachines, sleep, step, until } from './crash-cdp-lib.mjs';
@@ -32,8 +34,10 @@ refuseOffTestMachines('agent-reads-measure');
 
 const arg = (name, fallback) => { const hit = process.argv.find((a) => a.startsWith(`--${name}=`)); return hit ? hit.slice(name.length + 3) : fallback; };
 const MODE = arg('mode', 'door');
+const SCOPE = arg('scope', 'full');
 const OUT = arg('out', `agent-reads-${MODE}.json`);
 if (!['ipc', 'door', 'door-revision'].includes(MODE)) { console.error(`unknown --mode=${MODE}`); process.exit(2); }
+if (!['full', 'm4-diagnostic'].includes(SCOPE)) throw new Error(`unknown --scope=${SCOPE}`);
 
 // Check the child's actual checkout/machine before creating any home or launching anything. Only the nonce is supplied.
 const request = process.env.AGENT_READS_REQUEST ? JSON.parse(process.env.AGENT_READS_REQUEST) : null;
@@ -97,7 +101,7 @@ const done = finish('AGENT READS MEASURE', h, []);
 let session = null;
 let launched = false, ownedWindowPid = null, ownedHostPid = null;
 /** Written whatever happens: a row that fails still leaves everything measured up to it, and every first read. */
-const result = { identity, samplerPid: process.pid, pairIndex: request?.pairIndex ?? 0, mode: MODE, platform: process.platform, finished: false, cleanup: { complete: false }, measureControls: {} };
+const result = { identity, samplerPid: process.pid, pairIndex: request?.pairIndex ?? 0, mode: MODE, scope: SCOPE, platform: process.platform, finished: false, cleanup: { complete: false }, measureControls: {} };
 const writeResult = () => writeFileSync(OUT, `${JSON.stringify(result, null, 2)}\n`);
 /** How the agents started and ended, from the host's own lifecycle log: what a start that never came needs read. */
 const agentLifecycle = () => readOr(h.lifecycle).split(/\r?\n/).filter((l) => /kind=agent|agent .*(start|refus|fail)|host stall|stall main/.test(l)).slice(-80);
@@ -220,14 +224,40 @@ async function main() {
     for (const rows of [5000, 20000]) {
         step('M4', `opening an agent with ${rows} rows, five times`);
         const id = await agentThat(cdp, workspaceId, `m4-${rows}`, rows, 0);
+        const measure = `m4_${rows}`;
+        if (SCOPE === 'm4-diagnostic') {
+            const block = await measureM4Block({
+                openOrdinary: () => openOnce(cdp, id, rows), sleep,
+                openControl: async (ordinary) => {
+                    result[measure] = ordinary;
+                    const extraWorkMs = MODE === 'ipc' ? 0 : workBudget(ordinary.ms);
+                    const control = extraWorkMs === 0 ? ordinary : await openOnce(cdp, id, rows, extraWorkMs);
+                    result.measureControls[measure] = { metric: 'ms', value: control.ms, extraWorkMs, maxGapMs: control.maxGapMs };
+                    return control;
+                },
+                // Markers exist only for this EXTRA open, after the unchanged five ordinary opens and their control.
+                openStages: () => measureM4Stages({ agentId: id, mode: MODE, inspector, cdp, openExtra: () => openOnce(cdp, id, rows) }),
+            });
+            (result.m4Stages ??= {})[measure] = block.stages;
+            writeResult();
+            await cdp.evaluate(`window.genieTest.stopAgent(${JSON.stringify(id)}); true`, 10_000);
+            continue;
+        }
         const runs = [];
         for (let i = 0; i < 5; i += 1) { runs.push(await openOnce(cdp, id, rows)); await sleep(500); }
-        const measure = `m4_${rows}`;
         result[measure] = { ms: median(runs.map((r) => r.ms)), maxGapMs: Math.max(...runs.map((r) => r.maxGapMs)), runs };
         const extraWorkMs = MODE === 'ipc' ? 0 : workBudget(result[measure].ms);
         const control = extraWorkMs === 0 ? result[measure] : await openOnce(cdp, id, rows, extraWorkMs);
         result.measureControls[measure] = { metric: 'ms', value: control.ms, extraWorkMs, maxGapMs: control.maxGapMs };
         await cdp.evaluate(`window.genieTest.stopAgent(${JSON.stringify(id)}); true`, 10_000);
+    }
+
+    if (SCOPE === 'm4-diagnostic') {
+        result.finished = true;
+        writeResult();
+        console.log(`M4-only diagnostic acquired: ${OUT}; NOT ACCEPTANCE; no M5/M6 workloads`);
+        await cleanQuit(inspector).catch(() => {});
+        return;
     }
 
     step('M5', 'one agent streaming 50 events a second for 60 s, watched');

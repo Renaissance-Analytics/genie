@@ -5,7 +5,7 @@ export interface M4StageDurations {
     readonly [key: string]: unknown;
 }
 export interface M4BlockResult {
-    readonly ordinary: M4Ordinary | null; readonly control: OrdinaryM4Open | null; readonly stages: M4StageDurations | null;
+    readonly ordinary: M4Ordinary; readonly control: OrdinaryM4Open; readonly stages: M4StageDurations;
 }
 export function measureM4Block(ports: {
     readonly openOrdinary: () => Promise<OrdinaryM4Open>;
