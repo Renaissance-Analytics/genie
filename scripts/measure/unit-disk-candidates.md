@@ -16,6 +16,15 @@ before the remaining candidates/full suite run. It reuses the same candidate, wr
 exception stage, type, ID, line and message are retained (ten distinct messages maximum). No timestamps are used
 to filter the newly launched process's ancestry; native retained-handle exit status is recorded explicitly.
 
+To attribute the remaining volume and measure do-nothing worker IO, run
+`In-Session scripts/measure/unit-disk-attribution.ps1 40` on the same D16 after the normal unit prerequisites.
+It reuses the first gauge, then runs a temporary baseline (2 s idle for observer visibility) and additional suspects
+alone. It does not rerun the full suite or edit existing tests. The baseline file is removed in `finally`.
+`program-lookup.test.ts:258` is a strong static lead: 27 real-Windows cases each copy the Node executable three
+times in `beforeEach`, plus three extra executable copies (84 total). The wrapper prints the actual Node binary
+size and predicted copy bytes. Isolated OS totals must confirm this before treating it as the full-run outlier's
+source; the original process CSV contains no test-file mapping.
+
 | Candidate | Evidence / reason to measure |
 | --- | --- |
 | `test/prism-harness-0103.test.ts:43` | Streams JSONL until 540 MiB. Its public-SDK claim is the Node string-size regression above 512 MiB; keep that boundary proof. |
