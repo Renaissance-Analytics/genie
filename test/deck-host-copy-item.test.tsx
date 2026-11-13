@@ -213,7 +213,11 @@ describe('the window is wired to it', () => {
         expect(main).toMatch(/mainErrors\.record\('host-copy', new Error\(hostRuntime\.cause \?\? hostRuntime\.error\)\)/);
         expect(main).not.toMatch(/mainErrors\.record\('agent-host', new Error\(hostRuntime\.error\)\)/);
         expect(main).toMatch(/retryHostCopy: \(id\) => retryHostCopy\(mainErrors, id, /);
-        expect(main).toMatch(/openLog: \(\) => shell\.openPath\(/);
+        // Internal errors select the browser log by ID; host-copy items still use the default lifecycle log.
+        const openLog = main.slice(main.indexOf('openLog: (id) => {'), main.indexOf('report: async (id) => {'));
+        expect(openLog).toContain("join(genieRoot(), 'logs', 'genie-browser.log')");
+        expect(openLog).toContain("join(runtimeDir(genieRoot()), 'lifecycle.log')");
+        expect(openLog).toContain('shell.openPath(path)');
     });
 
     it('the Deck is told which action is running, until it ends either way', () => {
