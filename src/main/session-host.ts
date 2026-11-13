@@ -1611,8 +1611,14 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.needsNewDriver ?? false;
     }
 
-    /** Tests-first #633 forwarding seam; implementation follows the measured RED. */
-    commandStarted(_agentId: AgentId, _run: CommandRunRef): boolean { return false; }
+    /** A host-authored live command reference in this agent's ledger; never starts an absent session (#633). */
+    commandStarted(agentId: AgentId, run: CommandRunRef): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        entry.session.commandStarted(run);
+        this.#emit(agentId);
+        return true;
+    }
 
     /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */
     notice(agentId: AgentId, message: string): boolean {

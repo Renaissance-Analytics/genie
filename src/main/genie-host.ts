@@ -1475,7 +1475,7 @@ async function main(): Promise<void> {
         probe: (id) => host.probe(id),
         lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,
         reportPlan: (id, steps) => host.reportPlan(id, steps),
-        serviceExec: makeServiceExec(systemProcessTree, processSupervisor),
+        serviceExec: makeServiceExec(systemProcessTree, processSupervisor, (id, run) => { host.commandStarted(id as AgentId, run); }),
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         capabilities,
