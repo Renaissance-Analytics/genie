@@ -7,13 +7,16 @@ export interface PublishedUpdateRelease {
 /** Candidates arrive newest first; the manifest stays paired with its release for download pinning. */
 export async function selectPublishedUpdate<T extends { version: string }>(
     releases: readonly PublishedUpdateRelease[],
-    _allowPrerelease: boolean,
+    allowPrerelease: boolean,
     readManifest: (release: PublishedUpdateRelease) => Promise<T | null>,
 ): Promise<{ release: PublishedUpdateRelease; manifest: T }> {
-    // Tests-first seam: deliberately try only the first candidate until assertion RED is measured.
-    const release = releases[0];
-    if (!release) throw new Error('No published release with update metadata was found.');
-    const manifest = await readManifest(release);
-    if (!manifest) throw new Error('No published release with update metadata was found.');
-    return { release, manifest };
+    for (const release of releases) {
+        if (release.draft || (!allowPrerelease && release.prerelease)) continue;
+        // Only definite absence permits fallback. Authentication, network and parse failures propagate.
+        const manifest = await readManifest(release);
+        if (manifest === null) continue;
+        if (manifest.version !== release.tag_name.replace(/^v/, '')) throw new Error('The manifest version does not match its release.');
+        return { release, manifest };
+    }
+    throw new Error('No published release with update metadata was found.');
 }
