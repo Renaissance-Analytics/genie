@@ -11,6 +11,7 @@ import { Registry } from '../src/main/registry.js';
 async function rig() {
     let stored: readonly AgentRecord[] = [];
     let hold: { entered: () => void; released: Promise<void> } | null = null;
+    let holdWrite: { entered: () => void; released: Promise<void> } | null = null;
     const store = new HostRegistryStore({
         registryDropped: () => [],
         call: async (family, method, args) => {
@@ -22,7 +23,12 @@ async function rig() {
                 if (pending) { pending.entered(); await pending.released; }
                 return captured;
             }
-            if (method === 'writeAgents') { stored = structuredClone(args[0] as readonly AgentRecord[]); return; }
+            if (method === 'writeAgents') {
+                const records = structuredClone(args[0] as readonly AgentRecord[]);
+                const pending = holdWrite; holdWrite = null;
+                if (pending) { pending.entered(); await pending.released; }
+                stored = records; return;
+            }
             if (method === 'readRunningAtQuit' || method === 'readInterruptedAtQuit') return [];
             throw new Error(`unexpected fixture store call: ${method}`);
         },
@@ -53,6 +59,14 @@ async function rig() {
     };
     return {
         registry, api, add, start,
+        externalRecords: (change: (records: readonly AgentRecord[]) => readonly AgentRecord[]) => { stored = structuredClone(change(stored)); },
+        holdWrite: () => {
+            let entered!: () => void, release!: () => void;
+            const writing = new Promise<void>((resolve) => { entered = resolve; });
+            const released = new Promise<void>((resolve) => { release = resolve; });
+            holdWrite = { entered, released };
+            return { writing, release };
+        },
         holdRead: () => {
             let entered!: () => void, release!: () => void;
             const reading = new Promise<void>((resolve) => { entered = resolve; });
@@ -80,5 +94,33 @@ describe('newly created agents stay available through registry refresh (Tynn #56
         const id = await r.add();
         expect(await r.api.invoke('agents.restart', [id, 'graceful'])).toEqual({ ok: true, kind: 'graceful' });
         expect(r.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the created agent when refresh begins while its host-store write is pending', async () => {
+        const r = await rig();
+        const held = r.holdWrite();
+        const adding = r.add();
+        await held.writing;
+        const refreshing = r.registry.refresh();
+        // Let a stale read complete if refresh incorrectly reads through the unfinished write.
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        held.release();
+        const id = await adding;
+        await refreshing;
+        expect(await r.api.invoke('agents.restart', [id, 'graceful'])).toEqual({ ok: true, kind: 'graceful' });
+        expect(r.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('CONTROL: later external edits and deletion still replace the local record', async () => {
+        const r = await rig();
+        const id = await r.add();
+        r.externalRecords((records) => records.map((record) => record.id === id ? { ...record, name: 'renamed' } : record));
+        await r.registry.refresh();
+        expect(r.registry.find(id as AgentId)?.name).toBe('renamed');
+        r.externalRecords((records) => records.filter((record) => record.id !== id));
+        await r.registry.refresh();
+        expect(r.registry.find(id as AgentId)).toBeNull();
+        expect(await r.api.invoke('agents.restart', [id, 'graceful'])).toEqual({ ok: false, reason: 'unknown agent' });
+        expect(r.start).not.toHaveBeenCalled();
     });
 });

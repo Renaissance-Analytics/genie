@@ -57,6 +57,7 @@ export class Registry {
     #store: RegistryStore;
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
+    #registrations: Promise<void> = Promise.resolve();
     readonly #mailVisibility = new WorkspaceMailVisibility();
     #probe: SessionProbe = () => null;
     #observed: (id: AgentId) => TakeOverProbe | null = () => null;
@@ -93,8 +94,17 @@ export class Registry {
      */
     async refresh(): Promise<void> {
         if (!this.#loaded) return;
-        const workspaces = await this.#store.readWorkspaces();
-        const agents = await this.#store.readAgents();
+        let workspaces: readonly WorkspaceRecord[], agents: readonly AgentRecord[];
+        for (;;) {
+            const registrations = this.#registrations;
+            await registrations;
+            const beforeWorkspaces = this.#workspaces, beforeAgents = this.#agents;
+            workspaces = await this.#store.readWorkspaces();
+            agents = await this.#store.readAgents();
+            // A read started before a local change cannot replace that change. Read the store again;
+            // keeping just the local rows would hide legitimate changes and deletions from another window.
+            if (registrations === this.#registrations && beforeWorkspaces === this.#workspaces && beforeAgents === this.#agents) break;
+        }
         const changedAgents = agents.filter((a) => JSON.stringify(a) !== JSON.stringify(this.#agents.find((x) => x.id === a.id) ?? null)).map((a) => a.id);
         const gone = this.#agents.filter((a) => !agents.some((x) => x.id === a.id)).map((a) => a.id);
         const workspacesChanged = JSON.stringify(workspaces) !== JSON.stringify(this.#workspaces);
@@ -430,7 +440,11 @@ export class Registry {
         if (input.workspaceId === OS_WORKSPACE) throw new Error('The built-in Genie identity is reserved; agents belong to a regular workspace');
         const record = agentRecord({ id: mintAgentId(), ...input });
         this.#agents = [...this.#agents, record];
-        await this.#store.writeAgents(this.#agents);
+        const writing = this.#store.writeAgents(this.#agents);
+        // Refresh also waits for an already-started creation: its in-memory row precedes durable storage.
+        // A failed write still rejects register(), while refresh must remain able to read the actual store.
+        this.#registrations = Promise.allSettled([this.#registrations, writing]).then(() => {});
+        await writing;
         this.#emit();
         return record;
     }
