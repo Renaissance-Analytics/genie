@@ -66,6 +66,27 @@ describe('real paired measurement process adapter (Tynn #564)', () => {
         expect(io.readFile).not.toHaveBeenCalled();
     });
 
+    it('launches the explicitly scoped M4-only sampler without turning it into a full measurement', async () => {
+        io.readFile.mockResolvedValue(JSON.stringify({ ...report(), scope: 'm4-diagnostic' }));
+        const pending = runMeasurementProcess({ request, cwd, out, scope: 'm4-diagnostic' });
+        child.emit('close', 0, null);
+        const value = await pending;
+        expect(io.spawn.mock.calls[0]?.[1]).toContain('--scope=m4-diagnostic');
+        expect(value.scope).toBe('m4-diagnostic');
+    });
+
+    it('rejects diagnostic evidence when a full measurement was requested', async () => {
+        io.readFile.mockResolvedValue(JSON.stringify({ ...report(), scope: 'm4-diagnostic' }));
+        await expect(closed()).rejects.toThrow(/scope|diagnostic|full/i);
+    });
+
+    it('rejects full-measurement evidence when the M4-only scope was requested', async () => {
+        io.readFile.mockResolvedValue(JSON.stringify({ ...report(), scope: 'full' }));
+        const pending = runMeasurementProcess({ request, cwd, out, scope: 'm4-diagnostic' });
+        child.emit('close', 0, null);
+        await expect(pending).rejects.toThrow(/scope|diagnostic|full/i);
+    });
+
     it('rejects a missing result instead of making up an observation', async () => {
         io.readFile.mockRejectedValue(new Error('sample result missing'));
         await expect(closed()).rejects.toThrow(/missing|result/i);
