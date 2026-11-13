@@ -94,7 +94,7 @@ describe('the window\'s relay status follows genie-host\'s (Tynn #656)', () => {
         await until(() => r.wire.held().some((f) => f.kind === 'event' && f.channel === 'relayHost.event' && f.payload?.relay.state === 'unavailable'));
         // The gauge: the race is really here — the reply says "connecting" and the failure's event comes after it.
         const frames = r.wire.held();
-        const reply = frames.findIndex((f) => f.kind === 'result');
+        const reply = frames.findIndex((f) => f.kind === 'result' && f.value?.relay !== undefined);
         const failed = frames.findIndex((f) => f.kind === 'event' && f.payload?.relay.state === 'unavailable');
         expect(reply).toBeGreaterThanOrEqual(0);
         expect(frames[reply]!.value!.relay).toEqual({ state: 'connecting' });
@@ -112,7 +112,7 @@ describe('the window\'s relay status follows genie-host\'s (Tynn #656)', () => {
         const r = await rig(realLink(() => new Promise(() => {}), handles));
         r.wire.hold();
         const registered = r.replica.register(null);
-        await until(() => r.wire.held().some((f) => f.kind === 'result'));
+        await until(() => r.wire.held().some((f) => f.kind === 'result' && f.value?.relay !== undefined));
         r.wire.release();
         await registered;
         await settle();
