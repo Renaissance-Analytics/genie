@@ -9,6 +9,7 @@ import {
     resolveTailscaleCliPath,
     tailscaleRemedy,
     tailscaleUp,
+    type TailscaleCliDeps,
 } from '../src/main/tailscale-cli.js';
 
 /**
@@ -234,7 +235,8 @@ describe('getTailscaleStatus — five distinguishable states (genie#380, genie#3
         });
         expect(s.installed).toBe(true);
         expect(s.state).toBe('needs-login');
-        expect(s.authUrl).toBe('https://login.tailscale.com/a/abc');
+        // The link status reports may be long expired; a sign-in asks for a fresh one (Tynn #675).
+        expect('authUrl' in s).toBe(false);
     });
 
     it('reports RUNNING off a healthy status', async () => {
@@ -283,8 +285,33 @@ describe('getTailscaleStatus — five distinguishable states (genie#380, genie#3
 });
 
 describe('tailscaleUp — classifies its failure and names the remedy (genie#396)', () => {
+    /**
+     * `up` is read as it writes (Tynn #675): the same CLI answer, written then ended, through the `start` seam. `status`
+     * goes through `run` as before; these answers are not status JSON, so `up` is run bare.
+     */
+    const up = (deps: TailscaleCliDeps) =>
+        tailscaleUp({
+            ...deps,
+            start: (cli, args, timeoutMs) => {
+                const listeners: ((text: string) => void)[] = [];
+                const answer = deps.run!(cli, args, timeoutMs);
+                const say = (o: { stdout?: string; stderr?: string } | undefined) => {
+                    const text = `${o?.stdout ?? ''}${o?.stderr ?? ''}`;
+                    if (text) for (const l of listeners) l(text);
+                };
+                const done = answer.then(
+                    (o) => void say(o),
+                    (e) => {
+                        say(e as { stdout?: string; stderr?: string });
+                        throw e;
+                    },
+                );
+                return { onOutput: (l) => void listeners.push(l), done };
+            },
+        });
+
     it('succeeds', async () => {
-        const r = await tailscaleUp({
+        const r = await up({
             cliPath: () => '/usr/bin/tailscale',
             platform: 'linux',
             run: () => Promise.resolve({ stdout: '', stderr: '' }),
@@ -293,7 +320,7 @@ describe('tailscaleUp — classifies its failure and names the remedy (genie#396
     });
 
     it('surfaces the auth URL exactly as before', async () => {
-        const r = await tailscaleUp({
+        const r = await up({
             cliPath: () => '/usr/bin/tailscale',
             platform: 'linux',
             run: () =>
@@ -307,7 +334,7 @@ describe('tailscaleUp — classifies its failure and names the remedy (genie#396
     });
 
     it('names `systemctl enable --now tailscaled` for a stopped daemon', async () => {
-        const r = await tailscaleUp({
+        const r = await up({
             cliPath: () => '/usr/bin/tailscale',
             platform: 'linux',
             run: () =>
@@ -324,7 +351,7 @@ describe('tailscaleUp — classifies its failure and names the remedy (genie#396
     });
 
     it('names `tailscale set --operator=$USER` when the user is not an operator', async () => {
-        const r = await tailscaleUp({
+        const r = await up({
             cliPath: () => '/usr/bin/tailscale',
             platform: 'linux',
             run: () =>
@@ -340,7 +367,7 @@ describe('tailscaleUp — classifies its failure and names the remedy (genie#396
     });
 
     it('an unrecognised failure still surfaces the raw error (the fallback stays)', async () => {
-        const r = await tailscaleUp({
+        const r = await up({
             cliPath: () => '/usr/bin/tailscale',
             platform: 'linux',
             run: () => Promise.reject(cliError('the tailnet is on fire', 'boom')),
@@ -352,7 +379,7 @@ describe('tailscaleUp — classifies its failure and names the remedy (genie#396
     });
 
     it('never surfaces `spawn tailscale ENOENT` — an absent CLI says so in words', async () => {
-        const r = await tailscaleUp({
+        const r = await up({
             cliPath: () => '/usr/bin/tailscale',
             platform: 'linux',
             run: () => Promise.reject(enoent()),
