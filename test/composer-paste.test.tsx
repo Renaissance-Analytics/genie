@@ -125,7 +125,8 @@ describe('every composer has the quiet footer and holds pastes as pills', () => 
         expect(tags.filter((t) => t.f.endsWith('ChatFlyout.tsx'))).toHaveLength(1);
         const wanted = ['attachButton="icon"', 'sendButton="icon"', 'pasteThreshold={PASTE_PILL_CHARS}', 'pasteImages', 'previewChars={30}', "meter: 'near-limit'"];
         expect(tags.flatMap((t) => wanted.filter((w) => !t.tag.includes(w)).map((w) => `${t.f}: ${w}`))).toEqual([]);
-        expect(tags.filter((t) => /\bshowHint\b/.test(t.tag))).toHaveLength(0);
+        // The kit's own hint is OFF (Tynn #641): Genie's whole keys line is in the beforeSend slot instead.
+        expect(tags.filter((t) => !/\bshowHint=\{false\}/.test(t.tag)).map((t) => t.f)).toEqual([]);
     });
 
     it('the chat flyout, the Shell’s chat and the doctor window each render it — icon attach, icon send, no kbd hint', () => {
@@ -163,7 +164,7 @@ describe('every composer has the quiet footer and holds pastes as pills', () => 
     it('the props are the ones the API names', () => {
         const { props } = renderFlyout();
         expect(props).toMatchObject({ attachButton: 'icon', sendButton: 'icon', pasteThreshold: 200, pasteImages: true, previewChars: 30 });
-        expect(props.showHint).toBeUndefined();
+        expect(props.showHint).toBe(false);
     });
 });
 

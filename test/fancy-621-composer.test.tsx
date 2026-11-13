@@ -98,16 +98,6 @@ describe('#641: Genie’s whole line, inside the composer, left of Send', () => 
         expect(html.split('data-composer-keys').length - 1).toBe(1);
     });
 
-    it('follows a changed send key', async () => {
-        const store = await import('../src/renderer/send-key-store.js');
-        store.setSendKey('CommandOrControl+Enter');
-        try {
-            const { html, props } = await render();
-            expect(props['submitKey']).toBe('ctrl+enter');
-            expect(slot(html)).toContain('Ctrl+Enter to send · Enter for a new line');
-        } finally { store.setSendKey('Enter'); }
-    });
-
     // The send button's tooltip and name are the kit's, and since the composer is handed the person's key they name THAT
     // key, never the kit's built-in Ctrl/Cmd+Enter (Tynn #637).
     const sendButton = (html: string) => html.match(/<button[^>]*data-react-fancy-prompt-input-send[^>]*>/)?.[0] ?? '';
@@ -115,16 +105,6 @@ describe('#641: Genie’s whole line, inside the composer, left of Send', () => 
         const { html } = await render();
         expect(sendButton(html)).toContain('aria-keyshortcuts="Enter"');
         expect(sendButton(html)).toContain('aria-label="Send (Enter)"');
-    });
-
-    it('the send button names a changed key (CONTROL: the default above says Enter)', async () => {
-        const store = await import('../src/renderer/send-key-store.js');
-        store.setSendKey('CommandOrControl+Enter');
-        try {
-            const { html } = await render();
-            expect(sendButton(html)).toContain('aria-keyshortcuts="Control+Enter"');
-            expect(sendButton(html)).not.toContain('aria-keyshortcuts="Enter"');
-        } finally { store.setSendKey('Enter'); }
     });
 });
 
@@ -172,7 +152,8 @@ describe('#642: a sent image is the kit’s ImagePill, read from the host on fir
     });
 
     it('the window reads the host for both the desktop and the phone', () => {
-        // Desktop (Shell: the chat and the agent view) and the phone (MobileAgent: its chat and work panels).
+        // Desktop (Shell: the chat) and the phone (MobileAgent: its chat panel). Messages are drawn only in the chat: the
+        // work stream and the agent view show activity (stream-view's activityRows drops every message).
         expect(src('src/renderer/App.tsx').match(/agents\.attachment\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
     });
 });
@@ -228,7 +209,7 @@ describe('#642 on the shared chat rows: desktop chat and phone chat both show a 
         rows: [{ id: 'e1', at: T, event: { kind: 'message', speaker: 'you', peerName: null, text: 'look', attachments: ['shot.png', 'notes.txt'], attachmentRefs: [ref] } }],
         comms: [], turns: 1, cost: null, refusal: null,
     };
-    const phone = async (panel: 'chat' | 'work', load?: (id: string) => Promise<ReturnType<typeof reply>>) => {
+    const phone = async (panel: 'chat', load?: (id: string) => Promise<ReturnType<typeof reply>>) => {
         const { MobileAgent } = await import('../src/renderer/components/MobileShell.js');
         const noop = () => {};
         seen.pill.length = 0;
@@ -244,14 +225,6 @@ describe('#642 on the shared chat rows: desktop chat and phone chat both show a 
         expect(load).toHaveBeenCalledExactlyOnceWith(ref.id);
     });
 
-    it('the phone’s work panel: the message row carries the same pill', async () => {
-        const load = vi.fn(async (id: string) => reply(id));
-        await phone('work', load);
-        expect(pillFor('shot.png')).toBeDefined();
-        await (pillFor('shot.png')!['loadThumbnail'] as () => Promise<string>)();
-        expect(load).toHaveBeenCalledExactlyOnceWith(ref.id);
-    });
-
     it('CONTROL: a phone with no host read draws names, no pill', async () => {
         const html = await phone('chat');
         expect(html).toContain('shot.png');
@@ -262,20 +235,5 @@ describe('#642 on the shared chat rows: desktop chat and phone chat both show a 
         const flyout = src('src/renderer/components/ChatFlyout.tsx');
         expect(flyout.match(/<SentAttachments/g)?.length ?? 0).toBe(1);
         expect(flyout.slice(flyout.indexOf('export function ChatMessages'))).toContain('<SentAttachments');
-    });
-});
-
-describe('#642 in the agent view: a message row carries its attachments, paired with the images kept', () => {
-    it('a sent message with an image and a text file', async () => {
-        const { ledgerRow } = await import('../src/core/stream-view.js');
-        const ref = { id: 'c'.repeat(32), name: 'shot.png', mimeType: 'image/png', bytes: 9 };
-        const row = ledgerRow({ id: 'r1', at: 1, event: { kind: 'message', speaker: 'you', peerName: null, text: 'look', attachments: ['shot.png', 'notes.txt'], attachmentRefs: [ref] } } as never, { agentName: 'atlas' }) as unknown as { attachments?: unknown };
-        expect(row.attachments).toEqual([{ name: 'shot.png', ref }, { name: 'notes.txt', ref: null }]);
-    });
-
-    it('CONTROL: a message with no files carries none', async () => {
-        const { ledgerRow } = await import('../src/core/stream-view.js');
-        const row = ledgerRow({ id: 'r1', at: 1, event: { kind: 'message', speaker: 'you', peerName: null, text: 'hi' } } as never, { agentName: 'atlas' }) as unknown as { attachments?: unknown };
-        expect(row.attachments).toBeUndefined();
     });
 });

@@ -112,7 +112,8 @@ describe('the capture control', () => {
         const button = () => el.querySelector('[data-hotkey-capture] [data-react-fancy-hotkey-capture-trigger]') as HTMLButtonElement;
         return { onCapture: (props.onCapture as typeof onCapture | undefined) ?? onCapture, button };
     };
-    const caps = () => [...el.querySelectorAll('[data-hotkey-capture] kbd')].map((k) => k.textContent).filter((t) => t !== '+');
+    // The kit's chord: one <kbd>, a <span> per cap, the "+" between them aria-hidden.
+    const caps = () => [...el.querySelectorAll('[data-hotkey-capture] kbd > span:not([aria-hidden])')].map((k) => k.textContent);
     it('is the kit’s control, holding the stored key as the kit’s string', () => {
         mountCapture({ value: MOD_ENTER });
         expect(el.querySelector('[data-hotkey-capture] [data-react-fancy-hotkey-capture]')?.getAttribute('data-value')).toBe('ctrl+enter');
