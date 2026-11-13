@@ -10,11 +10,20 @@ const sample = () => ({
         heapBeforeBytes: 1_000_000, heapAfterGcBytes: 1_100_000, gc: true },
     m6: { readMs: 20, maxGapMs: 30 },
     control: { blockedGapMs: 130 },
+    measureControls: {
+        m4_5000: { metric: 'ms', value: 100 },
+        m4_20000: { metric: 'ms', value: 400 },
+        m5: { metric: 'windowCpuMs', value: 1_000 },
+        m6: { metric: 'readMs', value: 20 },
+    },
 });
-const report = () => ({ pairs: Array.from({ length: 3 }, (_, i) => ({
-    order: i % 2 === 0 ? ['ipc', 'door'] : ['door', 'ipc'],
-    ipc: sample(), door: sample(),
-})) });
+const report = () => ({ pairs: Array.from({ length: 3 }, (_, i) => {
+    const ipc = sample(), door = sample();
+    // Synthetic observations of deliberate extra work, separately measured from the ordinary run.
+    // VM scripts must physically inject and measure it; these numbers only specify the verdict.
+    for (const control of Object.values(door.measureControls)) control.value *= 2;
+    return { order: i % 2 === 0 ? ['ipc', 'door'] : ['door', 'ipc'], ipc, door };
+}) });
 const row = (data: unknown, name: string) => comparePairedRuns(data).find((r) => r.row === name);
 
 describe('the approved paired measurement verdict (Tynn #564)', () => {
@@ -25,6 +34,7 @@ describe('the approved paired measurement verdict (Tynn #564)', () => {
             'm4_5000.ms', 'm4_20000.ms', 'm5.windowCpuMs', 'm5.hostCpuMs', 'm6.readMs',
             'm4_5000.maxGapMs', 'm4_20000.maxGapMs', 'm5.maxGapMs', 'm6.maxGapMs',
             'm5.heapAfterGc',
+            'control.m4_5000', 'control.m4_20000', 'control.m5', 'control.m6',
         ]);
         expect(rows.every((r) => r.pass)).toBe(true);
     });
@@ -81,6 +91,33 @@ describe('the approved paired measurement verdict (Tynn #564)', () => {
     it('missing proof of GC fails even if the reported heap number is small', () => {
         const data = report(); data.pairs[1]!.door.m5.gc = false;
         expect(row(data, 'm5.heapAfterGc')).toMatchObject({ pass: false });
+    });
+
+    it.each(['m4_5000', 'm4_20000', 'm5', 'm6'] as const)('%s control must detect a slowdown beyond the ordinary 1.2x bound', (measure) => {
+        const data = report();
+        for (const pair of data.pairs) pair.door.measureControls[measure].value = pair.ipc.measureControls[measure].value * 1.2;
+        expect(row(data, `control.${measure}`)).toMatchObject({ pass: false, value: 1.2, limit: 1.2 });
+    });
+
+    it('a missing control observation fails instead of being dropped from the paired ratios', () => {
+        const data = report(); Reflect.deleteProperty(data.pairs[1]!.door.measureControls, 'm6');
+        expect(row(data, 'control.m6')).toMatchObject({ pass: false });
+    });
+
+    it('a control for the wrong metric cannot validate the intended measurement', () => {
+        const data = report(); data.pairs[1]!.door.measureControls.m5.metric = 'readMs';
+        expect(row(data, 'control.m5')).toMatchObject({ pass: false });
+    });
+
+    it('a nonfinite control observation fails instead of passing on the other two pairs', () => {
+        const data = report(); data.pairs[1]!.door.measureControls.m4_5000.value = Number.NaN;
+        expect(row(data, 'control.m4_5000')).toMatchObject({ pass: false });
+    });
+
+    it('detecting an artificial slowdown validates the control while the same ordinary slowdown still fails', () => {
+        const data = report(); for (const pair of data.pairs) pair.door.m4_5000.ms *= 2;
+        expect(row(data, 'm4_5000.ms')).toMatchObject({ pass: false, value: 2 });
+        expect(row(data, 'control.m4_5000')).toMatchObject({ pass: true, value: 2, limit: 1.2 });
     });
 
     it('CONTROL: the existing single-pair verdict independently sees a slow candidate', () => {
