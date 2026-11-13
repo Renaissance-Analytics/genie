@@ -776,7 +776,7 @@ function ProcessRow({ id, selected, children }: { id: string; selected: boolean;
         const log = row?.querySelector<HTMLDetailsElement>('[data-process-log]');
         if (!row || !log) return;
         log.open = true;
-        row.focus();
+        row.focus({ preventScroll: true });
         row.scrollIntoView?.({ block: 'nearest' });
     }, [selected]);
     return <li ref={ref} data-process={id} tabIndex={selected ? -1 : undefined} className="flex flex-wrap items-center gap-3 px-5 py-2">{children}</li>;
