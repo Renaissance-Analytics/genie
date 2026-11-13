@@ -15,7 +15,6 @@ const load = async (path: string): Promise<Record<string, unknown>> => (await im
 const core = await load('../src/core/send-key.js');
 const store = await load('../src/renderer/send-key-store.js');
 const captureModule = await load('../src/renderer/components/HotkeyCapture.js');
-const boundaryModule = await load('../src/renderer/components/SendKeyBoundary.js');
 const fn = <T,>(mod: Record<string, unknown>, name: string): T => { expect(mod[name], name).toBeDefined(); return mod[name] as T; };
 
 interface Press { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; isComposing?: boolean; keyCode?: number }
@@ -63,7 +62,7 @@ describe('what a key does in a composer', () => {
         expect(sendKeyFrom()(null)).toBe('Enter');
     });
 
-    it('the hint names both keys as they are now', () => {
+    it('the hint names both keys as they are now (drawn inside the composer since Tynn #641)', () => {
         const hint = fn<(sendKey: string, platform: string) => string>(core, 'sendKeyHint');
         expect(hint('Enter', 'generic')).toBe('Enter to send · Shift+Enter for a new line');
         expect(hint(MOD_ENTER, 'generic')).toBe('Ctrl+Enter to send · Enter for a new line');
@@ -94,7 +93,9 @@ describe('a key that cannot be the send key is refused in words', () => {
     });
 });
 
-describe('the capture control and the composer boundary', () => {
+// Settings records with the kit's HotkeyCapture (react-fancy 6.20+, Tynn #637); Genie's wrapper keeps what is stored, its
+// refusals and its Reset. The composer takes the key itself (PromptInput `submitKey`), so Genie's boundary is gone.
+describe('the capture control', () => {
     const g = globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean };
     let el: HTMLDivElement;
     let root: Root;
@@ -108,10 +109,16 @@ describe('the capture control and the composer boundary', () => {
         const C = Capture();
         const onCapture = vi.fn((_: string): string | null => null);
         act(() => root.render(<C value="Enter" platform="generic" label="Send message" onCapture={onCapture} {...props} />));
-        const button = () => el.querySelector('[data-hotkey-capture]') as HTMLButtonElement;
+        const button = () => el.querySelector('[data-hotkey-capture] [data-react-fancy-hotkey-capture-trigger]') as HTMLButtonElement;
         return { onCapture: (props.onCapture as typeof onCapture | undefined) ?? onCapture, button };
     };
-    const caps = () => [...el.querySelectorAll('[data-hotkey-capture] kbd')].map((k) => k.textContent);
+    // The kit's chord: one <kbd>, a <span> per cap, the "+" between them aria-hidden.
+    const caps = () => [...el.querySelectorAll('[data-hotkey-capture] kbd > span:not([aria-hidden])')].map((k) => k.textContent);
+    it('is the kit’s control, holding the stored key as the kit’s string', () => {
+        mountCapture({ value: MOD_ENTER });
+        expect(el.querySelector('[data-hotkey-capture] [data-react-fancy-hotkey-capture]')?.getAttribute('data-value')).toBe('ctrl+enter');
+    });
+
 
     it('shows the key as keycaps; clicked, it reads "Press the keys…"', () => {
         const c = mountCapture({ value: MOD_ENTER });
@@ -125,12 +132,12 @@ describe('the capture control and the composer boundary', () => {
         act(() => { c.button().click(); });
         press(c.button(), { key: 'Control', ctrlKey: true });
         expect(c.onCapture).not.toHaveBeenCalled();
-        const e = press(c.button(), { key: 'Enter', ctrlKey: true });
+        const e = press(c.button(), { key: 'Enter', code: 'Enter', ctrlKey: true });
         expect(c.onCapture).toHaveBeenCalledExactlyOnceWith(MOD_ENTER);
         expect(e.defaultPrevented).toBe(true);
         expect(c.button().textContent).not.toContain('Press the keys…');
         // No longer capturing: a later key is not taken.
-        press(c.button(), { key: 'x', altKey: true });
+        press(c.button(), { key: 'x', code: 'KeyX', altKey: true });
         expect(c.onCapture).toHaveBeenCalledTimes(1);
     });
 
@@ -146,7 +153,7 @@ describe('the capture control and the composer boundary', () => {
     it('a refused combination says why, in words, and the key shown stays', () => {
         const c = mountCapture({ onCapture: vi.fn(() => 'That key is used for typing.') });
         act(() => { c.button().click(); });
-        press(c.button(), { key: 'a' });
+        press(c.button(), { key: 'a', code: 'KeyA' });
         expect(el.querySelector('[data-hotkey-refused]')?.textContent).toBe('That key is used for typing.');
         expect(caps()).toEqual(['Enter']);
     });
@@ -158,51 +165,9 @@ describe('the capture control and the composer boundary', () => {
         expect(onReset).toHaveBeenCalledOnce();
     });
 
-    const mountComposer = (withList = false) => {
-        const Boundary = fn<(p: { children: React.ReactNode }) => React.ReactElement>(boundaryModule, 'SendKeyBoundary');
-        const sent = vi.fn();
-        act(() => root.render(
-            <Boundary>
-                <div data-editor="" tabIndex={0} />
-                {withList ? <div data-react-fancy-prompt-input-menu="" /> : null}
-                <button type="button" data-react-fancy-prompt-input-send="" onClick={sent} />
-            </Boundary>,
-        ));
-        return { sent, editor: el.querySelector('[data-editor]') as HTMLElement };
-    };
-
-    it('in the chat composer Enter sends, and Shift+Enter is left to the editor', () => {
-        const c = mountComposer();
-        const enter = press(c.editor, { key: 'Enter' });
-        expect(c.sent).toHaveBeenCalledOnce();
-        expect(enter.defaultPrevented).toBe(true);
-        const shifted = press(c.editor, { key: 'Enter', shiftKey: true });
-        expect(c.sent).toHaveBeenCalledOnce();
-        expect(shifted.defaultPrevented).toBe(false);
-    });
-
-    it('with a list open, or an IME composing, Enter is left alone', () => {
-        const withList = mountComposer(true);
-        expect(press(withList.editor, { key: 'Enter' }).defaultPrevented).toBe(false);
-        expect(withList.sent).not.toHaveBeenCalled();
-        const c = mountComposer();
-        expect(press(c.editor, { key: 'Enter', isComposing: true }).defaultPrevented).toBe(false);
-        expect(c.sent).not.toHaveBeenCalled();
-    });
-
-    it('a change in Settings applies to a composer that is already open', () => {
-        const c = mountComposer();
-        act(() => { fn<(k: string) => void>(store, 'setSendKey')(MOD_ENTER); });
-        // Enter is the editor's new line now; Ctrl+Enter is the editor's own send, left to it.
-        expect(press(c.editor, { key: 'Enter' }).defaultPrevented).toBe(false);
-        expect(press(c.editor, { key: 'Enter', ctrlKey: true }).defaultPrevented).toBe(false);
-        expect(c.sent).not.toHaveBeenCalled();
-        act(() => { fn<(k: string) => void>(store, 'setSendKey')('Alt+S'); });
-        press(c.editor, { key: 's', altKey: true });
-        expect(c.sent).toHaveBeenCalledOnce();
-        // The editor's built-in Ctrl+Enter is still the editor's: its send button's tooltip names it.
-        expect(press(c.editor, { key: 'Enter', ctrlKey: true }).defaultPrevented).toBe(false);
-        expect(c.sent).toHaveBeenCalledOnce();
+    it('a change in Settings reaches the open composer: the store the composer reads is updated', () => {
+        fn<(k: string) => void>(store, 'setSendKey')('Alt+S');
+        expect(fn<() => string>(store, 'sendKeyNow')()).toBe('Alt+S');
     });
 });
 
@@ -213,7 +178,7 @@ describe('the wiring', () => {
         expect(src('src/core/settings.ts')).toMatch(/\{ key: 'send_key', group: 'general', scope: 'device',[^\n]*default: '',[^\n]*hidden: true \}/);
     });
     it('every composer a person writes to an agent in follows it', () => {
-        expect(src('src/renderer/components/ChatFlyout.tsx')).toContain('<SendKeyBoundary');
+        expect(src('src/renderer/components/ChatFlyout.tsx')).toContain('submitKey={toHotkey(sendKey, keysPlatform)}');
         expect(src('src/renderer/components/InboxFlyout.tsx')).toContain('composerKey(');
         expect(src('src/renderer/components/MobileShell.tsx')).toContain('composerKey(');
     });

@@ -5,9 +5,11 @@ import { providerOfProgramProblem } from '../../core/provider-program-words.js';
 import { ProviderProgramChoice, type ProviderProgramChosen } from './ProviderProgramChoice.js';
 import { ChatQueueBar } from './ChatQueueBar.js';
 import { Button, Icon, PromptInput, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { toHotkey, fancyPlatform } from '../hotkey-strings.js';
 import { sendKeyHint } from '../../core/send-key.js';
+import { SentAttachments } from './SentAttachments.js';
+import type { AttachmentReply } from '../../core/thread-store.js';
 import { useSendKey } from '../send-key-store.js';
-import { SendKeyBoundary } from './SendKeyBoundary.js';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
@@ -56,7 +58,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'promptId' | 'draftProblem' | 'carried'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -276,6 +278,8 @@ export interface ChatFlyoutProps {
      * next. Absent = this turn cannot be stopped from here; the waiting message still says why.
      */
     onInterruptAndSend?: (() => void) | undefined;
+    /** Read one image a sent message kept, from the host (Tynn #642): its pill's thumbnail on first hover. Absent: images are named only. */
+    loadAttachment?: ((agentId: string, attachmentId: string) => Promise<AttachmentReply>) | undefined;
     /** Present = the agent's provider login is held for its rate limit: `Resume now` on the context line (Tynn #794). */
     onResumeLimit?: (() => void) | undefined;
     /** Signed out: `Log in` on the context line, with the provider's name. */
@@ -366,7 +370,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 function ChatFlyoutBody({
     onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -382,7 +386,16 @@ function ChatFlyoutBody({
         agents: canAgent ? refsIn?.agents ?? [] : [],
         workspaces: canWorkspace ? refsIn?.workspaces ?? [] : [],
     }), [canFile, canAgent, canWorkspace, refsIn]);
-    const setWidth = (w: number) => { setOwnDockWidth(w); onDockWidth?.(w); };
+    // A sent image's thumbnail, read for THIS thread's agent (Tynn #642): stable while the agent is, as the agent view's is.
+    const attachmentRef = useRef(loadAttachment);
+    attachmentRef.current = loadAttachment;
+    const canLoadAttachment = loadAttachment !== undefined;
+    const threadAgentId = thread?.agentId ?? null;
+    const threadAttachment = useMemo(
+        () => (canLoadAttachment && threadAgentId !== null ? (attachmentId: string) => attachmentRef.current!(threadAgentId, attachmentId) : undefined),
+        [canLoadAttachment, threadAgentId],
+    );
+    const setWidth =(w: number) => { setOwnDockWidth(w); onDockWidth?.(w); };
 
     /**
      * Drag the LEFT edge (the panel is anchored right). Pointer capture keeps the drag alive over whatever is underneath;
@@ -723,6 +736,7 @@ function ChatFlyoutBody({
                     mailOnly={mailOnly}
                     onOpenMail={onOpenMail}
                     onDiscardDraft={onDiscardDraft}
+                    loadAttachment={threadAttachment}
                 />
                 {/* ONE QUEUE, ONE ACTION (Tynn #702): what waits and what was not delivered, counted, with one Send all now. */}
                 <ChatQueueBar
@@ -824,7 +838,6 @@ function ChatFlyoutBody({
                  * start empty, and react-fancy reads `defaultDraft` only at mount.
                  */}
                 {drafts !== 'loading' ? (
-                <SendKeyBoundary>
                 <ChatComposers chats={keptChats} active={activeChat}>
                     {(chat) => (
                     <PromptInput
@@ -835,6 +848,17 @@ function ChatFlyoutBody({
                             : { budgetTokens: 0, meter: 'hidden' as const })}
                         attachButton="icon"
                         sendButton="icon"
+                        /*
+                         * THE PERSON'S SEND KEY (Tynn #637, react-fancy 6.21+): exactly this combination sends, its new line is
+                         * the other, and the send button's tooltip and name say it. THE KEYS LINE IN THE BOX (Tynn #641; the
+                         * owner: "this line should be in the box, not under it. it should be to the left of the send button"):
+                         * Genie's whole line, both keys, in the slot left of Send, which truncates before it moves Send. The
+                         * kit's own hint names only the send key, so it is off: the keys are said once.
+                         */
+                        submitKey={toHotkey(sendKey, keysPlatform)}
+                        platform={fancyPlatform(keysPlatform)}
+                        showHint={false}
+                        beforeSend={blocked ? null : <span data-composer-keys="" className="block truncate text-[10px] text-[var(--fg-4)]">{sendKeyHint(sendKey, keysPlatform)}</span>}
                         pasteThreshold={PASTE_PILL_CHARS}
                         pasteImages
                         previewChars={30}
@@ -869,11 +893,7 @@ function ChatFlyoutBody({
                     />
                     )}
                 </ChatComposers>
-                </SendKeyBoundary>
                 ) : null}
-                {/* The keys as they are now (Tynn issue #697), in Genie's own line: the send button's tooltip is the
-                    component's and names only its built-in key, which still sends as well. */}
-                {!blocked ? <div data-composer-keys="" className="px-1 pt-1 text-[10px] text-[var(--fg-4)]">{sendKeyHint(sendKey, keysPlatform)}</div> : null}
                 <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} onChooseProviderProgram={onChooseProviderProgram} />
             </div>
         </aside>
@@ -888,6 +908,8 @@ export interface ChatMessagesProps {
     readonly mailOnly: boolean;
     readonly onOpenMail?: ((messageId: string) => void) | undefined;
     readonly onDiscardDraft?: ((draftId: string) => void) | undefined;
+    /** Read one image a sent message kept, for THIS thread's agent (Tynn #642): the pill's thumbnail. Absent: images are named only. */
+    readonly loadAttachment?: ((attachmentId: string) => Promise<AttachmentReply>) | undefined;
 }
 
 /**
@@ -895,7 +917,7 @@ export interface ChatMessagesProps {
  * same rows as here, never a phone summary). The scroller, the history window, the queue bar and the composer are the
  * surface's own.
  */
-export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOpenMail, onDiscardDraft }: ChatMessagesProps) {
+export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOpenMail, onDiscardDraft, loadAttachment }: ChatMessagesProps) {
     return (
         <>
             {/*
@@ -955,13 +977,8 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                         <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
                         {/* As you typed it (the owner, 2026-10-21): your newlines kept, a long word or URL broken rather than overflowing. */}
                         <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
-                        {m.attachments ? (
-                            <div data-chat-attachments={m.id} className="flex flex-wrap justify-end gap-1">
-                                {m.attachments.map((name) => (
-                                    <span key={name} className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-3)]"><Icon name="paperclip" size="xs" />{name}</span>
-                                ))}
-                            </div>
-                        ) : null}
+                        {/* What it sent (Tynn #642): a kept image is the composer's own pill, its thumbnail read from the host on first hover. */}
+                        {m.attachments ? <SentAttachments id={m.id} names={m.attachments} refs={m.attachmentRefs} load={loadAttachment} /> : null}
                         {/*
                          * An undelivered message is KEPT and MARKED, with the route to send it:
                          * the agent is not running. Dropping it loses what someone wrote, and
