@@ -42,6 +42,9 @@ async function until(label: string, ready: () => boolean): Promise<void> {
         await new Promise<void>((resolve) => setImmediate(resolve));
     }
 }
+// Fake quitAndInstall returns without a helper-done event. Give queued follow-ups a short bounded settle
+// before success-path absence/count assertions; a single timer avoids the measured Windows tick-count cost.
+const settleSuccessfulInstall = () => new Promise<void>((resolve) => setTimeout(resolve, 25));
 const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 const exe = `${INSTALL}/genie`;
@@ -241,6 +244,7 @@ describe('the install order', () => {
         r.machine.onSleep = () => { if (r.machine.t >= 2_000) { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); } };
         const result = await w.replica.install();
         await until('the helper to install after the simulated processes end', () => r.calls.includes('quitAndInstall'));
+        await settleSuccessfulInstall();
         // The teardown leaves the host's, the window's and the helper's trees; the browser and the orphan are ended.
         expect(r.order).toEqual(['drain agents', 'stop hosted', `kill ${BROWSER}`, `kill ${ORPHAN}`, 'host exit', 'quitAndInstall']);
         expect(result?.report).toMatch(/Ada/);
@@ -272,6 +276,7 @@ describe('the install order', () => {
         r.machine.onSleep = () => { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); };
         await w.replica.install();
         await until('the successful helper install', () => r.calls.includes('quitAndInstall'));
+        await settleSuccessfulInstall();
         expect(r.calls).toContain('quitAndInstall');
         expect(r.failures).toEqual([]);
         expect(r.order.filter((o) => /relaunch|failure/.test(o))).toEqual([]);

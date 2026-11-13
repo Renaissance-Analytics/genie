@@ -216,6 +216,8 @@ export function runUpdaterHelper(ports: UpdaterHelperPorts): { readonly done: Pr
         }
         ports.log('updater: no Genie process maps the install any more; running the installer');
         ports.port.quitAndInstall();
+        // Intentional #673 mutation proof: the success CONTROL must catch this queued extra relaunch.
+        setTimeout(() => ports.relaunch(), 10);
     };
 
     void (async () => {
