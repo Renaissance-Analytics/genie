@@ -236,7 +236,9 @@ export function parseRoute(input: string): Route {
 
         case 'hosting': {
             const tab = params.get('tab');
-            return { surface: 'hosting', ...(HOSTING_TABS.includes(tab as HostingTab) ? { tab: tab as HostingTab } : {}), ...common };
+            const processId = params.get('process');
+            const workspaceId = params.get('workspace');
+            return { surface: 'hosting', ...(HOSTING_TABS.includes(tab as HostingTab) ? { tab: tab as HostingTab } : {}), ...(tab === 'processes' && processId && workspaceId ? { commandRun: { processId, workspaceId } } : {}), ...common };
         }
 
         // The AgentInbox is a flyout now, not a page: an old link to the page opens the flyout over the Dashboard.
@@ -260,6 +262,10 @@ export function formatRoute(route: Route): string {
             break;
         case 'hosting':
             if (route.tab) params.set('tab', route.tab);
+            if (route.tab === 'processes' && route.commandRun?.processId && route.commandRun.workspaceId) {
+                params.set('process', route.commandRun.processId);
+                params.set('workspace', route.commandRun.workspaceId);
+            }
             break;
         case 'dashboard':
             break;

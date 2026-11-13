@@ -192,6 +192,15 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
     // A control row is a REAL button (real buttons, 2026-11-01): react-fancy's Button, ghost so a list row is not boxed,
     // full width, its cells laid out by the row's own flex (labelClassName="contents"). Its cells are plain text — a
     // control row never carries prose, so no link ever sits inside the button.
+    const commandRun = row.commandRun;
+    const openCommandRun = markup?.onCommandRun;
+    if (commandRun && openCommandRun) {
+        return (
+            <Button type="button" variant="ghost" size="xs" labelClassName="contents" {...shared} aria-label={`Open command log: ${commandRun.command}`} onClick={() => openCommandRun(commandRun)} className={`${rowClass} w-full justify-start rounded-none text-left font-normal hover:bg-[var(--bg-2)]`}>
+                {cells}
+            </Button>
+        );
+    }
     if (control === 'inspect') {
         return (
             <Button type="button" variant="ghost" size="xs" labelClassName="contents" {...shared} onClick={() => onSelect(row.id)} className={`${rowClass} w-full justify-start rounded-none text-left font-normal hover:bg-[var(--bg-2)]`}>

@@ -72,7 +72,7 @@ export interface TimedEvent {
 export type Tone = 'default' | 'muted' | 'violet' | 'emerald' | 'sky' | 'amber' | 'bad';
 
 export interface LedgerRow {
-    /** Exact host-authored run target; tests-first navigation seam (#633). */
+    /** Exact host-authored run target; command text is a label, never its identity (#633). */
     commandRun?: CommandRunRef | undefined;
     id: string;
     at: number | null;
@@ -469,7 +469,7 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
 
         case 'notice':
             // A rate-limit notice reads as its headroom line, never the provider's raw sentence with an ISO date.
-            return { ...base, icon: 'info', tone: 'amber', main: row.event.headroom ? headroomLine(row.event.headroom) : row.event.message, lane: null };
+            return { ...base, icon: 'info', tone: 'amber', main: row.event.headroom ? headroomLine(row.event.headroom) : row.event.message, lane: null, ...(row.event.commandRun ? { commandRun: row.event.commandRun } : {}) };
 
         case 'approval': {
             // The decision, in one line: `allowed · php artisan migrate --force`. The tool, when the request named one.

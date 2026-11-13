@@ -70,6 +70,7 @@ interface SurfaceProps {
     readonly onCloseForm?: (() => void) | undefined;
     /** Which tab a tabbed surface opens on; the surface’s own default otherwise. */
     readonly tab?: string | undefined;
+    readonly commandRun?: { processId: string; workspaceId: string } | undefined;
     readonly data: FeatureData;
     /**
      * App.tsx's answers with a Promise<ActOutcome>, so a control that shows its progress can tell success from a refusal
@@ -538,7 +539,7 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
     );
 }
 
-export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm, workspaces = [], tab }: SurfaceProps) {
+export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm, workspaces = [], tab, commandRun }: SurfaceProps) {
     const hosting = data.hosting;
     return (
         <div data-surface="hosting" className="flex h-full min-h-0 flex-col">
@@ -603,7 +604,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">
-                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} />
+                            <ProcessesPanel processes={hosting.processes} workspaces={workspaces} onAction={onAction} {...(commandRun ? { commandRun } : {})} />
                         </Tabs.Panel>
                         <Tabs.Panel value="services">
                             <ServicesPanel services={data.services} workspaces={workspaces} onAction={onAction} onNavigate={onNavigate} />
@@ -678,7 +679,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
-export function ProcessesPanel({ processes, workspaces, onAction, now }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string } }) {
+export function ProcessesPanel({ processes, workspaces, onAction, now, commandRun }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string } }) {
     const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
     const button = 'text-[13px]';
     return (
@@ -725,6 +726,9 @@ export function ProcessesPanel({ processes, workspaces, onAction, now }: { proce
                     Add a process
                 </Button>
             </form>
+            {commandRun && !processes.some((p) => p.commandRun && p.id === commandRun.processId && p.workspaceId === commandRun.workspaceId) ? (
+                <p role="status" className="px-5 py-2 text-sm text-[var(--fg-3)]">This command is not in the current process history.</p>
+            ) : null}
             {processes.length === 0 ? (
                 <Empty>No background processes yet. Add one — a queue worker, a watcher, a dev server — and Genie keeps it running and brings it back after a restart.</Empty>
             ) : (
@@ -734,7 +738,7 @@ export function ProcessesPanel({ processes, workspaces, onAction, now }: { proce
                         // Drawn in place (no hooks): the row's own buttons stay in this list's element tree.
                         if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now: now ?? Date.now(), onAction })}</Fragment>;
                         return (
-                            <li key={p.id} data-process={p.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
+                            <ProcessRow key={p.id} id={p.id} selected={Boolean(p.commandRun && commandRun?.processId === p.id && commandRun.workspaceId === p.workspaceId)}>
                                 <span className="font-medium">{p.name}</span>
                                 <Badge variant="soft" size="sm">{p.state}</Badge>
                                 {p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
@@ -754,13 +758,28 @@ export function ProcessesPanel({ processes, workspaces, onAction, now }: { proce
                                         <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{p.log?.text || (p.commandRun ? (up ? 'No output yet' : 'No output recorded') : '')}</pre>
                                     </details>
                                 ) : null}
-                            </li>
+                            </ProcessRow>
                         );
                     })}
                 </ul>
             )}
         </div>
     );
+}
+
+/** Focus changes only with the selected target, so live output never steals focus from the person's controls. */
+function ProcessRow({ id, selected, children }: { id: string; selected: boolean; children: React.ReactNode }) {
+    const ref = useRef<HTMLLIElement>(null);
+    useEffect(() => {
+        if (!selected) return;
+        const row = ref.current;
+        const log = row?.querySelector<HTMLDetailsElement>('[data-process-log]');
+        if (!row || !log) return;
+        log.open = true;
+        row.focus();
+        row.scrollIntoView?.({ block: 'nearest' });
+    }, [selected]);
+    return <li ref={ref} data-process={id} tabIndex={selected ? -1 : undefined} className="flex flex-wrap items-center gap-3 px-5 py-2">{children}</li>;
 }
 
 /** Only this small clock ticks; the process list's forms, buttons and log DOM remain mounted in place. */
