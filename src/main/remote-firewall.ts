@@ -3,6 +3,7 @@
  */
 import { spawn } from 'node:child_process';
 import { resolveProgram, systemProgram } from '../core/program-lookup.js';
+import type { FirewallRuleFacts, FirewallRuleView } from '../renderer/features.js';
 
 /**
  * Windows Firewall rule management for the Mobile server port.
@@ -194,6 +195,163 @@ export async function ensureFirewallRule(
         return { ok: false, error: e instanceof Error ? e.message : 'Firewall update failed.' };
     }
     return interpretElevationExit(code);
+}
+
+// --- the rule's state, read from Windows, and removing it (Tynn #685) ----------
+
+/**
+ * WHY NETSH, NOT Get-NetFirewallRule. Measured on Windows Server 2025 as a standard user (Azure 1113-181038-fdcb0b):
+ * `Get-NetFirewallRule` fails with "Cannot connect to CIM server. Access denied", while `netsh advfirewall firewall show
+ * rule name=…` answers without elevation. Genie runs as the person, not an Administrator, so it reads with netsh.
+ */
+const RULE_SEPARATOR = /^-{10,}\s*$/;
+/** A `Label:  value` line: the label starts the line and holds no colon (an IPv6 value may). */
+const FIELD_LINE = /^([^\s:][^:]*):(.*)$/;
+
+/**
+ * Read `netsh advfirewall firewall show rule name=…`, its stdout and exit code, into Genie's rule's state. Pure.
+ *
+ * netsh prints, per matching rule, a `Rule Name:` line, a line of dashes, then one `Label:  value` line per property, and
+ * `Ok.` after the last rule; exit 1 with "No rules match the specified criteria." when none does (both measured, Azure
+ * 1113-182502-c7d78d). A property may run onto indented lines (an ICMP rule's Type/Code table): those stay with it. Labels
+ * are localized, so facts are read from English labels only and a Windows in another language reads `covers: null` with
+ * every line as printed, never a guess.
+ */
+export function parseShowRule(stdout: string, exitCode: number, port: number): FirewallRuleView {
+    const lines = stdout.split(/\r?\n/);
+    const words = lines.map((l) => l.trim()).filter((l) => l !== '');
+    if (exitCode !== 0) {
+        if (words.length === 0) return { state: 'unknown', reason: 'netsh did not answer.' };
+        if (words.some((l) => /^No rules match/i.test(l))) return { state: 'absent' };
+        return { state: 'unknown', reason: words.join(' ') };
+    }
+    const rules: FirewallRuleFacts[] = [];
+    for (let k = 0; k < lines.length; k += 1) {
+        if (!RULE_SEPARATOR.test(lines[k]!)) continue;
+        const fields: { label: string; value: string }[] = [];
+        for (let j = k + 1; j < lines.length; j += 1) {
+            const line = lines[j]!;
+            // The next rule's name line (followed by its own separator) ends this rule.
+            if (RULE_SEPARATOR.test(line) || RULE_SEPARATOR.test(lines[j + 1] ?? '')) break;
+            const field = FIELD_LINE.exec(line);
+            if (field) fields.push({ label: field[1]!.trim(), value: field[2]!.trim() });
+            else if (/^\s+\S/.test(line) && fields.length > 0) {
+                const last = fields[fields.length - 1]!;
+                last.value = `${last.value}\n${line.trim().replace(/\s+/g, ' ')}`;
+            }
+        }
+        rules.push(factsOf(fields));
+    }
+    if (rules.length === 0) return { state: 'unknown', reason: words.length ? `netsh answered without a rule: ${words.join(' ')}` : 'netsh did not answer.' };
+    const each = rules.map((r) => ruleCovers(r, port));
+    const covers = each.includes(true) ? true : each.includes(null) ? null : false;
+    return { state: 'present', port, covers, rules };
+}
+
+function factsOf(fields: readonly { label: string; value: string }[]): FirewallRuleFacts {
+    const get = (label: string): string | null => {
+        const f = fields.find((x) => x.label === label);
+        return f ? f.value.split('\n')[0]! : null;
+    };
+    const yesNo = (v: string | null, yes: string, no: readonly string[]): boolean | null => (v === yes ? true : v !== null && no.includes(v) ? false : null);
+    return {
+        fields,
+        enabled: yesNo(get('Enabled'), 'Yes', ['No']),
+        inbound: yesNo(get('Direction'), 'In', ['Out']),
+        allow: yesNo(get('Action'), 'Allow', ['Block', 'Bypass']),
+        protocol: get('Protocol'),
+        localPort: get('LocalPort'),
+        remoteIp: get('RemoteIP'),
+        profiles: get('Profiles'),
+    };
+}
+
+/** Whether one rule lets TCP `port` in: `false` as soon as a fact Genie can read says no, `null` if one it needs is unread. */
+function ruleCovers(r: FirewallRuleFacts, port: number): boolean | null {
+    if (r.enabled === false || r.inbound === false || r.allow === false) return false;
+    if (r.protocol !== null && r.protocol !== 'TCP' && r.protocol !== 'Any') return false;
+    if (r.localPort !== null && !portIn(r.localPort, port)) return false;
+    if (r.enabled === null || r.inbound === null || r.allow === null || r.protocol === null || r.localPort === null) return null;
+    return true;
+}
+
+/** `Any`, a port, a range `a-b`, or a comma list of them, as netsh prints LocalPort. */
+function portIn(spec: string, port: number): boolean {
+    return spec.split(',').map((s) => s.trim()).some((s) => {
+        if (s === 'Any') return true;
+        const range = /^(\d+)-(\d+)$/.exec(s);
+        if (range) return port >= Number(range[1]) && port <= Number(range[2]);
+        return /^\d+$/.test(s) && Number(s) === port;
+    });
+}
+
+/**
+ * Genie's rule's state, read from Windows by its exact name (netsh, no elevation). Never throws: a runner that fails reads
+ * `unknown` with its words.
+ */
+export async function readFirewallRule(port: number, run: NetshExec = runNetsh): Promise<FirewallRuleView> {
+    if (process.platform !== 'win32') return { state: 'unknown', reason: 'The firewall rule is only on Windows.' };
+    try {
+        assertPort(port);
+        const { stdout, code } = await run(buildShowRuleArgs());
+        return parseShowRule(stdout, code, port);
+    } catch (e) {
+        return { state: 'unknown', reason: e instanceof Error ? e.message : 'Windows Firewall could not be read.' };
+    }
+}
+
+/**
+ * MAIN'S READING OF THE RULE, DEBOUNCED (Tynn #685). `reread()` is what opening Settings → Remote access (or the window's
+ * focus while it is open) asks for: it joins a read in flight, and does not read again within `minIntervalMs` of the last
+ * one, so opening the page over and over never spawns netsh in a burst. `refresh()` is for after Allow or Remove: it always
+ * reads, and if a read is in flight it waits for it and reads AGAIN, because that read began before the change.
+ */
+export function firewallReader(
+    read: () => Promise<FirewallRuleView>,
+    { minIntervalMs, now = Date.now }: { minIntervalMs: number; now?: () => number },
+): { rule(): FirewallRuleView | null; reread(): Promise<void>; refresh(): Promise<void> } {
+    let current: FirewallRuleView | null = null;
+    let lastAt = Number.NEGATIVE_INFINITY;
+    let inflight: Promise<void> | null = null;
+    const run = (): Promise<void> => {
+        if (inflight) return inflight;
+        inflight = read()
+            .then((v) => { current = v; lastAt = now(); })
+            .finally(() => { inflight = null; });
+        return inflight;
+    };
+    return {
+        rule: () => current,
+        reread: () => (inflight ? inflight : now() - lastAt < minIntervalMs ? Promise.resolve() : run()),
+        refresh: async () => {
+            if (inflight) await inflight.catch(() => undefined);
+            await run();
+        },
+    };
+}
+
+/** The ELEVATED script that removes Genie's rule: ONE netsh delete, by the exact name, and its exit code. Pure. */
+export function buildRemoveInnerScript(): string {
+    return [netshCmdline(buildDeleteRuleArgs()), 'exit $LASTEXITCODE'].join('\n');
+}
+
+/**
+ * Remove Genie's own rule, and only it, through the same single UAC prompt Allow uses. Non-win32 → refused in words, nothing
+ * run. `{ ok }`, `{ ok:false, cancelled:true }` on a declined prompt, or `{ ok:false, error }` in words. Never throws.
+ */
+export async function removeFirewallRule(
+    run: ElevationExec = runPowershell,
+): Promise<{ ok: boolean; cancelled?: boolean; error?: string }> {
+    if (process.platform !== 'win32') return { ok: false, error: 'The firewall rule is only on Windows.' };
+    let code: number;
+    try {
+        code = await run(buildElevationCommand(encodeCommand(buildRemoveInnerScript())));
+    } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : 'Windows Firewall could not be changed.' };
+    }
+    if (code === 0) return { ok: true };
+    if (code === UAC_CANCELLED_EXIT) return { ok: false, cancelled: true };
+    return { ok: false, error: `Windows Firewall did not remove the rule (netsh exit ${code}).` };
 }
 
 // --- default executors (never invoked in unit tests — injected over) ---------

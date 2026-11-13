@@ -212,7 +212,7 @@ import { workspaceLifecycleApi, workspaceLifecyclePorts, type WorkspaceLifecycle
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { remoteAccess } from './remote-access.js';
-import { ensureFirewallRule } from './remote-firewall.js';
+import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { uploadSender } from './uploads.js';
 import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gitShowHead, gitTreeStatus } from './git-ports.js';
@@ -2253,7 +2253,21 @@ async function boot(): Promise<void> {
     void refreshTailscale();
     // Set once the feature push exists (below): Docker answering after a snapshot stopped waiting for it pushes again.
     let requestFeaturePush = (): void => {};
-    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    // GENIE'S FIREWALL RULE (Windows; Tynn #685): read from Windows at start and after every Allow or Remove, so Settings →
+    // Remote access shows whether the rule is there, never a button that assumes it is not.
+    // Opening the page re-reads it (debounced: 5 s), so a rule changed outside Genie shows without a restart.
+    const firewallRule = firewallReader(() => readFirewallRule(REMOTE_PORT), { minIntervalMs: 5000 });
+    const firewallPort: FeaturePorts['firewall'] = process.platform === 'win32'
+        ? {
+            rule: () => firewallRule.rule(),
+            refresh: () => firewallRule.refresh(),
+            reread: () => firewallRule.reread(),
+            allow: () => ensureFirewallRule(REMOTE_PORT),
+            remove: () => removeFirewallRule(),
+        }
+        : undefined;
+    if (firewallPort) void firewallPort.refresh().then(() => requestFeaturePush());
+    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(firewallPort ? { firewall: firewallPort } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     /*
      * REMOTE ACCESS IS GENIE-HOST'S (Tynn #409, host split P5d.1): with genie-host linked, IT listens on the tailnet, pairs,
