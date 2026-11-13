@@ -2,7 +2,6 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import type { UpdateChannel } from '../src/core/update-channel.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileLockIdentityStatus } from '@particle-academy/prism-harness';
 import { describe, expect, it } from 'vitest';
 import { windowLaunchFlags } from '../src/core/launch-flags.js';
 import { entryFor } from '../src/core/entry-mode.js';
@@ -34,14 +33,15 @@ const HELPER = 900;
 const HELPER_GPU = 901;
 const BROWSER = 600;
 const ORPHAN = 501;
-const tick = async (n = 40) => {
-    const probing = process.env.GENIE_PROBE673 === '1' && n === 400;
-    const from = performance.now();
-    for (let i = 0; i < n; i += 1) {
-        await new Promise((r) => setTimeout(r, 1));
-        if (probing && (i + 1) % 100 === 0) console.log(`[#673] ${JSON.stringify({ stage: 'real timer ticks', completed: i + 1, requested: n, wallMs: Math.round(performance.now() - from) })}`);
+const tick = async (n = 40) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 1)); };
+/** The helper advances a simulated clock. Wait for its outcome, not hundreds of real Windows timer ticks (#673). */
+async function until(label: string, ready: () => boolean): Promise<void> {
+    const deadline = performance.now() + 1_000;
+    while (!ready()) {
+        if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
+        await new Promise<void>((resolve) => setImmediate(resolve));
     }
-};
+}
 const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
 const exe = `${INSTALL}/genie`;
@@ -56,14 +56,7 @@ const PROCS: RunningProcess[] = [
     { pid: 777, executable: '/usr/bin/bash', parentPid: 1 },
 ];
 
-/** Opt-in probe only: no warm-up or timeout change, no identity values, paths or file contents. */
-function probe673(stage: string, from: number, r: ReturnType<typeof rig>): void {
-    if (process.env.GENIE_PROBE673 !== '1') return;
-    console.log(`[#673] ${JSON.stringify({ stage, wallMs: Math.round(performance.now() - from), simulatedMs: r.machine.t, calls: [...r.calls], order: [...r.order], lockReadMs: fileLockIdentityStatus().sample_duration_ms })}`);
-}
-
 function rig(options: { killFails?: readonly number[]; channel?: UpdateChannel; failed?: UpdateFailedRecord | null; clearFailed?: () => void; dropHelperOnDrain?: boolean } = {}) {
-    const from = performance.now();
     /** Whether a helper the host starts comes up and links; and how to make the linked one go away. */
     const helpers = { comeUp: true, drop: [] as Array<() => void> };
     const order: string[] = [];
@@ -96,10 +89,7 @@ function rig(options: { killFails?: readonly number[]; channel?: UpdateChannel; 
             sleep: async (ms) => { machine.t += ms; machine.onSleep(); await Promise.resolve(); },
             now: () => machine.t,
             quit: () => { order.push('helper quit'); },
-            recordFailure: (reason) => {
-                order.push('helper records failure'); failures.push(reason);
-                if (process.env.GENIE_PROBE673 === '1') console.log(`[#673] ${JSON.stringify({ stage: 'helper records failure', wallMs: Math.round(performance.now() - from), simulatedMs: machine.t })}`);
-            },
+            recordFailure: (reason) => { order.push('helper records failure'); failures.push(reason); },
             relaunch: () => { order.push('helper relaunches Genie'); },
             log: (line) => { logs.push(line); },
             caseInsensitive: false,
@@ -250,7 +240,7 @@ describe('the install order', () => {
         // The window and its renderer end 2 s into the helper's wait.
         r.machine.onSleep = () => { if (r.machine.t >= 2_000) { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); } };
         const result = await w.replica.install();
-        await tick(200);
+        await until('the helper to install after the simulated processes end', () => r.calls.includes('quitAndInstall'));
         // The teardown leaves the host's, the window's and the helper's trees; the browser and the orphan are ended.
         expect(r.order).toEqual(['drain agents', 'stop hosted', `kill ${BROWSER}`, `kill ${ORPHAN}`, 'host exit', 'quitAndInstall']);
         expect(result?.report).toMatch(/Ada/);
@@ -259,19 +249,12 @@ describe('the install order', () => {
     });
 
     it('the window process still alive past the bound: fails in words, and the installer is NEVER run onto a mapped Genie', async () => {
-        const from = performance.now();
         const r = rig();
-        probe673('window: rig', from, r);
         const w = await r.window();
-        probe673('window: connected', from, r);
         await w.replica.check();
-        probe673('window: checked', from, r);
         await w.replica.download();
-        probe673('window: downloaded', from, r);
         await w.replica.install();
-        probe673('window: install replied, before real timer ticks', from, r);
-        await tick(400);
-        probe673('window: real timer ticks finished', from, r);
+        await until('the helper to record the live window and quit', () => r.order.includes('helper quit'));
         expect(r.order).toContain('host exit');
         expect(r.calls).not.toContain('quitAndInstall');
         expect(r.logs.join('\n')).toMatch(new RegExp(`not installed[\\s\\S]*${WINDOW}|${WINDOW}[\\s\\S]*not installed`, 'i'));
@@ -288,7 +271,7 @@ describe('the install order', () => {
         await w.replica.download();
         r.machine.onSleep = () => { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); };
         await w.replica.install();
-        await tick(200);
+        await until('the successful helper install', () => r.calls.includes('quitAndInstall'));
         expect(r.calls).toContain('quitAndInstall');
         expect(r.failures).toEqual([]);
         expect(r.order.filter((o) => /relaunch|failure/.test(o))).toEqual([]);
@@ -301,7 +284,7 @@ describe('the install order', () => {
         await w.replica.check();
         await w.replica.download();
         await w.replica.install();
-        await tick(200);
+        await until('the host to finish its failed handover and exit', () => r.order.includes('host exit'));
         expect(r.calls).not.toContain('quitAndInstall');
         const at = (step: string) => r.order.indexOf(step);
         expect(at('host records failure')).toBeGreaterThan(at('drain agents'));
@@ -312,20 +295,13 @@ describe('the install order', () => {
     });
 
     it('a browser process the teardown could not end holds the install too: named, and not installed', async () => {
-        const from = performance.now();
         const r = rig({ killFails: [BROWSER] });
-        probe673('browser: rig', from, r);
         const w = await r.window();
-        probe673('browser: connected', from, r);
         await w.replica.check();
-        probe673('browser: checked', from, r);
         await w.replica.download();
-        probe673('browser: downloaded', from, r);
         r.machine.onSleep = () => { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); };
         await w.replica.install();
-        probe673('browser: install replied, before real timer ticks', from, r);
-        await tick(400);
-        probe673('browser: real timer ticks finished', from, r);
+        await until('the helper to record the live browser and quit', () => r.order.includes('helper quit'));
         expect(r.calls).not.toContain('quitAndInstall');
         expect(r.logs.join('\n')).toMatch(new RegExp(`${BROWSER}`));
     });
