@@ -60,7 +60,8 @@ export function readMeasurementIdentity(runId) {
     return { build, vmId, platform: process.platform, runId };
 }
 
-export async function runMeasurementProcess({ request, cwd, out, timeoutMs = 20 * 60_000 }) {
+export async function runMeasurementProcess({ request, cwd, out, timeoutMs = 20 * 60_000, scope = 'full' }) {
+    if (!['full', 'm4-diagnostic'].includes(scope)) throw new Error('unknown measurement scope');
     const context = structuredClone(request);
     if (!['ipc', 'door', 'door-revision'].includes(context?.mode) || !Number.isSafeInteger(context.pairIndex) || context.pairIndex < 0) throw new Error('invalid sample request mode or pair index');
     for (const field of IDENTITY_FIELDS) {
@@ -76,7 +77,9 @@ export async function runMeasurementProcess({ request, cwd, out, timeoutMs = 20 
     delete env.AGENT_READS_PROBE_ONLY;
 
     const samplerPid = await new Promise((accept, reject) => {
-        const child = spawn(process.execPath, [resolve(checkout, 'scripts/agent-reads-measure.mjs'), `--mode=${context.mode}`, `--out=${output}`], {
+        const args = [resolve(checkout, 'scripts/agent-reads-measure.mjs'), `--mode=${context.mode}`, `--out=${output}`];
+        if (scope !== 'full') args.push(`--scope=${scope}`);
+        const child = spawn(process.execPath, args, {
             cwd: checkout, shell: false, env, stdio: ['ignore', 'inherit', 'inherit'],
             detached: process.platform !== 'win32', windowsHide: true,
         });
@@ -109,6 +112,7 @@ export async function runMeasurementProcess({ request, cwd, out, timeoutMs = 20 
 
     // Never read evidence before exit, or accept a successful-looking file after an unsuccessful exit.
     const sample = JSON.parse(await readFile(output, 'utf8'));
+    if ((sample?.scope ?? 'full') !== scope) throw new Error('sampler scope does not match full/diagnostic request');
     if (sample?.finished !== true) throw new Error('unfinished sample result');
     if (sample.cleanup?.complete !== true) throw new Error('sample process cleanup is not confirmed');
     if (!Array.isArray(sample.failures) || sample.failures.length !== 0) throw new Error('sample recorded failed or missing checks');
