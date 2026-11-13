@@ -105,7 +105,7 @@ export type Route =
     | ({ surface: 'flow'; flowId: string | null; workspaceId: string | null } & Common)
     /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
     | ({ surface: PlainFeature } & Common)
-    | ({ surface: 'hosting'; tab?: HostingTab } & Common)
+    | ({ surface: 'hosting'; tab?: HostingTab; commandRun?: { processId: string; workspaceId: string } } & Common)
     /** Genie 1's sidebar (core/settings-nav.ts): the page shown; `null` = none asked for (General). */
     | ({ surface: 'settings'; section: SectionId | null } & Common)
     /** The Genie browser; the page it shows rides the URL so back and deep links work. */

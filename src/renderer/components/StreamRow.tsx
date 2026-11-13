@@ -3,6 +3,7 @@ import { countRender } from '../render-count.js';
 import { memo, useEffect, useRef, useState } from 'react';
 import type { LedgerRow, Tone } from '../../core/stream-view.js';
 import type { ToolOutputReply } from '../../core/tool-row-bound.js';
+import type { CommandRunRef } from '../../core/command-run.js';
 import { chatLinkTarget, type ChatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
 import { ChatProse } from './ChatProse.js';
 
@@ -65,6 +66,7 @@ export interface StreamRowProps {
 export interface StreamMarkup {
     refs: ChatRefs;
     onOpen: (target: ChatLinkTarget) => void;
+    onCommandRun?: ((run: CommandRunRef) => void) | undefined;
 }
 
 /** MEMOISED (genie#1340): a push redraws only the rows whose props changed. Rows keep their object while unchanged

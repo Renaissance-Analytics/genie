@@ -678,7 +678,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
-export function ProcessesPanel({ processes, workspaces, onAction, now }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number }) {
+export function ProcessesPanel({ processes, workspaces, onAction, now }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number; commandRun?: { processId: string; workspaceId: string } }) {
     const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
     const button = 'text-[13px]';
     return (

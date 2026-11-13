@@ -2,6 +2,7 @@ import { headroomLine } from './headroom.js';
 import { computeDiff } from '@particle-academy/fancy-file-commons';
 import { DIFF_TOO_LARGE, editLabel } from './file-edits.js';
 import type { StreamEvent, ToolKind } from './stream-event.js';
+import type { CommandRunRef } from './command-run.js';
 
 /**
  * HOW THE STREAM IS READ — the ledger's presentation decisions, with no React in sight.
@@ -71,6 +72,8 @@ export interface TimedEvent {
 export type Tone = 'default' | 'muted' | 'violet' | 'emerald' | 'sky' | 'amber' | 'bad';
 
 export interface LedgerRow {
+    /** Exact host-authored run target; tests-first navigation seam (#633). */
+    commandRun?: CommandRunRef | undefined;
     id: string;
     at: number | null;
     icon: string;
